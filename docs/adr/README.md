@@ -15,3 +15,4 @@ Architecture Decision Records (ADRs) capture decisions that materially constrain
 - [ADR-0002: Isolate stores behind a store-neutral core](0002-store-neutral-core.md)
 - [ADR-0003: Use PostgreSQL as the source of truth](0003-postgresql-source-of-truth.md)
 - [ADR-0004: Use API-first contracts in a monorepo](0004-api-first-monorepo.md)
+- [ADR-0005: Normalize provider evidence into purchase observations](0005-provider-neutral-purchase-observations.md)

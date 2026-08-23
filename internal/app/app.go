@@ -12,7 +12,9 @@ import (
 )
 
 var (
-	ErrUsage           = errors.New("usage: iapstack <api|worker|migrate>")
+	// ErrUsage indicates that the process mode arguments are missing or invalid.
+	ErrUsage = errors.New("usage: iapstack <api|worker|migrate>")
+	// ErrModeUnavailable indicates a reserved process mode that is not implemented yet.
 	ErrModeUnavailable = errors.New("mode is not implemented in the current bootstrap phase")
 )
 

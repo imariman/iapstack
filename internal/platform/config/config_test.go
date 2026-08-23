@@ -8,6 +8,7 @@ import (
 	"github.com/imariman/iapstack/internal/platform/config"
 )
 
+// TestLoadDefaults verifies configuration defaults when no environment values are set.
 func TestLoadDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -27,6 +28,7 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadOverrides verifies supported environment configuration overrides.
 func TestLoadOverrides(t *testing.T) {
 	t.Parallel()
 
@@ -50,6 +52,7 @@ func TestLoadOverrides(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsInvalidValues verifies fail-fast validation for malformed configuration.
 func TestLoadRejectsInvalidValues(t *testing.T) {
 	t.Parallel()
 
@@ -75,6 +78,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+// env builds a deterministic environment lookup for configuration tests.
 func env(values map[string]string) func(string) string {
 	return func(key string) string {
 		return values[key]
