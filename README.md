@@ -44,6 +44,11 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 
 **Independent implementation.** Official store documentation defines behavior and security requirements. Other open-source projects may be studied for interoperability and edge cases, while IAPStack's code is implemented independently.
 
+## Documentation
+
+- [v0.1 scope and architecture](docs/v0.1-scope.md)
+- [Architecture Decision Records](docs/adr/README.md)
+
 ## Planned architecture
 
 ```text
