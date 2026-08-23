@@ -49,6 +49,34 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 - [v0.1 scope and architecture](docs/v0.1-scope.md)
 - [Architecture Decision Records](docs/adr/README.md)
 
+## Development
+
+IAPStack currently requires Go 1.24 or newer. Run the API locally with:
+
+```sh
+go run ./cmd/iapstack api
+```
+
+The API listens on `:8080` by default and exposes `GET /healthz` and `GET /readyz`.
+Configuration is supplied through environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `IAPSTACK_HTTP_ADDRESS` | `:8080` | API listen address in `host:port` form |
+| `IAPSTACK_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline |
+| `IAPSTACK_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
+
+Run the local quality checks with:
+
+```sh
+gofmt -w .
+go vet ./...
+go test -race -count=1 ./...
+```
+
+The `worker` and `migrate` process modes are reserved by the architecture and will be
+implemented with their persistence responsibilities in the next delivery phases.
+
 ## Planned architecture
 
 ```text
