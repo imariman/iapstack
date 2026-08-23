@@ -34,6 +34,7 @@ type Failure struct {
 	cause      error
 }
 
+// NewFailure constructs a classified provider operation failure with an optional cause.
 func NewFailure(
 	provider core.Provider,
 	operation string,
@@ -50,14 +51,17 @@ func NewFailure(
 	}
 }
 
+// Error returns a stable redacted provider failure description.
 func (failure *Failure) Error() string {
 	return fmt.Sprintf("store %s %s failed: %s", failure.Provider, failure.Operation, failure.Kind)
 }
 
+// Unwrap exposes the diagnostic cause to explicit error inspection.
 func (failure *Failure) Unwrap() error {
 	return failure.cause
 }
 
+// Retryable reports whether the failure category is safe to retry by default.
 func (failure *Failure) Retryable() bool {
 	return failure.Kind == FailureRateLimited || failure.Kind == FailureTemporary
 }

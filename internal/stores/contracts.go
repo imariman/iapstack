@@ -32,19 +32,23 @@ type VerificationResult struct {
 }
 
 type Verifier interface {
+	// Verify authenticates purchase evidence and returns normalized observations.
 	Verify(context.Context, VerificationRequest) (VerificationResult, error)
 }
 
 type Reconciler interface {
+	// Reconcile queries authoritative provider state from stored purchase references.
 	Reconcile(context.Context, ReconciliationRequest) (VerificationResult, error)
 }
 
 type Adapter interface {
+	// Provider identifies the purchase provider implemented by the adapter.
 	Provider() core.Provider
 	Verifier
 	Reconciler
 }
 
+// Validate checks verification scope, customer identity, claims, bindings, and evidence.
 func (request VerificationRequest) Validate() error {
 	if err := errors.Join(
 		request.Application.Validate(),
@@ -59,6 +63,7 @@ func (request VerificationRequest) Validate() error {
 	return validateReferencesWithRole(request.ExpectedCustomerBindings, core.ReferenceCustomerBinding)
 }
 
+// Validate checks reconciliation scope, expected products, bindings, and query references.
 func (request ReconciliationRequest) Validate() error {
 	if err := errors.Join(request.Application.Validate(), request.CustomerID.Validate()); err != nil {
 		return err
@@ -75,6 +80,7 @@ func (request ReconciliationRequest) Validate() error {
 	return validateReferencesWithRole(request.QueryReferences, core.ReferenceQuery)
 }
 
+// ValidateForVerification checks a result against its original verification request.
 func (result VerificationResult) ValidateForVerification(request VerificationRequest) error {
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("verification request: %w", err)
@@ -87,6 +93,7 @@ func (result VerificationResult) ValidateForVerification(request VerificationReq
 	)
 }
 
+// ValidateForReconciliation checks a result against its reconciliation request.
 func (result VerificationResult) ValidateForReconciliation(request ReconciliationRequest) error {
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("reconciliation request: %w", err)
@@ -99,6 +106,7 @@ func (result VerificationResult) ValidateForReconciliation(request Reconciliatio
 	)
 }
 
+// validate enforces shared result, scope, product, binding, and reference invariants.
 func (result VerificationResult) validate(
 	application core.Application,
 	expectedProducts []core.ProviderProductID,
@@ -165,6 +173,7 @@ func (result VerificationResult) validate(
 	return nil
 }
 
+// validateReferencesWithRole checks validity, role consistency, and uniqueness.
 func validateReferencesWithRole(references []core.StoreReference, role core.ReferenceRole) error {
 	for i, reference := range references {
 		if err := reference.Validate(); err != nil {
@@ -182,6 +191,7 @@ func validateReferencesWithRole(references []core.StoreReference, role core.Refe
 	return nil
 }
 
+// hasMatchingReference reports whether two reference sets share an exact opaque reference.
 func hasMatchingReference(actual, expected []core.StoreReference) bool {
 	for _, actualReference := range actual {
 		for _, expectedReference := range expected {
@@ -193,6 +203,7 @@ func hasMatchingReference(actual, expected []core.StoreReference) bool {
 	return false
 }
 
+// validateProductSet checks provider product identifiers and rejects duplicates.
 func validateProductSet(products []core.ProviderProductID) error {
 	seen := make(map[core.ProviderProductID]struct{}, len(products))
 	for _, product := range products {

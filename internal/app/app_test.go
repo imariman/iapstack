@@ -9,6 +9,7 @@ import (
 	"github.com/imariman/iapstack/internal/app"
 )
 
+// TestRunRequiresKnownMode verifies that Run rejects missing, extra, and unknown modes.
 func TestRunRequiresKnownMode(t *testing.T) {
 	t.Parallel()
 
@@ -33,6 +34,7 @@ func TestRunRequiresKnownMode(t *testing.T) {
 	}
 }
 
+// TestRunReportsReservedModes verifies that reserved modes return their bootstrap error.
 func TestRunReportsReservedModes(t *testing.T) {
 	t.Parallel()
 
@@ -48,6 +50,7 @@ func TestRunReportsReservedModes(t *testing.T) {
 	}
 }
 
+// emptyEnv provides an environment lookup with no configured values.
 func emptyEnv(string) string {
 	return ""
 }

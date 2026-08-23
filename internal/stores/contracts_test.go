@@ -15,6 +15,7 @@ type fakeAdapter struct {
 	provider core.Provider
 }
 
+// TestEvidenceIsOpaqueCopiedAndLogSafe verifies defensive copying, hashing, and redaction.
 func TestEvidenceIsOpaqueCopiedAndLogSafe(t *testing.T) {
 	t.Parallel()
 
@@ -36,6 +37,7 @@ func TestEvidenceIsOpaqueCopiedAndLogSafe(t *testing.T) {
 	}
 }
 
+// TestEvidenceRequiresMediaType verifies rejection of malformed evidence content types.
 func TestEvidenceRequiresMediaType(t *testing.T) {
 	t.Parallel()
 
@@ -44,6 +46,7 @@ func TestEvidenceRequiresMediaType(t *testing.T) {
 	}
 }
 
+// TestVerificationResultSupportsMultipleLineItems verifies provider responses with several products.
 func TestVerificationResultSupportsMultipleLineItems(t *testing.T) {
 	t.Parallel()
 
@@ -72,6 +75,7 @@ func TestVerificationResultSupportsMultipleLineItems(t *testing.T) {
 	}
 }
 
+// TestVerificationResultRejectsScopeAndProductMismatch verifies request-result consistency.
 func TestVerificationResultRejectsScopeAndProductMismatch(t *testing.T) {
 	t.Parallel()
 
@@ -120,6 +124,7 @@ func TestVerificationResultRejectsScopeAndProductMismatch(t *testing.T) {
 	}
 }
 
+// TestVerificationResultChecksExpectedCustomerBinding verifies customer-bound purchase evidence.
 func TestVerificationResultChecksExpectedCustomerBinding(t *testing.T) {
 	t.Parallel()
 
@@ -153,6 +158,7 @@ func TestVerificationResultChecksExpectedCustomerBinding(t *testing.T) {
 	}
 }
 
+// TestReconciliationUsesOpaqueQueryReferences verifies query role and uniqueness rules.
 func TestReconciliationUsesOpaqueQueryReferences(t *testing.T) {
 	t.Parallel()
 
@@ -182,6 +188,7 @@ func TestReconciliationUsesOpaqueQueryReferences(t *testing.T) {
 	}
 }
 
+// TestReconciliationResultMustMatchQueryReference verifies query-to-result identity binding.
 func TestReconciliationResultMustMatchQueryReference(t *testing.T) {
 	t.Parallel()
 
@@ -214,6 +221,7 @@ func TestReconciliationResultMustMatchQueryReference(t *testing.T) {
 	}
 }
 
+// TestRegistrySupportsBuiltInAndFutureProviders verifies extensible and duplicate-safe registration.
 func TestRegistrySupportsBuiltInAndFutureProviders(t *testing.T) {
 	t.Parallel()
 
@@ -246,6 +254,7 @@ func TestRegistrySupportsBuiltInAndFutureProviders(t *testing.T) {
 	}
 }
 
+// TestFailureClassificationDoesNotLeakCause verifies retry classification and safe messages.
 func TestFailureClassificationDoesNotLeakCause(t *testing.T) {
 	t.Parallel()
 
@@ -267,18 +276,22 @@ func TestFailureClassificationDoesNotLeakCause(t *testing.T) {
 	}
 }
 
+// Provider returns the provider assigned to the fake adapter.
 func (adapter fakeAdapter) Provider() core.Provider {
 	return adapter.provider
 }
 
+// Verify satisfies the adapter contract for registry tests.
 func (fakeAdapter) Verify(context.Context, stores.VerificationRequest) (stores.VerificationResult, error) {
 	return stores.VerificationResult{}, nil
 }
 
+// Reconcile satisfies the adapter contract for registry tests.
 func (fakeAdapter) Reconcile(context.Context, stores.ReconciliationRequest) (stores.VerificationResult, error) {
 	return stores.VerificationResult{}, nil
 }
 
+// googleApplication builds a valid Google Play application fixture.
 func googleApplication() core.Application {
 	return core.Application{
 		ID:        "app_1",
@@ -291,6 +304,7 @@ func googleApplication() core.Application {
 	}
 }
 
+// productObservation builds a valid consumable line-item observation for contract tests.
 func productObservation(
 	t *testing.T,
 	application core.Application,
@@ -322,6 +336,7 @@ func productObservation(
 	}
 }
 
+// storeReference builds a validated opaque reference for store contract tests.
 func storeReference(t *testing.T, role core.ReferenceRole, kind, value string) core.StoreReference {
 	t.Helper()
 	reference, err := core.NewStoreReference(role, kind, value)

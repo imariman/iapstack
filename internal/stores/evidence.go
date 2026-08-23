@@ -22,6 +22,7 @@ type VerifiedArtifact struct {
 	Evidence Evidence
 }
 
+// NewEvidence validates and defensively copies a content-typed provider artifact.
 func NewEvidence(contentType string, payload []byte) (Evidence, error) {
 	evidence := Evidence{
 		ContentType: contentType,
@@ -33,6 +34,7 @@ func NewEvidence(contentType string, payload []byte) (Evidence, error) {
 	return evidence, nil
 }
 
+// Validate checks that the evidence has a valid media type and a non-empty payload.
 func (evidence Evidence) Validate() error {
 	if evidence.ContentType == "" {
 		return errors.New("evidence content type is required")
@@ -46,6 +48,7 @@ func (evidence Evidence) Validate() error {
 	return nil
 }
 
+// Validate checks the artifact discriminator and its opaque evidence.
 func (artifact VerifiedArtifact) Validate() error {
 	if artifact.Kind == "" {
 		return errors.New("verified artifact kind is required")
@@ -53,15 +56,18 @@ func (artifact VerifiedArtifact) Validate() error {
 	return artifact.Evidence.Validate()
 }
 
+// Bytes returns a defensive copy of the private evidence payload.
 func (evidence Evidence) Bytes() []byte {
 	return append([]byte(nil), evidence.payload...)
 }
 
+// Digest returns the hexadecimal SHA-256 digest of the private payload.
 func (evidence Evidence) Digest() string {
 	digest := sha256.Sum256(evidence.payload)
 	return hex.EncodeToString(digest[:])
 }
 
+// LogValue returns payload metadata without exposing the evidence contents.
 func (evidence Evidence) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("content_type", evidence.ContentType),

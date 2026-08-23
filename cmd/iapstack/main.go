@@ -10,6 +10,7 @@ import (
 	"github.com/imariman/iapstack/internal/app"
 )
 
+// main configures process signal handling and runs the selected IAPStack mode.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

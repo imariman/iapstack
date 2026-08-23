@@ -9,6 +9,7 @@ import (
 	"github.com/imariman/iapstack/internal/core"
 )
 
+// TestRepresentativeProviderObservations verifies normalized scenarios across supported providers.
 func TestRepresentativeProviderObservations(t *testing.T) {
 	t.Parallel()
 
@@ -117,6 +118,7 @@ func TestRepresentativeProviderObservations(t *testing.T) {
 	}
 }
 
+// TestPendingPurchaseDoesNotRequireTransaction verifies token-only pending observations.
 func TestPendingPurchaseDoesNotRequireTransaction(t *testing.T) {
 	t.Parallel()
 
@@ -148,6 +150,7 @@ func TestPendingPurchaseDoesNotRequireTransaction(t *testing.T) {
 	}
 }
 
+// TestAllowedAccessRequiresTransactionAndPeriod verifies the minimum grantable evidence.
 func TestAllowedAccessRequiresTransactionAndPeriod(t *testing.T) {
 	t.Parallel()
 
@@ -180,6 +183,7 @@ func TestAllowedAccessRequiresTransactionAndPeriod(t *testing.T) {
 	}
 }
 
+// TestTerminalStateAccessRules verifies that expired and revoked states deny access.
 func TestTerminalStateAccessRules(t *testing.T) {
 	t.Parallel()
 
@@ -198,6 +202,7 @@ func TestTerminalStateAccessRules(t *testing.T) {
 	}
 }
 
+// TestStoreReferenceIsRedacted verifies safe formatting and explicit value access.
 func TestStoreReferenceIsRedacted(t *testing.T) {
 	t.Parallel()
 
@@ -210,6 +215,7 @@ func TestStoreReferenceIsRedacted(t *testing.T) {
 	}
 }
 
+// subscriptionObservation builds a valid subscription observation for scenario tests.
 func subscriptionObservation(
 	t *testing.T,
 	provider core.Provider,
@@ -247,6 +253,7 @@ func subscriptionObservation(
 	}
 }
 
+// deniedObservation builds an expired or revoked subscription observation for tests.
 func deniedObservation(t *testing.T, state core.LifecycleState) core.PurchaseObservation {
 	t.Helper()
 	start := time.Now().UTC().Add(-2 * time.Hour)
@@ -272,6 +279,7 @@ func deniedObservation(t *testing.T, state core.LifecycleState) core.PurchaseObs
 	return observation
 }
 
+// storeReference builds a validated opaque provider reference for tests.
 func storeReference(t *testing.T, role core.ReferenceRole, kind, value string) core.StoreReference {
 	t.Helper()
 	reference, err := core.NewStoreReference(role, kind, value)

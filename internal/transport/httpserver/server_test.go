@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// TestHealthAndReadiness verifies probe status, body, and content type behavior.
 func TestHealthAndReadiness(t *testing.T) {
 	t.Parallel()
 
@@ -50,6 +51,7 @@ func TestHealthAndReadiness(t *testing.T) {
 	}
 }
 
+// TestRunStopsAfterCancellation verifies readiness transitions and graceful cancellation.
 func TestRunStopsAfterCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -88,6 +90,7 @@ func TestRunStopsAfterCancellation(t *testing.T) {
 	}
 }
 
+// newTestServer constructs an isolated loopback server for lifecycle tests.
 func newTestServer() *Server {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return New("127.0.0.1:0", time.Second, logger)

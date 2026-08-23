@@ -30,6 +30,7 @@ type StoreReference struct {
 	value string
 }
 
+// NewStoreReference constructs and validates an opaque provider reference.
 func NewStoreReference(role ReferenceRole, kind, value string) (StoreReference, error) {
 	reference := StoreReference{Role: role, Kind: kind, value: value}
 	if err := reference.Validate(); err != nil {
@@ -38,6 +39,7 @@ func NewStoreReference(role ReferenceRole, kind, value string) (StoreReference, 
 	return reference, nil
 }
 
+// Validate checks that the reference role, kind, and private value are well formed.
 func (reference StoreReference) Validate() error {
 	if err := validateIdentifier("store reference role", string(reference.Role)); err != nil {
 		return err
@@ -48,20 +50,24 @@ func (reference StoreReference) Validate() error {
 	return validateIdentifier("store reference value", reference.value)
 }
 
+// Value returns the private provider value for explicit adapter or persistence use.
 func (reference StoreReference) Value() string {
 	return reference.value
 }
 
+// IsZero reports whether the reference contains no role, kind, or value.
 func (reference StoreReference) IsZero() bool {
 	return reference.Role == "" && reference.Kind == "" && reference.value == ""
 }
 
+// Equal compares two references without exposing their private values.
 func (reference StoreReference) Equal(other StoreReference) bool {
 	return reference.Role == other.Role &&
 		reference.Kind == other.Kind &&
 		subtle.ConstantTimeCompare([]byte(reference.value), []byte(other.value)) == 1
 }
 
+// String returns a redacted human-readable representation of the reference.
 func (reference StoreReference) String() string {
 	if reference.IsZero() {
 		return ""
@@ -69,6 +75,7 @@ func (reference StoreReference) String() string {
 	return fmt.Sprintf("%s/%s:[REDACTED]", reference.Role, reference.Kind)
 }
 
+// LogValue returns a structured representation with the private value redacted.
 func (reference StoreReference) LogValue() slog.Value {
 	if reference.IsZero() {
 		return slog.StringValue("")

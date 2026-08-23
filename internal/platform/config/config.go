@@ -53,6 +53,7 @@ func Load(getenv func(string) string) (Config, error) {
 	return cfg, nil
 }
 
+// valueOrDefault returns a trimmed configured value or its fallback.
 func valueOrDefault(value, fallback string) string {
 	if value = strings.TrimSpace(value); value != "" {
 		return value
@@ -60,6 +61,7 @@ func valueOrDefault(value, fallback string) string {
 	return fallback
 }
 
+// parseLogLevel converts a configured log level into its slog representation.
 func parseLogLevel(value string) (slog.Level, error) {
 	switch strings.ToLower(value) {
 	case "debug":
@@ -75,6 +77,7 @@ func parseLogLevel(value string) (slog.Level, error) {
 	}
 }
 
+// validateHTTPAddress checks host-port syntax and the usable TCP port range.
 func validateHTTPAddress(address string) error {
 	_, port, err := net.SplitHostPort(address)
 	if err != nil {

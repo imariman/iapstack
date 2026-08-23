@@ -15,6 +15,7 @@ type Registry struct {
 	adapters map[core.Provider]Adapter
 }
 
+// NewRegistry validates and indexes one adapter per provider.
 func NewRegistry(adapters ...Adapter) (*Registry, error) {
 	registry := &Registry{adapters: make(map[core.Provider]Adapter, len(adapters))}
 	for _, adapter := range adapters {
@@ -33,6 +34,7 @@ func NewRegistry(adapters ...Adapter) (*Registry, error) {
 	return registry, nil
 }
 
+// Adapter returns the registered adapter for a provider.
 func (registry *Registry) Adapter(provider core.Provider) (Adapter, error) {
 	if err := provider.Validate(); err != nil {
 		return nil, err
@@ -47,6 +49,7 @@ func (registry *Registry) Adapter(provider core.Provider) (Adapter, error) {
 	return adapter, nil
 }
 
+// isNilAdapter detects typed nil values stored inside the adapter interface.
 func isNilAdapter(adapter Adapter) bool {
 	value := reflect.ValueOf(adapter)
 	switch value.Kind() {

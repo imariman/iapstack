@@ -25,6 +25,7 @@ type Server struct {
 	ready           atomic.Bool
 }
 
+// New constructs an API server with health, readiness, and bounded connection settings.
 func New(address string, shutdownTimeout time.Duration, logger *slog.Logger) *Server {
 	server := &Server{
 		logger:          logger,
@@ -44,6 +45,7 @@ func New(address string, shutdownTimeout time.Duration, logger *slog.Logger) *Se
 	return server
 }
 
+// Run serves HTTP traffic until cancellation or an unrecoverable server failure.
 func (s *Server) Run(ctx context.Context) error {
 	listener, err := net.Listen("tcp", s.server.Addr)
 	if err != nil {
@@ -89,10 +91,12 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
+// health reports whether the API process is alive.
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeStatus(w, http.StatusOK, "ok")
 }
 
+// readiness reports whether the API is ready to receive application traffic.
 func (s *Server) readiness(w http.ResponseWriter, _ *http.Request) {
 	if !s.ready.Load() {
 		writeStatus(w, http.StatusServiceUnavailable, "not_ready")
@@ -101,6 +105,7 @@ func (s *Server) readiness(w http.ResponseWriter, _ *http.Request) {
 	writeStatus(w, http.StatusOK, "ready")
 }
 
+// writeStatus writes a small JSON probe response with the requested status code.
 func writeStatus(w http.ResponseWriter, statusCode int, status string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)

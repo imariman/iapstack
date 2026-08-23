@@ -79,10 +79,12 @@ type StoreProduct struct {
 	ProviderID    ProviderProductID
 }
 
+// Validate checks that the provider identifier is present and well formed.
 func (provider Provider) Validate() error {
 	return validateIdentifier("provider", string(provider))
 }
 
+// Validate checks that the environment is one of the normalized built-in values.
 func (environment Environment) Validate() error {
 	switch environment {
 	case EnvironmentProduction, EnvironmentSandbox, EnvironmentTest:
@@ -92,10 +94,12 @@ func (environment Environment) Validate() error {
 	}
 }
 
+// Validate checks that the extensible product kind is present and well formed.
 func (kind ProductKind) Validate() error {
 	return validateIdentifier("product kind", string(kind))
 }
 
+// Validate checks that every provider application scope field is valid.
 func (application StoreApplication) Validate() error {
 	return errors.Join(
 		application.Provider.Validate(),
@@ -104,6 +108,7 @@ func (application StoreApplication) Validate() error {
 	)
 }
 
+// Validate checks the internal identity, project ownership, and store scope of an application.
 func (application Application) Validate() error {
 	return errors.Join(
 		application.ID.Validate(),
@@ -112,6 +117,7 @@ func (application Application) Validate() error {
 	)
 }
 
+// Validate checks the internal, project, and external identities of a customer.
 func (customer Customer) Validate() error {
 	return errors.Join(
 		customer.ID.Validate(),
@@ -120,6 +126,7 @@ func (customer Customer) Validate() error {
 	)
 }
 
+// Validate checks the identity, project ownership, and key of an entitlement.
 func (entitlement Entitlement) Validate() error {
 	return errors.Join(
 		entitlement.ID.Validate(),
@@ -128,6 +135,7 @@ func (entitlement Entitlement) Validate() error {
 	)
 }
 
+// Validate checks product identity, kind, and entitlement mappings for duplicates.
 func (product Product) Validate() error {
 	if err := errors.Join(product.ID.Validate(), product.ProjectID.Validate(), product.Kind.Validate()); err != nil {
 		return err
@@ -149,6 +157,7 @@ func (product Product) Validate() error {
 	return nil
 }
 
+// Validate checks the internal and provider identifiers in a store product mapping.
 func (product StoreProduct) Validate() error {
 	return errors.Join(
 		product.ApplicationID.Validate(),

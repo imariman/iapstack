@@ -6,6 +6,7 @@ import (
 	"github.com/imariman/iapstack/internal/core"
 )
 
+// TestProviderIsExtensible verifies built-in and future provider identifiers.
 func TestProviderIsExtensible(t *testing.T) {
 	t.Parallel()
 
@@ -23,6 +24,7 @@ func TestProviderIsExtensible(t *testing.T) {
 	}
 }
 
+// TestProductValidation verifies valid products and duplicate entitlement rejection.
 func TestProductValidation(t *testing.T) {
 	t.Parallel()
 
@@ -42,6 +44,7 @@ func TestProductValidation(t *testing.T) {
 	}
 }
 
+// TestApplicationRequiresStoreScope verifies complete and normalized provider application scope.
 func TestApplicationRequiresStoreScope(t *testing.T) {
 	t.Parallel()
 

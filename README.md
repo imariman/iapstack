@@ -76,7 +76,8 @@ go test -race -count=1 ./...
 
 Go source files place constants first, type and struct declarations second, and
 executable code last. Related constants stay together; unrelated constant groups are
-separated by a blank line, and every constant has an English explanatory comment.
+separated by a blank line. Every constant, function, and method has an English
+explanatory comment.
 
 The `worker` and `migrate` process modes are reserved by the architecture and will be
 implemented with their persistence responsibilities in the next delivery phases.

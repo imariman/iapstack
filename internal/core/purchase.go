@@ -140,6 +140,7 @@ type PurchaseObservation struct {
 	References      []StoreReference
 }
 
+// Validate checks that the lifecycle state belongs to the normalized state vocabulary.
 func (state LifecycleState) Validate() error {
 	switch state {
 	case LifecyclePending, LifecycleActive, LifecycleGracePeriod, LifecycleOnHold,
@@ -151,6 +152,7 @@ func (state LifecycleState) Validate() error {
 	}
 }
 
+// Validate checks that the access status is a supported normalized decision.
 func (status AccessStatus) Validate() error {
 	switch status {
 	case AccessAllowed, AccessDenied, AccessUnresolved:
@@ -160,6 +162,7 @@ func (status AccessStatus) Validate() error {
 	}
 }
 
+// Validate checks that the access reason is supported by the normalized domain.
 func (reason AccessReason) Validate() error {
 	switch reason {
 	case AccessReasonPurchaseValid, AccessReasonGracePeriod, AccessReasonPendingPayment,
@@ -172,6 +175,7 @@ func (reason AccessReason) Validate() error {
 	}
 }
 
+// Validate checks that the ownership value is supported by the normalized domain.
 func (ownership Ownership) Validate() error {
 	switch ownership {
 	case OwnershipPurchased, OwnershipFamilyShared, OwnershipUnknown:
@@ -181,6 +185,7 @@ func (ownership Ownership) Validate() error {
 	}
 }
 
+// Validate checks renewal mode, status, and next-period fields against the product kind.
 func (renewal Renewal) Validate(productKind ProductKind) error {
 	switch renewal.Mode {
 	case RenewalNone:
@@ -228,6 +233,7 @@ func (renewal Renewal) Validate(productKind ProductKind) error {
 	return nil
 }
 
+// Validate checks that the effective period has a coherent start and optional end.
 func (period EffectivePeriod) Validate() error {
 	if period.StartsAt.IsZero() {
 		if period.EndsAt != nil {
@@ -241,6 +247,7 @@ func (period EffectivePeriod) Validate() error {
 	return nil
 }
 
+// Validate checks normalized purchase invariants before an observation is persisted.
 func (observation PurchaseObservation) Validate() error {
 	if err := errors.Join(
 		observation.ID.Validate(),
@@ -299,6 +306,7 @@ func (observation PurchaseObservation) Validate() error {
 	return nil
 }
 
+// ReferencesFor returns a copy of the references assigned to the requested role.
 func (observation PurchaseObservation) ReferencesFor(role ReferenceRole) []StoreReference {
 	references := make([]StoreReference, 0, len(observation.References))
 	for _, reference := range observation.References {
@@ -309,6 +317,7 @@ func (observation PurchaseObservation) ReferencesFor(role ReferenceRole) []Store
 	return references
 }
 
+// hasReferenceRole reports whether the observation contains at least one reference for a role.
 func (observation PurchaseObservation) hasReferenceRole(role ReferenceRole) bool {
 	for _, reference := range observation.References {
 		if reference.Role == role {
@@ -318,6 +327,7 @@ func (observation PurchaseObservation) hasReferenceRole(role ReferenceRole) bool
 	return false
 }
 
+// validateReferenceSet checks reference validity and rejects exact role-kind-value duplicates.
 func validateReferenceSet(references []StoreReference) error {
 	for i, reference := range references {
 		if err := reference.Validate(); err != nil {
