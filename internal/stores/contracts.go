@@ -17,6 +17,34 @@ type VerificationRequest struct {
 	Evidence                 Evidence
 }
 
+type ReconciliationRequest struct {
+	Application              core.Application
+	CustomerID               core.CustomerID
+	ExpectedProducts         []core.ProviderProductID
+	ExpectedCustomerBindings []core.StoreReference
+	QueryReferences          []core.StoreReference
+}
+
+type VerificationResult struct {
+	VerifiedAt   time.Time
+	Artifacts    []VerifiedArtifact
+	Observations []core.PurchaseObservation
+}
+
+type Verifier interface {
+	Verify(context.Context, VerificationRequest) (VerificationResult, error)
+}
+
+type Reconciler interface {
+	Reconcile(context.Context, ReconciliationRequest) (VerificationResult, error)
+}
+
+type Adapter interface {
+	Provider() core.Provider
+	Verifier
+	Reconciler
+}
+
 func (request VerificationRequest) Validate() error {
 	if err := errors.Join(
 		request.Application.Validate(),
@@ -29,14 +57,6 @@ func (request VerificationRequest) Validate() error {
 		return err
 	}
 	return validateReferencesWithRole(request.ExpectedCustomerBindings, core.ReferenceCustomerBinding)
-}
-
-type ReconciliationRequest struct {
-	Application              core.Application
-	CustomerID               core.CustomerID
-	ExpectedProducts         []core.ProviderProductID
-	ExpectedCustomerBindings []core.StoreReference
-	QueryReferences          []core.StoreReference
 }
 
 func (request ReconciliationRequest) Validate() error {
@@ -53,12 +73,6 @@ func (request ReconciliationRequest) Validate() error {
 		return errors.New("reconciliation requires at least one query reference")
 	}
 	return validateReferencesWithRole(request.QueryReferences, core.ReferenceQuery)
-}
-
-type VerificationResult struct {
-	VerifiedAt   time.Time
-	Artifacts    []VerifiedArtifact
-	Observations []core.PurchaseObservation
 }
 
 func (result VerificationResult) ValidateForVerification(request VerificationRequest) error {
@@ -191,18 +205,4 @@ func validateProductSet(products []core.ProviderProductID) error {
 		seen[product] = struct{}{}
 	}
 	return nil
-}
-
-type Verifier interface {
-	Verify(context.Context, VerificationRequest) (VerificationResult, error)
-}
-
-type Reconciler interface {
-	Reconcile(context.Context, ReconciliationRequest) (VerificationResult, error)
-}
-
-type Adapter interface {
-	Provider() core.Provider
-	Verifier
-	Reconciler
 }

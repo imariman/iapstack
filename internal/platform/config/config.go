@@ -10,7 +10,9 @@ import (
 )
 
 const (
-	defaultHTTPAddress     = ":8080"
+	// defaultHTTPAddress is the API listen address used when no override is supplied.
+	defaultHTTPAddress = ":8080"
+	// defaultShutdownTimeout bounds graceful process shutdown.
 	defaultShutdownTimeout = 10 * time.Second
 )
 

@@ -5,27 +5,83 @@ import (
 	"fmt"
 )
 
-type Provider string
-
 const (
-	ProviderAppleAppStore      Provider = "apple_app_store"
-	ProviderGooglePlay         Provider = "google_play"
-	ProviderHuaweiAppGallery   Provider = "huawei_appgallery"
-	ProviderAmazonAppstore     Provider = "amazon_appstore"
+	// ProviderAppleAppStore identifies Apple's App Store purchase provider.
+	ProviderAppleAppStore Provider = "apple_app_store"
+	// ProviderGooglePlay identifies the Google Play purchase provider.
+	ProviderGooglePlay Provider = "google_play"
+	// ProviderHuaweiAppGallery identifies the Huawei AppGallery purchase provider.
+	ProviderHuaweiAppGallery Provider = "huawei_appgallery"
+	// ProviderAmazonAppstore identifies the Amazon Appstore purchase provider.
+	ProviderAmazonAppstore Provider = "amazon_appstore"
+	// ProviderSamsungGalaxyStore identifies the Samsung Galaxy Store purchase provider.
 	ProviderSamsungGalaxyStore Provider = "samsung_galaxy_store"
 )
+
+const (
+	// EnvironmentProduction identifies live provider transactions.
+	EnvironmentProduction Environment = "production"
+	// EnvironmentSandbox identifies provider-managed sandbox transactions.
+	EnvironmentSandbox Environment = "sandbox"
+	// EnvironmentTest identifies local, beta, or other test transactions.
+	EnvironmentTest Environment = "test"
+)
+
+const (
+	// ProductKindSubscription identifies access sold for a bounded recurring or prepaid period.
+	ProductKindSubscription ProductKind = "subscription"
+	// ProductKindNonConsumable identifies a durable one-time purchase.
+	ProductKindNonConsumable ProductKind = "non_consumable"
+	// ProductKindConsumable identifies a quantity that can be fulfilled or consumed.
+	ProductKindConsumable ProductKind = "consumable"
+)
+
+type Provider string
+
+type Environment string
+
+type ProductKind string
+
+type StoreApplication struct {
+	Provider    Provider
+	Environment Environment
+	ID          ProviderApplicationID
+}
+
+type Application struct {
+	ID        ApplicationID
+	ProjectID ProjectID
+	Store     StoreApplication
+}
+
+type Customer struct {
+	ID         CustomerID
+	ProjectID  ProjectID
+	ExternalID string
+}
+
+type Entitlement struct {
+	ID        EntitlementID
+	ProjectID ProjectID
+	Key       string
+}
+
+type Product struct {
+	ID             ProductID
+	ProjectID      ProjectID
+	Kind           ProductKind
+	EntitlementIDs []EntitlementID
+}
+
+type StoreProduct struct {
+	ApplicationID ApplicationID
+	ProductID     ProductID
+	ProviderID    ProviderProductID
+}
 
 func (provider Provider) Validate() error {
 	return validateIdentifier("provider", string(provider))
 }
-
-type Environment string
-
-const (
-	EnvironmentProduction Environment = "production"
-	EnvironmentSandbox    Environment = "sandbox"
-	EnvironmentTest       Environment = "test"
-)
 
 func (environment Environment) Validate() error {
 	switch environment {
@@ -36,22 +92,8 @@ func (environment Environment) Validate() error {
 	}
 }
 
-type ProductKind string
-
-const (
-	ProductKindSubscription  ProductKind = "subscription"
-	ProductKindNonConsumable ProductKind = "non_consumable"
-	ProductKindConsumable    ProductKind = "consumable"
-)
-
 func (kind ProductKind) Validate() error {
 	return validateIdentifier("product kind", string(kind))
-}
-
-type StoreApplication struct {
-	Provider    Provider
-	Environment Environment
-	ID          ProviderApplicationID
 }
 
 func (application StoreApplication) Validate() error {
@@ -62,24 +104,12 @@ func (application StoreApplication) Validate() error {
 	)
 }
 
-type Application struct {
-	ID        ApplicationID
-	ProjectID ProjectID
-	Store     StoreApplication
-}
-
 func (application Application) Validate() error {
 	return errors.Join(
 		application.ID.Validate(),
 		application.ProjectID.Validate(),
 		application.Store.Validate(),
 	)
-}
-
-type Customer struct {
-	ID         CustomerID
-	ProjectID  ProjectID
-	ExternalID string
 }
 
 func (customer Customer) Validate() error {
@@ -90,25 +120,12 @@ func (customer Customer) Validate() error {
 	)
 }
 
-type Entitlement struct {
-	ID        EntitlementID
-	ProjectID ProjectID
-	Key       string
-}
-
 func (entitlement Entitlement) Validate() error {
 	return errors.Join(
 		entitlement.ID.Validate(),
 		entitlement.ProjectID.Validate(),
 		validateIdentifier("entitlement key", entitlement.Key),
 	)
-}
-
-type Product struct {
-	ID             ProductID
-	ProjectID      ProjectID
-	Kind           ProductKind
-	EntitlementIDs []EntitlementID
 }
 
 func (product Product) Validate() error {
@@ -130,12 +147,6 @@ func (product Product) Validate() error {
 		seen[entitlementID] = struct{}{}
 	}
 	return nil
-}
-
-type StoreProduct struct {
-	ApplicationID ApplicationID
-	ProductID     ProductID
-	ProviderID    ProviderProductID
 }
 
 func (product StoreProduct) Validate() error {

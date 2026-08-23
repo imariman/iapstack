@@ -17,6 +17,11 @@ type Evidence struct {
 	payload     []byte
 }
 
+type VerifiedArtifact struct {
+	Kind     string
+	Evidence Evidence
+}
+
 func NewEvidence(contentType string, payload []byte) (Evidence, error) {
 	evidence := Evidence{
 		ContentType: contentType,
@@ -39,11 +44,6 @@ func (evidence Evidence) Validate() error {
 		return errors.New("evidence payload is required")
 	}
 	return nil
-}
-
-type VerifiedArtifact struct {
-	Kind     string
-	Evidence Evidence
 }
 
 func (artifact VerifiedArtifact) Validate() error {

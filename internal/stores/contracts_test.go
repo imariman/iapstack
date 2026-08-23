@@ -11,6 +11,10 @@ import (
 	"github.com/imariman/iapstack/internal/stores"
 )
 
+type fakeAdapter struct {
+	provider core.Provider
+}
+
 func TestEvidenceIsOpaqueCopiedAndLogSafe(t *testing.T) {
 	t.Parallel()
 
@@ -261,10 +265,6 @@ func TestFailureClassificationDoesNotLeakCause(t *testing.T) {
 	if failure.Unwrap() == nil {
 		t.Fatal("Unwrap() = nil, want original cause")
 	}
-}
-
-type fakeAdapter struct {
-	provider core.Provider
 }
 
 func (adapter fakeAdapter) Provider() core.Provider {

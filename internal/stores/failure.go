@@ -7,17 +7,24 @@ import (
 	"github.com/imariman/iapstack/internal/core"
 )
 
-type FailureKind string
-
 const (
+	// FailureInvalidEvidence indicates malformed, forged, or inconsistent purchase evidence.
 	FailureInvalidEvidence FailureKind = "invalid_evidence"
-	FailureUnauthorized    FailureKind = "unauthorized"
-	FailureNotFound        FailureKind = "not_found"
-	FailureConflict        FailureKind = "conflict"
-	FailureRateLimited     FailureKind = "rate_limited"
-	FailureTemporary       FailureKind = "temporary"
-	FailurePermanent       FailureKind = "permanent"
+	// FailureUnauthorized indicates rejected provider credentials or authorization.
+	FailureUnauthorized FailureKind = "unauthorized"
+	// FailureNotFound indicates that the provider could not find the purchase.
+	FailureNotFound FailureKind = "not_found"
+	// FailureConflict indicates a provider-side concurrent or state conflict.
+	FailureConflict FailureKind = "conflict"
+	// FailureRateLimited indicates provider throttling that can be retried later.
+	FailureRateLimited FailureKind = "rate_limited"
+	// FailureTemporary indicates a transient provider or network failure.
+	FailureTemporary FailureKind = "temporary"
+	// FailurePermanent indicates a non-retryable provider failure.
+	FailurePermanent FailureKind = "permanent"
 )
+
+type FailureKind string
 
 type Failure struct {
 	Provider   core.Provider

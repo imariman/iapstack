@@ -8,6 +8,7 @@ import (
 	"github.com/imariman/iapstack/internal/core"
 )
 
+// ErrAdapterNotFound indicates that no adapter is registered for a provider.
 var ErrAdapterNotFound = errors.New("store adapter not found")
 
 type Registry struct {

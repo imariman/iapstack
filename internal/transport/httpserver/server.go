@@ -12,8 +12,10 @@ import (
 )
 
 const (
+	// readHeaderTimeout bounds the time allowed to receive HTTP request headers.
 	readHeaderTimeout = 5 * time.Second
-	idleTimeout       = 60 * time.Second
+	// idleTimeout bounds how long an idle keep-alive connection remains open.
+	idleTimeout = 60 * time.Second
 )
 
 type Server struct {

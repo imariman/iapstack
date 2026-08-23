@@ -6,15 +6,20 @@ import (
 	"log/slog"
 )
 
-type ReferenceRole string
-
 const (
-	ReferenceTransaction     ReferenceRole = "transaction"
-	ReferenceLineage         ReferenceRole = "lineage"
-	ReferenceLinkedLineage   ReferenceRole = "linked_lineage"
-	ReferenceQuery           ReferenceRole = "query"
+	// ReferenceTransaction identifies an order, payment, transaction, or receipt.
+	ReferenceTransaction ReferenceRole = "transaction"
+	// ReferenceLineage identifies the current purchase or subscription lineage.
+	ReferenceLineage ReferenceRole = "lineage"
+	// ReferenceLinkedLineage identifies a prior or related purchase lineage.
+	ReferenceLinkedLineage ReferenceRole = "linked_lineage"
+	// ReferenceQuery identifies a token or identifier used for authoritative lookups.
+	ReferenceQuery ReferenceRole = "query"
+	// ReferenceCustomerBinding identifies a provider-side application customer association.
 	ReferenceCustomerBinding ReferenceRole = "customer_binding"
 )
+
+type ReferenceRole string
 
 // StoreReference is an opaque provider identifier. Its value is deliberately
 // private and redacted from string and structured log output because purchase

@@ -6,20 +6,139 @@ import (
 	"time"
 )
 
-type LifecycleState string
+const (
+	// LifecyclePending identifies a purchase that has not completed payment.
+	LifecyclePending LifecycleState = "pending"
+	// LifecycleActive identifies a purchase that currently permits service.
+	LifecycleActive LifecycleState = "active"
+	// LifecycleGracePeriod identifies temporary service during a billing grace period.
+	LifecycleGracePeriod LifecycleState = "grace_period"
+	// LifecycleOnHold identifies a subscription blocked by an unresolved billing issue.
+	LifecycleOnHold LifecycleState = "on_hold"
+	// LifecyclePaused identifies a subscription paused by the customer or provider.
+	LifecyclePaused LifecycleState = "paused"
+	// LifecycleCanceled identifies a purchase whose renewal or continuation was canceled.
+	LifecycleCanceled LifecycleState = "canceled"
+	// LifecycleExpired identifies a purchase whose effective period ended.
+	LifecycleExpired LifecycleState = "expired"
+	// LifecycleRefunded identifies a purchase with a provider-recorded refund.
+	LifecycleRefunded LifecycleState = "refunded"
+	// LifecycleRevoked identifies a purchase whose service was removed immediately.
+	LifecycleRevoked LifecycleState = "revoked"
+	// LifecycleUnresolved identifies provider evidence that cannot yet be normalized safely.
+	LifecycleUnresolved LifecycleState = "unresolved"
+)
 
 const (
-	LifecyclePending     LifecycleState = "pending"
-	LifecycleActive      LifecycleState = "active"
-	LifecycleGracePeriod LifecycleState = "grace_period"
-	LifecycleOnHold      LifecycleState = "on_hold"
-	LifecyclePaused      LifecycleState = "paused"
-	LifecycleCanceled    LifecycleState = "canceled"
-	LifecycleExpired     LifecycleState = "expired"
-	LifecycleRefunded    LifecycleState = "refunded"
-	LifecycleRevoked     LifecycleState = "revoked"
-	LifecycleUnresolved  LifecycleState = "unresolved"
+	// AccessAllowed indicates that verified store evidence currently permits service.
+	AccessAllowed AccessStatus = "allowed"
+	// AccessDenied indicates that verified store evidence currently denies service.
+	AccessDenied AccessStatus = "denied"
+	// AccessUnresolved indicates that store evidence is not yet authoritative enough for access.
+	AccessUnresolved AccessStatus = "unresolved"
 )
+
+const (
+	// AccessReasonPurchaseValid indicates a completed purchase in its effective period.
+	AccessReasonPurchaseValid AccessReason = "purchase_valid"
+	// AccessReasonGracePeriod indicates access retained during billing recovery.
+	AccessReasonGracePeriod AccessReason = "grace_period"
+	// AccessReasonPendingPayment indicates that payment has not completed.
+	AccessReasonPendingPayment AccessReason = "pending_payment"
+	// AccessReasonCanceledAtPeriodEnd indicates cancellation with access until expiry.
+	AccessReasonCanceledAtPeriodEnd AccessReason = "canceled_at_period_end"
+	// AccessReasonExpired indicates that the effective purchase period ended.
+	AccessReasonExpired AccessReason = "expired"
+	// AccessReasonBillingIssue indicates access affected by a provider billing problem.
+	AccessReasonBillingIssue AccessReason = "billing_issue"
+	// AccessReasonPaused indicates access affected by a paused subscription.
+	AccessReasonPaused AccessReason = "paused"
+	// AccessReasonRefunded indicates access evaluated after a refund.
+	AccessReasonRefunded AccessReason = "refunded"
+	// AccessReasonRevoked indicates that the provider removed service immediately.
+	AccessReasonRevoked AccessReason = "revoked"
+	// AccessReasonProviderDecision indicates an authoritative provider-specific decision.
+	AccessReasonProviderDecision AccessReason = "provider_decision"
+	// AccessReasonUnresolved indicates that no safe access decision is available yet.
+	AccessReasonUnresolved AccessReason = "unresolved"
+)
+
+const (
+	// OwnershipPurchased indicates that the current customer bought the product.
+	OwnershipPurchased Ownership = "purchased"
+	// OwnershipFamilyShared indicates that access comes from provider family sharing.
+	OwnershipFamilyShared Ownership = "family_shared"
+	// OwnershipUnknown indicates that the provider does not expose ownership detail.
+	OwnershipUnknown Ownership = "unknown"
+)
+
+const (
+	// RenewalNone identifies a purchase that does not renew automatically.
+	RenewalNone RenewalMode = "none"
+	// RenewalAuto identifies a provider-managed automatically renewing purchase.
+	RenewalAuto RenewalMode = "auto"
+	// RenewalPrepaid identifies a fixed prepaid subscription period.
+	RenewalPrepaid RenewalMode = "prepaid"
+	// RenewalUnknown identifies renewal behavior that cannot yet be determined.
+	RenewalUnknown RenewalMode = "unknown"
+)
+
+const (
+	// RenewalNotApplicable indicates that renewal status does not apply.
+	RenewalNotApplicable RenewalStatus = "not_applicable"
+	// RenewalEnabled indicates that automatic renewal is enabled.
+	RenewalEnabled RenewalStatus = "enabled"
+	// RenewalDisabled indicates that automatic renewal is disabled.
+	RenewalDisabled RenewalStatus = "disabled"
+	// RenewalStatusUnknown indicates that automatic renewal status is unavailable.
+	RenewalStatusUnknown RenewalStatus = "unknown"
+)
+
+type LifecycleState string
+
+type AccessStatus string
+
+type AccessReason string
+
+type Ownership string
+
+type RenewalMode string
+
+type RenewalStatus string
+
+type Renewal struct {
+	Mode          RenewalMode
+	Status        RenewalStatus
+	NextProductID ProviderProductID
+	NextRenewalAt *time.Time
+}
+
+type EffectivePeriod struct {
+	StartsAt time.Time
+	EndsAt   *time.Time
+}
+
+// PurchaseObservation is a verified, normalized view of one provider line item
+// at a point in time. ID must be a non-sensitive deterministic idempotency key;
+// provider tokens belong in redacted StoreReference values instead.
+type PurchaseObservation struct {
+	ID              ObservationID
+	ApplicationID   ApplicationID
+	Store           StoreApplication
+	ProductID       ProviderProductID
+	ProductKind     ProductKind
+	State           LifecycleState
+	ProviderState   string
+	Access          AccessStatus
+	AccessReason    AccessReason
+	Ownership       Ownership
+	Quantity        uint32
+	OccurredAt      time.Time
+	ObservedAt      time.Time
+	EffectivePeriod EffectivePeriod
+	Renewal         Renewal
+	References      []StoreReference
+}
 
 func (state LifecycleState) Validate() error {
 	switch state {
@@ -32,14 +151,6 @@ func (state LifecycleState) Validate() error {
 	}
 }
 
-type AccessStatus string
-
-const (
-	AccessAllowed    AccessStatus = "allowed"
-	AccessDenied     AccessStatus = "denied"
-	AccessUnresolved AccessStatus = "unresolved"
-)
-
 func (status AccessStatus) Validate() error {
 	switch status {
 	case AccessAllowed, AccessDenied, AccessUnresolved:
@@ -48,22 +159,6 @@ func (status AccessStatus) Validate() error {
 		return fmt.Errorf("unsupported access status %q", status)
 	}
 }
-
-type AccessReason string
-
-const (
-	AccessReasonPurchaseValid       AccessReason = "purchase_valid"
-	AccessReasonGracePeriod         AccessReason = "grace_period"
-	AccessReasonPendingPayment      AccessReason = "pending_payment"
-	AccessReasonCanceledAtPeriodEnd AccessReason = "canceled_at_period_end"
-	AccessReasonExpired             AccessReason = "expired"
-	AccessReasonBillingIssue        AccessReason = "billing_issue"
-	AccessReasonPaused              AccessReason = "paused"
-	AccessReasonRefunded            AccessReason = "refunded"
-	AccessReasonRevoked             AccessReason = "revoked"
-	AccessReasonProviderDecision    AccessReason = "provider_decision"
-	AccessReasonUnresolved          AccessReason = "unresolved"
-)
 
 func (reason AccessReason) Validate() error {
 	switch reason {
@@ -77,14 +172,6 @@ func (reason AccessReason) Validate() error {
 	}
 }
 
-type Ownership string
-
-const (
-	OwnershipPurchased    Ownership = "purchased"
-	OwnershipFamilyShared Ownership = "family_shared"
-	OwnershipUnknown      Ownership = "unknown"
-)
-
 func (ownership Ownership) Validate() error {
 	switch ownership {
 	case OwnershipPurchased, OwnershipFamilyShared, OwnershipUnknown:
@@ -92,31 +179,6 @@ func (ownership Ownership) Validate() error {
 	default:
 		return fmt.Errorf("unsupported ownership %q", ownership)
 	}
-}
-
-type RenewalMode string
-
-const (
-	RenewalNone    RenewalMode = "none"
-	RenewalAuto    RenewalMode = "auto"
-	RenewalPrepaid RenewalMode = "prepaid"
-	RenewalUnknown RenewalMode = "unknown"
-)
-
-type RenewalStatus string
-
-const (
-	RenewalNotApplicable RenewalStatus = "not_applicable"
-	RenewalEnabled       RenewalStatus = "enabled"
-	RenewalDisabled      RenewalStatus = "disabled"
-	RenewalStatusUnknown RenewalStatus = "unknown"
-)
-
-type Renewal struct {
-	Mode          RenewalMode
-	Status        RenewalStatus
-	NextProductID ProviderProductID
-	NextRenewalAt *time.Time
 }
 
 func (renewal Renewal) Validate(productKind ProductKind) error {
@@ -166,11 +228,6 @@ func (renewal Renewal) Validate(productKind ProductKind) error {
 	return nil
 }
 
-type EffectivePeriod struct {
-	StartsAt time.Time
-	EndsAt   *time.Time
-}
-
 func (period EffectivePeriod) Validate() error {
 	if period.StartsAt.IsZero() {
 		if period.EndsAt != nil {
@@ -182,28 +239,6 @@ func (period EffectivePeriod) Validate() error {
 		return errors.New("effective period end must be after its start")
 	}
 	return nil
-}
-
-// PurchaseObservation is a verified, normalized view of one provider line item
-// at a point in time. ID must be a non-sensitive deterministic idempotency key;
-// provider tokens belong in redacted StoreReference values instead.
-type PurchaseObservation struct {
-	ID              ObservationID
-	ApplicationID   ApplicationID
-	Store           StoreApplication
-	ProductID       ProviderProductID
-	ProductKind     ProductKind
-	State           LifecycleState
-	ProviderState   string
-	Access          AccessStatus
-	AccessReason    AccessReason
-	Ownership       Ownership
-	Quantity        uint32
-	OccurredAt      time.Time
-	ObservedAt      time.Time
-	EffectivePeriod EffectivePeriod
-	Renewal         Renewal
-	References      []StoreReference
 }
 
 func (observation PurchaseObservation) Validate() error {
