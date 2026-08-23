@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository:
+    name: Repository checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Validate tracked files
+        shell: bash
+        run: |
+          empty_tree="$(git hash-object -t tree /dev/null)"
+          git diff --check "$empty_tree" HEAD
+          test -s README.md
+          test -s LICENSE
+          test -s assets/iapstack-gopher.png
+
+  go:
+    name: Go checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Detect Go module
+        id: module
+        shell: bash
+        run: |
+          if [[ -f go.mod ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.module.outputs.present == 'true'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        if: steps.module.outputs.present == 'true'
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            echo "The following files are not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run go vet
+        if: steps.module.outputs.present == 'true'
+        run: go vet ./...
+
+      - name: Run tests
+        if: steps.module.outputs.present == 'true'
+        run: go test -race -count=1 ./...
+
+      - name: Report bootstrap state
+        if: steps.module.outputs.present != 'true'
+        run: echo "Go checks will activate automatically when go.mod is added."
