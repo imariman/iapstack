@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/imariman/iapstack/internal/core"
+	"github.com/imariman/iapstack/internal/protection"
 )
 
 // Store owns durable storage resources and starts atomic units of work.
@@ -79,13 +80,6 @@ type CatalogProduct struct {
 	Entitlements []core.Entitlement
 }
 
-// ProtectedValue contains encrypted bytes and a stable plaintext fingerprint.
-type ProtectedValue struct {
-	Ciphertext  []byte
-	Fingerprint [32]byte
-	KeyID       string
-}
-
 // EvidenceWrite describes encrypted purchase evidence received from a client or provider.
 type EvidenceWrite struct {
 	ProjectID     core.ProjectID
@@ -93,7 +87,7 @@ type EvidenceWrite struct {
 	CustomerID    core.CustomerID
 	Kind          string
 	ContentType   string
-	Payload       ProtectedValue
+	Payload       protection.Value
 	ReceivedAt    time.Time
 }
 
@@ -102,14 +96,14 @@ type ArtifactWrite struct {
 	EvidenceID  int64
 	Kind        string
 	ContentType string
-	Payload     ProtectedValue
+	Payload     protection.Value
 }
 
 // ProtectedReference contains non-secret reference metadata and an encrypted value.
 type ProtectedReference struct {
 	Role  core.ReferenceRole
 	Kind  string
-	Value ProtectedValue
+	Value protection.Value
 }
 
 // ObservationWrite binds a normalized observation to its internal catalog and protected references.
@@ -168,17 +162,6 @@ var (
 	// ErrConflict indicates that an identity or idempotency key belongs to different data.
 	ErrConflict = errors.New("persistence conflict")
 )
-
-// Validate checks one protected value without inspecting or exposing plaintext.
-func (value ProtectedValue) Validate() error {
-	if len(value.Ciphertext) == 0 {
-		return errors.New("protected ciphertext is required")
-	}
-	if value.Fingerprint == ([32]byte{}) {
-		return errors.New("protected fingerprint is required")
-	}
-	return validateText("encryption key ID", value.KeyID)
-}
 
 // Validate checks evidence scope, metadata, protected payload, and receipt time.
 func (write EvidenceWrite) Validate() error {

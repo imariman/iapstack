@@ -12,6 +12,7 @@ import (
 
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/stores"
 	"github.com/imariman/iapstack/internal/verification"
 )
@@ -271,17 +272,18 @@ func (clock fakeClock) Now() time.Time {
 // Protect returns deterministic ciphertext metadata without retaining plaintext.
 func (protector *fakeProtector) Protect(
 	_ context.Context,
-	request verification.ProtectionRequest,
-) (persistence.ProtectedValue, error) {
+	request protection.Request,
+) (protection.Value, error) {
 	protector.calls++
 	if protector.err != nil {
-		return persistence.ProtectedValue{}, protector.err
+		return protection.Value{}, protector.err
 	}
+	plaintext := request.Bytes()
 	fingerprintInput := append(
-		[]byte(string(request.ApplicationID)+":"+request.Purpose+":"),
-		request.Plaintext...,
+		[]byte(string(request.Scope.ApplicationID)+":"+request.Scope.Purpose+":"),
+		plaintext...,
 	)
-	return persistence.ProtectedValue{
+	return protection.Value{
 		Ciphertext:  []byte("protected-ciphertext"),
 		Fingerprint: sha256.Sum256(fingerprintInput),
 		KeyID:       verificationKeyID,
@@ -631,7 +633,7 @@ func newVerificationService(
 	t *testing.T,
 	store persistence.Store,
 	adapter stores.Adapter,
-	protector verification.Protector,
+	protector protection.Protector,
 	clock verification.Clock,
 ) *verification.Service {
 	t.Helper()
