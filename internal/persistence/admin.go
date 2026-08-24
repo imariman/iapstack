@@ -42,7 +42,9 @@ type AdminApplication struct {
 	Environment           core.Environment
 	ProviderApplicationID core.ProviderApplicationID
 	CredentialConfigured  bool
+	CredentialRevision    int64
 	WebhookConfigured     bool
+	WebhookRevision       int64
 	CreatedAt             time.Time
 }
 
