@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>IAPStack Operations</title>
+    <link rel="stylesheet" href="./app.css">
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">İçeriğe geç</a>
+
+    <main class="auth-stage" id="auth-stage">
+      <section class="auth-card" aria-labelledby="auth-title">
+        <div class="brand-lockup" aria-label="IAPStack">
+          <span class="brand-mark" aria-hidden="true">IAP</span>
+          <span class="brand-word">STACK</span>
+        </div>
+        <p class="eyebrow">Self-hosted purchase operations</p>
+        <h1 id="auth-title">Satın alma akışının kontrol odası.</h1>
+        <p class="auth-copy">Admin anahtarınız yalnızca bu sekmenin oturum belleğinde tutulur. Sunucuda veya kalıcı tarayıcı depolamasında saklanmaz.</p>
+        <form id="auth-form" class="auth-form">
+          <label for="admin-key">Admin bearer key</label>
+          <div class="key-row">
+            <input id="admin-key" name="admin-key" type="password" autocomplete="off" spellcheck="false" required placeholder="iap_… veya bootstrap anahtarı">
+            <button type="submit" class="primary-button">Bağlan</button>
+          </div>
+          <p class="form-message" id="auth-message" role="alert"></p>
+        </form>
+        <div class="auth-signal" aria-hidden="true">
+          <span>STORE</span><i></i><span>VERIFY</span><i></i><span>ACCESS</span><i></i><span>DELIVER</span>
+        </div>
+      </section>
+    </main>
+
+    <div class="app-shell" id="app-shell" hidden>
+      <aside class="sidebar">
+        <div class="brand-lockup compact" aria-label="IAPStack">
+          <span class="brand-mark" aria-hidden="true">IAP</span>
+          <span class="brand-word">STACK</span>
+        </div>
+        <div class="sidebar-heading">
+          <span>Projeler</span>
+          <button class="icon-button" id="open-setup" type="button" aria-label="Yeni proje ve uygulama ekle">+</button>
+        </div>
+        <nav id="project-nav" class="project-nav" aria-label="Projeler"></nav>
+        <div class="sidebar-footer">
+          <span class="system-dot" aria-hidden="true"></span>
+          <span>Self-hosted control plane</span>
+        </div>
+      </aside>
+
+      <main class="workspace" id="workspace" tabindex="-1">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Project operations</p>
+            <h1 id="project-title">—</h1>
+          </div>
+          <div class="topbar-actions">
+            <span id="updated-at" class="updated-at">Henüz yenilenmedi</span>
+            <button class="secondary-button" id="refresh" type="button">Yenile</button>
+            <button class="text-button" id="logout" type="button">Çıkış</button>
+          </div>
+        </header>
+
+        <div class="global-message" id="global-message" role="status" aria-live="polite"></div>
+
+        <section class="signal-line" aria-labelledby="signal-title">
+          <div class="signal-heading">
+            <p class="eyebrow">Live route</p>
+            <h2 id="signal-title">Purchase signal</h2>
+          </div>
+          <ol>
+            <li data-signal="store"><span class="signal-node"></span><strong>Store</strong><small id="signal-store">—</small></li>
+            <li data-signal="verify"><span class="signal-node"></span><strong>Verify</strong><small id="signal-verify">—</small></li>
+            <li data-signal="access"><span class="signal-node"></span><strong>Access</strong><small id="signal-access">—</small></li>
+            <li data-signal="deliver"><span class="signal-node"></span><strong>Deliver</strong><small id="signal-deliver">—</small></li>
+          </ol>
+        </section>
+
+        <section class="metric-grid" aria-label="Proje özeti">
+          <article><span>Uygulama</span><strong id="metric-apps">0</strong><small id="metric-apps-note">—</small></article>
+          <article><span>Müşteri</span><strong id="metric-customers">0</strong><small id="metric-customers-note">—</small></article>
+          <article><span>Ürün</span><strong id="metric-products">0</strong><small id="metric-products-note">—</small></article>
+          <article><span>Bekleyen iş</span><strong id="metric-pending">0</strong><small id="metric-pending-note">—</small></article>
+        </section>
+
+        <section class="panel" aria-labelledby="apps-title">
+          <div class="panel-heading">
+            <div><p class="eyebrow">Configuration</p><h2 id="apps-title">Uygulamalar</h2></div>
+            <span class="panel-count" id="apps-count">0 kayıt</span>
+          </div>
+          <div class="application-grid" id="application-grid"></div>
+        </section>
+
+        <div class="split-grid">
+          <section class="panel" aria-labelledby="catalog-title">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Catalog</p><h2 id="catalog-title">Ürün haritası</h2></div>
+              <span class="panel-count" id="products-count">0 kayıt</span>
+            </div>
+            <div class="stack-list" id="product-list"></div>
+          </section>
+
+          <section class="panel queue-panel" aria-labelledby="queue-title">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Durability</p><h2 id="queue-title">İş kuyrukları</h2></div>
+            </div>
+            <div class="queue-list" id="queue-list"></div>
+          </section>
+        </div>
+
+        <section class="panel table-panel" aria-labelledby="transactions-title">
+          <div class="panel-heading">
+            <div><p class="eyebrow">Latest evidence</p><h2 id="transactions-title">Son doğrulamalar</h2></div>
+            <span class="panel-count">Son 50</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Durum</th><th>Ürün</th><th>Müşteri</th><th>Erişim</th><th>Gözlem</th></tr></thead>
+              <tbody id="transaction-rows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="split-grid wide-left">
+          <section class="panel table-panel" aria-labelledby="customers-title">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Identity</p><h2 id="customers-title">Müşteriler</h2></div>
+              <span class="panel-count">İlk 200</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Müşteri</th><th>Erişim</th><th>Son gözlem</th></tr></thead>
+                <tbody id="customer-rows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel table-panel" aria-labelledby="webhooks-title">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Outbound</p><h2 id="webhooks-title">Bildirim teslimatı</h2></div>
+              <span class="panel-count">Son 50</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Event</th><th>Durum</th><th>Zaman</th></tr></thead>
+                <tbody id="webhook-rows"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <dialog id="setup-dialog" class="setup-dialog">
+      <form id="setup-form" method="dialog">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">Quick start</p><h2>Huawei katalog iskeleti</h2></div>
+          <button class="icon-button" id="close-setup" value="cancel" aria-label="Pencereyi kapat">×</button>
+        </div>
+        <p class="dialog-copy">Proje, uygulama, entitlement, ürün ve store mapping kayıtlarını tek akışta oluşturur. Credential ve webhook secret’larını API üzerinden ayrıca ekleyin.</p>
+        <div class="form-grid">
+          <label>Project ID<input name="project_id" required placeholder="my-project"></label>
+          <label>Application ID<input name="application_id" required placeholder="mobile-app"></label>
+          <label>Huawei App ID<input name="provider_application_id" required placeholder="123456789"></label>
+          <label>Environment<select name="environment"><option value="sandbox">Sandbox</option><option value="production">Production</option><option value="test">Test</option></select></label>
+          <label>Entitlement ID<input name="entitlement_id" required placeholder="premium-access"></label>
+          <label>Entitlement key<input name="entitlement_key" required placeholder="premium"></label>
+          <label>Product ID<input name="product_id" required placeholder="premium-yearly"></label>
+          <label>Product kind<select name="product_kind"><option value="subscription">Subscription</option><option value="non_consumable">Non-consumable</option></select></label>
+          <label class="full-row">Huawei product ID<input name="provider_product_id" required placeholder="premium_yearly_huawei"></label>
+        </div>
+        <p class="form-message" id="setup-message" role="alert"></p>
+        <div class="dialog-actions">
+          <button type="button" class="text-button" id="cancel-setup">Vazgeç</button>
+          <button type="submit" class="primary-button">Kataloğu oluştur</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

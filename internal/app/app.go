@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/imariman/iapstack/dashboard"
 	"github.com/imariman/iapstack/internal/auth"
 	"github.com/imariman/iapstack/internal/credentials"
 	"github.com/imariman/iapstack/internal/persistence"
@@ -138,10 +139,14 @@ func runAPI(
 	if err != nil {
 		return err
 	}
+	dashboardHandler, err := dashboard.New(api)
+	if err != nil {
+		return err
+	}
 	server := httpserver.NewWithOptions(httpserver.Options{
 		Address: cfg.HTTPAddress, ShutdownTimeout: cfg.ShutdownTimeout,
 		ReadinessTimeout: cfg.ReadinessTimeout, Logger: logger,
-		ReadyChecker: store, Metrics: metricRegistry, Handler: api,
+		ReadyChecker: store, Metrics: metricRegistry, Handler: dashboardHandler,
 	})
 	return server.Run(ctx)
 }
