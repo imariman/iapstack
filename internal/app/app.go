@@ -157,20 +157,15 @@ func runWorker(
 	metricRegistry *metrics.Registry,
 	logger *slog.Logger,
 ) error {
-	workerID, err := worker.NewIdentity(cfg.WorkerID)
-	if err != nil {
-		return err
-	}
 	providerProcessing, err := processing.New(store, keyring, verificationService)
 	if err != nil {
 		return err
 	}
-	runner, err := worker.New(store, worker.Config{
-		WorkerID: workerID, PollInterval: cfg.WorkerPollInterval,
+	runner, err := worker.New(store.Pool(), store, worker.Config{
+		WorkerID: cfg.WorkerID, PollInterval: cfg.WorkerPollInterval,
 		JobTimeout: cfg.WorkerJobTimeout, Concurrency: cfg.WorkerConcurrency,
-		BatchSize: cfg.WorkerBatchSize, MaxAttempts: cfg.WorkerMaxAttempts,
-		MaintenanceInterval: cfg.WorkerMaintenanceInterval, QueueRetention: cfg.QueueRetention,
-		PruneBatchSize: cfg.QueuePruneBatchSize,
+		ShutdownTimeout: cfg.ShutdownTimeout, MaxAttempts: cfg.WorkerMaxAttempts,
+		QueueRetention: cfg.QueueRetention,
 	}, map[persistence.QueueName]worker.Handler{
 		persistence.QueueInbox:          worker.HandlerFunc(providerProcessing.HandleInbox),
 		persistence.QueueReconciliation: worker.HandlerFunc(providerProcessing.HandleReconciliation),
@@ -187,7 +182,7 @@ func runWorker(
 	if err != nil {
 		return err
 	}
-	logger.Info("worker is ready", "worker_id", workerID)
+	logger.Info("worker is ready")
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	server := httpserver.NewWithOptions(httpserver.Options{

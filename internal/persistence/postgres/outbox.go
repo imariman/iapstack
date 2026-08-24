@@ -57,6 +57,9 @@ func (repository *transaction) SaveOutboxEvent(
 		normalizeTime(event.AvailableAt),
 	).Scan(&eventID)
 	if err == nil {
+		if err := repository.ensureRiverJob(ctx, persistence.QueueOutbox, eventID, event.AvailableAt); err != nil {
+			return "", err
+		}
 		return eventID, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -68,7 +71,11 @@ func (repository *transaction) SaveOutboxEvent(
 		if !outboxIdentityMatches(identity, event) {
 			return "", fmt.Errorf("save outbox event: %w", persistence.ErrConflict)
 		}
-		return event.ID, nil
+		eventID = event.ID
+		if err := repository.ensureRiverJob(ctx, persistence.QueueOutbox, eventID, event.AvailableAt); err != nil {
+			return "", err
+		}
+		return eventID, nil
 	}
 	if !errors.Is(err, persistence.ErrNotFound) {
 		return "", err
@@ -91,6 +98,9 @@ func (repository *transaction) SaveOutboxEvent(
 	).Scan(&eventID)
 	if err != nil {
 		return "", classifyError("load existing logical outbox event", err)
+	}
+	if err := repository.ensureRiverJob(ctx, persistence.QueueOutbox, eventID, event.AvailableAt); err != nil {
+		return "", err
 	}
 	return eventID, nil
 }

@@ -1,26 +1,30 @@
-// Package worker executes durable inbox, reconciliation, and outbox work with bounded concurrency.
+// Package worker executes durable inbox, reconciliation, and outbox jobs through River.
 package worker
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/imariman/iapstack/internal/jobs"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/platform/metrics"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
 const (
-	// maximumBackoff caps retry delay for repeatedly failing work.
-	maximumBackoff = 15 * time.Minute
+	// queueMetricsInterval controls the inexpensive aggregate River depth query.
+	queueMetricsInterval = time.Minute
 )
 
-// Handler processes one worker-owned durable message without changing queue state directly.
+// Handler processes one durable message without changing queue state directly.
 type Handler interface {
 	// Handle performs one bounded attempt and returns a safely classifiable error.
 	Handle(context.Context, persistence.QueueMessage) error
@@ -36,31 +40,51 @@ type RetryableError interface {
 	Retryable() bool
 }
 
-// Config controls worker identity, polling, claims, attempts, and concurrency.
+// Config controls River identity, polling, attempts, retention, shutdown, and per-queue concurrency.
 type Config struct {
-	WorkerID     string
-	PollInterval time.Duration
-	JobTimeout   time.Duration
-	Concurrency  int
-	BatchSize    int
-	MaxAttempts  int
-	// MaintenanceInterval controls durable depth sampling and retention cleanup frequency.
-	MaintenanceInterval time.Duration
-	// QueueRetention preserves terminal queue records for operational inspection and replay protection.
-	QueueRetention time.Duration
-	// PruneBatchSize bounds terminal records deleted from one queue per maintenance cycle.
-	PruneBatchSize int
+	WorkerID        string
+	PollInterval    time.Duration
+	JobTimeout      time.Duration
+	ShutdownTimeout time.Duration
+	Concurrency     int
+	MaxAttempts     int
+	QueueRetention  time.Duration
 }
 
-// Runner claims durable messages and records each attempt outcome.
+// Runner owns the River client and the three provider-neutral job workers.
 type Runner struct {
-	store           persistence.OperationsStore
-	config          Config
-	handlers        map[persistence.QueueName]Handler
+	client          *river.Client[pgx.Tx]
+	pool            *pgxpool.Pool
 	metrics         *metrics.Registry
 	logger          *slog.Logger
-	clock           func() time.Time
-	nextMaintenance time.Time
+	shutdownTimeout time.Duration
+}
+
+// executor loads durable payloads, invokes handlers, and records terminal audit outcomes.
+type executor struct {
+	store    persistence.OperationsStore
+	handlers map[persistence.QueueName]Handler
+	metrics  *metrics.Registry
+	logger   *slog.Logger
+	clock    func() time.Time
+}
+
+// inboxWorker adapts River inbox arguments to the shared executor.
+type inboxWorker struct {
+	river.WorkerDefaults[jobs.InboxArgs]
+	executor *executor
+}
+
+// outboxWorker adapts River outbox arguments to the shared executor.
+type outboxWorker struct {
+	river.WorkerDefaults[jobs.OutboxArgs]
+	executor *executor
+}
+
+// reconciliationWorker adapts River reconciliation arguments to the shared executor.
+type reconciliationWorker struct {
+	river.WorkerDefaults[jobs.ReconciliationArgs]
+	executor *executor
 }
 
 // Handle calls the adapted handler function.
@@ -68,28 +92,26 @@ func (handler HandlerFunc) Handle(ctx context.Context, message persistence.Queue
 	return handler(ctx, message)
 }
 
-// New validates and constructs one durable worker runner.
+// New validates dependencies and constructs one River-backed worker runner.
 func New(
+	pool *pgxpool.Pool,
 	store persistence.OperationsStore,
 	config Config,
 	handlers map[persistence.QueueName]Handler,
 	registry *metrics.Registry,
 	logger *slog.Logger,
 ) (*Runner, error) {
+	if pool == nil {
+		return nil, errors.New("worker PostgreSQL pool is required")
+	}
 	if store == nil {
 		return nil, errors.New("worker operations store is required")
 	}
-	if config.WorkerID == "" || config.PollInterval <= 0 || config.JobTimeout <= 0 ||
-		config.Concurrency <= 0 || config.BatchSize <= 0 || config.MaxAttempts <= 0 ||
-		config.MaintenanceInterval <= 0 || config.QueueRetention <= 0 ||
-		config.PruneBatchSize <= 0 || config.PruneBatchSize > 1000 {
+	if config.PollInterval <= 0 || config.JobTimeout <= 0 || config.ShutdownTimeout <= 0 ||
+		config.Concurrency <= 0 || config.MaxAttempts <= 0 || config.QueueRetention <= 0 {
 		return nil, errors.New("worker configuration is invalid")
 	}
-	for _, queue := range []persistence.QueueName{
-		persistence.QueueInbox,
-		persistence.QueueReconciliation,
-		persistence.QueueOutbox,
-	} {
+	for _, queue := range durableQueues() {
 		if handlers[queue] == nil {
 			return nil, fmt.Errorf("worker handler for %s is required", queue)
 		}
@@ -100,105 +122,221 @@ func New(
 	if logger == nil {
 		logger = slog.Default()
 	}
+	execution := &executor{
+		store: store, handlers: handlers, metrics: registry, logger: logger, clock: time.Now,
+	}
+	workers := river.NewWorkers()
+	if err := river.AddWorkerSafely(workers, &inboxWorker{executor: execution}); err != nil {
+		return nil, fmt.Errorf("register inbox River worker: %w", err)
+	}
+	if err := river.AddWorkerSafely(workers, &outboxWorker{executor: execution}); err != nil {
+		return nil, fmt.Errorf("register outbox River worker: %w", err)
+	}
+	if err := river.AddWorkerSafely(workers, &reconciliationWorker{executor: execution}); err != nil {
+		return nil, fmt.Errorf("register reconciliation River worker: %w", err)
+	}
+	queueConfig := river.QueueConfig{MaxWorkers: config.Concurrency}
+	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
+		ID: strings.TrimSpace(config.WorkerID),
+		Queues: map[string]river.QueueConfig{
+			jobs.QueueInbox: queueConfig, jobs.QueueOutbox: queueConfig, jobs.QueueReconciliation: queueConfig,
+		},
+		Workers:                     workers,
+		Logger:                      logger,
+		JobTimeout:                  config.JobTimeout,
+		MaxAttempts:                 config.MaxAttempts,
+		FetchPollInterval:           config.PollInterval,
+		CancelledJobRetentionPeriod: config.QueueRetention,
+		CompletedJobRetentionPeriod: config.QueueRetention,
+		DiscardedJobRetentionPeriod: config.QueueRetention,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("construct River worker client: %w", err)
+	}
 	return &Runner{
-		store: store, config: config, handlers: handlers, metrics: registry, logger: logger, clock: time.Now,
+		client: client, pool: pool, metrics: registry, logger: logger, shutdownTimeout: config.ShutdownTimeout,
 	}, nil
 }
 
-// Run polls durable queues until cancellation and waits for already-claimed attempts to finish.
+// Run starts River, stops accepting work on cancellation, and bounds graceful shutdown.
 func (runner *Runner) Run(ctx context.Context) error {
-	ticker := time.NewTicker(runner.config.PollInterval)
-	defer ticker.Stop()
-	semaphore := make(chan struct{}, runner.config.Concurrency)
-	var attempts sync.WaitGroup
+	if runner == nil || runner.client == nil {
+		return errors.New("River worker runner is not initialized")
+	}
+	if err := runner.client.Start(context.WithoutCancel(ctx)); err != nil {
+		return fmt.Errorf("start River worker: %w", err)
+	}
+	metricsContext, metricsCancel := context.WithCancel(context.Background())
+	var metricsWorkers sync.WaitGroup
+	metricsWorkers.Add(1)
+	go func() {
+		defer metricsWorkers.Done()
+		runner.sampleQueueDepth(metricsContext)
+	}()
+	defer func() {
+		metricsCancel()
+		metricsWorkers.Wait()
+	}()
+	<-ctx.Done()
+	shutdownContext, cancel := context.WithTimeout(context.Background(), runner.shutdownTimeout)
+	defer cancel()
+	if err := runner.client.Stop(shutdownContext); err == nil {
+		return nil
+	}
+	hardStopContext, hardStopCancel := context.WithTimeout(context.Background(), runner.shutdownTimeout)
+	defer hardStopCancel()
+	if err := runner.client.StopAndCancel(hardStopContext); err != nil {
+		return fmt.Errorf("stop River worker: %w", err)
+	}
+	return nil
+}
 
+// sampleQueueDepth publishes bounded River state counts until worker shutdown.
+func (runner *Runner) sampleQueueDepth(ctx context.Context) {
+	ticker := time.NewTicker(queueMetricsInterval)
+	defer ticker.Stop()
 	for {
-		if err := runner.poll(ctx, semaphore, &attempts); err != nil {
-			runner.logger.Error("worker poll failed", "error_code", "queue_poll_failed")
+		if err := runner.refreshQueueDepth(ctx); err != nil && ctx.Err() == nil {
+			runner.logger.Error("sample River queue depth", "error_code", "queue_metrics_failed")
 		}
 		select {
 		case <-ctx.Done():
-			attempts.Wait()
-			return nil
+			return
 		case <-ticker.C:
 		}
 	}
 }
 
-// poll claims bounded work from every queue and dispatches it under one shared semaphore.
-func (runner *Runner) poll(ctx context.Context, semaphore chan struct{}, attempts *sync.WaitGroup) error {
-	if ctx.Err() != nil {
-		return nil
-	}
-	now := runner.clock().UTC()
-	var pollErr error
+// refreshQueueDepth reads grouped River job states without participating in queue transitions.
+func (runner *Runner) refreshQueueDepth(ctx context.Context) error {
+	states := []string{"available", "cancelled", "completed", "discarded", "pending", "retryable", "running", "scheduled"}
 	for _, queue := range durableQueues() {
-		availableSlots := cap(semaphore) - len(semaphore)
-		if availableSlots <= 0 {
-			break
-		}
-		limit := runner.config.BatchSize
-		if limit > availableSlots {
-			limit = availableSlots
-		}
-		var messages []persistence.QueueMessage
-		err := runner.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
-			var claimErr error
-			messages, claimErr = repository.ClaimQueue(ctx, persistence.QueueClaim{
-				Queue: queue, WorkerID: runner.config.WorkerID, Now: now,
-				StaleBefore: now.Add(-2 * runner.config.JobTimeout), Limit: limit,
-			})
-			return claimErr
-		})
-		if err != nil {
-			pollErr = fmt.Errorf("claim %s: %w", queue, err)
-			break
-		}
-		for _, message := range messages {
-			semaphore <- struct{}{}
-			attempts.Add(1)
-			go func(message persistence.QueueMessage) {
-				defer func() {
-					<-semaphore
-					attempts.Done()
-				}()
-				runner.attempt(message)
-			}(message)
+		for _, state := range states {
+			runner.metrics.SetQueueDepth(string(queue), state, 0)
 		}
 	}
-	runner.maintain(ctx, now)
-	return pollErr
-}
-
-// maintain samples queue depth and removes a bounded number of expired terminal records.
-func (runner *Runner) maintain(ctx context.Context, now time.Time) {
-	if !runner.nextMaintenance.IsZero() && now.Before(runner.nextMaintenance) {
-		return
+	rows, err := runner.pool.Query(ctx, `
+		SELECT queue, state, count(*)
+		FROM river_job
+		WHERE queue = ANY($1)
+		GROUP BY queue, state
+	`, []string{jobs.QueueInbox, jobs.QueueOutbox, jobs.QueueReconciliation})
+	if err != nil {
+		return fmt.Errorf("query River queue depth: %w", err)
 	}
-	runner.nextMaintenance = now.Add(runner.config.MaintenanceInterval)
-	for _, queue := range durableQueues() {
-		var depth map[string]int64
-		err := runner.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
-			if _, err := repository.PruneQueue(ctx, persistence.QueuePrune{
-				Queue: queue, Before: now.Add(-runner.config.QueueRetention), Limit: runner.config.PruneBatchSize,
-			}); err != nil {
-				return err
-			}
-			var err error
-			depth, err = repository.QueueDepth(ctx, queue)
-			return err
-		})
-		if err != nil {
-			runner.logger.Error("worker queue maintenance failed", "queue", queue, "error_code", "queue_maintenance_failed")
+	defer rows.Close()
+	for rows.Next() {
+		var queue, state string
+		var depth int64
+		if err := rows.Scan(&queue, &state, &depth); err != nil {
+			return fmt.Errorf("scan River queue depth: %w", err)
+		}
+		persistenceQueue, ok := persistenceQueue(queue)
+		if !ok {
 			continue
 		}
-		for _, state := range queueStates(queue) {
-			runner.metrics.SetQueueDepth(string(queue), state, depth[state])
-		}
+		runner.metrics.SetQueueDepth(string(persistenceQueue), state, depth)
 	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate River queue depth: %w", err)
+	}
+	return nil
 }
 
-// durableQueues returns the fixed queue processing and maintenance order.
+// Work processes one protected notification job.
+func (worker *inboxWorker) Work(ctx context.Context, job *river.Job[jobs.InboxArgs]) error {
+	return worker.executor.execute(ctx, persistence.QueueInbox, job.Args.MessageID, job.Attempt, job.MaxAttempts)
+}
+
+// Work processes one immutable webhook delivery job.
+func (worker *outboxWorker) Work(ctx context.Context, job *river.Job[jobs.OutboxArgs]) error {
+	return worker.executor.execute(ctx, persistence.QueueOutbox, job.Args.EventID, job.Attempt, job.MaxAttempts)
+}
+
+// Work processes one protected lifecycle reconciliation job.
+func (worker *reconciliationWorker) Work(ctx context.Context, job *river.Job[jobs.ReconciliationArgs]) error {
+	return worker.executor.execute(ctx, persistence.QueueReconciliation, job.Args.JobID, job.Attempt, job.MaxAttempts)
+}
+
+// execute loads one audit record, invokes its handler, and persists terminal outcomes.
+func (execution *executor) execute(
+	ctx context.Context,
+	queue persistence.QueueName,
+	id string,
+	attempt int,
+	maxAttempts int,
+) error {
+	var message persistence.QueueMessage
+	err := execution.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var loadErr error
+		message, loadErr = repository.QueueMessage(ctx, queue, id)
+		return loadErr
+	})
+	if err != nil {
+		if errors.Is(err, persistence.ErrNotFound) {
+			return river.JobCancel(errors.New("queue_record_not_found"))
+		}
+		return errors.New("queue_record_load_failed")
+	}
+	if message.Completed || message.Failed {
+		return nil
+	}
+	handlerErr := execution.handlers[queue].Handle(ctx, message)
+	if handlerErr == nil {
+		return execution.complete(ctx, queue, id)
+	}
+	if errors.Is(handlerErr, context.Canceled) && ctx.Err() != nil {
+		return context.Canceled
+	}
+	code := errorCode(handlerErr)
+	if isRetryable(handlerErr) && attempt < maxAttempts {
+		execution.metrics.ObserveQueueAttempt(string(queue), "retry")
+		return errors.New(code)
+	}
+	if err := execution.fail(ctx, queue, id, code); err != nil {
+		return err
+	}
+	if isRetryable(handlerErr) {
+		return errors.New(code)
+	}
+	return river.JobCancel(errors.New(code))
+}
+
+// complete records one successful audit outcome after the handler returns.
+func (execution *executor) complete(ctx context.Context, queue persistence.QueueName, id string) error {
+	completedAt := execution.clock().UTC()
+	err := execution.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		return repository.CompleteQueue(ctx, persistence.QueueCompletion{
+			Queue: queue, ID: id, CompletedAt: completedAt,
+		})
+	})
+	if err != nil {
+		execution.logger.Error("record queue completion",
+			"queue", queue, "message_id", id, "error_code", "queue_transition_failed")
+		return errors.New("queue_transition_failed")
+	}
+	execution.metrics.ObserveQueueAttempt(string(queue), "completed")
+	return nil
+}
+
+// fail records one terminal audit outcome after attempts are exhausted or a permanent error occurs.
+func (execution *executor) fail(ctx context.Context, queue persistence.QueueName, id, code string) error {
+	failedAt := execution.clock().UTC()
+	err := execution.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		return repository.FailQueue(ctx, persistence.QueueFailure{
+			Queue: queue, ID: id, FailedAt: failedAt, ErrorCode: code,
+		})
+	})
+	if err != nil {
+		execution.logger.Error("record queue failure",
+			"queue", queue, "message_id", id, "error_code", "queue_transition_failed")
+		return errors.New("queue_transition_failed")
+	}
+	execution.metrics.ObserveQueueAttempt(string(queue), "failed")
+	return nil
+}
+
+// durableQueues returns every fixed queue that must have a registered handler.
 func durableQueues() []persistence.QueueName {
 	return []persistence.QueueName{
 		persistence.QueueInbox,
@@ -207,52 +345,18 @@ func durableQueues() []persistence.QueueName {
 	}
 }
 
-// queueStates returns every bounded state label emitted for one queue.
-func queueStates(queue persistence.QueueName) []string {
-	if queue == persistence.QueueOutbox {
-		return []string{"pending", "processing", "delivered", "failed"}
+// persistenceQueue maps one River queue name back to the stable metrics label.
+func persistenceQueue(queue string) (persistence.QueueName, bool) {
+	switch queue {
+	case jobs.QueueInbox:
+		return persistence.QueueInbox, true
+	case jobs.QueueOutbox:
+		return persistence.QueueOutbox, true
+	case jobs.QueueReconciliation:
+		return persistence.QueueReconciliation, true
+	default:
+		return "", false
 	}
-	return []string{"pending", "processing", "processed", "failed"}
-}
-
-// attempt runs one handler with a timeout and records a complete, retry, or failed transition.
-func (runner *Runner) attempt(message persistence.QueueMessage) {
-	ctx, cancel := context.WithTimeout(context.Background(), runner.config.JobTimeout)
-	defer cancel()
-	err := runner.handlers[message.Queue].Handle(ctx, message)
-	completedAt := runner.clock().UTC()
-	transition := persistence.QueueTransition{
-		Queue: message.Queue, ID: message.ID, WorkerID: runner.config.WorkerID, CompletedAt: completedAt,
-	}
-	outcome := "completed"
-	operation := func(operationContext context.Context, repository persistence.OperationsTransaction) error {
-		return repository.CompleteQueue(operationContext, transition)
-	}
-	if err != nil {
-		transition.ErrorCode = errorCode(err)
-		if message.Attempts < runner.config.MaxAttempts && isRetryable(err) {
-			outcome = "retry"
-			transition.AvailableAt = completedAt.Add(backoff(message.Attempts))
-			operation = func(operationContext context.Context, repository persistence.OperationsTransaction) error {
-				return repository.RetryQueue(operationContext, transition)
-			}
-		} else {
-			outcome = "failed"
-			operation = func(operationContext context.Context, repository persistence.OperationsTransaction) error {
-				return repository.FailQueue(operationContext, transition)
-			}
-		}
-	}
-	transitionCtx, transitionCancel := context.WithTimeout(context.Background(), runner.config.JobTimeout)
-	defer transitionCancel()
-	if transitionErr := runner.store.Operate(transitionCtx, func(repository persistence.OperationsTransaction) error {
-		return operation(transitionCtx, repository)
-	}); transitionErr != nil {
-		runner.logger.Error("record queue outcome",
-			"queue", message.Queue, "message_id", message.ID, "error_code", "queue_transition_failed")
-		return
-	}
-	runner.metrics.ObserveQueueAttempt(string(message.Queue), outcome)
 }
 
 // isRetryable applies explicit error classification and treats context deadlines as transient.
@@ -271,7 +375,7 @@ func errorCode(err error) string {
 	}
 	var value coded
 	if errors.As(err, &value) {
-		return value.CodeValue()
+		return safeErrorCode(value.CodeValue())
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "deadline_exceeded"
@@ -279,21 +383,15 @@ func errorCode(err error) string {
 	return "handler_failed"
 }
 
-// backoff returns exponential full jitter capped at the operational maximum.
-func backoff(attempt int) time.Duration {
-	if attempt < 1 {
-		attempt = 1
+// safeErrorCode accepts only bounded lowercase identifiers suitable for logs and audit metadata.
+func safeErrorCode(code string) string {
+	if len(code) == 0 || len(code) > 64 {
+		return "handler_failed"
 	}
-	ceiling := time.Second
-	for index := 1; index < attempt && ceiling < maximumBackoff/2; index++ {
-		ceiling *= 2
+	for _, character := range code {
+		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '_' {
+			return "handler_failed"
+		}
 	}
-	if ceiling > maximumBackoff {
-		ceiling = maximumBackoff
-	}
-	var random [8]byte
-	if _, err := rand.Read(random[:]); err != nil {
-		return ceiling / 2
-	}
-	return time.Duration(binary.BigEndian.Uint64(random[:]) % uint64(ceiling+1))
+	return code
 }

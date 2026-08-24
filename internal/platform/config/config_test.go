@@ -57,14 +57,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.WorkerID != "" {
 		t.Errorf("WorkerID = %q, want automatic empty marker", cfg.WorkerID)
 	}
-	if cfg.WorkerMaintenanceInterval != time.Minute {
-		t.Errorf("WorkerMaintenanceInterval = %v, want 1m", cfg.WorkerMaintenanceInterval)
-	}
 	if cfg.QueueRetention != 30*24*time.Hour {
 		t.Errorf("QueueRetention = %v, want 720h", cfg.QueueRetention)
-	}
-	if cfg.QueuePruneBatchSize != 1000 {
-		t.Errorf("QueuePruneBatchSize = %d, want 1000", cfg.QueuePruneBatchSize)
 	}
 }
 
@@ -110,7 +104,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "shutdown syntax", values: map[string]string{shutdownTimeoutEnvironment: "later"}},
 		{name: "shutdown sign", values: map[string]string{shutdownTimeoutEnvironment: "-1s"}},
 		{name: "log level", values: map[string]string{logLevelEnvironment: "verbose"}},
-		{name: "prune batch upper bound", values: map[string]string{"IAPSTACK_QUEUE_PRUNE_BATCH_SIZE": "1001"}},
+		{name: "worker attempts", values: map[string]string{"IAPSTACK_WORKER_MAX_ATTEMPTS": "0"}},
 	}
 
 	for _, tt := range tests {

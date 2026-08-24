@@ -12,6 +12,8 @@ import (
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
 const (
@@ -31,12 +33,14 @@ const (
 
 // Store implements provider-neutral persistence with a PostgreSQL connection pool.
 type Store struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	river *river.Client[pgx.Tx]
 }
 
 // transaction implements every repository against one PostgreSQL transaction.
 type transaction struct {
-	tx pgx.Tx
+	tx    pgx.Tx
+	river *river.Client[pgx.Tx]
 }
 
 var (
@@ -84,6 +88,11 @@ func NewStore(ctx context.Context, pool *pgxpool.Pool) (*Store, error) {
 	if err := store.Ping(ctx); err != nil {
 		return nil, err
 	}
+	riverClient, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("construct River insert client: %w", err)
+	}
+	store.river = riverClient
 	return store, nil
 }
 
@@ -102,7 +111,7 @@ func (store *Store) Ping(ctx context.Context) error {
 	if version != LatestVersion {
 		return fmt.Errorf("PostgreSQL schema version is %d, require %d: %w", version, LatestVersion, ErrSchemaVersionMismatch)
 	}
-	return nil
+	return validateRiverSchema(ctx, store.pool)
 }
 
 // Transact executes one callback in a serializable PostgreSQL transaction.
@@ -176,13 +185,21 @@ func (store *Store) transactOnce(
 		}
 	}()
 
-	if err := operation(&transaction{tx: postgresTransaction}); err != nil {
+	if err := operation(&transaction{tx: postgresTransaction, river: store.river}); err != nil {
 		return err
 	}
 	if err := postgresTransaction.Commit(ctx); err != nil {
 		return classifyError("commit transaction", err)
 	}
 	return nil
+}
+
+// Pool returns the shared PostgreSQL pool used by runtime infrastructure.
+func (store *Store) Pool() *pgxpool.Pool {
+	if store == nil {
+		return nil
+	}
+	return store.pool
 }
 
 // transactionRetryDelay returns exponential full jitter for one completed transaction attempt.

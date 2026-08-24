@@ -24,16 +24,10 @@ const (
 	defaultWorkerJobTimeout = 30 * time.Second
 	// defaultWorkerConcurrency limits concurrent durable job attempts per process.
 	defaultWorkerConcurrency = 4
-	// defaultWorkerBatchSize limits records claimed by one worker poll.
-	defaultWorkerBatchSize = 16
 	// defaultWorkerMaxAttempts moves repeatedly failing records to their terminal state.
 	defaultWorkerMaxAttempts = 12
-	// defaultWorkerMaintenanceInterval controls queue depth sampling and retention cleanup.
-	defaultWorkerMaintenanceInterval = time.Minute
 	// defaultQueueRetention preserves terminal queue records for debugging and replay protection.
 	defaultQueueRetention = 30 * 24 * time.Hour
-	// defaultQueuePruneBatchSize bounds cleanup work per queue and maintenance cycle.
-	defaultQueuePruneBatchSize = 1000
 	// defaultHTTPBodyLimit bounds JSON and provider notification request bodies.
 	defaultHTTPBodyLimit int64 = 1 << 20
 	// defaultProviderTimeout bounds one outbound provider call.
@@ -44,50 +38,44 @@ const (
 
 // Config contains validated process configuration shared by IAPStack modes.
 type Config struct {
-	HTTPAddress               string
-	WorkerHTTPAddress         string
-	ShutdownTimeout           time.Duration
-	ReadinessTimeout          time.Duration
-	LogLevel                  slog.Level
-	DatabaseURL               string
-	BootstrapAdminKey         string
-	WorkerID                  string
-	WorkerPollInterval        time.Duration
-	WorkerJobTimeout          time.Duration
-	WorkerConcurrency         int
-	WorkerBatchSize           int
-	WorkerMaxAttempts         int
-	WorkerMaintenanceInterval time.Duration
-	QueueRetention            time.Duration
-	QueuePruneBatchSize       int
-	HTTPBodyLimit             int64
-	ProviderTimeout           time.Duration
-	WebhookTimeout            time.Duration
+	HTTPAddress        string
+	WorkerHTTPAddress  string
+	ShutdownTimeout    time.Duration
+	ReadinessTimeout   time.Duration
+	LogLevel           slog.Level
+	DatabaseURL        string
+	BootstrapAdminKey  string
+	WorkerID           string
+	WorkerPollInterval time.Duration
+	WorkerJobTimeout   time.Duration
+	WorkerConcurrency  int
+	WorkerMaxAttempts  int
+	QueueRetention     time.Duration
+	HTTPBodyLimit      int64
+	ProviderTimeout    time.Duration
+	WebhookTimeout     time.Duration
 }
 
 // Load reads and validates process configuration from environment values.
 func Load(getenv func(string) string) (Config, error) {
 	var err error
 	cfg := Config{
-		HTTPAddress:               valueOrDefault(getenv("IAPSTACK_HTTP_ADDRESS"), defaultHTTPAddress),
-		WorkerHTTPAddress:         valueOrDefault(getenv("IAPSTACK_WORKER_HTTP_ADDRESS"), defaultWorkerHTTPAddress),
-		ShutdownTimeout:           defaultShutdownTimeout,
-		ReadinessTimeout:          defaultReadinessTimeout,
-		LogLevel:                  slog.LevelInfo,
-		DatabaseURL:               strings.TrimSpace(getenv("IAPSTACK_DATABASE_URL")),
-		BootstrapAdminKey:         strings.TrimSpace(getenv("IAPSTACK_BOOTSTRAP_ADMIN_KEY")),
-		WorkerID:                  strings.TrimSpace(getenv("IAPSTACK_WORKER_ID")),
-		WorkerPollInterval:        defaultWorkerPollInterval,
-		WorkerJobTimeout:          defaultWorkerJobTimeout,
-		WorkerConcurrency:         defaultWorkerConcurrency,
-		WorkerBatchSize:           defaultWorkerBatchSize,
-		WorkerMaxAttempts:         defaultWorkerMaxAttempts,
-		WorkerMaintenanceInterval: defaultWorkerMaintenanceInterval,
-		QueueRetention:            defaultQueueRetention,
-		QueuePruneBatchSize:       defaultQueuePruneBatchSize,
-		HTTPBodyLimit:             defaultHTTPBodyLimit,
-		ProviderTimeout:           defaultProviderTimeout,
-		WebhookTimeout:            defaultWebhookTimeout,
+		HTTPAddress:        valueOrDefault(getenv("IAPSTACK_HTTP_ADDRESS"), defaultHTTPAddress),
+		WorkerHTTPAddress:  valueOrDefault(getenv("IAPSTACK_WORKER_HTTP_ADDRESS"), defaultWorkerHTTPAddress),
+		ShutdownTimeout:    defaultShutdownTimeout,
+		ReadinessTimeout:   defaultReadinessTimeout,
+		LogLevel:           slog.LevelInfo,
+		DatabaseURL:        strings.TrimSpace(getenv("IAPSTACK_DATABASE_URL")),
+		BootstrapAdminKey:  strings.TrimSpace(getenv("IAPSTACK_BOOTSTRAP_ADMIN_KEY")),
+		WorkerID:           strings.TrimSpace(getenv("IAPSTACK_WORKER_ID")),
+		WorkerPollInterval: defaultWorkerPollInterval,
+		WorkerJobTimeout:   defaultWorkerJobTimeout,
+		WorkerConcurrency:  defaultWorkerConcurrency,
+		WorkerMaxAttempts:  defaultWorkerMaxAttempts,
+		QueueRetention:     defaultQueueRetention,
+		HTTPBodyLimit:      defaultHTTPBodyLimit,
+		ProviderTimeout:    defaultProviderTimeout,
+		WebhookTimeout:     defaultWebhookTimeout,
 	}
 
 	if raw := strings.TrimSpace(getenv("IAPSTACK_SHUTDOWN_TIMEOUT")); raw != "" {
@@ -107,11 +95,6 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if raw := strings.TrimSpace(getenv("IAPSTACK_WORKER_JOB_TIMEOUT")); raw != "" {
 		if cfg.WorkerJobTimeout, err = positiveDuration("IAPSTACK_WORKER_JOB_TIMEOUT", raw); err != nil {
-			return Config{}, err
-		}
-	}
-	if raw := strings.TrimSpace(getenv("IAPSTACK_WORKER_MAINTENANCE_INTERVAL")); raw != "" {
-		if cfg.WorkerMaintenanceInterval, err = positiveDuration("IAPSTACK_WORKER_MAINTENANCE_INTERVAL", raw); err != nil {
 			return Config{}, err
 		}
 	}
@@ -135,22 +118,9 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, err
 		}
 	}
-	if raw := strings.TrimSpace(getenv("IAPSTACK_WORKER_BATCH_SIZE")); raw != "" {
-		if cfg.WorkerBatchSize, err = positiveInteger("IAPSTACK_WORKER_BATCH_SIZE", raw); err != nil {
-			return Config{}, err
-		}
-	}
 	if raw := strings.TrimSpace(getenv("IAPSTACK_WORKER_MAX_ATTEMPTS")); raw != "" {
 		if cfg.WorkerMaxAttempts, err = positiveInteger("IAPSTACK_WORKER_MAX_ATTEMPTS", raw); err != nil {
 			return Config{}, err
-		}
-	}
-	if raw := strings.TrimSpace(getenv("IAPSTACK_QUEUE_PRUNE_BATCH_SIZE")); raw != "" {
-		if cfg.QueuePruneBatchSize, err = positiveInteger("IAPSTACK_QUEUE_PRUNE_BATCH_SIZE", raw); err != nil {
-			return Config{}, err
-		}
-		if cfg.QueuePruneBatchSize > 1000 {
-			return Config{}, fmt.Errorf("IAPSTACK_QUEUE_PRUNE_BATCH_SIZE must not exceed 1000")
 		}
 	}
 	if raw := strings.TrimSpace(getenv("IAPSTACK_HTTP_BODY_LIMIT")); raw != "" {

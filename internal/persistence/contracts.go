@@ -143,26 +143,18 @@ type OperationsRepository interface {
 	WebhookEndpoint(context.Context, core.ProjectID, core.ApplicationID) (WebhookEndpointRecord, error)
 }
 
-// QueueRepository owns durable queue insertion, claiming, and state transitions.
+// QueueRepository stores durable job payloads and their terminal audit outcomes.
 type QueueRepository interface {
 	// SaveInboxMessage stores one protected notification idempotently.
 	SaveInboxMessage(context.Context, InboxMessage) (string, error)
 	// SaveReconciliationJob stores one protected reconciliation request idempotently.
 	SaveReconciliationJob(context.Context, ReconciliationJob) (string, error)
-	// ClaimQueue atomically leases available records to one worker.
-	ClaimQueue(context.Context, QueueClaim) ([]QueueMessage, error)
-	// CompleteQueue marks one worker-owned record delivered or processed.
-	CompleteQueue(context.Context, QueueTransition) error
-	// RetryQueue returns one worker-owned record to pending with a future schedule.
-	RetryQueue(context.Context, QueueTransition) error
-	// FailQueue moves one worker-owned record to its terminal failed state.
-	FailQueue(context.Context, QueueTransition) error
-	// RecoverQueueLocks returns stale processing records to pending.
-	RecoverQueueLocks(context.Context, QueueName, time.Time) (int64, error)
-	// QueueDepth returns current counts grouped by durable state.
-	QueueDepth(context.Context, QueueName) (map[string]int64, error)
-	// PruneQueue deletes a bounded batch of expired terminal records.
-	PruneQueue(context.Context, QueuePrune) (int64, error)
+	// QueueMessage returns one durable payload by its fixed queue and record identity.
+	QueueMessage(context.Context, QueueName, string) (QueueMessage, error)
+	// CompleteQueue records successful processing or delivery idempotently.
+	CompleteQueue(context.Context, QueueCompletion) error
+	// FailQueue records one terminal processing or delivery failure idempotently.
+	FailQueue(context.Context, QueueFailure) error
 }
 
 // CatalogProduct joins one provider product mapping to its internal product and entitlements.
@@ -335,23 +327,7 @@ type ReconciliationJob struct {
 	AvailableAt   time.Time
 }
 
-// QueueClaim requests a bounded atomic lease of currently available work.
-type QueueClaim struct {
-	Queue       QueueName
-	WorkerID    string
-	Now         time.Time
-	StaleBefore time.Time
-	Limit       int
-}
-
-// QueuePrune requests bounded retention cleanup for one durable queue.
-type QueuePrune struct {
-	Queue  QueueName
-	Before time.Time
-	Limit  int
-}
-
-// QueueMessage is one leased inbox, outbox, or reconciliation record.
+// QueueMessage is one durable inbox, outbox, or reconciliation payload.
 type QueueMessage struct {
 	Queue            QueueName
 	ID               string
@@ -363,18 +339,24 @@ type QueueMessage struct {
 	ContentType      string
 	ProtectedPayload protection.Value
 	JSONPayload      json.RawMessage
-	Attempts         int
 	OccurredAt       time.Time
+	Completed        bool
+	Failed           bool
 }
 
-// QueueTransition changes one worker-owned durable record after an attempt.
-type QueueTransition struct {
+// QueueCompletion records one successful terminal job outcome.
+type QueueCompletion struct {
 	Queue       QueueName
 	ID          string
-	WorkerID    string
 	CompletedAt time.Time
-	AvailableAt time.Time
-	ErrorCode   string
+}
+
+// QueueFailure records one permanent terminal job outcome.
+type QueueFailure struct {
+	Queue     QueueName
+	ID        string
+	FailedAt  time.Time
+	ErrorCode string
 }
 
 var (
@@ -474,34 +456,6 @@ func (job ReconciliationJob) Validate() error {
 	)
 }
 
-// Validate checks queue identity, worker lease parameters, and batch limit.
-func (claim QueueClaim) Validate() error {
-	var limitError error
-	if claim.Limit <= 0 || claim.Limit > 1000 {
-		limitError = errors.New("queue claim limit must be between 1 and 1000")
-	}
-	return errors.Join(
-		claim.Queue.Validate(),
-		validateText("queue worker ID", claim.WorkerID),
-		validateTime("queue claim time", claim.Now),
-		validateTime("queue stale-before time", claim.StaleBefore),
-		limitError,
-	)
-}
-
-// Validate checks queue identity, retention boundary, and cleanup batch limit.
-func (prune QueuePrune) Validate() error {
-	var limitError error
-	if prune.Limit <= 0 || prune.Limit > 1000 {
-		limitError = errors.New("queue prune limit must be between 1 and 1000")
-	}
-	return errors.Join(
-		prune.Queue.Validate(),
-		validateTime("queue prune boundary", prune.Before),
-		limitError,
-	)
-}
-
 // Validate checks one fixed durable queue name.
 func (name QueueName) Validate() error {
 	switch name {
@@ -512,18 +466,22 @@ func (name QueueName) Validate() error {
 	}
 }
 
-// Validate checks worker ownership, record identity, timestamps, and safe error metadata.
-func (transition QueueTransition) Validate() error {
-	var errorCodeError error
-	if transition.ErrorCode != "" {
-		errorCodeError = validateText("queue error code", transition.ErrorCode)
-	}
+// Validate checks one successful queue outcome.
+func (completion QueueCompletion) Validate() error {
 	return errors.Join(
-		transition.Queue.Validate(),
-		validateText("queue record ID", transition.ID),
-		validateText("queue worker ID", transition.WorkerID),
-		validateTime("queue completion time", transition.CompletedAt),
-		errorCodeError,
+		completion.Queue.Validate(),
+		validateText("queue record ID", completion.ID),
+		validateTime("queue completion time", completion.CompletedAt),
+	)
+}
+
+// Validate checks one failed queue outcome and its safe error code.
+func (failure QueueFailure) Validate() error {
+	return errors.Join(
+		failure.Queue.Validate(),
+		validateText("queue record ID", failure.ID),
+		validateTime("queue failure time", failure.FailedAt),
+		validateText("queue error code", failure.ErrorCode),
 	)
 }
 

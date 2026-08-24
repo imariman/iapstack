@@ -1,4 +1,4 @@
--- Add authenticated API identities, protected webhook delivery configuration, and reconciliation work.
+-- Add authenticated API identities, protected webhook configuration, and reconciliation audit records.
 CREATE TABLE api_keys (
     id text PRIMARY KEY,
     role text NOT NULL,
@@ -49,12 +49,10 @@ CREATE TABLE reconciliation_jobs (
     payload_ciphertext bytea NOT NULL,
     payload_fingerprint bytea NOT NULL,
     encryption_key_id text NOT NULL,
-    state text NOT NULL DEFAULT 'pending',
-    attempts integer NOT NULL DEFAULT 0,
     available_at timestamptz NOT NULL,
-    locked_at timestamptz,
-    locked_by text,
+    river_job_id bigint UNIQUE,
     processed_at timestamptz,
+    failed_at timestamptz,
     last_error_code text,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
@@ -69,22 +67,14 @@ CREATE TABLE reconciliation_jobs (
     CONSTRAINT reconciliation_jobs_key_valid CHECK (
         encryption_key_id <> '' AND encryption_key_id = btrim(encryption_key_id)
     ),
-    CONSTRAINT reconciliation_jobs_state_valid CHECK (state IN ('pending', 'processing', 'processed', 'failed')),
-    CONSTRAINT reconciliation_jobs_attempts_valid CHECK (attempts >= 0),
-    CONSTRAINT reconciliation_jobs_lock_pair_valid CHECK ((locked_at IS NULL) = (locked_by IS NULL)),
-    CONSTRAINT reconciliation_jobs_state_fields_valid CHECK (
-        (state = 'pending' AND locked_at IS NULL AND processed_at IS NULL)
-        OR (state = 'processing' AND locked_at IS NOT NULL AND processed_at IS NULL)
-        OR (state = 'processed' AND locked_at IS NULL AND processed_at IS NOT NULL)
-        OR (state = 'failed' AND locked_at IS NULL AND processed_at IS NULL)
+    CONSTRAINT reconciliation_jobs_river_job_valid CHECK (river_job_id IS NULL OR river_job_id > 0),
+    CONSTRAINT reconciliation_jobs_outcome_valid CHECK (
+        NOT (processed_at IS NOT NULL AND failed_at IS NOT NULL)
+        AND (last_error_code IS NULL OR failed_at IS NOT NULL)
     )
 );
 
 CREATE INDEX api_keys_application_idx ON api_keys (application_id) WHERE revoked_at IS NULL;
-CREATE INDEX reconciliation_jobs_claim_idx ON reconciliation_jobs (available_at, created_at)
-    WHERE state = 'pending';
-CREATE INDEX reconciliation_jobs_lock_idx ON reconciliation_jobs (locked_at)
-    WHERE state = 'processing';
 
 ---- create above / drop below ----
 

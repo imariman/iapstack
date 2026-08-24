@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -401,175 +400,85 @@ func TestSerializableTransactionRetriesConcurrentIdempotentWrites(t *testing.T) 
 	assertTableCount(t, database, "purchase_evidence", 1)
 }
 
-// TestOperationalQueueClaimRetryAndCompletion verifies idempotency, concurrent leasing, and worker ownership.
-func TestOperationalQueueClaimRetryAndCompletion(t *testing.T) {
+// TestOperationalQueueEnqueueAndCompletion verifies atomic River insertion and idempotent audit outcomes.
+func TestOperationalQueueEnqueueAndCompletion(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)
 	fixture := seedCatalog(t, database)
 	store := openRepositoryStore(t, database.ctx)
 	writes := newPurchaseWrites(t, fixture)
+	var firstID, secondID string
 	if err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
-		_, err := repository.SaveOutboxEvent(database.ctx, writes.outbox)
-		return err
+		var saveErr error
+		firstID, saveErr = repository.SaveOutboxEvent(database.ctx, writes.outbox)
+		if saveErr != nil {
+			return saveErr
+		}
+		secondID, saveErr = repository.SaveOutboxEvent(database.ctx, writes.outbox)
+		return saveErr
 	}); err != nil {
 		t.Fatalf("SaveOutboxEvent() error = %v", err)
 	}
+	if firstID != writes.outbox.ID || secondID != firstID {
+		t.Fatalf("outbox IDs = (%q, %q), want %q", firstID, secondID, writes.outbox.ID)
+	}
+	var riverJobID int64
+	if err := database.conn.QueryRow(database.ctx,
+		`SELECT river_job_id FROM outbox_events WHERE id = $1`, firstID).Scan(&riverJobID); err != nil {
+		t.Fatalf("load linked River job: %v", err)
+	}
+	var kind, queue string
+	if err := database.conn.QueryRow(database.ctx,
+		`SELECT kind, queue FROM river_job WHERE id = $1`, riverJobID).Scan(&kind, &queue); err != nil {
+		t.Fatalf("load River job: %v", err)
+	}
+	if kind != "iapstack_outbox" || queue != "iapstack_outbox" {
+		t.Fatalf("River job = (%q, %q), want iapstack_outbox", kind, queue)
+	}
+	assertTableCount(t, database, "river_job", 1)
 
-	now := writes.outbox.AvailableAt.Add(time.Second)
-	claims := make(chan []persistence.QueueMessage, 2)
-	errorsChannel := make(chan error, 2)
-	start := make(chan struct{})
-	var workers sync.WaitGroup
-	for _, workerID := range []string{"worker-a", "worker-b"} {
-		workers.Add(1)
-		go func(workerID string) {
-			defer workers.Done()
-			<-start
-			var messages []persistence.QueueMessage
-			err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
-				var claimErr error
-				messages, claimErr = repository.ClaimQueue(database.ctx, persistence.QueueClaim{
-					Queue: persistence.QueueOutbox, WorkerID: workerID, Now: now,
-					StaleBefore: now.Add(-time.Minute), Limit: 1,
-				})
-				return claimErr
-			})
-			errorsChannel <- err
-			claims <- messages
-		}(workerID)
-	}
-	close(start)
-	workers.Wait()
-	close(claims)
-	close(errorsChannel)
-	for err := range errorsChannel {
-		if err != nil {
-			t.Fatalf("concurrent ClaimQueue() error = %v", err)
-		}
-	}
-	var claimed persistence.QueueMessage
-	claimCount := 0
-	for messages := range claims {
-		claimCount += len(messages)
-		if len(messages) == 1 {
-			claimed = messages[0]
-		}
-	}
-	if claimCount != 1 {
-		t.Fatalf("concurrent claimed count = %d, want 1", claimCount)
-	}
-	workerID := "worker-a"
-	if claimed.ID == "" {
-		t.Fatal("claimed outbox identity is empty")
-	}
-	// Resolve the actual owner because either concurrent worker may win the lease.
-	if err := database.conn.QueryRow(database.ctx, `SELECT locked_by FROM outbox_events WHERE id = $1`, claimed.ID).Scan(&workerID); err != nil {
-		t.Fatalf("load outbox owner: %v", err)
-	}
-	retryAt := now.Add(time.Minute)
+	completedAt := writes.outbox.AvailableAt.Add(time.Second)
 	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
-		return repository.RetryQueue(database.ctx, persistence.QueueTransition{
-			Queue: persistence.QueueOutbox, ID: claimed.ID, WorkerID: workerID,
-			CompletedAt: now.Add(time.Second), AvailableAt: retryAt, ErrorCode: "temporary",
+		message, loadErr := repository.QueueMessage(database.ctx, persistence.QueueOutbox, firstID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if message.Completed || message.Failed || !json.Valid(message.JSONPayload) {
+			return errors.New("loaded outbox audit record is invalid")
+		}
+		return repository.CompleteQueue(database.ctx, persistence.QueueCompletion{
+			Queue: persistence.QueueOutbox, ID: firstID, CompletedAt: completedAt,
 		})
 	}); err != nil {
-		t.Fatalf("RetryQueue() error = %v", err)
+		t.Fatalf("complete outbox audit record: %v", err)
 	}
-	var retried []persistence.QueueMessage
-	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
-		var claimErr error
-		retried, claimErr = repository.ClaimQueue(database.ctx, persistence.QueueClaim{
-			Queue: persistence.QueueOutbox, WorkerID: "worker-c", Now: retryAt,
-			StaleBefore: retryAt.Add(-time.Minute), Limit: 1,
-		})
-		return claimErr
-	}); err != nil || len(retried) != 1 || retried[0].Attempts != 2 {
-		t.Fatalf("retried ClaimQueue() = %#v, %v", retried, err)
+	var deliveredAt time.Time
+	if err := database.conn.QueryRow(database.ctx,
+		`SELECT delivered_at FROM outbox_events WHERE id = $1`, firstID).Scan(&deliveredAt); err != nil {
+		t.Fatalf("load outbox completion: %v", err)
 	}
-	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
-		return repository.CompleteQueue(database.ctx, persistence.QueueTransition{
-			Queue: persistence.QueueOutbox, ID: claimed.ID, WorkerID: "worker-c", CompletedAt: retryAt.Add(time.Second),
-		})
-	}); err != nil {
-		t.Fatalf("CompleteQueue() error = %v", err)
+	if !deliveredAt.Equal(completedAt) {
+		t.Fatalf("delivered_at = %v, want %v", deliveredAt, completedAt)
 	}
-	assertTableCount(t, database, "outbox_events", 1)
 }
 
-// TestOperationalQueuePrunePreservesLiveAndRecentRecords verifies bounded terminal retention cleanup.
-func TestOperationalQueuePrunePreservesLiveAndRecentRecords(t *testing.T) {
+// TestOperationalQueueEnqueueRollsBackAtomically verifies River and audit records share one commit boundary.
+func TestOperationalQueueEnqueueRollsBackAtomically(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)
 	fixture := seedCatalog(t, database)
 	store := openRepositoryStore(t, database.ctx)
-	base := newPurchaseWrites(t, fixture).outbox
-	for index, identity := range []string{"old-delivered", "old-failed", "recent-delivered", "pending"} {
-		event := base
-		event.ID = identity
-		event.AggregateID = identity
-		event.Payload = json.RawMessage(fmt.Sprintf(`{"identity":%q}`, identity))
-		event.PayloadFingerprint = sha256.Sum256(event.Payload)
-		event.OccurredAt = base.OccurredAt.Add(time.Duration(index) * time.Second)
-		event.AvailableAt = event.OccurredAt
-		if err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
-			_, err := repository.SaveOutboxEvent(database.ctx, event)
-			return err
-		}); err != nil {
-			t.Fatalf("SaveOutboxEvent(%q) error = %v", identity, err)
+	event := newPurchaseWrites(t, fixture).outbox
+	expected := errors.New("force rollback")
+	err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		if _, saveErr := repository.SaveOutboxEvent(database.ctx, event); saveErr != nil {
+			return saveErr
 		}
+		return expected
+	})
+	if !errors.Is(err, expected) {
+		t.Fatalf("Transact() error = %v, want forced rollback", err)
 	}
-	boundary := base.OccurredAt.Add(24 * time.Hour)
-	oldTime := boundary.Add(-time.Hour)
-	recentTime := boundary.Add(time.Hour)
-	if _, err := database.conn.Exec(database.ctx, `
-		UPDATE outbox_events
-		SET state = CASE WHEN id = 'old-failed' THEN 'failed' ELSE 'delivered' END,
-			delivered_at = CASE
-				WHEN id = 'old-failed' THEN NULL::timestamptz
-				WHEN id = 'recent-delivered' THEN $2
-				ELSE $1
-			END,
-			last_error_code = CASE WHEN id = 'old-failed' THEN 'permanent' ELSE NULL END,
-			updated_at = CASE WHEN id = 'recent-delivered' THEN $2 ELSE $1 END
-		WHERE id IN ('old-delivered', 'old-failed', 'recent-delivered')
-	`, oldTime, recentTime); err != nil {
-		t.Fatalf("prepare terminal queue records: %v", err)
-	}
-
-	var pruned int64
-	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
-		var err error
-		pruned, err = repository.PruneQueue(database.ctx, persistence.QueuePrune{
-			Queue: persistence.QueueOutbox, Before: boundary, Limit: 1,
-		})
-		return err
-	}); err != nil {
-		t.Fatalf("PruneQueue() error = %v", err)
-	}
-	if pruned != 1 {
-		t.Fatalf("first PruneQueue() count = %d, want 1", pruned)
-	}
-	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
-		var err error
-		pruned, err = repository.PruneQueue(database.ctx, persistence.QueuePrune{
-			Queue: persistence.QueueOutbox, Before: boundary, Limit: 1000,
-		})
-		return err
-	}); err != nil {
-		t.Fatalf("second PruneQueue() error = %v", err)
-	}
-	if pruned != 1 {
-		t.Fatalf("second PruneQueue() count = %d, want 1", pruned)
-	}
-	assertTableCount(t, database, "outbox_events", 2)
-	for _, identity := range []string{"recent-delivered", "pending"} {
-		var exists bool
-		if err := database.conn.QueryRow(database.ctx,
-			`SELECT EXISTS (SELECT 1 FROM outbox_events WHERE id = $1)`, identity).Scan(&exists); err != nil {
-			t.Fatalf("check retained queue record %q: %v", identity, err)
-		}
-		if !exists {
-			t.Fatalf("queue record %q was pruned, want retained", identity)
-		}
-	}
+	assertTableCount(t, database, "outbox_events", 0)
+	assertTableCount(t, database, "river_job", 0)
 }
 
 // newPurchaseWrites builds one valid provider-neutral purchase persistence graph.
@@ -792,6 +701,7 @@ func assertTableCount(t *testing.T, database *testDatabase, table string, expect
 		"provider_references":     {},
 		"purchase_evidence":       {},
 		"purchase_observations":   {},
+		"river_job":               {},
 	}
 	if _, allowed := allowedTables[table]; !allowed {
 		t.Fatalf("table %q is not allowed by test helper", table)
