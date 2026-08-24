@@ -130,7 +130,7 @@ func runAPI(
 		return err
 	}
 	api, err := httpapi.New(httpapi.Dependencies{
-		Store: store, Operations: store, Authentication: authentication,
+		Store: store, Operations: store, Admin: store, Authentication: authentication,
 		Credentials: credentialService, Webhooks: webhookService,
 		Verification: verificationService, Huawei: huaweiAdapter,
 		Protection: keyring, BodyLimit: cfg.HTTPBodyLimit,

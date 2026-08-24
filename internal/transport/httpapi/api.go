@@ -38,6 +38,7 @@ const (
 type API struct {
 	store          persistence.Store
 	operations     persistence.OperationsStore
+	admin          persistence.AdminQueryStore
 	authentication *auth.Service
 	credentials    *credentials.Service
 	webhooks       *webhooks.Service
@@ -53,6 +54,7 @@ type API struct {
 type Dependencies struct {
 	Store          persistence.Store
 	Operations     persistence.OperationsStore
+	Admin          persistence.AdminQueryStore
 	Authentication *auth.Service
 	Credentials    *credentials.Service
 	Webhooks       *webhooks.Service
@@ -151,13 +153,13 @@ type verificationResponse struct {
 
 // New validates dependencies and registers the complete v1 route surface.
 func New(dependencies Dependencies) (*API, error) {
-	if dependencies.Store == nil || dependencies.Operations == nil || dependencies.Authentication == nil ||
+	if dependencies.Store == nil || dependencies.Operations == nil || dependencies.Admin == nil || dependencies.Authentication == nil ||
 		dependencies.Credentials == nil || dependencies.Webhooks == nil || dependencies.Verification == nil ||
 		dependencies.Huawei == nil || dependencies.Protection == nil || dependencies.BodyLimit <= 0 {
 		return nil, errors.New("HTTP API dependencies are incomplete")
 	}
 	api := &API{
-		store: dependencies.Store, operations: dependencies.Operations,
+		store: dependencies.Store, operations: dependencies.Operations, admin: dependencies.Admin,
 		authentication: dependencies.Authentication, credentials: dependencies.Credentials,
 		webhooks: dependencies.Webhooks, verification: dependencies.Verification,
 		huawei: dependencies.Huawei, protection: dependencies.Protection,
@@ -165,6 +167,8 @@ func New(dependencies Dependencies) (*API, error) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/admin/api-keys", api.createAPIKey)
+	mux.HandleFunc("GET /v1/admin/projects", api.adminProjects)
+	mux.HandleFunc("GET /v1/admin/projects/{project_id}/overview", api.adminProjectOverview)
 	mux.HandleFunc("PUT /v1/admin/projects/{project_id}", api.putProject)
 	mux.HandleFunc("PUT /v1/admin/projects/{project_id}/applications/{application_id}", api.putApplication)
 	mux.HandleFunc("PUT /v1/admin/projects/{project_id}/customers/{customer_id}", api.putCustomer)
