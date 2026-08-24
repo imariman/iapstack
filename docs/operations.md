@@ -58,9 +58,32 @@ Never remove an encryption key until all rows written with that key ID have been
 
 ## Queue incident response
 
-- `iapstack_queue_depth` shows pending, processing, delivered/processed, and failed records.
-- Stale processing locks are returned to pending automatically after twice the configured job timeout.
+- `iapstack_queue_depth` shows River's available, scheduled, retryable, running, completed, cancelled, and discarded states.
 - River owns job claims, stale-job recovery, exponential retry scheduling, and terminal job cleanup.
 - Retryable failures become discarded after `IAPSTACK_WORKER_MAX_ATTEMPTS`; permanent failures are cancelled immediately.
 - Inbox, outbox, and reconciliation tables retain protected payloads and stable terminal audit outcomes while River job arguments contain identifiers only.
 - Durable records contain only safe error codes; correlate application logs with `message_id` and HTTP logs with `X-Request-ID`.
+
+## Compose release gate
+
+Run the same clean-volume release gate required by GitHub CI:
+
+```sh
+./deploy/e2e/run.sh
+```
+
+The harness creates an isolated Compose project and temporary TLS certificate, then removes its containers and volume on exit. It exercises the production `migrate`, `api`, and `worker` modes with PostgreSQL 17 and a separate TLS fixture service.
+
+The gate verifies:
+
+1. Migration ordering and API/worker readiness from an empty volume.
+2. Stored admin and application key creation plus full Huawei application configuration.
+3. Authoritative signed lifetime verification and idempotent duplicate submission.
+4. HMAC-SHA-256 webhook headers and one logical delivery per entitlement version.
+5. Duplicate signed Huawei notification persistence while the worker is stopped.
+6. River recovery after worker restart, authoritative refund projection, and duplicate notification suppression.
+7. API and worker Prometheus metric families.
+
+Ports default to `18080` for API, `18081` for worker metrics, `18082` for fixture controls, and `15432` for PostgreSQL. Override `IAPSTACK_HTTP_PORT`, `IAPSTACK_E2E_WORKER_PORT`, `IAPSTACK_E2E_FIXTURE_PORT`, or `IAPSTACK_POSTGRES_PORT` when those ports are occupied.
+
+On failure the harness prints Compose status and logs before cleanup. The fixture uses generated test-only RSA and TLS keys; it never contacts Huawei or an application-owned endpoint.

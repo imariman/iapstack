@@ -69,3 +69,5 @@ Reject timestamps outside the application's replay window and deduplicate by eve
 ## Huawei sandbox release gate
 
 Before a v0.1 release, run fixture and sandbox scenarios for lifetime purchase, initial subscription, renewal, cancellation-at-period-end, expiration, grace period, refund/revocation, duplicate purchase submission, duplicate notification, and a missed notification recovered by scheduled reconciliation. Record request IDs and verify that duplicates do not increase entitlement versions or create new logical webhook events.
+
+The automated production-shaped fixture subset runs with `./deploy/e2e/run.sh`. It covers signed lifetime verification, duplicate purchase and notification submission, worker restart recovery, authoritative refund projection, and HMAC webhook delivery. Provider-managed subscription lifecycle scenarios still require the Huawei sandbox before a release is promoted from candidate to stable.

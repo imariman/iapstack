@@ -105,6 +105,14 @@ PostgreSQL integration tests activate when `IAPSTACK_TEST_DATABASE_URL` is set. 
 runs them against a clean PostgreSQL service and verifies every migration can be
 applied, rolled back, and reapplied.
 
+Run the clean Compose release gate locally with:
+
+```sh
+./deploy/e2e/run.sh
+```
+
+It exercises PostgreSQL migration, API bootstrap, signed Huawei verification, River worker restart recovery, duplicate notification handling, entitlement projection, and signed webhook delivery.
+
 Purchase verification is coordinated by the provider-neutral `internal/verification`
 use case. Provider network calls and protection of sensitive evidence happen before
 the durable transaction. Catalog validation, evidence and observation persistence,
@@ -132,7 +140,7 @@ explanatory comment.
 
 The `worker` process handles the protected Huawei notification inbox, scheduled
 reconciliation, and signed application webhook outbox with bounded concurrency,
-stale-lock recovery, and exponential full-jitter retries.
+River-managed stale-job recovery, and exponential retry scheduling.
 
 Operational deployment, backup, queue recovery, and upgrade procedures are documented
 in [the operations guide](docs/operations.md). The authenticated v1 endpoints, Huawei
