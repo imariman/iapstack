@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -247,6 +248,70 @@ func TestTransactionalPurchasePersistence(t *testing.T) {
 	})
 	if !errors.Is(err, rollbackError) {
 		t.Fatalf("rollback Transact() error = %v, want sentinel", err)
+	}
+	assertTableCount(t, database, "purchase_evidence", 1)
+}
+
+// TestSerializableTransactionRetriesConcurrentIdempotentWrites verifies transparent fresh-snapshot retries.
+func TestSerializableTransactionRetriesConcurrentIdempotentWrites(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	write := newPurchaseWrites(t, fixture).evidence
+	ready := make(chan struct{}, 2)
+	start := make(chan struct{})
+	errorsChannel := make(chan error, 2)
+	identities := make(chan int64, 2)
+	var attempts atomic.Int32
+	var workers sync.WaitGroup
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			firstAttempt := true
+			var evidenceID int64
+			err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+				attempts.Add(1)
+				if _, loadErr := repository.Application(database.ctx,
+					core.ProjectID(fixture.projectID), core.ApplicationID(fixture.applicationID)); loadErr != nil {
+					return loadErr
+				}
+				if firstAttempt {
+					firstAttempt = false
+					ready <- struct{}{}
+					<-start
+				}
+				var saveErr error
+				evidenceID, saveErr = repository.SaveEvidence(database.ctx, write)
+				return saveErr
+			})
+			errorsChannel <- err
+			identities <- evidenceID
+		}()
+	}
+	<-ready
+	<-ready
+	close(start)
+	workers.Wait()
+	close(errorsChannel)
+	close(identities)
+	for err := range errorsChannel {
+		if err != nil {
+			t.Fatalf("concurrent Transact() error = %v", err)
+		}
+	}
+	var expectedID int64
+	for identity := range identities {
+		if expectedID == 0 {
+			expectedID = identity
+			continue
+		}
+		if identity != expectedID {
+			t.Fatalf("concurrent evidence IDs = (%d, %d), want one identity", expectedID, identity)
+		}
+	}
+	if attempts.Load() < 3 {
+		t.Fatalf("transaction attempts = %d, want at least one retry", attempts.Load())
 	}
 	assertTableCount(t, database, "purchase_evidence", 1)
 }

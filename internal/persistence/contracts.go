@@ -373,6 +373,8 @@ var (
 	ErrNotFound = errors.New("persistence record not found")
 	// ErrConflict indicates that an identity or idempotency key belongs to different data.
 	ErrConflict = errors.New("persistence conflict")
+	// ErrUnavailable indicates that durable storage could not complete a transient operation safely.
+	ErrUnavailable = errors.New("persistence unavailable")
 )
 
 // Validate checks API key identity, role scope, verifier bytes, and creation time.

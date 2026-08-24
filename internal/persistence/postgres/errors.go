@@ -10,6 +10,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+var (
+	// errRetryableTransaction marks PostgreSQL concurrency failures that require a fresh transaction snapshot.
+	errRetryableTransaction = errors.New("retryable PostgreSQL transaction failure")
+)
+
 // validateText enforces non-empty, trimmed PostgreSQL metadata values.
 func validateText(name, value string) error {
 	if value == "" {
@@ -33,7 +38,9 @@ func classifyError(operation string, err error) error {
 	var postgresError *pgconn.PgError
 	if errors.As(err, &postgresError) {
 		switch postgresError.Code {
-		case "23503", "23505", "23514", "40001", "40P01":
+		case "40001", "40P01":
+			return fmt.Errorf("%s: %w", operation, errRetryableTransaction)
+		case "23503", "23505", "23514":
 			if postgresError.ConstraintName != "" {
 				return fmt.Errorf(
 					"%s: %w: PostgreSQL constraint %s",

@@ -2,13 +2,25 @@ package postgres
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
+	"time"
 
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+const (
+	// maximumTransactionAttempts bounds retries for serialization failures and deadlocks.
+	maximumTransactionAttempts = 4
+	// transactionRetryBase is the first full-jitter retry ceiling.
+	transactionRetryBase = 5 * time.Millisecond
+	// transactionRetryMaximum caps transaction retry delay under repeated contention.
+	transactionRetryMaximum = 100 * time.Millisecond
 )
 
 // Store implements provider-neutral persistence with a PostgreSQL connection pool.
@@ -106,6 +118,36 @@ func (store *Store) transact(
 	if store == nil || store.pool == nil {
 		return errors.New("PostgreSQL store is not initialized")
 	}
+	for attempt := 1; attempt <= maximumTransactionAttempts; attempt++ {
+		err = store.transactOnce(ctx, isolation, operation)
+		if !errors.Is(err, errRetryableTransaction) {
+			return err
+		}
+		if attempt == maximumTransactionAttempts {
+			return fmt.Errorf(
+				"PostgreSQL transaction retries exhausted after %d attempts: %w",
+				maximumTransactionAttempts,
+				persistence.ErrUnavailable,
+			)
+		}
+		delay := transactionRetryDelay(attempt)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return err
+}
+
+// transactOnce executes one PostgreSQL transaction attempt and always releases its connection.
+func (store *Store) transactOnce(
+	ctx context.Context,
+	isolation pgx.TxIsoLevel,
+	operation func(*transaction) error,
+) (err error) {
 
 	postgresTransaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: isolation})
 	if err != nil {
@@ -125,6 +167,22 @@ func (store *Store) transact(
 		return classifyError("commit transaction", err)
 	}
 	return nil
+}
+
+// transactionRetryDelay returns exponential full jitter for one completed transaction attempt.
+func transactionRetryDelay(attempt int) time.Duration {
+	ceiling := transactionRetryBase
+	for index := 1; index < attempt && ceiling < transactionRetryMaximum/2; index++ {
+		ceiling *= 2
+	}
+	if ceiling > transactionRetryMaximum {
+		ceiling = transactionRetryMaximum
+	}
+	random, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(ceiling)+1))
+	if err != nil {
+		return ceiling / 2
+	}
+	return time.Duration(random.Int64())
 }
 
 // Close releases every connection owned by the PostgreSQL pool.

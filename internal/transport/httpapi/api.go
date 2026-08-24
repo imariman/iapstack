@@ -681,6 +681,8 @@ func (api *API) writeError(writer http.ResponseWriter, request *http.Request, er
 		status, code, message = http.StatusNotFound, "not_found", "the requested resource was not found"
 	} else if errors.Is(err, persistence.ErrConflict) {
 		status, code, message = http.StatusConflict, "conflict", "the request conflicts with current state"
+	} else if errors.Is(err, persistence.ErrUnavailable) {
+		status, code, message = http.StatusServiceUnavailable, "storage_unavailable", "durable storage is temporarily unavailable"
 	} else {
 		var providerFailure *stores.Failure
 		if errors.As(err, &providerFailure) {
