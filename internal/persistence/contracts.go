@@ -7,11 +7,26 @@ import (
 	"errors"
 	"fmt"
 	"mime"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/protection"
+)
+
+const (
+	// APIKeyRoleAdmin grants control-plane access across projects.
+	APIKeyRoleAdmin APIKeyRole = "admin"
+	// APIKeyRoleApplication grants data-plane access to one application.
+	APIKeyRoleApplication APIKeyRole = "application"
+
+	// QueueInbox identifies protected provider notification work.
+	QueueInbox QueueName = "inbox"
+	// QueueOutbox identifies application webhook delivery work.
+	QueueOutbox QueueName = "outbox"
+	// QueueReconciliation identifies protected provider reconciliation work.
+	QueueReconciliation QueueName = "reconciliation"
 )
 
 // Store owns durable storage resources and starts atomic units of work.
@@ -32,6 +47,23 @@ type Transaction interface {
 	EntitlementRepository
 	OutboxRepository
 }
+
+// OperationsStore executes control-plane and durable queue work in atomic units.
+type OperationsStore interface {
+	// Operate executes one operations callback in an atomic unit of work.
+	Operate(context.Context, OperationsFunc) error
+}
+
+// OperationsTransaction combines control-plane and queue repositories.
+type OperationsTransaction interface {
+	CatalogRepository
+	CatalogWriter
+	OperationsRepository
+	QueueRepository
+}
+
+// OperationsFunc performs operational durable work that must commit or roll back together.
+type OperationsFunc func(OperationsTransaction) error
 
 // CredentialRepository stores and resolves protected application credential packages.
 type CredentialRepository interface {
@@ -59,6 +91,22 @@ type CatalogRepository interface {
 	) ([]CatalogProduct, error)
 }
 
+// CatalogWriter creates idempotent control-plane catalog records.
+type CatalogWriter interface {
+	// PutProject creates one project or confirms an identical existing identity.
+	PutProject(context.Context, core.ProjectID) error
+	// PutApplication creates one provider application or confirms identical configuration.
+	PutApplication(context.Context, core.Application) error
+	// PutCustomer creates one external customer identity or returns its existing record.
+	PutCustomer(context.Context, core.Customer) (core.Customer, error)
+	// PutEntitlementDefinition creates one named entitlement.
+	PutEntitlementDefinition(context.Context, core.Entitlement) error
+	// PutProduct creates one product and its entitlement grants.
+	PutProduct(context.Context, core.Product) error
+	// PutStoreProduct creates one application provider-product mapping.
+	PutStoreProduct(context.Context, core.ProjectID, core.StoreProduct) error
+}
+
 // PurchaseRepository stores encrypted evidence and immutable normalized observations.
 type PurchaseRepository interface {
 	// SaveEvidence stores client evidence idempotently and returns its durable identity.
@@ -81,6 +129,38 @@ type EntitlementRepository interface {
 type OutboxRepository interface {
 	// SaveOutboxEvent stores one logical event idempotently and returns its durable identity.
 	SaveOutboxEvent(context.Context, OutboxEvent) (string, error)
+}
+
+// OperationsRepository stores API identities and protected webhook configuration.
+type OperationsRepository interface {
+	// APIKey returns one non-revoked API key verifier by public identity.
+	APIKey(context.Context, string) (APIKeyRecord, error)
+	// PutAPIKey creates one API key verifier without storing the bearer secret.
+	PutAPIKey(context.Context, APIKeyRecord) error
+	// PutWebhookEndpoint creates or rotates one protected application webhook endpoint.
+	PutWebhookEndpoint(context.Context, WebhookEndpointWrite) (WebhookEndpointRecord, error)
+	// WebhookEndpoint returns protected delivery configuration for one application.
+	WebhookEndpoint(context.Context, core.ProjectID, core.ApplicationID) (WebhookEndpointRecord, error)
+}
+
+// QueueRepository owns durable queue insertion, claiming, and state transitions.
+type QueueRepository interface {
+	// SaveInboxMessage stores one protected notification idempotently.
+	SaveInboxMessage(context.Context, InboxMessage) (string, error)
+	// SaveReconciliationJob stores one protected reconciliation request idempotently.
+	SaveReconciliationJob(context.Context, ReconciliationJob) (string, error)
+	// ClaimQueue atomically leases available records to one worker.
+	ClaimQueue(context.Context, QueueClaim) ([]QueueMessage, error)
+	// CompleteQueue marks one worker-owned record delivered or processed.
+	CompleteQueue(context.Context, QueueTransition) error
+	// RetryQueue returns one worker-owned record to pending with a future schedule.
+	RetryQueue(context.Context, QueueTransition) error
+	// FailQueue moves one worker-owned record to its terminal failed state.
+	FailQueue(context.Context, QueueTransition) error
+	// RecoverQueueLocks returns stale processing records to pending.
+	RecoverQueueLocks(context.Context, QueueName, time.Time) (int64, error)
+	// QueueDepth returns current counts grouped by durable state.
+	QueueDepth(context.Context, QueueName) (map[string]int64, error)
 }
 
 // CatalogProduct joins one provider product mapping to its internal product and entitlements.
@@ -193,12 +273,235 @@ type OutboxEvent struct {
 	AvailableAt        time.Time
 }
 
+// APIKeyRole identifies one stable authorization boundary.
+type APIKeyRole string
+
+// APIKeyRecord stores a public key identity and memory-hard secret verifier.
+type APIKeyRecord struct {
+	ID            string
+	Role          APIKeyRole
+	ProjectID     core.ProjectID
+	ApplicationID core.ApplicationID
+	SecretSalt    [16]byte
+	SecretHash    [32]byte
+	CreatedAt     time.Time
+}
+
+// WebhookEndpointWrite describes protected application delivery configuration.
+type WebhookEndpointWrite struct {
+	ProjectID        core.ProjectID
+	ApplicationID    core.ApplicationID
+	URL              string
+	Secret           protection.Value
+	ExpectedRevision int64
+}
+
+// WebhookEndpointRecord contains protected delivery configuration and revision metadata.
+type WebhookEndpointRecord struct {
+	ProjectID     core.ProjectID
+	ApplicationID core.ApplicationID
+	URL           string
+	Secret        protection.Value
+	Revision      int64
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// QueueName identifies one fixed durable queue table.
+type QueueName string
+
+// InboxMessage describes one protected provider notification for durable insertion.
+type InboxMessage struct {
+	ID            string
+	ProjectID     core.ProjectID
+	ApplicationID core.ApplicationID
+	Provider      core.Provider
+	Kind          string
+	ContentType   string
+	Payload       protection.Value
+	ReceivedAt    time.Time
+	AvailableAt   time.Time
+}
+
+// ReconciliationJob describes one protected provider query scheduled for a customer.
+type ReconciliationJob struct {
+	ID            string
+	ProjectID     core.ProjectID
+	ApplicationID core.ApplicationID
+	CustomerID    core.CustomerID
+	Payload       protection.Value
+	AvailableAt   time.Time
+}
+
+// QueueClaim requests a bounded atomic lease of currently available work.
+type QueueClaim struct {
+	Queue       QueueName
+	WorkerID    string
+	Now         time.Time
+	StaleBefore time.Time
+	Limit       int
+}
+
+// QueueMessage is one leased inbox, outbox, or reconciliation record.
+type QueueMessage struct {
+	Queue            QueueName
+	ID               string
+	ProjectID        core.ProjectID
+	ApplicationID    core.ApplicationID
+	CustomerID       core.CustomerID
+	Provider         core.Provider
+	Kind             string
+	ContentType      string
+	ProtectedPayload protection.Value
+	JSONPayload      json.RawMessage
+	Attempts         int
+	OccurredAt       time.Time
+}
+
+// QueueTransition changes one worker-owned durable record after an attempt.
+type QueueTransition struct {
+	Queue       QueueName
+	ID          string
+	WorkerID    string
+	CompletedAt time.Time
+	AvailableAt time.Time
+	ErrorCode   string
+}
+
 var (
 	// ErrNotFound indicates that a requested durable record does not exist in scope.
 	ErrNotFound = errors.New("persistence record not found")
 	// ErrConflict indicates that an identity or idempotency key belongs to different data.
 	ErrConflict = errors.New("persistence conflict")
 )
+
+// Validate checks API key identity, role scope, verifier bytes, and creation time.
+func (record APIKeyRecord) Validate() error {
+	var scopeError error
+	switch record.Role {
+	case APIKeyRoleAdmin:
+		if record.ProjectID != "" || record.ApplicationID != "" {
+			scopeError = errors.New("admin API key must not have application scope")
+		}
+	case APIKeyRoleApplication:
+		scopeError = errors.Join(record.ProjectID.Validate(), record.ApplicationID.Validate())
+	default:
+		scopeError = fmt.Errorf("unsupported API key role %q", record.Role)
+	}
+	var verifierError error
+	if record.SecretSalt == ([16]byte{}) || record.SecretHash == ([32]byte{}) {
+		verifierError = errors.New("API key verifier is required")
+	}
+	return errors.Join(
+		validateText("API key ID", record.ID),
+		scopeError,
+		verifierError,
+		validateTime("API key creation time", record.CreatedAt),
+	)
+}
+
+// Validate checks webhook scope, HTTPS URL, protected secret, and optimistic revision.
+func (write WebhookEndpointWrite) Validate() error {
+	return errors.Join(
+		write.ProjectID.Validate(),
+		write.ApplicationID.Validate(),
+		validateHTTPSURL(write.URL),
+		write.Secret.Validate(),
+		validateNonNegative("webhook expected revision", write.ExpectedRevision),
+	)
+}
+
+// Validate checks stored webhook configuration and durable revision metadata.
+func (record WebhookEndpointRecord) Validate() error {
+	var revisionError error
+	if record.Revision <= 0 {
+		revisionError = errors.New("webhook revision must be positive")
+	}
+	if !record.UpdatedAt.IsZero() && !record.CreatedAt.IsZero() && record.UpdatedAt.Before(record.CreatedAt) {
+		revisionError = errors.Join(revisionError, errors.New("webhook update time cannot precede creation"))
+	}
+	return errors.Join(
+		record.ProjectID.Validate(),
+		record.ApplicationID.Validate(),
+		validateHTTPSURL(record.URL),
+		record.Secret.Validate(),
+		revisionError,
+		validateTime("webhook creation time", record.CreatedAt),
+		validateTime("webhook update time", record.UpdatedAt),
+	)
+}
+
+// Validate checks notification scope, protected payload, metadata, and schedule.
+func (message InboxMessage) Validate() error {
+	var scheduleError error
+	if !message.AvailableAt.IsZero() && !message.ReceivedAt.IsZero() && message.AvailableAt.Before(message.ReceivedAt) {
+		scheduleError = errors.New("inbox availability cannot precede receipt")
+	}
+	return errors.Join(
+		validateText("inbox message ID", message.ID),
+		message.ProjectID.Validate(),
+		message.ApplicationID.Validate(),
+		message.Provider.Validate(),
+		validateText("inbox kind", message.Kind),
+		validateContentType("inbox content type", message.ContentType),
+		message.Payload.Validate(),
+		validateTime("inbox receipt time", message.ReceivedAt),
+		validateTime("inbox availability time", message.AvailableAt),
+		scheduleError,
+	)
+}
+
+// Validate checks reconciliation scope, protected query payload, and schedule.
+func (job ReconciliationJob) Validate() error {
+	return errors.Join(
+		validateText("reconciliation job ID", job.ID),
+		job.ProjectID.Validate(),
+		job.ApplicationID.Validate(),
+		job.CustomerID.Validate(),
+		job.Payload.Validate(),
+		validateTime("reconciliation availability time", job.AvailableAt),
+	)
+}
+
+// Validate checks queue identity, worker lease parameters, and batch limit.
+func (claim QueueClaim) Validate() error {
+	var limitError error
+	if claim.Limit <= 0 || claim.Limit > 1000 {
+		limitError = errors.New("queue claim limit must be between 1 and 1000")
+	}
+	return errors.Join(
+		claim.Queue.Validate(),
+		validateText("queue worker ID", claim.WorkerID),
+		validateTime("queue claim time", claim.Now),
+		validateTime("queue stale-before time", claim.StaleBefore),
+		limitError,
+	)
+}
+
+// Validate checks one fixed durable queue name.
+func (name QueueName) Validate() error {
+	switch name {
+	case QueueInbox, QueueOutbox, QueueReconciliation:
+		return nil
+	default:
+		return fmt.Errorf("unsupported queue %q", name)
+	}
+}
+
+// Validate checks worker ownership, record identity, timestamps, and safe error metadata.
+func (transition QueueTransition) Validate() error {
+	var errorCodeError error
+	if transition.ErrorCode != "" {
+		errorCodeError = validateText("queue error code", transition.ErrorCode)
+	}
+	return errors.Join(
+		transition.Queue.Validate(),
+		validateText("queue record ID", transition.ID),
+		validateText("queue worker ID", transition.WorkerID),
+		validateTime("queue completion time", transition.CompletedAt),
+		errorCodeError,
+	)
+}
 
 // Validate checks the project, application, and provider-owned credential kind.
 func (key CredentialKey) Validate() error {
@@ -390,6 +693,23 @@ func validateContentType(name, value string) error {
 func validateTime(name string, value time.Time) error {
 	if value.IsZero() {
 		return fmt.Errorf("%s is required", name)
+	}
+	return nil
+}
+
+// validateHTTPSURL accepts only absolute HTTPS webhook destinations without embedded credentials.
+func validateHTTPSURL(value string) error {
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+		return errors.New("webhook URL must be an absolute HTTPS URL without user information")
+	}
+	return nil
+}
+
+// validateNonNegative checks optimistic revision inputs that allow zero for creation.
+func validateNonNegative(name string, value int64) error {
+	if value < 0 {
+		return fmt.Errorf("%s must not be negative", name)
 	}
 	return nil
 }

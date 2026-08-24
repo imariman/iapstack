@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -246,6 +247,100 @@ func TestTransactionalPurchasePersistence(t *testing.T) {
 		t.Fatalf("rollback Transact() error = %v, want sentinel", err)
 	}
 	assertTableCount(t, database, "purchase_evidence", 1)
+}
+
+// TestOperationalQueueClaimRetryAndCompletion verifies idempotency, concurrent leasing, and worker ownership.
+func TestOperationalQueueClaimRetryAndCompletion(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	writes := newPurchaseWrites(t, fixture)
+	if err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		_, err := repository.SaveOutboxEvent(database.ctx, writes.outbox)
+		return err
+	}); err != nil {
+		t.Fatalf("SaveOutboxEvent() error = %v", err)
+	}
+
+	now := writes.outbox.AvailableAt.Add(time.Second)
+	claims := make(chan []persistence.QueueMessage, 2)
+	errorsChannel := make(chan error, 2)
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	for _, workerID := range []string{"worker-a", "worker-b"} {
+		workers.Add(1)
+		go func(workerID string) {
+			defer workers.Done()
+			<-start
+			var messages []persistence.QueueMessage
+			err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+				var claimErr error
+				messages, claimErr = repository.ClaimQueue(database.ctx, persistence.QueueClaim{
+					Queue: persistence.QueueOutbox, WorkerID: workerID, Now: now,
+					StaleBefore: now.Add(-time.Minute), Limit: 1,
+				})
+				return claimErr
+			})
+			errorsChannel <- err
+			claims <- messages
+		}(workerID)
+	}
+	close(start)
+	workers.Wait()
+	close(claims)
+	close(errorsChannel)
+	for err := range errorsChannel {
+		if err != nil {
+			t.Fatalf("concurrent ClaimQueue() error = %v", err)
+		}
+	}
+	var claimed persistence.QueueMessage
+	claimCount := 0
+	for messages := range claims {
+		claimCount += len(messages)
+		if len(messages) == 1 {
+			claimed = messages[0]
+		}
+	}
+	if claimCount != 1 {
+		t.Fatalf("concurrent claimed count = %d, want 1", claimCount)
+	}
+	workerID := "worker-a"
+	if claimed.ID == "" {
+		t.Fatal("claimed outbox identity is empty")
+	}
+	// Resolve the actual owner because either concurrent worker may win the lease.
+	if err := database.conn.QueryRow(database.ctx, `SELECT locked_by FROM outbox_events WHERE id = $1`, claimed.ID).Scan(&workerID); err != nil {
+		t.Fatalf("load outbox owner: %v", err)
+	}
+	retryAt := now.Add(time.Minute)
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		return repository.RetryQueue(database.ctx, persistence.QueueTransition{
+			Queue: persistence.QueueOutbox, ID: claimed.ID, WorkerID: workerID,
+			CompletedAt: now.Add(time.Second), AvailableAt: retryAt, ErrorCode: "temporary",
+		})
+	}); err != nil {
+		t.Fatalf("RetryQueue() error = %v", err)
+	}
+	var retried []persistence.QueueMessage
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var claimErr error
+		retried, claimErr = repository.ClaimQueue(database.ctx, persistence.QueueClaim{
+			Queue: persistence.QueueOutbox, WorkerID: "worker-c", Now: retryAt,
+			StaleBefore: retryAt.Add(-time.Minute), Limit: 1,
+		})
+		return claimErr
+	}); err != nil || len(retried) != 1 || retried[0].Attempts != 2 {
+		t.Fatalf("retried ClaimQueue() = %#v, %v", retried, err)
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		return repository.CompleteQueue(database.ctx, persistence.QueueTransition{
+			Queue: persistence.QueueOutbox, ID: claimed.ID, WorkerID: "worker-c", CompletedAt: retryAt.Add(time.Second),
+		})
+	}); err != nil {
+		t.Fatalf("CompleteQueue() error = %v", err)
+	}
+	assertTableCount(t, database, "outbox_events", 1)
 }
 
 // newPurchaseWrites builds one valid provider-neutral purchase persistence graph.

@@ -24,6 +24,8 @@ type transaction struct {
 var (
 	// storeContract verifies that Store implements the durable storage boundary.
 	_ persistence.Store = (*Store)(nil)
+	// operationsStoreContract verifies that Store implements operational atomic work.
+	_ persistence.OperationsStore = (*Store)(nil)
 	// transactionContract verifies that transaction implements every repository boundary.
 	_ persistence.Transaction = (*transaction)(nil)
 )
@@ -77,11 +79,28 @@ func (store *Store) Ping(ctx context.Context) error {
 
 // Transact executes one callback in a serializable PostgreSQL transaction.
 func (store *Store) Transact(ctx context.Context, operation persistence.TransactionFunc) (err error) {
-	if store == nil || store.pool == nil {
-		return errors.New("PostgreSQL store is not initialized")
-	}
 	if operation == nil {
 		return errors.New("persistence transaction operation is required")
+	}
+	return store.transact(ctx, func(repository *transaction) error {
+		return operation(repository)
+	})
+}
+
+// Operate executes one control-plane or queue callback in a serializable transaction.
+func (store *Store) Operate(ctx context.Context, operation persistence.OperationsFunc) error {
+	if operation == nil {
+		return errors.New("persistence operations callback is required")
+	}
+	return store.transact(ctx, func(repository *transaction) error {
+		return operation(repository)
+	})
+}
+
+// transact executes one concrete callback in a serializable PostgreSQL transaction.
+func (store *Store) transact(ctx context.Context, operation func(*transaction) error) (err error) {
+	if store == nil || store.pool == nil {
+		return errors.New("PostgreSQL store is not initialized")
 	}
 
 	postgresTransaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})

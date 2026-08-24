@@ -69,6 +69,7 @@ func TestMigrationLifecycle(t *testing.T) {
 		"customer_entitlements",
 		"outbox_events",
 		"application_credentials",
+		"api_keys",
 	}
 
 	for version := int32(1); version <= postgres.LatestVersion; version++ {

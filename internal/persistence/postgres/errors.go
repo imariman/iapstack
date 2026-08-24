@@ -23,6 +23,9 @@ func validateText(name, value string) error {
 
 // classifyError translates stable PostgreSQL outcomes without exposing statement values.
 func classifyError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%s: %w", operation, persistence.ErrNotFound)
 	}
