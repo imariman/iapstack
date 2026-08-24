@@ -101,6 +101,53 @@ jobs:
         if: steps.module.outputs.present != 'true'
         run: echo "Go checks will activate automatically when go.mod is added."
 
+  flutter-sdk:
+    name: Flutter SDK checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.1
+          cache: true
+
+      - name: Check provider-neutral SDK
+        working-directory: sdk/flutter/iapstack
+        run: |
+          dart pub get
+          dart format --output=none --set-exit-if-changed .
+          dart analyze
+          dart test
+
+      - name: Check Huawei SDK
+        working-directory: sdk/flutter/iapstack_huawei
+        run: |
+          flutter pub get
+          dart format --output=none --set-exit-if-changed .
+          flutter analyze
+          flutter test
+
+      - name: Check Huawei sandbox example
+        working-directory: sdk/flutter/iapstack_huawei/example
+        run: |
+          flutter pub get
+          dart format --output=none --set-exit-if-changed lib test
+          flutter analyze
+          flutter test
+          flutter build apk --debug
+
   container:
     name: Container build
     runs-on: ubuntu-latest
