@@ -19,6 +19,8 @@ const (
 	testDatabaseURLKey = "IAPSTACK_TEST_DATABASE_URL"
 	// testDatabaseTimeout bounds one integration-test database session.
 	testDatabaseTimeout = 30 * time.Second
+	// testDatabaseAdvisoryLock serializes schema-resetting integration test packages.
+	testDatabaseAdvisoryLock int64 = 424090117
 )
 
 // testDatabase owns one connection and its embedded migration runner.
@@ -283,6 +285,10 @@ func openTestDatabase(t *testing.T, targetVersion int32) *testDatabase {
 	if err != nil {
 		t.Fatalf("connect to integration PostgreSQL: %v", err)
 	}
+	if _, err := connection.Exec(ctx, `SELECT pg_advisory_lock($1)`, testDatabaseAdvisoryLock); err != nil {
+		_ = connection.Close(ctx)
+		t.Fatalf("lock integration PostgreSQL: %v", err)
+	}
 
 	migrator, err := postgres.NewMigrator(ctx, connection)
 	if err != nil {
@@ -305,6 +311,9 @@ func openTestDatabase(t *testing.T, targetVersion int32) *testDatabase {
 		defer cleanupCancel()
 		if err := migrator.MigrateTo(cleanupCtx, 0); err != nil {
 			t.Errorf("reset integration PostgreSQL during cleanup: %v", err)
+		}
+		if _, err := connection.Exec(cleanupCtx, `SELECT pg_advisory_unlock($1)`, testDatabaseAdvisoryLock); err != nil {
+			t.Errorf("unlock integration PostgreSQL: %v", err)
 		}
 		if err := connection.Close(cleanupCtx); err != nil {
 			t.Errorf("close integration PostgreSQL: %v", err)

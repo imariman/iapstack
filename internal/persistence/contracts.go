@@ -136,9 +136,10 @@ type EntitlementProjection struct {
 
 // CustomerEntitlement is a versioned current projection returned to application use cases.
 type CustomerEntitlement struct {
-	Projection EntitlementProjection
-	Key        string
-	Version    int64
+	Projection          EntitlementProjection
+	SourceApplicationID core.ApplicationID
+	Key                 string
+	Version             int64
 }
 
 // EntitlementWriteResult reports the durable projection and whether it changed.
