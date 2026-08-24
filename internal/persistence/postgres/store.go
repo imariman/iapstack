@@ -82,28 +82,32 @@ func (store *Store) Transact(ctx context.Context, operation persistence.Transact
 	if operation == nil {
 		return errors.New("persistence transaction operation is required")
 	}
-	return store.transact(ctx, func(repository *transaction) error {
+	return store.transact(ctx, pgx.Serializable, func(repository *transaction) error {
 		return operation(repository)
 	})
 }
 
-// Operate executes one control-plane or queue callback in a serializable transaction.
+// Operate executes one control-plane or queue callback with row-lock-compatible isolation.
 func (store *Store) Operate(ctx context.Context, operation persistence.OperationsFunc) error {
 	if operation == nil {
 		return errors.New("persistence operations callback is required")
 	}
-	return store.transact(ctx, func(repository *transaction) error {
+	return store.transact(ctx, pgx.ReadCommitted, func(repository *transaction) error {
 		return operation(repository)
 	})
 }
 
-// transact executes one concrete callback in a serializable PostgreSQL transaction.
-func (store *Store) transact(ctx context.Context, operation func(*transaction) error) (err error) {
+// transact executes one concrete callback at the requested PostgreSQL isolation level.
+func (store *Store) transact(
+	ctx context.Context,
+	isolation pgx.TxIsoLevel,
+	operation func(*transaction) error,
+) (err error) {
 	if store == nil || store.pool == nil {
 		return errors.New("PostgreSQL store is not initialized")
 	}
 
-	postgresTransaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	postgresTransaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: isolation})
 	if err != nil {
 		return fmt.Errorf("begin PostgreSQL transaction: %w", err)
 	}
