@@ -124,6 +124,63 @@ func TestNormalizeSubscriptionLifecycle(t *testing.T) {
 	}
 }
 
+// TestObservationSnapshotIdentitySeparatesLifecycleChangesButNotReceiptTime verifies durable replay semantics.
+func TestObservationSnapshotIdentitySeparatesLifecycleChangesButNotReceiptTime(t *testing.T) {
+	application := core.Application{ID: "application-1", ProjectID: "project-1", Store: core.StoreApplication{
+		Provider: core.ProviderHuaweiAppGallery, Environment: core.EnvironmentSandbox, ID: "provider-app-1",
+	}}
+	firstTime := time.Date(2026, time.August, 24, 10, 0, 0, 0, time.UTC)
+	purchase := purchaseData{
+		ApplicationID: "provider-app-1", ProductID: "subscription", OrderID: "order-1",
+		PurchaseToken: "token-1", PurchaseState: 0, PurchaseTime: firstTime.Add(-time.Hour).UnixMilli(),
+		ExpirationDate: firstTime.Add(time.Hour).UnixMilli(), RenewStatus: 1, SubIsValid: true, Quantity: 1,
+	}
+	artifact, err := stores.NewEvidence("application/json", []byte(`{"authoritative":true}`))
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	adapter := &Adapter{clock: func() time.Time { return firstTime }}
+	first, err := adapter.result(application, core.ProductKindSubscription, purchase, artifact)
+	if err != nil {
+		t.Fatalf("first result() error = %v", err)
+	}
+	adapter.clock = func() time.Time { return firstTime.Add(time.Minute) }
+	replayed, err := adapter.result(application, core.ProductKindSubscription, purchase, artifact)
+	if err != nil {
+		t.Fatalf("replayed result() error = %v", err)
+	}
+	if first.Observations[0].ID != replayed.Observations[0].ID {
+		t.Fatalf("replayed observation IDs = (%q, %q), want stable identity",
+			first.Observations[0].ID, replayed.Observations[0].ID)
+	}
+	if first.Observations[0].ObservedAt.Equal(replayed.Observations[0].ObservedAt) {
+		t.Fatal("replayed observation times are equal, want distinct receipt times")
+	}
+
+	adapter.clock = func() time.Time { return firstTime.Add(2 * time.Hour) }
+	expired, err := adapter.result(application, core.ProductKindSubscription, purchase, artifact)
+	if err != nil {
+		t.Fatalf("expired result() error = %v", err)
+	}
+	if expired.Observations[0].State != core.LifecycleExpired {
+		t.Fatalf("expired lifecycle = %q, want %q", expired.Observations[0].State, core.LifecycleExpired)
+	}
+	if first.Observations[0].ID == expired.Observations[0].ID {
+		t.Fatal("active and expired observations share one identity")
+	}
+
+	canceledPurchase := purchase
+	canceledPurchase.RenewStatus = 0
+	adapter.clock = func() time.Time { return firstTime }
+	canceled, err := adapter.result(application, core.ProductKindSubscription, canceledPurchase, artifact)
+	if err != nil {
+		t.Fatalf("canceled result() error = %v", err)
+	}
+	if first.Observations[0].ID == canceled.Observations[0].ID {
+		t.Fatal("renewing and canceled observations share one identity")
+	}
+}
+
 // TestVerifySignatureRejectsTampering verifies that exact signed JSON bytes cannot be changed.
 func TestVerifySignatureRejectsTampering(t *testing.T) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)

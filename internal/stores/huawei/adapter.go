@@ -465,10 +465,16 @@ func (adapter *Adapter) result(
 		}
 		references = append(references, reference)
 	}
-	identity := sha256.Sum256([]byte(strings.Join([]string{
-		string(application.ID), purchase.ProductID, purchase.PurchaseToken,
-		strconv.Itoa(purchase.PurchaseState), strconv.FormatInt(purchase.ExpirationDate, 10),
-	}, "\x00")))
+	identity := observationSnapshotIdentity(
+		application.ID,
+		productKind,
+		purchase,
+		state,
+		access,
+		reason,
+		renewal,
+		quantity,
+	)
 	observation := core.PurchaseObservation{
 		ID:              core.ObservationID("hua-" + hex.EncodeToString(identity[:16])),
 		ApplicationID:   application.ID,
@@ -495,6 +501,41 @@ func (adapter *Adapter) result(
 		Artifacts:    []stores.VerifiedArtifact{{Kind: "huawei_server_response", Evidence: artifact}},
 		Observations: []core.PurchaseObservation{observation},
 	}, nil
+}
+
+// observationSnapshotIdentity hashes every authoritative field that can change the immutable normalized snapshot.
+func observationSnapshotIdentity(
+	applicationID core.ApplicationID,
+	productKind core.ProductKind,
+	purchase purchaseData,
+	state core.LifecycleState,
+	access core.AccessStatus,
+	reason core.AccessReason,
+	renewal core.Renewal,
+	quantity uint32,
+) [32]byte {
+	return sha256.Sum256([]byte(strings.Join([]string{
+		string(applicationID),
+		string(productKind),
+		purchase.ApplicationID,
+		purchase.ProductID,
+		purchase.OrderID,
+		purchase.PurchaseToken,
+		strconv.Itoa(purchase.PurchaseState),
+		strconv.FormatInt(purchase.PurchaseTime, 10),
+		strconv.FormatInt(purchase.ExpirationDate, 10),
+		strconv.FormatInt(purchase.GraceExpirationTime, 10),
+		strconv.Itoa(purchase.RenewStatus),
+		strconv.Itoa(purchase.RetryFlag),
+		strconv.FormatBool(purchase.SubIsValid),
+		purchase.DeveloperPayload,
+		strconv.FormatUint(uint64(quantity), 10),
+		string(state),
+		string(access),
+		string(reason),
+		string(renewal.Mode),
+		string(renewal.Status),
+	}, "\x00")))
 }
 
 // parseEvidence decodes the submitted envelope and its embedded purchase data.

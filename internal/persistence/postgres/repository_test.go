@@ -192,6 +192,8 @@ func TestTransactionalPurchasePersistence(t *testing.T) {
 	}
 
 	writes.outbox.ID = "outbox-replayed-with-new-id"
+	writes.evidence.ReceivedAt = writes.evidence.ReceivedAt.Add(time.Minute)
+	writes.observation.Observation.ObservedAt = writes.observation.Observation.ObservedAt.Add(time.Minute)
 	replayedOutboxID, replayedVersion, replayedChanged := persistPurchaseWrites(t, database.ctx, store, writes)
 	if replayedOutboxID != firstOutboxID {
 		t.Fatalf("replayed outbox ID = %q, want existing %q", replayedOutboxID, firstOutboxID)
