@@ -19,6 +19,7 @@ type entitlementRow struct {
 	entitlementID       string
 	entitlementKey      string
 	sourceObservationID string
+	sourceApplicationID string
 	sourceProductID     string
 	access              string
 	accessReason        string
@@ -150,6 +151,7 @@ func (repository *transaction) CustomerEntitlements(
 			ce.entitlement_id,
 			e.key,
 			ce.source_observation_id,
+			po.application_id,
 			ce.source_product_id,
 			ce.access_status,
 			ce.access_reason,
@@ -159,6 +161,10 @@ func (repository *transaction) CustomerEntitlements(
 		FROM customer_entitlements AS ce
 		JOIN entitlements AS e
 			ON e.id = ce.entitlement_id AND e.project_id = ce.project_id
+		JOIN purchase_observations AS po
+			ON po.id = ce.source_observation_id
+			AND po.customer_id = ce.customer_id
+			AND po.project_id = ce.project_id
 		WHERE ce.project_id = $1 AND ce.customer_id = $2
 		ORDER BY e.key
 	`, projectID, customerID)
@@ -200,6 +206,7 @@ func (repository *transaction) loadCustomerEntitlement(
 			ce.entitlement_id,
 			e.key,
 			ce.source_observation_id,
+			po.application_id,
 			ce.source_product_id,
 			ce.access_status,
 			ce.access_reason,
@@ -209,6 +216,10 @@ func (repository *transaction) loadCustomerEntitlement(
 		FROM customer_entitlements AS ce
 		JOIN entitlements AS e
 			ON e.id = ce.entitlement_id AND e.project_id = ce.project_id
+		JOIN purchase_observations AS po
+			ON po.id = ce.source_observation_id
+			AND po.customer_id = ce.customer_id
+			AND po.project_id = ce.project_id
 		WHERE ce.project_id = $1 AND ce.customer_id = $2 AND ce.entitlement_id = $3
 	`, projectID, customerID, entitlementID).Scan(
 		&row.projectID,
@@ -216,6 +227,7 @@ func (repository *transaction) loadCustomerEntitlement(
 		&row.entitlementID,
 		&row.entitlementKey,
 		&row.sourceObservationID,
+		&row.sourceApplicationID,
 		&row.sourceProductID,
 		&row.access,
 		&row.accessReason,
@@ -238,6 +250,7 @@ func scanEntitlementRow(rows pgx.Rows) (entitlementRow, error) {
 		&row.entitlementID,
 		&row.entitlementKey,
 		&row.sourceObservationID,
+		&row.sourceApplicationID,
 		&row.sourceProductID,
 		&row.access,
 		&row.accessReason,
@@ -267,6 +280,7 @@ func (row entitlementRow) entitlement() (persistence.CustomerEntitlement, error)
 	}
 	if err := errors.Join(
 		projection.Validate(),
+		core.ApplicationID(row.sourceApplicationID).Validate(),
 		validateText("stored entitlement key", row.entitlementKey),
 	); err != nil {
 		return persistence.CustomerEntitlement{}, fmt.Errorf("validate stored entitlement projection: %w", err)
@@ -275,9 +289,10 @@ func (row entitlementRow) entitlement() (persistence.CustomerEntitlement, error)
 		return persistence.CustomerEntitlement{}, errors.New("stored entitlement projection version must be positive")
 	}
 	return persistence.CustomerEntitlement{
-		Projection: projection,
-		Key:        row.entitlementKey,
-		Version:    row.version,
+		Projection:          projection,
+		SourceApplicationID: core.ApplicationID(row.sourceApplicationID),
+		Key:                 row.entitlementKey,
+		Version:             row.version,
 	}, nil
 }
 

@@ -87,6 +87,13 @@ PostgreSQL integration tests activate when `IAPSTACK_TEST_DATABASE_URL` is set. 
 runs them against a clean PostgreSQL service and verifies every migration can be
 applied, rolled back, and reapplied.
 
+Purchase verification is coordinated by the provider-neutral `internal/verification`
+use case. Provider network calls and protection of sensitive evidence happen before
+the durable transaction. Catalog validation, evidence and observation persistence,
+entitlement projection, and outbox insertion then commit or roll back together. The
+use case depends only on adapter, protector, clock, and persistence ports; concrete
+providers and PostgreSQL remain replaceable implementations.
+
 Go source files place constants first, type and struct declarations second, and
 executable code last. Related constants stay together; unrelated constant groups are
 separated by a blank line. Every constant, function, and method has an English
@@ -102,7 +109,9 @@ reconciliation, and outbox responsibilities in a later delivery phase.
 ├── cmd/iapstack/          # API and worker entrypoints
 ├── internal/
 │   ├── core/              # Customers, transactions, products, and entitlements
-│   └── stores/            # Apple, Google, Huawei, Amazon, and future adapters
+│   ├── stores/            # Apple, Google, Huawei, Amazon, and future adapters
+│   ├── persistence/       # Durable ports and PostgreSQL repositories
+│   └── verification/      # Provider-neutral purchase verification orchestration
 ├── dashboard/             # Self-hosted web dashboard
 ├── sdks/                  # Flutter and future client SDKs
 ├── contracts/             # Public API and webhook contracts
