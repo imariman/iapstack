@@ -75,6 +75,33 @@ func TestDashboardSecretLifecycleAvoidsPersistentStorage(t *testing.T) {
 	}
 }
 
+// TestDashboardUsesEnglishInterface verifies the embedded interface stays consistently English.
+func TestDashboardUsesEnglishInterface(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	if !strings.Contains(string(document), `<html lang="en">`) {
+		t.Fatal("dashboard document must declare English as its interface language")
+	}
+	for _, value := range []string{string(document), string(script)} {
+		if strings.ContainsAny(value, "\u00e7\u011f\u0131\u00f6\u015f\u00fc\u00c7\u011e\u0130\u00d6\u015e\u00dc") {
+			t.Fatal("dashboard interface contains Turkish characters")
+		}
+		for _, forbidden := range []string{"Yeni", "Hata", "Tamam", "Eksik", "Bekleyen", "Durum", "Katalog"} {
+			if strings.Contains(value, forbidden) {
+				t.Fatalf("dashboard interface contains Turkish term %q", forbidden)
+			}
+		}
+	}
+}
+
 // TestHandlerRedirectsAndDelegates verifies the canonical entrypoint and API fallthrough.
 func TestHandlerRedirectsAndDelegates(t *testing.T) {
 	t.Parallel()

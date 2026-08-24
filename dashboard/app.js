@@ -96,12 +96,12 @@ function showAuthenticated(authenticated) {
 function errorMessage(error) {
   const suffix = error.requestID ? ` · Request ${error.requestID}` : "";
   if (error.status === 401) {
-    return `Admin anahtarı geçersiz veya yetkisiz.${suffix}`;
+    return `The admin key is invalid or unauthorized.${suffix}`;
   }
   if (error.status === 503) {
-    return `Veritabanı şu anda kullanılamıyor.${suffix}`;
+    return `The database is currently unavailable.${suffix}`;
   }
-  return `${error.message || "İstek tamamlanamadı."}${suffix}`;
+  return `${error.message || "The request could not be completed."}${suffix}`;
 }
 
 function setFormMessage(element, message, tone = "error") {
@@ -149,7 +149,7 @@ async function loadOverview(projectID) {
     state.selectedProject = projectID;
     renderProjectNavigation();
     renderOverview();
-    elements.updatedAt.textContent = `Güncellendi ${formatTime(new Date().toISOString())}`;
+    elements.updatedAt.textContent = `Updated ${formatTime(new Date().toISOString())}`;
   } catch (error) {
     if (error.status === 401) {
       logout();
@@ -171,31 +171,31 @@ function renderProjectNavigation() {
     button.setAttribute("aria-current", project.id === state.selectedProject ? "page" : "false");
     button.append(
       node("strong", "", project.id),
-      node("small", "", `${project.application_count} app · ${project.customer_count} müşteri`),
+      node("small", "", `${countLabel(project.application_count, "app")} · ${countLabel(project.customer_count, "customer")}`),
     );
     button.addEventListener("click", () => loadOverview(project.id));
     elements.projectNav.append(button);
   }
   if (!state.projects.length) {
-    elements.projectNav.append(node("p", "empty-state", "Henüz proje yok. + ile ilk kataloğu oluşturun."));
+    elements.projectNav.append(node("p", "empty-state", "No projects yet. Use + to create your first catalog."));
   }
 }
 
 function renderEmptyWorkspace() {
   state.overview = null;
-  elements.projectTitle.textContent = "İlk projeyi oluşturun";
-  elements.globalMessage.textContent = "Sol menüdeki + düğmesi Huawei katalog iskeletini oluşturur.";
+  elements.projectTitle.textContent = "Create your first project";
+  elements.globalMessage.textContent = "Use the + button in the sidebar to create a Huawei catalog setup.";
   setText("metric-apps", "0");
   setText("metric-customers", "0");
   setText("metric-products", "0");
   setText("metric-pending", "0");
   for (const id of ["application-grid", "product-list", "queue-list"]) {
     const container = document.querySelector(`#${id}`);
-    container.replaceChildren(node("p", "empty-state", "Bu bölüm proje oluşturulduğunda dolacak."));
+    container.replaceChildren(node("p", "empty-state", "This section will populate after you create a project."));
   }
-  renderEmptyTable("transaction-rows", 5, "Henüz doğrulama yok.");
-  renderEmptyTable("customer-rows", 3, "Henüz müşteri yok.");
-  renderEmptyTable("webhook-rows", 3, "Henüz webhook olayı yok.");
+  renderEmptyTable("transaction-rows", 5, "No verifications yet.");
+  renderEmptyTable("customer-rows", 3, "No customers yet.");
+  renderEmptyTable("webhook-rows", 3, "No webhook events yet.");
 }
 
 function renderOverview() {
@@ -210,18 +210,18 @@ function renderOverview() {
 
   elements.projectTitle.textContent = overview.project.id;
   setText("metric-apps", overview.project.application_count);
-  setText("metric-apps-note", `${configured} tam yapılandırılmış`);
+  setText("metric-apps-note", `${configured} fully configured`);
   setText("metric-customers", overview.project.customer_count);
-  setText("metric-customers-note", `${allowed} aktif entitlement`);
+  setText("metric-customers-note", countLabel(allowed, "active entitlement"));
   setText("metric-products", overview.project.product_count);
-  setText("metric-products-note", `${sum(overview.products, "store_mapping_count")} store eşlemesi`);
+  setText("metric-products-note", countLabel(sum(overview.products, "store_mapping_count"), "store mapping"));
   setText("metric-pending", pending);
-  setText("metric-pending-note", failed ? `${failed} terminal hata` : "Terminal hata yok");
+  setText("metric-pending-note", failed ? countLabel(failed, "terminal failure") : "No terminal failures");
 
-  setText("signal-store", `${configured}/${overview.applications.length} hazır`);
-  setText("signal-verify", `${overview.recent_transactions.length} son kayıt`);
-  setText("signal-access", `${allowed} izin`);
-  setText("signal-deliver", `${delivered} teslim`);
+  setText("signal-store", `${configured}/${overview.applications.length} ready`);
+  setText("signal-verify", countLabel(overview.recent_transactions.length, "recent record"));
+  setText("signal-access", `${allowed} allowed`);
+  setText("signal-deliver", `${delivered} delivered`);
   setSignalWarning("store", configured !== overview.applications.length);
   setSignalWarning("verify", failed > 0);
   setSignalWarning("access", overview.recent_transactions.some((item) => item.access === "unresolved"));
@@ -238,9 +238,9 @@ function renderOverview() {
 function renderApplications(applications) {
   const container = document.querySelector("#application-grid");
   container.replaceChildren();
-  setText("apps-count", `${applications.length} kayıt`);
+  setText("apps-count", countLabel(applications.length, "record"));
   if (!applications.length) {
-    container.append(node("p", "empty-state", "Bu projede uygulama yok."));
+    container.append(node("p", "empty-state", "This project has no applications."));
     return;
   }
   for (const application of applications) {
@@ -252,11 +252,11 @@ function renderApplications(applications) {
     const config = node("div", "config-list");
     config.append(
       configRow("Environment", application.environment, true),
-      configRow("Provider credential", application.credential_configured ? "Hazır" : "Eksik", application.credential_configured),
-      configRow("Webhook", application.webhook_configured ? "Hazır" : "Eksik", application.webhook_configured),
+      configRow("Provider credential", application.credential_configured ? "Ready" : "Missing", application.credential_configured),
+      configRow("Webhook", application.webhook_configured ? "Ready" : "Missing", application.webhook_configured),
     );
     const actions = node("div", "application-actions");
-    const manage = node("button", "secondary-button", "Bağlantıları yönet");
+    const manage = node("button", "secondary-button", "Manage connections");
     manage.type = "button";
     manage.addEventListener("click", () => openApplicationManager(application));
     actions.append(manage);
@@ -288,10 +288,10 @@ function renderCommissioningStatus() {
   if (!application) return;
   setText("application-dialog-title", application.id);
   setText("application-dialog-meta", `${providerLabel(application.provider)} · ${application.environment} · ${application.provider_application_id}`);
-  setText("credential-revision", application.credential_revision ? `Revision ${application.credential_revision}` : "Yeni");
-  setText("webhook-revision", application.webhook_revision ? `Revision ${application.webhook_revision}` : "Yeni");
-  setText("credential-step-status", application.credential_configured ? `Revision ${application.credential_revision}` : "Eksik");
-  setText("webhook-step-status", application.webhook_configured ? `Revision ${application.webhook_revision}` : "Eksik");
+  setText("credential-revision", application.credential_revision ? `Revision ${application.credential_revision}` : "New");
+  setText("webhook-revision", application.webhook_revision ? `Revision ${application.webhook_revision}` : "New");
+  setText("credential-step-status", application.credential_configured ? `Revision ${application.credential_revision}` : "Missing");
+  setText("webhook-step-status", application.webhook_configured ? `Revision ${application.webhook_revision}` : "Missing");
   document.querySelector("#credential-step").classList.toggle("complete", application.credential_configured);
   document.querySelector("#webhook-step").classList.toggle("complete", application.webhook_configured);
 }
@@ -388,9 +388,9 @@ async function createCustomer(form) {
 function renderProducts(products) {
   const container = document.querySelector("#product-list");
   container.replaceChildren();
-  setText("products-count", `${products.length} kayıt`);
+  setText("products-count", countLabel(products.length, "record"));
   if (!products.length) {
-    container.append(node("p", "empty-state", "Katalog ürünü bulunmuyor."));
+    container.append(node("p", "empty-state", "No catalog products found."));
     return;
   }
   for (const product of products) {
@@ -417,9 +417,9 @@ function renderQueues(queues) {
     const item = node("article", "queue-item");
     item.append(
       node("strong", "", queueLabel(queue.name)),
-      queueNumber("Bekleyen", queue.pending),
-      queueNumber("Tamam", queue.completed),
-      queueNumber("Hata", queue.failed, "failed"),
+      queueNumber("Pending", queue.pending),
+      queueNumber("Completed", queue.completed),
+      queueNumber("Failed", queue.failed, "failed"),
     );
     container.append(item);
   }
@@ -435,7 +435,7 @@ function renderTransactions(transactions) {
   const body = document.querySelector("#transaction-rows");
   body.replaceChildren();
   if (!transactions.length) {
-    renderEmptyTable("transaction-rows", 5, "Henüz doğrulanmış purchase observation yok.");
+    renderEmptyTable("transaction-rows", 5, "No verified purchase observations yet.");
     return;
   }
   for (const transaction of transactions) {
@@ -455,14 +455,14 @@ function renderCustomers(customers) {
   const body = document.querySelector("#customer-rows");
   body.replaceChildren();
   if (!customers.length) {
-    renderEmptyTable("customer-rows", 3, "Henüz müşteri yok.");
+    renderEmptyTable("customer-rows", 3, "No customers yet.");
     return;
   }
   for (const customer of customers) {
     const row = document.createElement("tr");
     row.append(
       compoundCell(customer.external_id, customer.id),
-      textCell(`${customer.allowed_count}/${customer.entitlement_count} izinli`),
+      textCell(`${customer.allowed_count}/${customer.entitlement_count} allowed`),
       textCell(customer.last_observed_at ? formatTime(customer.last_observed_at) : "—"),
     );
     body.append(row);
@@ -473,7 +473,7 @@ function renderWebhooks(events) {
   const body = document.querySelector("#webhook-rows");
   body.replaceChildren();
   if (!events.length) {
-    renderEmptyTable("webhook-rows", 3, "Henüz webhook teslimatı yok.");
+    renderEmptyTable("webhook-rows", 3, "No webhook deliveries yet.");
     return;
   }
   for (const event of events) {
@@ -540,7 +540,7 @@ function formatTime(value) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return "—";
-  return new Intl.DateTimeFormat("tr-TR", {
+  return new Intl.DateTimeFormat("en-GB", {
     dateStyle: "short",
     timeStyle: "short",
   }).format(date);
@@ -548,6 +548,10 @@ function formatTime(value) {
 
 function sum(items, key) {
   return items.reduce((total, item) => total + Number(item[key] || 0), 0);
+}
+
+function countLabel(value, singular) {
+  return `${value} ${singular}${Number(value) === 1 ? "" : "s"}`;
 }
 
 function node(tag, className = "", text = "") {
@@ -633,7 +637,7 @@ document.querySelector("#cancel-setup").addEventListener("click", () => elements
 
 elements.setupForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  elements.setupMessage.textContent = "Katalog oluşturuluyor…";
+  elements.setupMessage.textContent = "Creating catalog…";
   const submit = elements.setupForm.querySelector("button[type='submit']");
   submit.disabled = true;
   try {
@@ -641,7 +645,7 @@ elements.setupForm.addEventListener("submit", async (event) => {
     elements.setupForm.reset();
     elements.setupDialog.close();
     await loadProjects(projectID);
-    elements.globalMessage.textContent = "Katalog iskeleti oluşturuldu. Provider credential ve webhook yapılandırmasını tamamlayın.";
+    elements.globalMessage.textContent = "Catalog setup created. Complete the provider credential and notification connection.";
   } catch (error) {
     elements.setupMessage.textContent = errorMessage(error);
   } finally {
@@ -664,12 +668,12 @@ elements.credentialForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = elements.credentialForm.querySelector("button[type='submit']");
   submit.disabled = true;
-  setFormMessage(elements.credentialMessage, "Huawei bağlantısı korunarak kaydediliyor…", "working");
+  setFormMessage(elements.credentialMessage, "Saving the protected Huawei connection…", "working");
   try {
     await saveHuaweiCredential(elements.credentialForm);
     elements.credentialForm.reset();
     await refreshManagedApplication();
-    setFormMessage(elements.credentialMessage, "Huawei bağlantısı kaydedildi.", "success");
+    setFormMessage(elements.credentialMessage, "Huawei connection saved.", "success");
   } catch (error) {
     setFormMessage(elements.credentialMessage, errorMessage(error));
   } finally {
@@ -681,12 +685,12 @@ elements.webhookForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = elements.webhookForm.querySelector("button[type='submit']");
   submit.disabled = true;
-  setFormMessage(elements.webhookMessage, "Bildirim bağlantısı korunarak kaydediliyor…", "working");
+  setFormMessage(elements.webhookMessage, "Saving the protected notification connection…", "working");
   try {
     await saveWebhook(elements.webhookForm);
     elements.webhookForm.reset();
     await refreshManagedApplication();
-    setFormMessage(elements.webhookMessage, "Bildirim bağlantısı kaydedildi.", "success");
+    setFormMessage(elements.webhookMessage, "Notification connection saved.", "success");
   } catch (error) {
     setFormMessage(elements.webhookMessage, errorMessage(error));
   } finally {
@@ -698,7 +702,7 @@ elements.applicationKeyForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = elements.applicationKeyForm.querySelector("button[type='submit']");
   submit.disabled = true;
-  setFormMessage(elements.applicationKeyMessage, "Application key oluşturuluyor…", "working");
+  setFormMessage(elements.applicationKeyMessage, "Creating application key…", "working");
   try {
     const response = await createApplicationKey();
     revealApplicationKey(response.key);
@@ -711,7 +715,7 @@ elements.applicationKeyForm.addEventListener("submit", async (event) => {
 
 document.querySelector("#open-customer").addEventListener("click", () => {
   if (!state.selectedProject) {
-    elements.globalMessage.textContent = "Önce bir proje oluşturun.";
+    elements.globalMessage.textContent = "Create a project first.";
     return;
   }
   elements.customerForm.reset();
@@ -731,12 +735,12 @@ elements.customerForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = elements.customerForm.querySelector("button[type='submit']");
   submit.disabled = true;
-  setFormMessage(elements.customerMessage, "Müşteri ekleniyor…", "working");
+  setFormMessage(elements.customerMessage, "Adding customer…", "working");
   try {
     await createCustomer(elements.customerForm);
     elements.customerDialog.close();
     await loadProjects(state.selectedProject);
-    elements.globalMessage.textContent = "Müşteri eklendi.";
+    elements.globalMessage.textContent = "Customer added.";
   } catch (error) {
     setFormMessage(elements.customerMessage, errorMessage(error));
   } finally {
@@ -747,11 +751,11 @@ elements.customerForm.addEventListener("submit", async (event) => {
 document.querySelector("#copy-key").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(elements.revealedKey.value);
-    setFormMessage(elements.copyMessage, "Application key panoya kopyalandı.", "success");
+    setFormMessage(elements.copyMessage, "Application key copied to the clipboard.", "success");
   } catch (_) {
     elements.revealedKey.focus();
     elements.revealedKey.select();
-    setFormMessage(elements.copyMessage, "Otomatik kopyalama engellendi; seçili değeri manuel kopyalayın.");
+    setFormMessage(elements.copyMessage, "Automatic copy was blocked. Copy the selected value manually.");
   }
 });
 
