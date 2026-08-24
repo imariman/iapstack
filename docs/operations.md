@@ -37,9 +37,12 @@ The project overview shows application credential/webhook coverage, catalog mapp
 customer access counts, recent normalized purchase observations, queue outcomes, and
 webhook delivery metadata. It never renders protected provider payloads or secrets.
 The quick-start dialog creates a Huawei project, application, entitlement, product,
-and provider-product mapping. Configure the provider credential, webhook endpoint,
-stored API keys, and initial customers through the documented admin API before using
-the application in production.
+and provider-product mapping. Open an application card to create or rotate its Huawei
+server credential, configure signed webhook delivery, and create a one-time application
+bearer for the Flutter SDK. Customers can also be created from the project overview.
+Credential and signing-secret fields are cleared after submission and never returned
+by the admin read API. Store every newly displayed application bearer immediately in
+your deployment secret manager; the dashboard cannot recover it after the dialog closes.
 
 ## Backup and restore rehearsal
 
