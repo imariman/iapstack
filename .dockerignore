@@ -3,3 +3,6 @@
 .env
 *.log
 coverage.out
+sdk/flutter/**/.dart_tool
+sdk/flutter/**/build
+sdk/flutter/**/.gradle

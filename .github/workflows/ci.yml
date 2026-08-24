@@ -33,6 +33,9 @@ jobs:
           test -s README.md
           test -s LICENSE
           test -s assets/iapstack-gopher.png
+          test -s dashboard/index.html
+          test -s dashboard/app.css
+          node --check dashboard/app.js
           test -x deploy/e2e/run.sh
 
   go:

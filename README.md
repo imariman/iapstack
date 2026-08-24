@@ -49,6 +49,7 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 - [v0.1 scope and architecture](docs/v0.1-scope.md)
 - [Architecture Decision Records](docs/adr/README.md)
 - [HTTP API v1 and Huawei sandbox gate](docs/api-v1.md)
+- [Operations and dashboard guide](docs/operations.md)
 - [Provider-neutral Flutter SDK](sdk/flutter/iapstack/README.md)
 - [Huawei Flutter SDK and sandbox example](sdk/flutter/iapstack_huawei/README.md)
 
@@ -61,6 +62,8 @@ go run ./cmd/iapstack api
 ```
 
 The API listens on `:8080` by default and exposes `GET /healthz` and `GET /readyz`.
+The embedded operations dashboard is available at `http://localhost:8080/dashboard/`
+and uses the same authenticated `/v1/admin` API as external administration clients.
 Configuration is supplied through environment variables:
 
 | Variable | Default | Purpose |
@@ -188,7 +191,7 @@ credential/evidence contracts, and webhook verification rules are documented in
 - [x] Implement the Huawei AppGallery adapter from official specifications
 - [x] Add PostgreSQL migrations and a production-ready Docker setup
 - [x] Build the initial provider-neutral Flutter SDK and Huawei companion
-- [ ] Build the initial dashboard
+- [x] Build the initial dashboard
 - [ ] Add Apple App Store and Google Play adapters
 - [ ] Add Amazon Appstore and additional store adapters
 - [ ] Support customer migration, reconciliation, and signed outbound webhooks
