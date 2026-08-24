@@ -102,7 +102,10 @@ func Migrate(ctx context.Context, databaseURL string) (err error) {
 		err = errors.Join(err, migrator.Close(ctx))
 	}()
 
-	return migrator.Up(ctx)
+	if err := migrator.Up(ctx); err != nil {
+		return err
+	}
+	return MigrateRiver(ctx, databaseURL)
 }
 
 // Up advances the database to the latest schema version embedded in this build.
