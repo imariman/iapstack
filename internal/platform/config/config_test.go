@@ -13,6 +13,8 @@ const (
 	httpAddressEnvironment = "IAPSTACK_HTTP_ADDRESS"
 	// shutdownTimeoutEnvironment names the graceful-shutdown setting used by tests.
 	shutdownTimeoutEnvironment = "IAPSTACK_SHUTDOWN_TIMEOUT"
+	// workerHTTPAddressEnvironment names the worker probe-address setting used by tests.
+	workerHTTPAddressEnvironment = "IAPSTACK_WORKER_HTTP_ADDRESS"
 	// logLevelEnvironment names the structured-log-level setting used by tests.
 	logLevelEnvironment = "IAPSTACK_LOG_LEVEL"
 	// databaseURLEnvironment names the PostgreSQL connection setting used by tests.
@@ -40,6 +42,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.HTTPAddress != defaultHTTPAddress {
 		t.Errorf("HTTPAddress = %q, want %q", cfg.HTTPAddress, defaultHTTPAddress)
 	}
+	if cfg.WorkerHTTPAddress != ":8081" {
+		t.Errorf("WorkerHTTPAddress = %q, want :8081", cfg.WorkerHTTPAddress)
+	}
 	if cfg.ShutdownTimeout != 10*time.Second {
 		t.Errorf("ShutdownTimeout = %v, want 10s", cfg.ShutdownTimeout)
 	}
@@ -48,6 +53,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.DatabaseURL != "" {
 		t.Errorf("DatabaseURL = %q, want empty", cfg.DatabaseURL)
+	}
+	if cfg.WorkerID != "" {
+		t.Errorf("WorkerID = %q, want automatic empty marker", cfg.WorkerID)
+	}
+	if cfg.QueueRetention != 30*24*time.Hour {
+		t.Errorf("QueueRetention = %v, want 720h", cfg.QueueRetention)
 	}
 }
 
@@ -89,9 +100,11 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	}{
 		{name: "address shape", values: map[string]string{httpAddressEnvironment: "8080"}},
 		{name: "address port", values: map[string]string{httpAddressEnvironment: ":0"}},
+		{name: "worker address", values: map[string]string{workerHTTPAddressEnvironment: "8081"}},
 		{name: "shutdown syntax", values: map[string]string{shutdownTimeoutEnvironment: "later"}},
 		{name: "shutdown sign", values: map[string]string{shutdownTimeoutEnvironment: "-1s"}},
 		{name: "log level", values: map[string]string{logLevelEnvironment: "verbose"}},
+		{name: "worker attempts", values: map[string]string{"IAPSTACK_WORKER_MAX_ATTEMPTS": "0"}},
 	}
 
 	for _, tt := range tests {

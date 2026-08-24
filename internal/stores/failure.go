@@ -65,3 +65,11 @@ func (failure *Failure) Unwrap() error {
 func (failure *Failure) Retryable() bool {
 	return failure.Kind == FailureRateLimited || failure.Kind == FailureTemporary
 }
+
+// CodeValue returns one stable provider failure code for durable worker state.
+func (failure *Failure) CodeValue() string {
+	if failure == nil {
+		return "provider_failure"
+	}
+	return "provider_" + string(failure.Kind)
+}

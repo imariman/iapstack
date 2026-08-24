@@ -69,6 +69,8 @@ func TestMigrationLifecycle(t *testing.T) {
 		"customer_entitlements",
 		"outbox_events",
 		"application_credentials",
+		"api_keys",
+		"reconciliation_jobs_customer_idx",
 	}
 
 	for version := int32(1); version <= postgres.LatestVersion; version++ {
@@ -87,6 +89,26 @@ func TestMigrationLifecycle(t *testing.T) {
 		t.Fatalf("Up() error = %v", err)
 	}
 	assertVersion(t, database, postgres.LatestVersion)
+}
+
+// TestQueryIndexMigrationReplacesRedundantIndexes verifies the audited latest index set.
+func TestQueryIndexMigrationReplacesRedundantIndexes(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	for _, index := range []string{
+		"purchase_observations_evidence_scope_idx",
+		"purchase_observations_internal_product_idx",
+		"customer_entitlements_mapping_idx",
+		"reconciliation_jobs_customer_idx",
+	} {
+		assertRelationExists(t, database, index, true)
+	}
+	for _, index := range []string{
+		"provider_references_lookup_idx",
+		"customers_project_idx",
+		"entitlements_project_idx",
+	} {
+		assertRelationExists(t, database, index, false)
+	}
 }
 
 // TestApplicationCredentialMigrationConstraints verifies protected values and project isolation.
@@ -251,7 +273,7 @@ func TestEntitlementProjectionMigrationConstraints(t *testing.T) {
 	)
 }
 
-// TestInboxOutboxMigrationConstraints verifies queue deduplication and state consistency.
+// TestInboxOutboxMigrationConstraints verifies audit deduplication and terminal outcome consistency.
 func TestInboxOutboxMigrationConstraints(t *testing.T) {
 	database := openTestDatabase(t, 4)
 	fixture := seedCatalog(t, database)
@@ -270,14 +292,14 @@ func TestInboxOutboxMigrationConstraints(t *testing.T) {
 		fixture.applicationID,
 		inboxFingerprint,
 	)
-	expectConstraint(t, database, "inbox_messages_state_fields_valid", `
+	expectConstraint(t, database, "inbox_messages_outcome_valid", `
 		INSERT INTO inbox_messages (
 			id, project_id, application_id, provider, kind, content_type,
 			payload_ciphertext, payload_fingerprint, encryption_key_id,
-			state, received_at, available_at
+			received_at, available_at, processed_at, failed_at
 		) VALUES (
 			'inbox-invalid', $1, $2, 'huawei_appgallery', 'subscription_event', 'application/json',
-			'ciphertext', $3, 'test-key', 'processing', now(), now()
+			'ciphertext', $3, 'test-key', now(), now(), now(), now()
 		)
 	`, fixture.projectID, fixture.applicationID, bytes.Repeat([]byte{7}, 32))
 
@@ -293,13 +315,13 @@ func TestInboxOutboxMigrationConstraints(t *testing.T) {
 		fixture.applicationID,
 		outboxFingerprint,
 	)
-	expectConstraint(t, database, "outbox_events_state_fields_valid", `
+	expectConstraint(t, database, "outbox_events_outcome_valid", `
 		INSERT INTO outbox_events (
 			id, project_id, application_id, event_type, aggregate_type, aggregate_id,
-			payload, payload_fingerprint, state, occurred_at, available_at
+			payload, payload_fingerprint, occurred_at, available_at, delivered_at, failed_at
 		) VALUES (
 			'outbox-invalid', $1, $2, 'entitlement.changed', 'customer', 'customer-1',
-			'{"entitlement":"pro"}'::jsonb, $3, 'delivered', now(), now()
+			'{"entitlement":"pro"}'::jsonb, $3, now(), now(), now(), now()
 		)
 	`, fixture.projectID, fixture.applicationID, bytes.Repeat([]byte{8}, 32))
 }
@@ -332,6 +354,10 @@ func openTestDatabase(t *testing.T, targetVersion int32) *testDatabase {
 	}
 
 	database := &testDatabase{ctx: ctx, conn: connection, migrator: migrator}
+	if err := postgres.RemoveRiver(ctx, databaseURL); err != nil {
+		_ = connection.Close(ctx)
+		t.Fatalf("reset River integration schema: %v", err)
+	}
 	if err := migrator.MigrateTo(ctx, 0); err != nil {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset integration PostgreSQL: %v", err)
@@ -340,10 +366,19 @@ func openTestDatabase(t *testing.T, targetVersion int32) *testDatabase {
 		_ = connection.Close(ctx)
 		t.Fatalf("migrate integration PostgreSQL to %d: %v", targetVersion, err)
 	}
+	if targetVersion == postgres.LatestVersion {
+		if err := postgres.MigrateRiver(ctx, databaseURL); err != nil {
+			_ = connection.Close(ctx)
+			t.Fatalf("migrate River integration schema: %v", err)
+		}
+	}
 
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), testDatabaseTimeout)
 		defer cleanupCancel()
+		if err := postgres.RemoveRiver(cleanupCtx, databaseURL); err != nil {
+			t.Errorf("reset River PostgreSQL during cleanup: %v", err)
+		}
 		if err := migrator.MigrateTo(cleanupCtx, 0); err != nil {
 			t.Errorf("reset integration PostgreSQL during cleanup: %v", err)
 		}

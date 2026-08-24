@@ -15,7 +15,7 @@ import (
 
 const (
 	// LatestVersion identifies the newest schema version embedded in this build.
-	LatestVersion int32 = 5
+	LatestVersion int32 = 7
 	// migrationsDirectory is the embedded directory containing sequential SQL migrations.
 	migrationsDirectory = "migrations"
 	// schemaVersionTable stores the single current migration version for IAPStack.
@@ -33,6 +33,8 @@ var (
 	ErrDatabaseURLRequired = errors.New("IAPSTACK_DATABASE_URL is required")
 	// ErrInvalidDatabaseURL indicates that PostgreSQL connection configuration cannot be parsed.
 	ErrInvalidDatabaseURL = errors.New("IAPSTACK_DATABASE_URL is not a valid PostgreSQL connection string")
+	// ErrSchemaVersionMismatch indicates that runtime code and the migrated schema are incompatible.
+	ErrSchemaVersionMismatch = errors.New("PostgreSQL schema version does not match this IAPStack build")
 )
 
 // embeddedMigrations contains every SQL migration shipped with the IAPStack binary.
@@ -100,7 +102,10 @@ func Migrate(ctx context.Context, databaseURL string) (err error) {
 		err = errors.Join(err, migrator.Close(ctx))
 	}()
 
-	return migrator.Up(ctx)
+	if err := migrator.Up(ctx); err != nil {
+		return err
+	}
+	return MigrateRiver(ctx, databaseURL)
 }
 
 // Up advances the database to the latest schema version embedded in this build.

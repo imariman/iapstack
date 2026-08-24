@@ -246,7 +246,7 @@ func (repository *transaction) insertObservation(
 	return false, classifyError("save purchase observation", err)
 }
 
-// observationMatches checks every immutable observation field against an existing identity.
+// observationMatches checks the immutable logical snapshot independently of receipt evidence and observation time.
 func (repository *transaction) observationMatches(
 	ctx context.Context,
 	write persistence.ObservationWrite,
@@ -258,31 +258,28 @@ func (repository *transaction) observationMatches(
 			SELECT 1
 			FROM purchase_observations
 			WHERE id = $1
-				AND evidence_id = $2
-				AND project_id = $3
-				AND application_id = $4
-				AND customer_id = $5
-				AND product_id = $6
-				AND provider_product_id = $7
-				AND product_kind = $8
-				AND lifecycle_state = $9
-				AND provider_state = $10
-				AND access_status = $11
-				AND access_reason = $12
-				AND ownership = $13
-				AND quantity = $14
-				AND occurred_at IS NOT DISTINCT FROM $15::timestamptz
-				AND observed_at = $16
-				AND effective_starts_at IS NOT DISTINCT FROM $17::timestamptz
-				AND effective_ends_at IS NOT DISTINCT FROM $18::timestamptz
-				AND renewal_mode = $19
-				AND renewal_status = $20
-				AND next_provider_product_id IS NOT DISTINCT FROM $21::text
-				AND next_renewal_at IS NOT DISTINCT FROM $22::timestamptz
+				AND project_id = $2
+				AND application_id = $3
+				AND customer_id = $4
+				AND product_id = $5
+				AND provider_product_id = $6
+				AND product_kind = $7
+				AND lifecycle_state = $8
+				AND provider_state = $9
+				AND access_status = $10
+				AND access_reason = $11
+				AND ownership = $12
+				AND quantity = $13
+				AND occurred_at IS NOT DISTINCT FROM $14::timestamptz
+				AND effective_starts_at IS NOT DISTINCT FROM $15::timestamptz
+				AND effective_ends_at IS NOT DISTINCT FROM $16::timestamptz
+				AND renewal_mode = $17
+				AND renewal_status = $18
+				AND next_provider_product_id IS NOT DISTINCT FROM $19::text
+				AND next_renewal_at IS NOT DISTINCT FROM $20::timestamptz
 		)
 	`,
 		observation.ID,
-		write.EvidenceID,
 		write.ProjectID,
 		observation.ApplicationID,
 		write.CustomerID,
@@ -296,7 +293,6 @@ func (repository *transaction) observationMatches(
 		observation.Ownership,
 		observation.Quantity,
 		nullableTime(observation.OccurredAt),
-		normalizeTime(observation.ObservedAt),
 		nullableTime(observation.EffectivePeriod.StartsAt),
 		nullableTimePointer(observation.EffectivePeriod.EndsAt),
 		observation.Renewal.Mode,

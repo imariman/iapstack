@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,6 +114,18 @@ func TestOpenStoreValidatesURL(t *testing.T) {
 	}
 }
 
+// TestStorePingRejectsOutdatedSchema verifies readiness follows the exact embedded migration version.
+func TestStorePingRejectsOutdatedSchema(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	store := openRepositoryStore(t, database.ctx)
+	mustMigrateTo(t, database, postgres.LatestVersion-1)
+
+	err := store.Ping(database.ctx)
+	if !errors.Is(err, postgres.ErrSchemaVersionMismatch) {
+		t.Fatalf("Ping() error = %v, want ErrSchemaVersionMismatch", err)
+	}
+}
+
 // TestCatalogRepositories verifies scoped application, customer, and product graph lookups.
 func TestCatalogRepositories(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)
@@ -175,6 +189,78 @@ func TestCatalogRepositories(t *testing.T) {
 	}
 }
 
+// TestPutProductSerializesExactEntitlementSets verifies that concurrent writers cannot both commit divergent sets.
+func TestPutProductSerializesExactEntitlementSets(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	additional := []core.Entitlement{
+		{ID: "entitlement-2", ProjectID: core.ProjectID(fixture.projectID), Key: "second"},
+		{ID: "entitlement-3", ProjectID: core.ProjectID(fixture.projectID), Key: "third"},
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		for _, entitlement := range additional {
+			if err := repository.PutEntitlementDefinition(database.ctx, entitlement); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed additional entitlements: %v", err)
+	}
+
+	ready := make(chan struct{}, 2)
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var workers sync.WaitGroup
+	for _, entitlementID := range []core.EntitlementID{additional[0].ID, additional[1].ID} {
+		workers.Add(1)
+		go func(entitlementID core.EntitlementID) {
+			defer workers.Done()
+			results <- store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+				ready <- struct{}{}
+				<-start
+				return repository.PutProduct(database.ctx, core.Product{
+					ID: core.ProductID(fixture.productID), ProjectID: core.ProjectID(fixture.projectID),
+					Kind: core.ProductKindNonConsumable,
+					EntitlementIDs: []core.EntitlementID{
+						core.EntitlementID(fixture.entitlementID), entitlementID,
+					},
+				})
+			})
+		}(entitlementID)
+	}
+	<-ready
+	<-ready
+	close(start)
+	workers.Wait()
+	close(results)
+	successes := 0
+	conflicts := 0
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, persistence.ErrConflict):
+			conflicts++
+		default:
+			t.Fatalf("concurrent PutProduct() error = %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("concurrent PutProduct() outcomes = (%d success, %d conflict), want (1, 1)", successes, conflicts)
+	}
+	var storedCount int
+	if err := database.conn.QueryRow(database.ctx, `
+		SELECT count(*) FROM product_entitlements WHERE project_id = $1 AND product_id = $2
+	`, fixture.projectID, fixture.productID).Scan(&storedCount); err != nil {
+		t.Fatalf("count product entitlements: %v", err)
+	}
+	if storedCount != 2 {
+		t.Fatalf("stored entitlement count = %d, want exact winning set of 2", storedCount)
+	}
+}
+
 // TestTransactionalPurchasePersistence verifies atomic, idempotent, and isolated repository writes.
 func TestTransactionalPurchasePersistence(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)
@@ -191,6 +277,8 @@ func TestTransactionalPurchasePersistence(t *testing.T) {
 	}
 
 	writes.outbox.ID = "outbox-replayed-with-new-id"
+	writes.evidence.ReceivedAt = writes.evidence.ReceivedAt.Add(time.Minute)
+	writes.observation.Observation.ObservedAt = writes.observation.Observation.ObservedAt.Add(time.Minute)
 	replayedOutboxID, replayedVersion, replayedChanged := persistPurchaseWrites(t, database.ctx, store, writes)
 	if replayedOutboxID != firstOutboxID {
 		t.Fatalf("replayed outbox ID = %q, want existing %q", replayedOutboxID, firstOutboxID)
@@ -246,6 +334,151 @@ func TestTransactionalPurchasePersistence(t *testing.T) {
 		t.Fatalf("rollback Transact() error = %v, want sentinel", err)
 	}
 	assertTableCount(t, database, "purchase_evidence", 1)
+}
+
+// TestSerializableTransactionRetriesConcurrentIdempotentWrites verifies transparent fresh-snapshot retries.
+func TestSerializableTransactionRetriesConcurrentIdempotentWrites(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	write := newPurchaseWrites(t, fixture).evidence
+	ready := make(chan struct{}, 2)
+	start := make(chan struct{})
+	errorsChannel := make(chan error, 2)
+	identities := make(chan int64, 2)
+	var attempts atomic.Int32
+	var workers sync.WaitGroup
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			firstAttempt := true
+			var evidenceID int64
+			err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+				attempts.Add(1)
+				if _, loadErr := repository.Application(database.ctx,
+					core.ProjectID(fixture.projectID), core.ApplicationID(fixture.applicationID)); loadErr != nil {
+					return loadErr
+				}
+				if firstAttempt {
+					firstAttempt = false
+					ready <- struct{}{}
+					<-start
+				}
+				var saveErr error
+				evidenceID, saveErr = repository.SaveEvidence(database.ctx, write)
+				return saveErr
+			})
+			errorsChannel <- err
+			identities <- evidenceID
+		}()
+	}
+	<-ready
+	<-ready
+	close(start)
+	workers.Wait()
+	close(errorsChannel)
+	close(identities)
+	for err := range errorsChannel {
+		if err != nil {
+			t.Fatalf("concurrent Transact() error = %v", err)
+		}
+	}
+	var expectedID int64
+	for identity := range identities {
+		if expectedID == 0 {
+			expectedID = identity
+			continue
+		}
+		if identity != expectedID {
+			t.Fatalf("concurrent evidence IDs = (%d, %d), want one identity", expectedID, identity)
+		}
+	}
+	if attempts.Load() < 3 {
+		t.Fatalf("transaction attempts = %d, want at least one retry", attempts.Load())
+	}
+	assertTableCount(t, database, "purchase_evidence", 1)
+}
+
+// TestOperationalQueueEnqueueAndCompletion verifies atomic River insertion and idempotent audit outcomes.
+func TestOperationalQueueEnqueueAndCompletion(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	writes := newPurchaseWrites(t, fixture)
+	var firstID, secondID string
+	if err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		var saveErr error
+		firstID, saveErr = repository.SaveOutboxEvent(database.ctx, writes.outbox)
+		if saveErr != nil {
+			return saveErr
+		}
+		secondID, saveErr = repository.SaveOutboxEvent(database.ctx, writes.outbox)
+		return saveErr
+	}); err != nil {
+		t.Fatalf("SaveOutboxEvent() error = %v", err)
+	}
+	if firstID != writes.outbox.ID || secondID != firstID {
+		t.Fatalf("outbox IDs = (%q, %q), want %q", firstID, secondID, writes.outbox.ID)
+	}
+	var riverJobID int64
+	if err := database.conn.QueryRow(database.ctx,
+		`SELECT river_job_id FROM outbox_events WHERE id = $1`, firstID).Scan(&riverJobID); err != nil {
+		t.Fatalf("load linked River job: %v", err)
+	}
+	var kind, queue string
+	if err := database.conn.QueryRow(database.ctx,
+		`SELECT kind, queue FROM river_job WHERE id = $1`, riverJobID).Scan(&kind, &queue); err != nil {
+		t.Fatalf("load River job: %v", err)
+	}
+	if kind != "iapstack_outbox" || queue != "iapstack_outbox" {
+		t.Fatalf("River job = (%q, %q), want iapstack_outbox", kind, queue)
+	}
+	assertTableCount(t, database, "river_job", 1)
+
+	completedAt := writes.outbox.AvailableAt.Add(time.Second)
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		message, loadErr := repository.QueueMessage(database.ctx, persistence.QueueOutbox, firstID)
+		if loadErr != nil {
+			return loadErr
+		}
+		if message.Completed || message.Failed || !json.Valid(message.JSONPayload) {
+			return errors.New("loaded outbox audit record is invalid")
+		}
+		return repository.CompleteQueue(database.ctx, persistence.QueueCompletion{
+			Queue: persistence.QueueOutbox, ID: firstID, CompletedAt: completedAt,
+		})
+	}); err != nil {
+		t.Fatalf("complete outbox audit record: %v", err)
+	}
+	var deliveredAt time.Time
+	if err := database.conn.QueryRow(database.ctx,
+		`SELECT delivered_at FROM outbox_events WHERE id = $1`, firstID).Scan(&deliveredAt); err != nil {
+		t.Fatalf("load outbox completion: %v", err)
+	}
+	if !deliveredAt.Equal(completedAt) {
+		t.Fatalf("delivered_at = %v, want %v", deliveredAt, completedAt)
+	}
+}
+
+// TestOperationalQueueEnqueueRollsBackAtomically verifies River and audit records share one commit boundary.
+func TestOperationalQueueEnqueueRollsBackAtomically(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	event := newPurchaseWrites(t, fixture).outbox
+	expected := errors.New("force rollback")
+	err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		if _, saveErr := repository.SaveOutboxEvent(database.ctx, event); saveErr != nil {
+			return saveErr
+		}
+		return expected
+	})
+	if !errors.Is(err, expected) {
+		t.Fatalf("Transact() error = %v, want forced rollback", err)
+	}
+	assertTableCount(t, database, "outbox_events", 0)
+	assertTableCount(t, database, "river_job", 0)
 }
 
 // newPurchaseWrites builds one valid provider-neutral purchase persistence graph.
@@ -468,6 +701,7 @@ func assertTableCount(t *testing.T, database *testDatabase, table string, expect
 		"provider_references":     {},
 		"purchase_evidence":       {},
 		"purchase_observations":   {},
+		"river_job":               {},
 	}
 	if _, allowed := allowedTables[table]; !allowed {
 		t.Fatalf("table %q is not allowed by test helper", table)

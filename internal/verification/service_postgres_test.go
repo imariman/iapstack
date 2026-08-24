@@ -153,6 +153,10 @@ func openVerificationTestDatabase(t *testing.T) *verificationTestDatabase {
 		_ = connection.Close(ctx)
 		t.Fatalf("NewMigrator() error = %v", err)
 	}
+	if err := postgres.RemoveRiver(ctx, databaseURL); err != nil {
+		_ = connection.Close(ctx)
+		t.Fatalf("reset verification River schema: %v", err)
+	}
 	if err := migrator.MigrateTo(ctx, 0); err != nil {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset verification PostgreSQL: %v", err)
@@ -161,10 +165,17 @@ func openVerificationTestDatabase(t *testing.T) *verificationTestDatabase {
 		_ = connection.Close(ctx)
 		t.Fatalf("migrate verification PostgreSQL: %v", err)
 	}
+	if err := postgres.MigrateRiver(ctx, databaseURL); err != nil {
+		_ = connection.Close(ctx)
+		t.Fatalf("migrate verification River schema: %v", err)
+	}
 	database := &verificationTestDatabase{ctx: ctx, conn: connection, migrator: migrator}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), verificationDatabaseTimeout)
 		defer cleanupCancel()
+		if err := postgres.RemoveRiver(cleanupCtx, databaseURL); err != nil {
+			t.Errorf("reset verification River schema during cleanup: %v", err)
+		}
 		if err := migrator.MigrateTo(cleanupCtx, 0); err != nil {
 			t.Errorf("reset verification PostgreSQL during cleanup: %v", err)
 		}
