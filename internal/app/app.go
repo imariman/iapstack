@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/imariman/iapstack/dashboard"
 	"github.com/imariman/iapstack/internal/auth"
 	"github.com/imariman/iapstack/internal/credentials"
 	"github.com/imariman/iapstack/internal/persistence"
@@ -130,7 +131,7 @@ func runAPI(
 		return err
 	}
 	api, err := httpapi.New(httpapi.Dependencies{
-		Store: store, Operations: store, Authentication: authentication,
+		Store: store, Operations: store, Admin: store, Authentication: authentication,
 		Credentials: credentialService, Webhooks: webhookService,
 		Verification: verificationService, Huawei: huaweiAdapter,
 		Protection: keyring, BodyLimit: cfg.HTTPBodyLimit,
@@ -138,10 +139,14 @@ func runAPI(
 	if err != nil {
 		return err
 	}
+	dashboardHandler, err := dashboard.New(api)
+	if err != nil {
+		return err
+	}
 	server := httpserver.NewWithOptions(httpserver.Options{
 		Address: cfg.HTTPAddress, ShutdownTimeout: cfg.ShutdownTimeout,
 		ReadinessTimeout: cfg.ReadinessTimeout, Logger: logger,
-		ReadyChecker: store, Metrics: metricRegistry, Handler: api,
+		ReadyChecker: store, Metrics: metricRegistry, Handler: dashboardHandler,
 	})
 	return server.Run(ctx)
 }

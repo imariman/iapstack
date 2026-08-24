@@ -189,6 +189,51 @@ func TestCatalogRepositories(t *testing.T) {
 	}
 }
 
+// TestAdminQueryStoreReturnsBoundedSafeOverview verifies dashboard catalog and queue projections.
+func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+
+	projects, err := store.AdminProjects(database.ctx)
+	if err != nil {
+		t.Fatalf("AdminProjects() error = %v", err)
+	}
+	if len(projects) != 1 || projects[0].ID != core.ProjectID(fixture.projectID) {
+		t.Fatalf("AdminProjects() = %#v, want seeded project", projects)
+	}
+	if projects[0].ApplicationCount != 1 || projects[0].CustomerCount != 1 || projects[0].ProductCount != 1 {
+		t.Fatalf("AdminProjects() counts = %#v, want one application, customer, and product", projects[0])
+	}
+
+	overview, err := store.AdminProjectOverview(database.ctx, core.ProjectID(fixture.projectID))
+	if err != nil {
+		t.Fatalf("AdminProjectOverview() error = %v", err)
+	}
+	if len(overview.Applications) != 1 || overview.Applications[0].CredentialConfigured ||
+		overview.Applications[0].WebhookConfigured {
+		t.Fatalf("overview applications = %#v, want one unconfigured application", overview.Applications)
+	}
+	if len(overview.Products) != 1 || len(overview.Products[0].EntitlementKeys) != 1 ||
+		overview.Products[0].StoreMappingCount != 1 {
+		t.Fatalf("overview products = %#v, want one fully mapped catalog product", overview.Products)
+	}
+	if len(overview.Customers) != 1 || overview.Customers[0].ExternalID != "customer-external" {
+		t.Fatalf("overview customers = %#v, want seeded external customer", overview.Customers)
+	}
+	if len(overview.Queues) != 3 {
+		t.Fatalf("overview queues = %#v, want three fixed queues", overview.Queues)
+	}
+	if len(overview.RecentTransactions) != 0 || len(overview.RecentWebhookEvents) != 0 {
+		t.Fatalf("overview activity = (%#v, %#v), want empty activity", overview.RecentTransactions, overview.RecentWebhookEvents)
+	}
+
+	_, err = store.AdminProjectOverview(database.ctx, "missing-project")
+	if !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("missing AdminProjectOverview() error = %v, want ErrNotFound", err)
+	}
+}
+
 // TestPutProductSerializesExactEntitlementSets verifies that concurrent writers cannot both commit divergent sets.
 func TestPutProductSerializesExactEntitlementSets(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)

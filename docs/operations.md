@@ -25,6 +25,22 @@ curl --fail http://127.0.0.1:8080/metrics
 
 The migration container must complete successfully before API and worker processes start. `/healthz` is process liveness; `/readyz` also probes PostgreSQL.
 
+## Operations dashboard
+
+Open `http://127.0.0.1:8080/dashboard/` after the API becomes ready. Connect with a
+bootstrap or stored administrator bearer. The dashboard stores the bearer only in
+the current browser tab's `sessionStorage`; closing the tab clears it, and signing
+out clears it immediately. Do not use the dashboard from an untrusted browser or
+expose the API over plaintext outside local development.
+
+The project overview shows application credential/webhook coverage, catalog mappings,
+customer access counts, recent normalized purchase observations, queue outcomes, and
+webhook delivery metadata. It never renders protected provider payloads or secrets.
+The quick-start dialog creates a Huawei project, application, entitlement, product,
+and provider-product mapping. Configure the provider credential, webhook endpoint,
+stored API keys, and initial customers through the documented admin API before using
+the application in production.
+
 ## Backup and restore rehearsal
 
 Create a compressed logical backup:

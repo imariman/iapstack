@@ -30,6 +30,19 @@ The Huawei credential uses schema version 1 and media type `application/vnd.iaps
 
 Huawei service roots vary by account site and API generation, so the applicable URLs are explicit protected application configuration. Confirm them against the current Huawei console and official documentation.
 
+## Administrative read model
+
+The initial dashboard uses two bounded, read-only administrator contracts:
+
+- `GET /v1/admin/projects` lists up to 200 projects with application, customer, and product counts.
+- `GET /v1/admin/projects/{project_id}/overview` returns up to 200 applications, products, and customers plus the 50 most recent normalized purchase observations and webhook delivery outcomes.
+
+The overview also includes aggregate pending, completed, and failed counts for the
+inbox, reconciliation, and outbox queues. These responses deliberately omit API key
+verifiers, credential payloads, ciphertext, fingerprints, provider references,
+purchase evidence, and webhook bodies. Unknown project scopes return the same
+`not_found` envelope used by other scoped resources.
+
 ## Application operations
 
 - `POST /v1/applications/{application_id}/purchases:verify`
