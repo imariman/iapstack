@@ -1,10 +1,12 @@
 "use strict";
 
 const sessionKey = "iapstack.dashboard.admin";
+const huaweiCredentialContentType = "application/vnd.iapstack.huawei-credentials+json";
 const state = {
   adminKey: "",
   projects: [],
   selectedProject: "",
+  managedApplication: null,
   overview: null,
 };
 
@@ -23,6 +25,19 @@ const elements = {
   setupDialog: document.querySelector("#setup-dialog"),
   setupForm: document.querySelector("#setup-form"),
   setupMessage: document.querySelector("#setup-message"),
+  applicationDialog: document.querySelector("#application-dialog"),
+  credentialForm: document.querySelector("#credential-form"),
+  credentialMessage: document.querySelector("#credential-message"),
+  webhookForm: document.querySelector("#webhook-form"),
+  webhookMessage: document.querySelector("#webhook-message"),
+  applicationKeyForm: document.querySelector("#application-key-form"),
+  applicationKeyMessage: document.querySelector("#application-key-message"),
+  customerDialog: document.querySelector("#customer-dialog"),
+  customerForm: document.querySelector("#customer-form"),
+  customerMessage: document.querySelector("#customer-message"),
+  keyDialog: document.querySelector("#key-dialog"),
+  revealedKey: document.querySelector("#revealed-key"),
+  copyMessage: document.querySelector("#copy-message"),
 };
 
 function sessionRead() {
@@ -87,6 +102,12 @@ function errorMessage(error) {
     return `Veritabanı şu anda kullanılamıyor.${suffix}`;
   }
   return `${error.message || "İstek tamamlanamadı."}${suffix}`;
+}
+
+function setFormMessage(element, message, tone = "error") {
+  element.textContent = message;
+  element.classList.toggle("success", tone === "success");
+  element.classList.toggle("working", tone === "working");
 }
 
 async function connect(adminKey) {
@@ -234,7 +255,12 @@ function renderApplications(applications) {
       configRow("Provider credential", application.credential_configured ? "Hazır" : "Eksik", application.credential_configured),
       configRow("Webhook", application.webhook_configured ? "Hazır" : "Eksik", application.webhook_configured),
     );
-    card.append(heading, config);
+    const actions = node("div", "application-actions");
+    const manage = node("button", "secondary-button", "Bağlantıları yönet");
+    manage.type = "button";
+    manage.addEventListener("click", () => openApplicationManager(application));
+    actions.append(manage);
+    card.append(heading, config, actions);
     container.append(card);
   }
 }
@@ -244,6 +270,119 @@ function configRow(label, value, ready) {
   const status = node("span", `config-state${ready ? " ready" : ""}`, value);
   row.append(node("span", "", label), status);
   return row;
+}
+
+function openApplicationManager(application) {
+  state.managedApplication = application;
+  elements.credentialForm.reset();
+  elements.webhookForm.reset();
+  elements.credentialMessage.textContent = "";
+  elements.webhookMessage.textContent = "";
+  elements.applicationKeyMessage.textContent = "";
+  renderCommissioningStatus();
+  elements.applicationDialog.showModal();
+}
+
+function renderCommissioningStatus() {
+  const application = state.managedApplication;
+  if (!application) return;
+  setText("application-dialog-title", application.id);
+  setText("application-dialog-meta", `${providerLabel(application.provider)} · ${application.environment} · ${application.provider_application_id}`);
+  setText("credential-revision", application.credential_revision ? `Revision ${application.credential_revision}` : "Yeni");
+  setText("webhook-revision", application.webhook_revision ? `Revision ${application.webhook_revision}` : "Yeni");
+  setText("credential-step-status", application.credential_configured ? `Revision ${application.credential_revision}` : "Eksik");
+  setText("webhook-step-status", application.webhook_configured ? `Revision ${application.webhook_revision}` : "Eksik");
+  document.querySelector("#credential-step").classList.toggle("complete", application.credential_configured);
+  document.querySelector("#webhook-step").classList.toggle("complete", application.webhook_configured);
+}
+
+function closeApplicationManager() {
+  elements.credentialForm.reset();
+  elements.webhookForm.reset();
+  elements.credentialMessage.textContent = "";
+  elements.webhookMessage.textContent = "";
+  elements.applicationKeyMessage.textContent = "";
+  state.managedApplication = null;
+  elements.applicationDialog.close();
+}
+
+async function refreshManagedApplication() {
+  const applicationID = state.managedApplication?.id;
+  await loadOverview(state.selectedProject);
+  state.managedApplication = state.overview?.applications.find((application) => application.id === applicationID) || null;
+  renderCommissioningStatus();
+}
+
+function applicationAdminPath(suffix) {
+  const project = encodeURIComponent(state.selectedProject);
+  const application = encodeURIComponent(state.managedApplication.id);
+  return `/v1/admin/projects/${project}/applications/${application}${suffix}`;
+}
+
+async function saveHuaweiCredential(form) {
+  const data = Object.fromEntries(new FormData(form));
+  await apiRequest(applicationAdminPath("/credentials/huawei_server_api"), {
+    method: "PUT",
+    body: JSON.stringify({
+      content_type: huaweiCredentialContentType,
+      schema_version: 1,
+      expected_revision: state.managedApplication.credential_revision,
+      payload: {
+        client_id: data.client_id,
+        client_secret: data.client_secret,
+        public_key: data.public_key,
+        token_url: data.token_url,
+        order_url: data.order_url,
+        subscription_url: data.subscription_url,
+      },
+    }),
+  });
+}
+
+async function saveWebhook(form) {
+  const data = Object.fromEntries(new FormData(form));
+  await apiRequest(applicationAdminPath("/webhook"), {
+    method: "PUT",
+    body: JSON.stringify({
+      url: data.url,
+      signing_secret: data.signing_secret,
+      expected_revision: state.managedApplication.webhook_revision,
+    }),
+  });
+}
+
+async function createApplicationKey() {
+  return apiRequest("/v1/admin/api-keys", {
+    method: "POST",
+    body: JSON.stringify({
+      role: "application",
+      project_id: state.selectedProject,
+      application_id: state.managedApplication.id,
+    }),
+  });
+}
+
+function revealApplicationKey(value) {
+  closeApplicationManager();
+  elements.revealedKey.value = value;
+  elements.copyMessage.textContent = "";
+  elements.keyDialog.showModal();
+}
+
+function closeKeyDialog() {
+  elements.revealedKey.value = "";
+  elements.copyMessage.textContent = "";
+  elements.keyDialog.close();
+}
+
+async function createCustomer(form) {
+  const data = Object.fromEntries(new FormData(form));
+  const project = encodeURIComponent(state.selectedProject);
+  const customer = encodeURIComponent(data.customer_id);
+  await apiRequest(`/v1/admin/projects/${project}/customers/${customer}`, {
+    method: "PUT",
+    body: JSON.stringify({ external_id: data.external_id }),
+  });
 }
 
 function renderProducts(products) {
@@ -430,7 +569,14 @@ function logout() {
   state.adminKey = "";
   state.projects = [];
   state.selectedProject = "";
+  state.managedApplication = null;
   state.overview = null;
+  elements.credentialForm.reset();
+  elements.webhookForm.reset();
+  elements.revealedKey.value = "";
+  for (const dialog of [elements.applicationDialog, elements.customerDialog, elements.keyDialog, elements.setupDialog]) {
+    if (dialog.open) dialog.close();
+  }
   sessionWrite("");
   elements.adminKey.value = "";
   showAuthenticated(false);
@@ -501,6 +647,119 @@ elements.setupForm.addEventListener("submit", async (event) => {
   } finally {
     submit.disabled = false;
   }
+});
+
+document.querySelector("#close-application").addEventListener("click", closeApplicationManager);
+
+elements.applicationDialog.addEventListener("close", () => {
+  elements.credentialForm.reset();
+  elements.webhookForm.reset();
+  elements.credentialMessage.textContent = "";
+  elements.webhookMessage.textContent = "";
+  elements.applicationKeyMessage.textContent = "";
+  state.managedApplication = null;
+});
+
+elements.credentialForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = elements.credentialForm.querySelector("button[type='submit']");
+  submit.disabled = true;
+  setFormMessage(elements.credentialMessage, "Huawei bağlantısı korunarak kaydediliyor…", "working");
+  try {
+    await saveHuaweiCredential(elements.credentialForm);
+    elements.credentialForm.reset();
+    await refreshManagedApplication();
+    setFormMessage(elements.credentialMessage, "Huawei bağlantısı kaydedildi.", "success");
+  } catch (error) {
+    setFormMessage(elements.credentialMessage, errorMessage(error));
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+elements.webhookForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = elements.webhookForm.querySelector("button[type='submit']");
+  submit.disabled = true;
+  setFormMessage(elements.webhookMessage, "Bildirim bağlantısı korunarak kaydediliyor…", "working");
+  try {
+    await saveWebhook(elements.webhookForm);
+    elements.webhookForm.reset();
+    await refreshManagedApplication();
+    setFormMessage(elements.webhookMessage, "Bildirim bağlantısı kaydedildi.", "success");
+  } catch (error) {
+    setFormMessage(elements.webhookMessage, errorMessage(error));
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+elements.applicationKeyForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = elements.applicationKeyForm.querySelector("button[type='submit']");
+  submit.disabled = true;
+  setFormMessage(elements.applicationKeyMessage, "Application key oluşturuluyor…", "working");
+  try {
+    const response = await createApplicationKey();
+    revealApplicationKey(response.key);
+  } catch (error) {
+    setFormMessage(elements.applicationKeyMessage, errorMessage(error));
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+document.querySelector("#open-customer").addEventListener("click", () => {
+  if (!state.selectedProject) {
+    elements.globalMessage.textContent = "Önce bir proje oluşturun.";
+    return;
+  }
+  elements.customerForm.reset();
+  elements.customerMessage.textContent = "";
+  elements.customerDialog.showModal();
+});
+
+document.querySelector("#close-customer").addEventListener("click", () => elements.customerDialog.close());
+document.querySelector("#cancel-customer").addEventListener("click", () => elements.customerDialog.close());
+
+elements.customerDialog.addEventListener("close", () => {
+  elements.customerForm.reset();
+  elements.customerMessage.textContent = "";
+});
+
+elements.customerForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = elements.customerForm.querySelector("button[type='submit']");
+  submit.disabled = true;
+  setFormMessage(elements.customerMessage, "Müşteri ekleniyor…", "working");
+  try {
+    await createCustomer(elements.customerForm);
+    elements.customerDialog.close();
+    await loadProjects(state.selectedProject);
+    elements.globalMessage.textContent = "Müşteri eklendi.";
+  } catch (error) {
+    setFormMessage(elements.customerMessage, errorMessage(error));
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+document.querySelector("#copy-key").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(elements.revealedKey.value);
+    setFormMessage(elements.copyMessage, "Application key panoya kopyalandı.", "success");
+  } catch (_) {
+    elements.revealedKey.focus();
+    elements.revealedKey.select();
+    setFormMessage(elements.copyMessage, "Otomatik kopyalama engellendi; seçili değeri manuel kopyalayın.");
+  }
+});
+
+document.querySelector("#close-key").addEventListener("click", closeKeyDialog);
+document.querySelector("#done-key").addEventListener("click", closeKeyDialog);
+elements.keyDialog.addEventListener("close", () => {
+  elements.revealedKey.value = "";
+  elements.copyMessage.textContent = "";
 });
 
 const savedKey = sessionRead();

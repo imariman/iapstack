@@ -128,7 +128,7 @@
           <section class="panel table-panel" aria-labelledby="customers-title">
             <div class="panel-heading">
               <div><p class="eyebrow">Identity</p><h2 id="customers-title">Müşteriler</h2></div>
-              <span class="panel-count">İlk 200</span>
+              <div class="panel-actions"><span class="panel-count">İlk 200</span><button class="secondary-button compact-button" id="open-customer" type="button">Müşteri ekle</button></div>
             </div>
             <div class="table-wrap">
               <table>
@@ -160,7 +160,7 @@
           <div><p class="eyebrow">Quick start</p><h2>Huawei katalog iskeleti</h2></div>
           <button class="icon-button" id="close-setup" value="cancel" aria-label="Pencereyi kapat">×</button>
         </div>
-        <p class="dialog-copy">Proje, uygulama, entitlement, ürün ve store mapping kayıtlarını tek akışta oluşturur. Credential ve webhook secret’larını API üzerinden ayrıca ekleyin.</p>
+        <p class="dialog-copy">Proje, uygulama, entitlement, ürün ve store mapping kayıtlarını tek akışta oluşturur. Ardından uygulama kartından güvenli bağlantıları tamamlayın.</p>
         <div class="form-grid">
           <label>Project ID<input name="project_id" required placeholder="my-project"></label>
           <label>Application ID<input name="application_id" required placeholder="mobile-app"></label>
@@ -178,6 +178,89 @@
           <button type="submit" class="primary-button">Kataloğu oluştur</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="application-dialog" class="setup-dialog commissioning-dialog">
+      <div class="commissioning-shell">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">Application commissioning</p><h2 id="application-dialog-title">Uygulama bağlantıları</h2><code id="application-dialog-meta"></code></div>
+          <button class="icon-button" id="close-application" type="button" aria-label="Pencereyi kapat">×</button>
+        </div>
+
+        <ol class="commissioning-route" aria-label="Kurulum durumu">
+          <li class="complete"><span>1</span><strong>Kimlik</strong><small>Hazır</small></li>
+          <li id="credential-step"><span>2</span><strong>Huawei</strong><small id="credential-step-status">Eksik</small></li>
+          <li id="webhook-step"><span>3</span><strong>Bildirim</strong><small id="webhook-step-status">Eksik</small></li>
+          <li><span>4</span><strong>App key</strong><small>İsteğe bağlı</small></li>
+        </ol>
+
+        <div class="commissioning-sections">
+          <section class="management-section" aria-labelledby="credential-title">
+            <div class="management-heading"><div><p class="eyebrow">Store authority</p><h3 id="credential-title">Huawei server bağlantısı</h3></div><span id="credential-revision" class="revision-badge">Yeni</span></div>
+            <p>Huawei token, order ve subscription servislerine yapılan server-side sorgular için kullanılır. Kaydedilen değerler tekrar gösterilmez.</p>
+            <form id="credential-form" class="management-form">
+              <div class="form-grid">
+                <label>Client ID<input name="client_id" autocomplete="off" required></label>
+                <label>Client secret<input name="client_secret" type="password" autocomplete="new-password" required></label>
+                <label class="full-row">Public key<textarea name="public_key" rows="5" autocomplete="off" required placeholder="-----BEGIN PUBLIC KEY-----"></textarea></label>
+                <label class="full-row">Token URL<input name="token_url" type="url" required placeholder="https://oauth-login.cloud.huawei.com/oauth2/v3/token"></label>
+                <label class="full-row">Order service URL<input name="order_url" type="url" required placeholder="https://…"></label>
+                <label class="full-row">Subscription service URL<input name="subscription_url" type="url" required placeholder="https://…"></label>
+              </div>
+              <p class="form-message" id="credential-message" role="status"></p>
+              <div class="section-actions"><button type="submit" class="primary-button">Huawei bağlantısını kaydet</button></div>
+            </form>
+          </section>
+
+          <section class="management-section" aria-labelledby="webhook-config-title">
+            <div class="management-heading"><div><p class="eyebrow">Application delivery</p><h3 id="webhook-config-title">Backend bildirimi</h3></div><span id="webhook-revision" class="revision-badge">Yeni</span></div>
+            <p>Entitlement değişikliklerini uygulama backend’inize HMAC-SHA-256 imzalı olarak gönderir. Secret kaydedildikten sonra tekrar gösterilmez.</p>
+            <form id="webhook-form" class="management-form">
+              <div class="form-grid">
+                <label class="full-row">HTTPS endpoint<input name="url" type="url" required placeholder="https://api.example.com/iapstack/events"></label>
+                <label class="full-row">Signing secret<input name="signing_secret" type="password" autocomplete="new-password" minlength="32" required placeholder="En az 32 rastgele karakter"></label>
+              </div>
+              <p class="form-message" id="webhook-message" role="status"></p>
+              <div class="section-actions"><button type="submit" class="primary-button">Bildirim bağlantısını kaydet</button></div>
+            </form>
+          </section>
+
+          <section class="management-section key-section" aria-labelledby="application-key-title">
+            <div class="management-heading"><div><p class="eyebrow">Client access</p><h3 id="application-key-title">Application key</h3></div></div>
+            <p>Flutter SDK’yı bu application scope’una bağlayan bearer yalnızca oluşturulduğu anda gösterilir. Yeni key eskilerini otomatik olarak iptal etmez.</p>
+            <form id="application-key-form" class="management-form">
+              <p class="form-message" id="application-key-message" role="status"></p>
+              <div class="section-actions"><button type="submit" class="secondary-button">Yeni application key oluştur</button></div>
+            </form>
+          </section>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="customer-dialog" class="setup-dialog small-dialog">
+      <form id="customer-form" method="dialog">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">Customer identity</p><h2>Müşteri ekle</h2></div>
+          <button class="icon-button" id="close-customer" type="button" aria-label="Pencereyi kapat">×</button>
+        </div>
+        <p class="dialog-copy">Internal ID kalıcı kayıt kimliğidir. External ID, Flutter SDK’nın purchase ve entitlement çağrılarında kullandığı müşteri kimliğidir.</p>
+        <div class="form-grid">
+          <label>Internal customer ID<input name="customer_id" required placeholder="customer-42"></label>
+          <label>External customer ID<input name="external_id" required placeholder="auth-user-42"></label>
+        </div>
+        <p class="form-message" id="customer-message" role="status"></p>
+        <div class="dialog-actions"><button type="button" class="text-button" id="cancel-customer">Vazgeç</button><button type="submit" class="primary-button">Müşteriyi ekle</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="key-dialog" class="setup-dialog small-dialog key-dialog">
+      <div class="key-reveal">
+        <div class="dialog-heading"><div><p class="eyebrow">Shown once</p><h2>Application key hazır</h2></div><button class="icon-button" id="close-key" type="button" aria-label="Pencereyi kapat">×</button></div>
+        <p class="dialog-copy">Bu değer tekrar alınamaz. Güvenli secret store’unuza kopyaladıktan sonra pencereyi kapatın.</p>
+        <label class="revealed-key-label">Application bearer<textarea id="revealed-key" rows="4" readonly spellcheck="false"></textarea></label>
+        <p class="form-message" id="copy-message" role="status"></p>
+        <div class="dialog-actions"><button type="button" class="secondary-button" id="copy-key">Key’i kopyala</button><button type="button" class="primary-button" id="done-key">Tamam</button></div>
+      </div>
     </dialog>
   </body>
 </html>

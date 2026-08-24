@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -44,6 +45,33 @@ func TestHandlerServesSecureEmbeddedAssets(t *testing.T) {
 		if policy := recorder.Header().Get("Content-Security-Policy"); !strings.Contains(policy, "frame-ancestors 'none'") {
 			t.Fatalf("GET %s Content-Security-Policy = %q", test.path, policy)
 		}
+	}
+}
+
+// TestDashboardSecretLifecycleAvoidsPersistentStorage verifies browser-managed secrets remain ephemeral.
+func TestDashboardSecretLifecycleAvoidsPersistentStorage(t *testing.T) {
+	t.Parallel()
+
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	if strings.Contains(string(script), "localStorage") {
+		t.Fatal("dashboard script must not persist bearer or secret values in localStorage")
+	}
+	for _, required := range []string{
+		"sessionStorage", "credentialForm.reset()", "webhookForm.reset()", `revealedKey.value = ""`,
+	} {
+		if !strings.Contains(string(script), required) {
+			t.Fatalf("dashboard script does not contain secret lifecycle control %q", required)
+		}
+	}
+	if count := strings.Count(string(document), `autocomplete="new-password"`); count != 2 {
+		t.Fatalf("dashboard secret fields with new-password autocomplete = %d, want 2", count)
 	}
 }
 

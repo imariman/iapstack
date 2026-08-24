@@ -38,7 +38,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -49,6 +50,7 @@ button {
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
+textarea:focus-visible,
 a:focus-visible {
   outline: 3px solid rgba(35, 87, 216, 0.35);
   outline-offset: 2px;
@@ -183,7 +185,8 @@ a:focus-visible {
 }
 
 input,
-select {
+select,
+textarea {
   background: #fff;
   border: 1px solid var(--line-strong);
   border-radius: 3px;
@@ -191,6 +194,11 @@ select {
   min-height: 45px;
   padding: 0.7rem 0.8rem;
   text-transform: none;
+}
+
+textarea {
+  line-height: 1.45;
+  resize: vertical;
 }
 
 .primary-button,
@@ -252,6 +260,14 @@ select {
   color: var(--danger);
   font-size: 0.82rem;
   min-height: 1.25rem;
+}
+
+.form-message.success {
+  color: var(--success);
+}
+
+.form-message.working {
+  color: var(--signal);
 }
 
 .auth-signal {
@@ -540,6 +556,17 @@ select {
   padding-bottom: 0.9rem;
 }
 
+.panel-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.7rem;
+}
+
+.compact-button {
+  font-size: 0.72rem;
+  padding: 0.42rem 0.62rem;
+}
+
 .panel h2 {
   font-size: 1.8rem;
   letter-spacing: -0.025em;
@@ -623,6 +650,16 @@ td code {
 
 .config-state.ready {
   color: var(--success);
+}
+
+.application-actions {
+  border-top: 1px solid var(--line);
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+}
+
+.application-actions button {
+  width: 100%;
 }
 
 .split-grid {
@@ -800,7 +837,7 @@ td strong {
   background: rgba(20, 31, 54, 0.6);
 }
 
-.setup-dialog form {
+.setup-dialog > form {
   padding: clamp(1.25rem, 4vw, 2.2rem);
 }
 
@@ -809,6 +846,154 @@ td strong {
   align-items: center;
   display: flex;
   justify-content: space-between;
+}
+
+.commissioning-dialog {
+  max-width: 980px;
+}
+
+.commissioning-shell,
+.key-reveal {
+  padding: clamp(1.25rem, 4vw, 2.2rem);
+}
+
+.dialog-heading code {
+  color: var(--muted);
+  font-family: var(--utility);
+  font-size: 0.68rem;
+}
+
+.commissioning-route {
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  list-style: none;
+  margin: 1.6rem 0;
+  padding: 0;
+}
+
+.commissioning-route li {
+  border-bottom: 2px solid var(--line);
+  display: grid;
+  gap: 0.2rem;
+  padding: 0 0.4rem 0.7rem 2.15rem;
+  position: relative;
+}
+
+.commissioning-route li > span {
+  align-items: center;
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  display: flex;
+  font-family: var(--utility);
+  font-size: 0.65rem;
+  height: 1.55rem;
+  justify-content: center;
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 1.55rem;
+}
+
+.commissioning-route li.complete {
+  border-color: var(--success);
+}
+
+.commissioning-route li.complete > span {
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+}
+
+.commissioning-route strong {
+  font-size: 0.78rem;
+}
+
+.commissioning-route small {
+  color: var(--muted);
+  font-family: var(--utility);
+  font-size: 0.58rem;
+}
+
+.commissioning-sections {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.management-section {
+  border: 1px solid var(--line);
+  padding: 1.2rem;
+}
+
+.management-section.key-section {
+  grid-column: 1 / -1;
+}
+
+.management-heading {
+  align-items: start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.management-heading h3 {
+  font-family: var(--display);
+  font-size: 1.45rem;
+  font-stretch: condensed;
+  margin: 0;
+}
+
+.management-section > p {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  min-height: 3.5rem;
+}
+
+.revision-badge {
+  background: var(--signal-soft);
+  border-radius: 999px;
+  color: var(--signal);
+  font-family: var(--utility);
+  font-size: 0.59rem;
+  font-weight: 700;
+  padding: 0.3rem 0.5rem;
+  white-space: nowrap;
+}
+
+.management-form .form-grid {
+  grid-template-columns: 1fr;
+}
+
+.management-form label,
+.revealed-key-label {
+  color: var(--muted);
+  display: grid;
+  font-family: var(--utility);
+  font-size: 0.68rem;
+  font-weight: 700;
+  gap: 0.4rem;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.section-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.small-dialog {
+  max-width: 620px;
+}
+
+.key-dialog textarea {
+  background: var(--paper);
+  font-family: var(--utility);
+  font-size: 0.76rem;
+  margin-top: 0.45rem;
+  overflow-wrap: anywhere;
 }
 
 .dialog-heading h2 {
@@ -844,8 +1029,13 @@ td strong {
   }
 
   .split-grid,
-  .split-grid.wide-left {
+  .split-grid.wide-left,
+  .commissioning-sections {
     grid-template-columns: 1fr;
+  }
+
+  .management-section.key-section {
+    grid-column: auto;
   }
 }
 
@@ -907,6 +1097,11 @@ td strong {
   .application-grid {
     grid-template-columns: 1fr;
   }
+
+  .commissioning-route {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 1rem;
+  }
 }
 
 @media (max-width: 520px) {
@@ -927,6 +1122,16 @@ td strong {
   .key-row,
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .panel-heading {
+    align-items: start;
+    gap: 0.7rem;
+  }
+
+  .panel-actions {
+    align-items: end;
+    flex-direction: column;
   }
 
   .auth-signal {
