@@ -35,13 +35,13 @@ func TestRunRequiresKnownMode(t *testing.T) {
 	}
 }
 
-// TestRunReportsReservedModes verifies that the worker mode remains explicitly reserved.
-func TestRunReportsReservedModes(t *testing.T) {
+// TestRunWorkerRequiresDatabaseURL verifies that the implemented worker fails fast without persistence.
+func TestRunWorkerRequiresDatabaseURL(t *testing.T) {
 	t.Parallel()
 
 	err := app.Run(context.Background(), []string{"worker"}, emptyEnv, &bytes.Buffer{})
-	if !errors.Is(err, app.ErrModeUnavailable) {
-		t.Fatalf("Run() error = %v, want ErrModeUnavailable", err)
+	if !errors.Is(err, postgres.ErrDatabaseURLRequired) {
+		t.Fatalf("Run() error = %v, want ErrDatabaseURLRequired", err)
 	}
 }
 
