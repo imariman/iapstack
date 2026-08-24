@@ -66,6 +66,25 @@ Outbound requests include `IAPStack-Event-ID`, `IAPStack-Timestamp`, and `IAPSta
 
 Reject timestamps outside the application's replay window and deduplicate by event ID.
 
+## Flutter SDK
+
+The provider-neutral Dart/Flutter package is in `sdk/flutter/iapstack`. It
+implements application-scoped authentication, bounded response reads,
+timeouts, transient retries, request ID propagation, v1 models, and stable
+error envelopes. It does not persist or log the application bearer.
+
+Huawei applications add `sdk/flutter/iapstack_huawei`. The companion uses the
+official `huawei_iap` plugin, retains the exact signed `InAppPurchaseData` JSON
+string, binds purchases through `developerPayload`, walks continuation tokens,
+deduplicates repeated provider entries, and sends restore requests in batches
+of at most 100. Consumables remain outside v0.1.
+
+The runnable Android harness under `sdk/flutter/iapstack_huawei/example` takes
+all IAPStack values through `--dart-define`; AppGallery Connect configuration
+and signing files are deliberately gitignored. Follow its README for device
+setup and never commit `agconnect-services.json`, keystores, or application
+keys.
+
 ## Huawei sandbox release gate
 
 Before a v0.1 release, run fixture and sandbox scenarios for lifetime purchase, initial subscription, renewal, cancellation-at-period-end, expiration, grace period, refund/revocation, duplicate purchase submission, duplicate notification, and a missed notification recovered by scheduled reconciliation. Record request IDs and verify that duplicates do not increase entitlement versions or create new logical webhook events.

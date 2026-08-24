@@ -48,6 +48,9 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 
 - [v0.1 scope and architecture](docs/v0.1-scope.md)
 - [Architecture Decision Records](docs/adr/README.md)
+- [HTTP API v1 and Huawei sandbox gate](docs/api-v1.md)
+- [Provider-neutral Flutter SDK](sdk/flutter/iapstack/README.md)
+- [Huawei Flutter SDK and sandbox example](sdk/flutter/iapstack_huawei/README.md)
 
 ## Development
 
@@ -100,6 +103,19 @@ gofmt -w .
 go vet ./...
 go test -race -count=1 ./...
 ```
+
+Run the Flutter SDK checks with:
+
+```sh
+(cd sdk/flutter/iapstack && dart pub get && dart analyze && dart test)
+(cd sdk/flutter/iapstack_huawei && flutter pub get && flutter analyze && flutter test)
+(cd sdk/flutter/iapstack_huawei/example && flutter pub get && flutter analyze && flutter test)
+```
+
+The provider-neutral package owns `/v1` transport, timeout/retry behavior,
+models, and stable error mapping. The Huawei companion uses the official
+`huawei_iap` plugin to preserve signed purchase data, paginate restore results,
+and batch submissions. Its Android example is the manual sandbox harness.
 
 PostgreSQL integration tests activate when `IAPSTACK_TEST_DATABASE_URL` is set. CI
 runs them against a clean PostgreSQL service and verifies every migration can be
@@ -161,7 +177,7 @@ credential/evidence contracts, and webhook verification rules are documented in
 │   ├── platform/          # Concrete configuration, logging, and protection implementations
 │   └── verification/      # Provider-neutral purchase verification orchestration
 ├── dashboard/             # Self-hosted web dashboard
-├── sdks/                  # Flutter and future client SDKs
+├── sdk/flutter/           # Provider-neutral Flutter SDK and Huawei companion
 ├── contracts/             # Public API and webhook contracts
 └── deploy/                # Docker and deployment templates
 ```
@@ -171,7 +187,8 @@ credential/evidence contracts, and webhook verification rules are documented in
 - [x] Define the core domain, public API contracts, and persistence model
 - [x] Implement the Huawei AppGallery adapter from official specifications
 - [x] Add PostgreSQL migrations and a production-ready Docker setup
-- [ ] Build the initial dashboard and Flutter SDK
+- [x] Build the initial provider-neutral Flutter SDK and Huawei companion
+- [ ] Build the initial dashboard
 - [ ] Add Apple App Store and Google Play adapters
 - [ ] Add Amazon Appstore and additional store adapters
 - [ ] Support customer migration, reconciliation, and signed outbound webhooks

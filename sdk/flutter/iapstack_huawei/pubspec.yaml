@@ -1,0 +1,25 @@
+name: iapstack_huawei
+description: Huawei AppGallery IAP bridge for the provider-neutral IAPStack Flutter SDK.
+version: 0.1.0-dev.1
+repository: https://github.com/imariman/iapstack/tree/main/sdk/flutter/iapstack_huawei
+publish_to: none
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.19.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  huawei_iap: 6.14.0+300
+  iapstack:
+    path: ../iapstack
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  http: ^1.2.2
+  lints: ^5.1.1
+
+flutter:
+  uses-material-design: false
