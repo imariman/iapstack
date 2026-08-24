@@ -1,0 +1,43 @@
+services:
+  fixture:
+    build:
+      context: ..
+      dockerfile: deploy/e2e/Dockerfile
+    environment:
+      IAPSTACK_E2E_TLS_CERT_FILE: /e2e/tls.crt
+      IAPSTACK_E2E_TLS_KEY_FILE: /e2e/tls.key
+      IAPSTACK_E2E_WEBHOOK_SECRET: ${IAPSTACK_E2E_WEBHOOK_SECRET:?set IAPSTACK_E2E_WEBHOOK_SECRET}
+    ports:
+      - "${IAPSTACK_E2E_FIXTURE_PORT:-18082}:8082"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8082/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - ${IAPSTACK_E2E_CERT_DIR:?set IAPSTACK_E2E_CERT_DIR}/tls.crt:/e2e/tls.crt:ro
+      - ${IAPSTACK_E2E_CERT_DIR:?set IAPSTACK_E2E_CERT_DIR}/tls.key:/e2e/tls.key:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: "no"
+
+  api:
+    environment:
+      SSL_CERT_FILE: /e2e/tls.crt
+    volumes:
+      - ${IAPSTACK_E2E_CERT_DIR:?set IAPSTACK_E2E_CERT_DIR}/tls.crt:/e2e/tls.crt:ro
+    depends_on:
+      fixture:
+        condition: service_healthy
+
+  worker:
+    environment:
+      SSL_CERT_FILE: /e2e/tls.crt
+    ports:
+      - "${IAPSTACK_E2E_WORKER_PORT:-18081}:8081"
+    volumes:
+      - ${IAPSTACK_E2E_CERT_DIR:?set IAPSTACK_E2E_CERT_DIR}/tls.crt:/e2e/tls.crt:ro
+    depends_on:
+      fixture:
+        condition: service_healthy
