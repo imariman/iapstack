@@ -177,6 +177,78 @@ func TestCatalogRepositories(t *testing.T) {
 	}
 }
 
+// TestPutProductSerializesExactEntitlementSets verifies that concurrent writers cannot both commit divergent sets.
+func TestPutProductSerializesExactEntitlementSets(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	additional := []core.Entitlement{
+		{ID: "entitlement-2", ProjectID: core.ProjectID(fixture.projectID), Key: "second"},
+		{ID: "entitlement-3", ProjectID: core.ProjectID(fixture.projectID), Key: "third"},
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		for _, entitlement := range additional {
+			if err := repository.PutEntitlementDefinition(database.ctx, entitlement); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed additional entitlements: %v", err)
+	}
+
+	ready := make(chan struct{}, 2)
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var workers sync.WaitGroup
+	for _, entitlementID := range []core.EntitlementID{additional[0].ID, additional[1].ID} {
+		workers.Add(1)
+		go func(entitlementID core.EntitlementID) {
+			defer workers.Done()
+			results <- store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+				ready <- struct{}{}
+				<-start
+				return repository.PutProduct(database.ctx, core.Product{
+					ID: core.ProductID(fixture.productID), ProjectID: core.ProjectID(fixture.projectID),
+					Kind: core.ProductKindSubscription,
+					EntitlementIDs: []core.EntitlementID{
+						core.EntitlementID(fixture.entitlementID), entitlementID,
+					},
+				})
+			})
+		}(entitlementID)
+	}
+	<-ready
+	<-ready
+	close(start)
+	workers.Wait()
+	close(results)
+	successes := 0
+	conflicts := 0
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, persistence.ErrConflict):
+			conflicts++
+		default:
+			t.Fatalf("concurrent PutProduct() error = %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("concurrent PutProduct() outcomes = (%d success, %d conflict), want (1, 1)", successes, conflicts)
+	}
+	var storedCount int
+	if err := database.conn.QueryRow(database.ctx, `
+		SELECT count(*) FROM product_entitlements WHERE project_id = $1 AND product_id = $2
+	`, fixture.projectID, fixture.productID).Scan(&storedCount); err != nil {
+		t.Fatalf("count product entitlements: %v", err)
+	}
+	if storedCount != 2 {
+		t.Fatalf("stored entitlement count = %d, want exact winning set of 2", storedCount)
+	}
+}
+
 // TestTransactionalPurchasePersistence verifies atomic, idempotent, and isolated repository writes.
 func TestTransactionalPurchasePersistence(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)

@@ -103,7 +103,9 @@ func (repository *transaction) PutProduct(ctx context.Context, product core.Prod
 		return classifyError("put product", err)
 	}
 	var projectID, kind string
-	err = repository.tx.QueryRow(ctx, `SELECT project_id, kind FROM products WHERE id = $1`, product.ID).Scan(&projectID, &kind)
+	err = repository.tx.QueryRow(ctx, `
+		SELECT project_id, kind FROM products WHERE id = $1 FOR UPDATE
+	`, product.ID).Scan(&projectID, &kind)
 	if err != nil {
 		return classifyError("load product", err)
 	}
