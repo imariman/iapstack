@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/imariman/iapstack/internal/app"
+	"github.com/imariman/iapstack/internal/persistence/postgres"
 )
 
 // TestRunRequiresKnownMode verifies that Run rejects missing, extra, and unknown modes.
@@ -34,19 +35,23 @@ func TestRunRequiresKnownMode(t *testing.T) {
 	}
 }
 
-// TestRunReportsReservedModes verifies that reserved modes return their bootstrap error.
+// TestRunReportsReservedModes verifies that the worker mode remains explicitly reserved.
 func TestRunReportsReservedModes(t *testing.T) {
 	t.Parallel()
 
-	for _, mode := range []string{"worker", "migrate"} {
-		t.Run(mode, func(t *testing.T) {
-			t.Parallel()
+	err := app.Run(context.Background(), []string{"worker"}, emptyEnv, &bytes.Buffer{})
+	if !errors.Is(err, app.ErrModeUnavailable) {
+		t.Fatalf("Run() error = %v, want ErrModeUnavailable", err)
+	}
+}
 
-			err := app.Run(context.Background(), []string{mode}, emptyEnv, &bytes.Buffer{})
-			if !errors.Is(err, app.ErrModeUnavailable) {
-				t.Fatalf("Run() error = %v, want ErrModeUnavailable", err)
-			}
-		})
+// TestRunMigrateRequiresDatabaseURL verifies fail-fast migration configuration validation.
+func TestRunMigrateRequiresDatabaseURL(t *testing.T) {
+	t.Parallel()
+
+	err := app.Run(context.Background(), []string{"migrate"}, emptyEnv, &bytes.Buffer{})
+	if !errors.Is(err, postgres.ErrDatabaseURLRequired) {
+		t.Fatalf("Run() error = %v, want ErrDatabaseURLRequired", err)
 	}
 }
 

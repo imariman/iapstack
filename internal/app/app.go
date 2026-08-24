@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/imariman/iapstack/internal/persistence/postgres"
 	"github.com/imariman/iapstack/internal/platform/config"
 	"github.com/imariman/iapstack/internal/platform/logging"
 	"github.com/imariman/iapstack/internal/transport/httpserver"
@@ -49,7 +50,7 @@ func Run(
 	case "worker":
 		return fmt.Errorf("%w: worker", ErrModeUnavailable)
 	case "migrate":
-		return fmt.Errorf("%w: migrate", ErrModeUnavailable)
+		return postgres.Migrate(ctx, cfg.DatabaseURL)
 	default:
 		panic("validated mode was not handled")
 	}
