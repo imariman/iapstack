@@ -161,6 +161,8 @@ type QueueRepository interface {
 	RecoverQueueLocks(context.Context, QueueName, time.Time) (int64, error)
 	// QueueDepth returns current counts grouped by durable state.
 	QueueDepth(context.Context, QueueName) (map[string]int64, error)
+	// PruneQueue deletes a bounded batch of expired terminal records.
+	PruneQueue(context.Context, QueuePrune) (int64, error)
 }
 
 // CatalogProduct joins one provider product mapping to its internal product and entitlements.
@@ -342,6 +344,13 @@ type QueueClaim struct {
 	Limit       int
 }
 
+// QueuePrune requests bounded retention cleanup for one durable queue.
+type QueuePrune struct {
+	Queue  QueueName
+	Before time.Time
+	Limit  int
+}
+
 // QueueMessage is one leased inbox, outbox, or reconciliation record.
 type QueueMessage struct {
 	Queue            QueueName
@@ -476,6 +485,19 @@ func (claim QueueClaim) Validate() error {
 		validateText("queue worker ID", claim.WorkerID),
 		validateTime("queue claim time", claim.Now),
 		validateTime("queue stale-before time", claim.StaleBefore),
+		limitError,
+	)
+}
+
+// Validate checks queue identity, retention boundary, and cleanup batch limit.
+func (prune QueuePrune) Validate() error {
+	var limitError error
+	if prune.Limit <= 0 || prune.Limit > 1000 {
+		limitError = errors.New("queue prune limit must be between 1 and 1000")
+	}
+	return errors.Join(
+		prune.Queue.Validate(),
+		validateTime("queue prune boundary", prune.Before),
 		limitError,
 	)
 }

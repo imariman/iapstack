@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -480,6 +481,76 @@ func TestOperationalQueueClaimRetryAndCompletion(t *testing.T) {
 		t.Fatalf("CompleteQueue() error = %v", err)
 	}
 	assertTableCount(t, database, "outbox_events", 1)
+}
+
+// TestOperationalQueuePrunePreservesLiveAndRecentRecords verifies bounded terminal retention cleanup.
+func TestOperationalQueuePrunePreservesLiveAndRecentRecords(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	base := newPurchaseWrites(t, fixture).outbox
+	for index, identity := range []string{"old-delivered", "old-failed", "recent-delivered", "pending"} {
+		event := base
+		event.ID = identity
+		event.AggregateID = identity
+		event.Payload = json.RawMessage(fmt.Sprintf(`{"identity":%q}`, identity))
+		event.PayloadFingerprint = sha256.Sum256(event.Payload)
+		event.OccurredAt = base.OccurredAt.Add(time.Duration(index) * time.Second)
+		event.AvailableAt = event.OccurredAt
+		if err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+			_, err := repository.SaveOutboxEvent(database.ctx, event)
+			return err
+		}); err != nil {
+			t.Fatalf("SaveOutboxEvent(%q) error = %v", identity, err)
+		}
+	}
+	boundary := base.OccurredAt.Add(24 * time.Hour)
+	oldTime := boundary.Add(-time.Hour)
+	recentTime := boundary.Add(time.Hour)
+	if _, err := database.conn.Exec(database.ctx, `
+		UPDATE outbox_events SET state = 'delivered', delivered_at = $1, updated_at = $1 WHERE id = 'old-delivered';
+		UPDATE outbox_events SET state = 'failed', last_error_code = 'permanent', updated_at = $1 WHERE id = 'old-failed';
+		UPDATE outbox_events SET state = 'delivered', delivered_at = $2, updated_at = $2 WHERE id = 'recent-delivered';
+	`, oldTime, recentTime); err != nil {
+		t.Fatalf("prepare terminal queue records: %v", err)
+	}
+
+	var pruned int64
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var err error
+		pruned, err = repository.PruneQueue(database.ctx, persistence.QueuePrune{
+			Queue: persistence.QueueOutbox, Before: boundary, Limit: 1,
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("PruneQueue() error = %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("first PruneQueue() count = %d, want 1", pruned)
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var err error
+		pruned, err = repository.PruneQueue(database.ctx, persistence.QueuePrune{
+			Queue: persistence.QueueOutbox, Before: boundary, Limit: 1000,
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("second PruneQueue() error = %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("second PruneQueue() count = %d, want 1", pruned)
+	}
+	assertTableCount(t, database, "outbox_events", 2)
+	for _, identity := range []string{"recent-delivered", "pending"} {
+		var exists bool
+		if err := database.conn.QueryRow(database.ctx,
+			`SELECT EXISTS (SELECT 1 FROM outbox_events WHERE id = $1)`, identity).Scan(&exists); err != nil {
+			t.Fatalf("check retained queue record %q: %v", identity, err)
+		}
+		if !exists {
+			t.Fatalf("queue record %q was pruned, want retained", identity)
+		}
+	}
 }
 
 // newPurchaseWrites builds one valid provider-neutral purchase persistence graph.

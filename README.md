@@ -75,6 +75,9 @@ Configuration is supplied through environment variables:
 | `IAPSTACK_WORKER_CONCURRENCY` | `4` | Maximum concurrent job attempts |
 | `IAPSTACK_WORKER_BATCH_SIZE` | `16` | Maximum records claimed per queue poll |
 | `IAPSTACK_WORKER_MAX_ATTEMPTS` | `12` | Attempts before a record enters terminal failed state |
+| `IAPSTACK_WORKER_MAINTENANCE_INTERVAL` | `1m` | Queue depth sampling and retention cleanup interval |
+| `IAPSTACK_QUEUE_RETENTION` | `720h` | Retention period for delivered, processed, and failed queue records |
+| `IAPSTACK_QUEUE_PRUNE_BATCH_SIZE` | `1000` | Maximum terminal records deleted per queue and maintenance cycle |
 
 Modes that handle provider evidence initialize the protection keyring before serving
 work and fail fast when any protection variable is missing or malformed. Generate every

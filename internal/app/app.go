@@ -165,6 +165,8 @@ func runWorker(
 		WorkerID: cfg.WorkerID, PollInterval: cfg.WorkerPollInterval,
 		JobTimeout: cfg.WorkerJobTimeout, Concurrency: cfg.WorkerConcurrency,
 		BatchSize: cfg.WorkerBatchSize, MaxAttempts: cfg.WorkerMaxAttempts,
+		MaintenanceInterval: cfg.WorkerMaintenanceInterval, QueueRetention: cfg.QueueRetention,
+		PruneBatchSize: cfg.QueuePruneBatchSize,
 	}, map[persistence.QueueName]worker.Handler{
 		persistence.QueueInbox:          worker.HandlerFunc(providerProcessing.HandleInbox),
 		persistence.QueueReconciliation: worker.HandlerFunc(providerProcessing.HandleReconciliation),

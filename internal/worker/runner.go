@@ -44,16 +44,23 @@ type Config struct {
 	Concurrency  int
 	BatchSize    int
 	MaxAttempts  int
+	// MaintenanceInterval controls durable depth sampling and retention cleanup frequency.
+	MaintenanceInterval time.Duration
+	// QueueRetention preserves terminal queue records for operational inspection and replay protection.
+	QueueRetention time.Duration
+	// PruneBatchSize bounds terminal records deleted from one queue per maintenance cycle.
+	PruneBatchSize int
 }
 
 // Runner claims durable messages and records each attempt outcome.
 type Runner struct {
-	store    persistence.OperationsStore
-	config   Config
-	handlers map[persistence.QueueName]Handler
-	metrics  *metrics.Registry
-	logger   *slog.Logger
-	clock    func() time.Time
+	store           persistence.OperationsStore
+	config          Config
+	handlers        map[persistence.QueueName]Handler
+	metrics         *metrics.Registry
+	logger          *slog.Logger
+	clock           func() time.Time
+	nextMaintenance time.Time
 }
 
 // Handle calls the adapted handler function.
@@ -73,7 +80,9 @@ func New(
 		return nil, errors.New("worker operations store is required")
 	}
 	if config.WorkerID == "" || config.PollInterval <= 0 || config.JobTimeout <= 0 ||
-		config.Concurrency <= 0 || config.BatchSize <= 0 || config.MaxAttempts <= 0 {
+		config.Concurrency <= 0 || config.BatchSize <= 0 || config.MaxAttempts <= 0 ||
+		config.MaintenanceInterval <= 0 || config.QueueRetention <= 0 ||
+		config.PruneBatchSize <= 0 || config.PruneBatchSize > 1000 {
 		return nil, errors.New("worker configuration is invalid")
 	}
 	for _, queue := range []persistence.QueueName{
@@ -122,14 +131,11 @@ func (runner *Runner) poll(ctx context.Context, semaphore chan struct{}, attempt
 		return nil
 	}
 	now := runner.clock().UTC()
-	for _, queue := range []persistence.QueueName{
-		persistence.QueueInbox,
-		persistence.QueueReconciliation,
-		persistence.QueueOutbox,
-	} {
+	var pollErr error
+	for _, queue := range durableQueues() {
 		availableSlots := cap(semaphore) - len(semaphore)
 		if availableSlots <= 0 {
-			return nil
+			break
 		}
 		limit := runner.config.BatchSize
 		if limit > availableSlots {
@@ -142,20 +148,11 @@ func (runner *Runner) poll(ctx context.Context, semaphore chan struct{}, attempt
 				Queue: queue, WorkerID: runner.config.WorkerID, Now: now,
 				StaleBefore: now.Add(-2 * runner.config.JobTimeout), Limit: limit,
 			})
-			if claimErr != nil {
-				return claimErr
-			}
-			depth, depthErr := repository.QueueDepth(ctx, queue)
-			if depthErr != nil {
-				return depthErr
-			}
-			for state, count := range depth {
-				runner.metrics.SetQueueDepth(string(queue), state, count)
-			}
-			return nil
+			return claimErr
 		})
 		if err != nil {
-			return fmt.Errorf("claim %s: %w", queue, err)
+			pollErr = fmt.Errorf("claim %s: %w", queue, err)
+			break
 		}
 		for _, message := range messages {
 			semaphore <- struct{}{}
@@ -169,7 +166,53 @@ func (runner *Runner) poll(ctx context.Context, semaphore chan struct{}, attempt
 			}(message)
 		}
 	}
-	return nil
+	runner.maintain(ctx, now)
+	return pollErr
+}
+
+// maintain samples queue depth and removes a bounded number of expired terminal records.
+func (runner *Runner) maintain(ctx context.Context, now time.Time) {
+	if !runner.nextMaintenance.IsZero() && now.Before(runner.nextMaintenance) {
+		return
+	}
+	runner.nextMaintenance = now.Add(runner.config.MaintenanceInterval)
+	for _, queue := range durableQueues() {
+		var depth map[string]int64
+		err := runner.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+			if _, err := repository.PruneQueue(ctx, persistence.QueuePrune{
+				Queue: queue, Before: now.Add(-runner.config.QueueRetention), Limit: runner.config.PruneBatchSize,
+			}); err != nil {
+				return err
+			}
+			var err error
+			depth, err = repository.QueueDepth(ctx, queue)
+			return err
+		})
+		if err != nil {
+			runner.logger.Error("worker queue maintenance failed", "queue", queue, "error_code", "queue_maintenance_failed")
+			continue
+		}
+		for _, state := range queueStates(queue) {
+			runner.metrics.SetQueueDepth(string(queue), state, depth[state])
+		}
+	}
+}
+
+// durableQueues returns the fixed queue processing and maintenance order.
+func durableQueues() []persistence.QueueName {
+	return []persistence.QueueName{
+		persistence.QueueInbox,
+		persistence.QueueReconciliation,
+		persistence.QueueOutbox,
+	}
+}
+
+// queueStates returns every bounded state label emitted for one queue.
+func queueStates(queue persistence.QueueName) []string {
+	if queue == persistence.QueueOutbox {
+		return []string{"pending", "processing", "delivered", "failed"}
+	}
+	return []string{"pending", "processing", "processed", "failed"}
 }
 
 // attempt runs one handler with a timeout and records a complete, retry, or failed transition.

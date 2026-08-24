@@ -216,6 +216,35 @@ func (repository *transaction) QueueDepth(
 	return depth, nil
 }
 
+// PruneQueue deletes a bounded batch of terminal records older than one retention boundary.
+func (repository *transaction) PruneQueue(
+	ctx context.Context,
+	prune persistence.QueuePrune,
+) (int64, error) {
+	if err := prune.Validate(); err != nil {
+		return 0, err
+	}
+	table, completedColumn, terminalState, err := queueCompletion(prune.Queue)
+	if err != nil {
+		return 0, err
+	}
+	query := fmt.Sprintf(`
+		WITH candidates AS (
+			SELECT id FROM %s
+			WHERE state IN ($1, 'failed') AND COALESCE(%s, updated_at) < $2
+			ORDER BY COALESCE(%s, updated_at), id
+			FOR UPDATE SKIP LOCKED LIMIT $3
+		)
+		DELETE FROM %s AS record USING candidates
+		WHERE record.id = candidates.id
+	`, table, completedColumn, completedColumn, table)
+	command, err := repository.tx.Exec(ctx, query, terminalState, prune.Before, prune.Limit)
+	if err != nil {
+		return 0, classifyError("prune queue", err)
+	}
+	return command.RowsAffected(), nil
+}
+
 // claimInbox leases protected provider notification records.
 func (repository *transaction) claimInbox(
 	ctx context.Context,

@@ -54,6 +54,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DatabaseURL != "" {
 		t.Errorf("DatabaseURL = %q, want empty", cfg.DatabaseURL)
 	}
+	if cfg.WorkerMaintenanceInterval != time.Minute {
+		t.Errorf("WorkerMaintenanceInterval = %v, want 1m", cfg.WorkerMaintenanceInterval)
+	}
+	if cfg.QueueRetention != 30*24*time.Hour {
+		t.Errorf("QueueRetention = %v, want 720h", cfg.QueueRetention)
+	}
+	if cfg.QueuePruneBatchSize != 1000 {
+		t.Errorf("QueuePruneBatchSize = %d, want 1000", cfg.QueuePruneBatchSize)
+	}
 }
 
 // TestLoadOverrides verifies supported environment configuration overrides.
@@ -98,6 +107,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "shutdown syntax", values: map[string]string{shutdownTimeoutEnvironment: "later"}},
 		{name: "shutdown sign", values: map[string]string{shutdownTimeoutEnvironment: "-1s"}},
 		{name: "log level", values: map[string]string{logLevelEnvironment: "verbose"}},
+		{name: "prune batch upper bound", values: map[string]string{"IAPSTACK_QUEUE_PRUNE_BATCH_SIZE": "1001"}},
 	}
 
 	for _, tt := range tests {
