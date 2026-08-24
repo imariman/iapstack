@@ -70,14 +70,11 @@ Configuration is supplied through environment variables:
 | `IAPSTACK_PROTECTION_ACTIVE_KEY_ID` | none | Encryption key ID used for new protected values |
 | `IAPSTACK_PROTECTION_KEYS` | none | JSON object mapping key IDs to base64-encoded 32-byte encryption root keys |
 | `IAPSTACK_PROTECTION_FINGERPRINT_KEY` | none | Base64-encoded 32-byte stable fingerprint root key |
-| `IAPSTACK_WORKER_ID` | automatic | Optional durable queue worker identity; defaults to a unique process identity |
+| `IAPSTACK_WORKER_ID` | automatic | Optional River client identity; leave empty unless the deployment guarantees uniqueness |
 | `IAPSTACK_WORKER_HTTP_ADDRESS` | `:8081` | Worker health, readiness, and metrics listen address |
-| `IAPSTACK_WORKER_CONCURRENCY` | `4` | Maximum concurrent job attempts |
-| `IAPSTACK_WORKER_BATCH_SIZE` | `16` | Maximum records claimed per queue poll |
-| `IAPSTACK_WORKER_MAX_ATTEMPTS` | `12` | Attempts before a record enters terminal failed state |
-| `IAPSTACK_WORKER_MAINTENANCE_INTERVAL` | `1m` | Queue depth sampling and retention cleanup interval |
-| `IAPSTACK_QUEUE_RETENTION` | `720h` | Retention period for delivered, processed, and failed queue records |
-| `IAPSTACK_QUEUE_PRUNE_BATCH_SIZE` | `1000` | Maximum terminal records deleted per queue and maintenance cycle |
+| `IAPSTACK_WORKER_CONCURRENCY` | `4` | Maximum concurrent River jobs per queue and worker process |
+| `IAPSTACK_WORKER_MAX_ATTEMPTS` | `12` | Attempts before River discards a retryable job |
+| `IAPSTACK_QUEUE_RETENTION` | `720h` | Retention period for terminal River job metadata |
 
 Modes that handle provider evidence initialize the protection keyring before serving
 work and fail fast when any protection variable is missing or malformed. Generate every

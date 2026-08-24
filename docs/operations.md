@@ -60,5 +60,7 @@ Never remove an encryption key until all rows written with that key ID have been
 
 - `iapstack_queue_depth` shows pending, processing, delivered/processed, and failed records.
 - Stale processing locks are returned to pending automatically after twice the configured job timeout.
-- Retryable failures use exponential full jitter. Records become terminal after `IAPSTACK_WORKER_MAX_ATTEMPTS`.
+- River owns job claims, stale-job recovery, exponential retry scheduling, and terminal job cleanup.
+- Retryable failures become discarded after `IAPSTACK_WORKER_MAX_ATTEMPTS`; permanent failures are cancelled immediately.
+- Inbox, outbox, and reconciliation tables retain protected payloads and stable terminal audit outcomes while River job arguments contain identifiers only.
 - Durable records contain only safe error codes; correlate application logs with `message_id` and HTTP logs with `X-Request-ID`.
