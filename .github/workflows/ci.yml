@@ -99,3 +99,15 @@ jobs:
       - name: Report bootstrap state
         if: steps.module.outputs.present != 'true'
         run: echo "Go checks will activate automatically when go.mod is added."
+
+  container:
+    name: Container build
+    runs-on: ubuntu-latest
+    needs: go
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Build production image
+        run: docker build --tag iapstack:ci .
