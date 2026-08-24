@@ -1,8 +1,8 @@
 package postgres
 
 import (
-	"bytes"
 	"context"
+	"crypto/hmac"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -444,5 +444,5 @@ func nullableString(value string) any {
 
 // protectedFingerprintMatches compares a stored fingerprint without leaking it.
 func protectedFingerprintMatches(stored []byte, expected [32]byte) bool {
-	return bytes.Equal(stored, expected[:])
+	return hmac.Equal(stored, expected[:])
 }

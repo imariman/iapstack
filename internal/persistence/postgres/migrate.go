@@ -15,7 +15,7 @@ import (
 
 const (
 	// LatestVersion identifies the newest schema version embedded in this build.
-	LatestVersion int32 = 4
+	LatestVersion int32 = 5
 	// migrationsDirectory is the embedded directory containing sequential SQL migrations.
 	migrationsDirectory = "migrations"
 	// schemaVersionTable stores the single current migration version for IAPStack.

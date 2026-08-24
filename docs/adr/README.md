@@ -17,3 +17,4 @@ Architecture Decision Records (ADRs) capture decisions that materially constrain
 - [ADR-0004: Use API-first contracts in a monorepo](0004-api-first-monorepo.md)
 - [ADR-0005: Normalize provider evidence into purchase observations](0005-provider-neutral-purchase-observations.md)
 - [ADR-0006: Protect sensitive data with scoped authenticated envelopes](0006-scoped-authenticated-data-protection.md)
+- [ADR-0007: Resolve provider credentials through application-scoped packages](0007-application-scoped-provider-credentials.md)

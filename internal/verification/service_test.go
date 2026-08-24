@@ -343,6 +343,22 @@ func (repository *fakeTransaction) Application(
 	return repository.application, nil
 }
 
+// Credential is not used by purchase verification unit tests.
+func (repository *fakeTransaction) Credential(
+	_ context.Context,
+	_ persistence.CredentialKey,
+) (persistence.CredentialRecord, error) {
+	return persistence.CredentialRecord{}, persistence.ErrNotFound
+}
+
+// PutCredential is not used by purchase verification unit tests.
+func (repository *fakeTransaction) PutCredential(
+	_ context.Context,
+	_ persistence.CredentialWrite,
+) (persistence.CredentialRecord, error) {
+	return persistence.CredentialRecord{}, persistence.ErrNotFound
+}
+
 // CustomerByExternalID returns the configured customer inside its exact scope.
 func (repository *fakeTransaction) CustomerByExternalID(
 	_ context.Context,
