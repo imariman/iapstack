@@ -157,12 +157,16 @@ func runWorker(
 	metricRegistry *metrics.Registry,
 	logger *slog.Logger,
 ) error {
+	workerID, err := worker.NewIdentity(cfg.WorkerID)
+	if err != nil {
+		return err
+	}
 	providerProcessing, err := processing.New(store, keyring, verificationService)
 	if err != nil {
 		return err
 	}
 	runner, err := worker.New(store, worker.Config{
-		WorkerID: cfg.WorkerID, PollInterval: cfg.WorkerPollInterval,
+		WorkerID: workerID, PollInterval: cfg.WorkerPollInterval,
 		JobTimeout: cfg.WorkerJobTimeout, Concurrency: cfg.WorkerConcurrency,
 		BatchSize: cfg.WorkerBatchSize, MaxAttempts: cfg.WorkerMaxAttempts,
 		MaintenanceInterval: cfg.WorkerMaintenanceInterval, QueueRetention: cfg.QueueRetention,
@@ -183,7 +187,7 @@ func runWorker(
 	if err != nil {
 		return err
 	}
-	logger.Info("worker is ready", "worker_id", cfg.WorkerID)
+	logger.Info("worker is ready", "worker_id", workerID)
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	server := httpserver.NewWithOptions(httpserver.Options{

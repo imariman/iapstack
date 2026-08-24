@@ -115,6 +115,18 @@ func TestOpenStoreValidatesURL(t *testing.T) {
 	}
 }
 
+// TestStorePingRejectsOutdatedSchema verifies readiness follows the exact embedded migration version.
+func TestStorePingRejectsOutdatedSchema(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	store := openRepositoryStore(t, database.ctx)
+	mustMigrateTo(t, database, postgres.LatestVersion-1)
+
+	err := store.Ping(database.ctx)
+	if !errors.Is(err, postgres.ErrSchemaVersionMismatch) {
+		t.Fatalf("Ping() error = %v, want ErrSchemaVersionMismatch", err)
+	}
+}
+
 // TestCatalogRepositories verifies scoped application, customer, and product graph lookups.
 func TestCatalogRepositories(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)

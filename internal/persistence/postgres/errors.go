@@ -38,8 +38,10 @@ func classifyError(operation string, err error) error {
 	var postgresError *pgconn.PgError
 	if errors.As(err, &postgresError) {
 		switch postgresError.Code {
-		case "40001", "40P01":
+		case "40001", "40P01", "55P03":
 			return fmt.Errorf("%s: %w", operation, errRetryableTransaction)
+		case "53300", "57014", "57P01", "57P02", "57P03":
+			return fmt.Errorf("%s: %w", operation, persistence.ErrUnavailable)
 		case "23503", "23505", "23514":
 			if postgresError.ConstraintName != "" {
 				return fmt.Errorf(
@@ -51,6 +53,9 @@ func classifyError(operation string, err error) error {
 			}
 			return fmt.Errorf("%s: %w", operation, persistence.ErrConflict)
 		}
+	}
+	if pgconn.SafeToRetry(err) {
+		return fmt.Errorf("%s: %w", operation, persistence.ErrUnavailable)
 	}
 	return fmt.Errorf("%s: %w", operation, err)
 }

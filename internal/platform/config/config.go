@@ -76,7 +76,7 @@ func Load(getenv func(string) string) (Config, error) {
 		LogLevel:                  slog.LevelInfo,
 		DatabaseURL:               strings.TrimSpace(getenv("IAPSTACK_DATABASE_URL")),
 		BootstrapAdminKey:         strings.TrimSpace(getenv("IAPSTACK_BOOTSTRAP_ADMIN_KEY")),
-		WorkerID:                  valueOrDefault(getenv("IAPSTACK_WORKER_ID"), "worker-1"),
+		WorkerID:                  strings.TrimSpace(getenv("IAPSTACK_WORKER_ID")),
 		WorkerPollInterval:        defaultWorkerPollInterval,
 		WorkerJobTimeout:          defaultWorkerJobTimeout,
 		WorkerConcurrency:         defaultWorkerConcurrency,

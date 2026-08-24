@@ -70,7 +70,7 @@ Configuration is supplied through environment variables:
 | `IAPSTACK_PROTECTION_ACTIVE_KEY_ID` | none | Encryption key ID used for new protected values |
 | `IAPSTACK_PROTECTION_KEYS` | none | JSON object mapping key IDs to base64-encoded 32-byte encryption root keys |
 | `IAPSTACK_PROTECTION_FINGERPRINT_KEY` | none | Base64-encoded 32-byte stable fingerprint root key |
-| `IAPSTACK_WORKER_ID` | `worker-1` | Unique durable queue worker identity |
+| `IAPSTACK_WORKER_ID` | automatic | Optional durable queue worker identity; defaults to a unique process identity |
 | `IAPSTACK_WORKER_HTTP_ADDRESS` | `:8081` | Worker health, readiness, and metrics listen address |
 | `IAPSTACK_WORKER_CONCURRENCY` | `4` | Maximum concurrent job attempts |
 | `IAPSTACK_WORKER_BATCH_SIZE` | `16` | Maximum records claimed per queue poll |

@@ -33,6 +33,8 @@ var (
 	ErrDatabaseURLRequired = errors.New("IAPSTACK_DATABASE_URL is required")
 	// ErrInvalidDatabaseURL indicates that PostgreSQL connection configuration cannot be parsed.
 	ErrInvalidDatabaseURL = errors.New("IAPSTACK_DATABASE_URL is not a valid PostgreSQL connection string")
+	// ErrSchemaVersionMismatch indicates that runtime code and the migrated schema are incompatible.
+	ErrSchemaVersionMismatch = errors.New("PostgreSQL schema version does not match this IAPStack build")
 )
 
 // embeddedMigrations contains every SQL migration shipped with the IAPStack binary.

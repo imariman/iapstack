@@ -21,6 +21,12 @@ const (
 	transactionRetryBase = 5 * time.Millisecond
 	// transactionRetryMaximum caps transaction retry delay under repeated contention.
 	transactionRetryMaximum = 100 * time.Millisecond
+	// runtimeStatementTimeout bounds one PostgreSQL statement independently of request cancellation.
+	runtimeStatementTimeout = 15 * time.Second
+	// runtimeLockTimeout bounds time spent waiting to acquire a PostgreSQL lock.
+	runtimeLockTimeout = 5 * time.Second
+	// runtimeIdleTransactionTimeout releases sessions abandoned inside a transaction.
+	runtimeIdleTransactionTimeout = 30 * time.Second
 )
 
 // Store implements provider-neutral persistence with a PostgreSQL connection pool.
@@ -53,6 +59,9 @@ func OpenStore(ctx context.Context, databaseURL string) (*Store, error) {
 		return nil, ErrInvalidDatabaseURL
 	}
 	poolConfig.ConnConfig.RuntimeParams["application_name"] = "iapstack"
+	poolConfig.ConnConfig.RuntimeParams["statement_timeout"] = runtimeStatementTimeout.String()
+	poolConfig.ConnConfig.RuntimeParams["lock_timeout"] = runtimeLockTimeout.String()
+	poolConfig.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = runtimeIdleTransactionTimeout.String()
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
@@ -78,13 +87,20 @@ func NewStore(ctx context.Context, pool *pgxpool.Pool) (*Store, error) {
 	return store, nil
 }
 
-// Ping verifies that PostgreSQL accepts a query through the pool.
+// Ping verifies PostgreSQL connectivity and exact runtime schema compatibility.
 func (store *Store) Ping(ctx context.Context) error {
 	if store == nil || store.pool == nil {
 		return errors.New("PostgreSQL store is not initialized")
 	}
 	if err := store.pool.Ping(ctx); err != nil {
 		return fmt.Errorf("ping PostgreSQL: %w", err)
+	}
+	var version int32
+	if err := store.pool.QueryRow(ctx, `SELECT version FROM public.schema_version`).Scan(&version); err != nil {
+		return fmt.Errorf("read PostgreSQL schema version: %w", err)
+	}
+	if version != LatestVersion {
+		return fmt.Errorf("PostgreSQL schema version is %d, require %d: %w", version, LatestVersion, ErrSchemaVersionMismatch)
 	}
 	return nil
 }
@@ -151,7 +167,7 @@ func (store *Store) transactOnce(
 
 	postgresTransaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: isolation})
 	if err != nil {
-		return fmt.Errorf("begin PostgreSQL transaction: %w", err)
+		return classifyError("begin PostgreSQL transaction", err)
 	}
 	defer func() {
 		rollbackError := postgresTransaction.Rollback(ctx)

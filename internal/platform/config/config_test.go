@@ -54,6 +54,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DatabaseURL != "" {
 		t.Errorf("DatabaseURL = %q, want empty", cfg.DatabaseURL)
 	}
+	if cfg.WorkerID != "" {
+		t.Errorf("WorkerID = %q, want automatic empty marker", cfg.WorkerID)
+	}
 	if cfg.WorkerMaintenanceInterval != time.Minute {
 		t.Errorf("WorkerMaintenanceInterval = %v, want 1m", cfg.WorkerMaintenanceInterval)
 	}

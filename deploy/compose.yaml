@@ -62,7 +62,7 @@ services:
     command: ["worker"]
     environment:
       <<: *iapstack-environment
-      IAPSTACK_WORKER_ID: ${IAPSTACK_WORKER_ID:-worker-1}
+      IAPSTACK_WORKER_ID: ${IAPSTACK_WORKER_ID:-}
       IAPSTACK_WORKER_HTTP_ADDRESS: :8081
     expose:
       - "8081"
