@@ -223,7 +223,7 @@ func TestPutProductSerializesExactEntitlementSets(t *testing.T) {
 				<-start
 				return repository.PutProduct(database.ctx, core.Product{
 					ID: core.ProductID(fixture.productID), ProjectID: core.ProjectID(fixture.projectID),
-					Kind: core.ProductKindSubscription,
+					Kind: core.ProductKindNonConsumable,
 					EntitlementIDs: []core.EntitlementID{
 						core.EntitlementID(fixture.entitlementID), entitlementID,
 					},
@@ -520,9 +520,16 @@ func TestOperationalQueuePrunePreservesLiveAndRecentRecords(t *testing.T) {
 	oldTime := boundary.Add(-time.Hour)
 	recentTime := boundary.Add(time.Hour)
 	if _, err := database.conn.Exec(database.ctx, `
-		UPDATE outbox_events SET state = 'delivered', delivered_at = $1, updated_at = $1 WHERE id = 'old-delivered';
-		UPDATE outbox_events SET state = 'failed', last_error_code = 'permanent', updated_at = $1 WHERE id = 'old-failed';
-		UPDATE outbox_events SET state = 'delivered', delivered_at = $2, updated_at = $2 WHERE id = 'recent-delivered';
+		UPDATE outbox_events
+		SET state = CASE WHEN id = 'old-failed' THEN 'failed' ELSE 'delivered' END,
+			delivered_at = CASE
+				WHEN id = 'old-failed' THEN NULL::timestamptz
+				WHEN id = 'recent-delivered' THEN $2
+				ELSE $1
+			END,
+			last_error_code = CASE WHEN id = 'old-failed' THEN 'permanent' ELSE NULL END,
+			updated_at = CASE WHEN id = 'recent-delivered' THEN $2 ELSE $1 END
+		WHERE id IN ('old-delivered', 'old-failed', 'recent-delivered')
 	`, oldTime, recentTime); err != nil {
 		t.Fatalf("prepare terminal queue records: %v", err)
 	}

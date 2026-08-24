@@ -70,6 +70,7 @@ func TestMigrationLifecycle(t *testing.T) {
 		"outbox_events",
 		"application_credentials",
 		"api_keys",
+		"inbox_messages_retention_idx",
 	}
 
 	for version := int32(1); version <= postgres.LatestVersion; version++ {
@@ -88,6 +89,93 @@ func TestMigrationLifecycle(t *testing.T) {
 		t.Fatalf("Up() error = %v", err)
 	}
 	assertVersion(t, database, postgres.LatestVersion)
+}
+
+// TestQueryIndexMigrationReplacesRedundantIndexes verifies the audited latest index set.
+func TestQueryIndexMigrationReplacesRedundantIndexes(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	for _, index := range []string{
+		"purchase_observations_evidence_scope_idx",
+		"purchase_observations_internal_product_idx",
+		"customer_entitlements_mapping_idx",
+		"reconciliation_jobs_customer_idx",
+		"inbox_messages_retention_idx",
+		"outbox_events_retention_idx",
+		"reconciliation_jobs_retention_idx",
+	} {
+		assertRelationExists(t, database, index, true)
+	}
+	for _, index := range []string{
+		"provider_references_lookup_idx",
+		"customers_project_idx",
+		"entitlements_project_idx",
+	} {
+		assertRelationExists(t, database, index, false)
+	}
+}
+
+// TestQueueRetentionIndexesSupportPrunePredicates verifies cleanup queries are eligible for partial indexes.
+func TestQueueRetentionIndexesSupportPrunePredicates(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	if _, err := database.conn.Exec(database.ctx, `SET enable_seqscan = off`); err != nil {
+		t.Fatalf("disable sequential scans: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := database.conn.Exec(database.ctx, `RESET enable_seqscan`); err != nil {
+			t.Errorf("reset sequential scans: %v", err)
+		}
+	})
+	tests := []struct {
+		name  string
+		index string
+		query string
+	}{
+		{
+			name:  "inbox",
+			index: "inbox_messages_retention_idx",
+			query: `EXPLAIN (COSTS OFF) SELECT id FROM inbox_messages
+				WHERE state IN ('processed', 'failed') AND COALESCE(processed_at, updated_at) < now()
+				ORDER BY COALESCE(processed_at, updated_at), id LIMIT 1000`,
+		},
+		{
+			name:  "outbox",
+			index: "outbox_events_retention_idx",
+			query: `EXPLAIN (COSTS OFF) SELECT id FROM outbox_events
+				WHERE state IN ('delivered', 'failed') AND COALESCE(delivered_at, updated_at) < now()
+				ORDER BY COALESCE(delivered_at, updated_at), id LIMIT 1000`,
+		},
+		{
+			name:  "reconciliation",
+			index: "reconciliation_jobs_retention_idx",
+			query: `EXPLAIN (COSTS OFF) SELECT id FROM reconciliation_jobs
+				WHERE state IN ('processed', 'failed') AND COALESCE(processed_at, updated_at) < now()
+				ORDER BY COALESCE(processed_at, updated_at), id LIMIT 1000`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows, err := database.conn.Query(database.ctx, tt.query)
+			if err != nil {
+				t.Fatalf("explain retention query: %v", err)
+			}
+			defer rows.Close()
+			var plan strings.Builder
+			for rows.Next() {
+				var line string
+				if err := rows.Scan(&line); err != nil {
+					t.Fatalf("scan retention plan: %v", err)
+				}
+				plan.WriteString(line)
+				plan.WriteByte('\n')
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatalf("iterate retention plan: %v", err)
+			}
+			if !strings.Contains(plan.String(), tt.index) {
+				t.Fatalf("retention plan did not use %s:\n%s", tt.index, plan.String())
+			}
+		})
+	}
 }
 
 // TestApplicationCredentialMigrationConstraints verifies protected values and project isolation.

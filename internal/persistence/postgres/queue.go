@@ -231,14 +231,14 @@ func (repository *transaction) PruneQueue(
 	query := fmt.Sprintf(`
 		WITH candidates AS (
 			SELECT id FROM %s
-			WHERE state IN ($1, 'failed') AND COALESCE(%s, updated_at) < $2
+			WHERE state IN ('%s', 'failed') AND COALESCE(%s, updated_at) < $1
 			ORDER BY COALESCE(%s, updated_at), id
-			FOR UPDATE SKIP LOCKED LIMIT $3
+			FOR UPDATE SKIP LOCKED LIMIT $2
 		)
 		DELETE FROM %s AS record USING candidates
 		WHERE record.id = candidates.id
-	`, table, completedColumn, completedColumn, table)
-	command, err := repository.tx.Exec(ctx, query, terminalState, prune.Before, prune.Limit)
+	`, table, terminalState, completedColumn, completedColumn, table)
+	command, err := repository.tx.Exec(ctx, query, prune.Before, prune.Limit)
 	if err != nil {
 		return 0, classifyError("prune queue", err)
 	}
