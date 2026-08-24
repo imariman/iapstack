@@ -48,11 +48,16 @@ func checkGoFile(path string) error {
 	}
 
 	declarationStage := 0
+	constantBlocks := 0
 	for _, declaration := range file.Decls {
 		switch declaration := declaration.(type) {
 		case *ast.GenDecl:
 			switch declaration.Tok {
 			case token.CONST:
+				constantBlocks++
+				if constantBlocks > 1 {
+					return fmt.Errorf("%s:%d: constants must use one top-level block per file", path, fileSet.Position(declaration.Pos()).Line)
+				}
 				if declarationStage > 0 {
 					return fmt.Errorf("%s:%d: constants must appear before type, variable, and function declarations", path, fileSet.Position(declaration.Pos()).Line)
 				}

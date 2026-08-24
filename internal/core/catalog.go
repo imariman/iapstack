@@ -16,18 +16,14 @@ const (
 	ProviderAmazonAppstore Provider = "amazon_appstore"
 	// ProviderSamsungGalaxyStore identifies the Samsung Galaxy Store purchase provider.
 	ProviderSamsungGalaxyStore Provider = "samsung_galaxy_store"
-)
 
-const (
 	// EnvironmentProduction identifies live provider transactions.
 	EnvironmentProduction Environment = "production"
 	// EnvironmentSandbox identifies provider-managed sandbox transactions.
 	EnvironmentSandbox Environment = "sandbox"
 	// EnvironmentTest identifies local, beta, or other test transactions.
 	EnvironmentTest Environment = "test"
-)
 
-const (
 	// ProductKindSubscription identifies access sold for a bounded recurring or prepaid period.
 	ProductKindSubscription ProductKind = "subscription"
 	// ProductKindNonConsumable identifies a durable one-time purchase.

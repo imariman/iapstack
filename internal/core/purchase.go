@@ -27,18 +27,14 @@ const (
 	LifecycleRevoked LifecycleState = "revoked"
 	// LifecycleUnresolved identifies provider evidence that cannot yet be normalized safely.
 	LifecycleUnresolved LifecycleState = "unresolved"
-)
 
-const (
 	// AccessAllowed indicates that verified store evidence currently permits service.
 	AccessAllowed AccessStatus = "allowed"
 	// AccessDenied indicates that verified store evidence currently denies service.
 	AccessDenied AccessStatus = "denied"
 	// AccessUnresolved indicates that store evidence is not yet authoritative enough for access.
 	AccessUnresolved AccessStatus = "unresolved"
-)
 
-const (
 	// AccessReasonPurchaseValid indicates a completed purchase in its effective period.
 	AccessReasonPurchaseValid AccessReason = "purchase_valid"
 	// AccessReasonGracePeriod indicates access retained during billing recovery.
@@ -61,18 +57,14 @@ const (
 	AccessReasonProviderDecision AccessReason = "provider_decision"
 	// AccessReasonUnresolved indicates that no safe access decision is available yet.
 	AccessReasonUnresolved AccessReason = "unresolved"
-)
 
-const (
 	// OwnershipPurchased indicates that the current customer bought the product.
 	OwnershipPurchased Ownership = "purchased"
 	// OwnershipFamilyShared indicates that access comes from provider family sharing.
 	OwnershipFamilyShared Ownership = "family_shared"
 	// OwnershipUnknown indicates that the provider does not expose ownership detail.
 	OwnershipUnknown Ownership = "unknown"
-)
 
-const (
 	// RenewalNone identifies a purchase that does not renew automatically.
 	RenewalNone RenewalMode = "none"
 	// RenewalAuto identifies a provider-managed automatically renewing purchase.
@@ -81,9 +73,7 @@ const (
 	RenewalPrepaid RenewalMode = "prepaid"
 	// RenewalUnknown identifies renewal behavior that cannot yet be determined.
 	RenewalUnknown RenewalMode = "unknown"
-)
 
-const (
 	// RenewalNotApplicable indicates that renewal status does not apply.
 	RenewalNotApplicable RenewalStatus = "not_applicable"
 	// RenewalEnabled indicates that automatic renewal is enabled.
