@@ -14,6 +14,7 @@ import (
 
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/stores"
 )
 
@@ -43,24 +44,10 @@ type AdapterRegistry interface {
 	Adapter(core.Provider) (stores.Adapter, error)
 }
 
-// Protector encrypts sensitive bytes and produces a stable scoped fingerprint.
-type Protector interface {
-	// Protect encrypts one plaintext value for a non-secret purpose and application scope.
-	Protect(context.Context, ProtectionRequest) (persistence.ProtectedValue, error)
-}
-
 // Clock supplies trusted receipt timestamps to the verification use case.
 type Clock interface {
 	// Now returns the current trusted time.
 	Now() time.Time
-}
-
-// ProtectionRequest carries plaintext only across the explicit protection boundary.
-type ProtectionRequest struct {
-	ProjectID     core.ProjectID
-	ApplicationID core.ApplicationID
-	Purpose       string
-	Plaintext     []byte
 }
 
 // Command describes one application and customer scoped purchase submission.
@@ -84,7 +71,7 @@ type Result struct {
 type Service struct {
 	store     persistence.Store
 	adapters  AdapterRegistry
-	protector Protector
+	protector protection.Protector
 	projector Projector
 	clock     Clock
 }
@@ -123,7 +110,7 @@ type entitlementEventPayload struct {
 func NewService(
 	store persistence.Store,
 	adapters AdapterRegistry,
-	protector Protector,
+	protector protection.Protector,
 	projector Projector,
 	clock Clock,
 ) (*Service, error) {
@@ -226,18 +213,6 @@ func (command Command) Validate() error {
 		}
 	}
 	return nil
-}
-
-// Validate checks protection scope, purpose, and plaintext presence.
-func (request ProtectionRequest) Validate() error {
-	if len(request.Plaintext) == 0 {
-		return errors.New("protection plaintext is required")
-	}
-	return errors.Join(
-		request.ProjectID.Validate(),
-		request.ApplicationID.Validate(),
-		validateText("protection purpose", request.Purpose),
-	)
 }
 
 // loadScope resolves the authoritative application and customer before a provider call.
@@ -366,22 +341,21 @@ func (service *Service) protect(
 	applicationID core.ApplicationID,
 	purpose string,
 	plaintext []byte,
-) (persistence.ProtectedValue, error) {
-	request := ProtectionRequest{
+) (protection.Value, error) {
+	request, err := protection.NewRequest(protection.Scope{
 		ProjectID:     projectID,
 		ApplicationID: applicationID,
 		Purpose:       purpose,
-		Plaintext:     append([]byte(nil), plaintext...),
-	}
-	if err := request.Validate(); err != nil {
-		return persistence.ProtectedValue{}, err
+	}, plaintext)
+	if err != nil {
+		return protection.Value{}, err
 	}
 	protected, err := service.protector.Protect(ctx, request)
 	if err != nil {
-		return persistence.ProtectedValue{}, fmt.Errorf("protect %s: %w", purpose, err)
+		return protection.Value{}, fmt.Errorf("protect %s: %w", purpose, err)
 	}
 	if err := protected.Validate(); err != nil {
-		return persistence.ProtectedValue{}, fmt.Errorf("validate protected %s: %w", purpose, err)
+		return protection.Value{}, fmt.Errorf("validate protected %s: %w", purpose, err)
 	}
 	return protected, nil
 }

@@ -66,6 +66,18 @@ Configuration is supplied through environment variables:
 | `IAPSTACK_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline |
 | `IAPSTACK_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `IAPSTACK_DATABASE_URL` | none | PostgreSQL connection string required by database-backed modes |
+| `IAPSTACK_PROTECTION_ACTIVE_KEY_ID` | none | Encryption key ID used for new protected values |
+| `IAPSTACK_PROTECTION_KEYS` | none | JSON object mapping key IDs to base64-encoded 32-byte encryption root keys |
+| `IAPSTACK_PROTECTION_FINGERPRINT_KEY` | none | Base64-encoded 32-byte stable fingerprint root key |
+
+Modes that handle provider evidence initialize the protection keyring before serving
+work and fail fast when any protection variable is missing or malformed. Generate every
+root key with a cryptographically secure secret generator such as
+`openssl rand -base64 32`. Keep the fingerprint key stable across ordinary encryption
+key rotations; changing it alters idempotency fingerprints and requires an explicit
+data migration. To rotate encryption, add the new key to `IAPSTACK_PROTECTION_KEYS`,
+select it with `IAPSTACK_PROTECTION_ACTIVE_KEY_ID`, and retain old keys until all values
+written with them have been re-encrypted or expired.
 
 Start a local PostgreSQL instance and apply every pending migration with:
 
@@ -94,6 +106,12 @@ entitlement projection, and outbox insertion then commit or roll back together. 
 use case depends only on adapter, protector, clock, and persistence ports; concrete
 providers and PostgreSQL remain replaceable implementations.
 
+Sensitive data crosses the private-plaintext `internal/protection` port. The concrete
+platform keyring uses versioned AES-256-GCM envelopes with secure random nonces,
+scope-bound authenticated data, HKDF-derived encryption subkeys, and a separate
+project/application/purpose-scoped HMAC-SHA-256 fingerprint. Persistence receives only
+ciphertext, fingerprint, and `key_id`; it never receives plaintext.
+
 Go source files place constants first, type and struct declarations second, and
 executable code last. Related constants stay together; unrelated constant groups are
 separated by a blank line. Every constant, function, and method has an English
@@ -111,6 +129,8 @@ reconciliation, and outbox responsibilities in a later delivery phase.
 │   ├── core/              # Customers, transactions, products, and entitlements
 │   ├── stores/            # Apple, Google, Huawei, Amazon, and future adapters
 │   ├── persistence/       # Durable ports and PostgreSQL repositories
+│   ├── protection/        # Provider-neutral sensitive-data protection port
+│   ├── platform/          # Concrete configuration, logging, and protection implementations
 │   └── verification/      # Provider-neutral purchase verification orchestration
 ├── dashboard/             # Self-hosted web dashboard
 ├── sdks/                  # Flutter and future client SDKs

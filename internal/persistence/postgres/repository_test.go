@@ -12,6 +12,7 @@ import (
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/persistence/postgres"
+	"github.com/imariman/iapstack/internal/protection"
 )
 
 const (
@@ -312,8 +313,8 @@ func persistPurchaseWrites(
 }
 
 // repositoryProtectedValue produces deterministic protected metadata for repository tests.
-func repositoryProtectedValue(plaintext string) persistence.ProtectedValue {
-	return persistence.ProtectedValue{
+func repositoryProtectedValue(plaintext string) protection.Value {
+	return protection.Value{
 		Ciphertext:  []byte("ciphertext:" + plaintext),
 		Fingerprint: sha256.Sum256([]byte(plaintext)),
 		KeyID:       repositoryEncryptionKeyID,
