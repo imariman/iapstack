@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"strings"
 	"time"
 
@@ -26,9 +27,18 @@ type Store interface {
 // Transaction combines the repositories available inside one atomic unit of work.
 type Transaction interface {
 	CatalogRepository
+	CredentialRepository
 	PurchaseRepository
 	EntitlementRepository
 	OutboxRepository
+}
+
+// CredentialRepository stores and resolves protected application credential packages.
+type CredentialRepository interface {
+	// Credential returns one protected credential in its project and application scope.
+	Credential(context.Context, CredentialKey) (CredentialRecord, error)
+	// PutCredential creates or rotates one credential with optimistic revision control.
+	PutCredential(context.Context, CredentialWrite) (CredentialRecord, error)
 }
 
 // TransactionFunc performs durable operations that must commit or roll back together.
@@ -78,6 +88,33 @@ type CatalogProduct struct {
 	Mapping      core.StoreProduct
 	Product      core.Product
 	Entitlements []core.Entitlement
+}
+
+// CredentialKey identifies one provider-owned credential package within an application.
+type CredentialKey struct {
+	ProjectID     core.ProjectID
+	ApplicationID core.ApplicationID
+	Kind          string
+}
+
+// CredentialWrite describes one protected credential creation or rotation attempt.
+type CredentialWrite struct {
+	CredentialKey
+	ContentType      string
+	SchemaVersion    int
+	Payload          protection.Value
+	ExpectedRevision int64
+}
+
+// CredentialRecord contains protected credential data and durable revision metadata.
+type CredentialRecord struct {
+	CredentialKey
+	ContentType   string
+	SchemaVersion int
+	Payload       protection.Value
+	Revision      int64
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // EvidenceWrite describes encrypted purchase evidence received from a client or provider.
@@ -162,6 +199,64 @@ var (
 	// ErrConflict indicates that an identity or idempotency key belongs to different data.
 	ErrConflict = errors.New("persistence conflict")
 )
+
+// Validate checks the project, application, and provider-owned credential kind.
+func (key CredentialKey) Validate() error {
+	return errors.Join(
+		key.ProjectID.Validate(),
+		key.ApplicationID.Validate(),
+		validateText("credential kind", key.Kind),
+	)
+}
+
+// Validate checks protected credential metadata and optimistic revision input.
+func (write CredentialWrite) Validate() error {
+	var schemaVersionError error
+	if write.SchemaVersion <= 0 {
+		schemaVersionError = errors.New("credential schema version must be positive")
+	}
+	var revisionError error
+	if write.ExpectedRevision < 0 {
+		revisionError = errors.New("credential expected revision must not be negative")
+	}
+	return errors.Join(
+		write.CredentialKey.Validate(),
+		validateContentType("credential content type", write.ContentType),
+		schemaVersionError,
+		write.Payload.Validate(),
+		revisionError,
+	)
+}
+
+// Validate checks stored credential metadata, protected data, revision, and timestamps.
+func (record CredentialRecord) Validate() error {
+	var schemaVersionError error
+	if record.SchemaVersion <= 0 {
+		schemaVersionError = errors.New("credential schema version must be positive")
+	}
+	var revisionError error
+	if record.Revision <= 0 {
+		revisionError = errors.New("credential revision must be positive")
+	}
+	if !record.CreatedAt.IsZero() && !record.UpdatedAt.IsZero() && record.UpdatedAt.Before(record.CreatedAt) {
+		revisionError = errors.Join(revisionError, errors.New("credential update time cannot precede creation"))
+	}
+	return errors.Join(
+		record.CredentialKey.Validate(),
+		validateContentType("credential content type", record.ContentType),
+		schemaVersionError,
+		record.Payload.Validate(),
+		revisionError,
+		validateTime("credential creation time", record.CreatedAt),
+		validateTime("credential update time", record.UpdatedAt),
+	)
+}
+
+// Clone returns a defensive copy of protected credential bytes.
+func (record CredentialRecord) Clone() CredentialRecord {
+	record.Payload = record.Payload.Clone()
+	return record
+}
 
 // Validate checks evidence scope, metadata, protected payload, and receipt time.
 func (write EvidenceWrite) Validate() error {
@@ -276,6 +371,17 @@ func validateText(name, value string) error {
 	}
 	if strings.TrimSpace(value) != value {
 		return fmt.Errorf("%s must not have leading or trailing whitespace", name)
+	}
+	return nil
+}
+
+// validateContentType enforces a non-empty, trimmed media type at persistence boundaries.
+func validateContentType(name, value string) error {
+	if err := validateText(name, value); err != nil {
+		return err
+	}
+	if _, _, err := mime.ParseMediaType(value); err != nil {
+		return fmt.Errorf("%s must be a valid media type", name)
 	}
 	return nil
 }

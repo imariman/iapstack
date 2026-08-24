@@ -112,6 +112,13 @@ scope-bound authenticated data, HKDF-derived encryption subkeys, and a separate
 project/application/purpose-scoped HMAC-SHA-256 fingerprint. Persistence receives only
 ciphertext, fingerprint, and `key_id`; it never receives plaintext.
 
+Provider adapters obtain application credentials through the opaque, versioned
+`stores.CredentialSource` port. `internal/credentials` validates the authoritative
+application scope and opens protected PostgreSQL values only for the requesting
+provider configuration. Shared configuration never acquires Huawei-, Apple-, or
+Google-shaped credential fields. Credential payload rotation uses optimistic durable
+revisions; encryption-key rotation remains independent and preserves fingerprints.
+
 Go source files place constants first, type and struct declarations second, and
 executable code last. Related constants stay together; unrelated constant groups are
 separated by a blank line. Every constant, function, and method has an English
@@ -127,6 +134,7 @@ reconciliation, and outbox responsibilities in a later delivery phase.
 ├── cmd/iapstack/          # API and worker entrypoints
 ├── internal/
 │   ├── core/              # Customers, transactions, products, and entitlements
+│   ├── credentials/       # Protected application credential orchestration
 │   ├── stores/            # Apple, Google, Huawei, Amazon, and future adapters
 │   ├── persistence/       # Durable ports and PostgreSQL repositories
 │   ├── protection/        # Provider-neutral sensitive-data protection port

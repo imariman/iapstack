@@ -24,6 +24,10 @@ const (
 	repositoryContentType = "application/json"
 	// repositoryEncryptionKeyID identifies the deterministic test protector key.
 	repositoryEncryptionKeyID = "test-key"
+	// repositoryCredentialKind identifies the logical application credential package.
+	repositoryCredentialKind = "server_api"
+	// repositoryCredentialSchemaVersion identifies the test provider credential format.
+	repositoryCredentialSchemaVersion = 1
 )
 
 // purchaseWrites groups one coherent verification persistence graph for tests.
@@ -33,6 +37,67 @@ type purchaseWrites struct {
 	observation persistence.ObservationWrite
 	projection  persistence.EntitlementProjection
 	outbox      persistence.OutboxEvent
+}
+
+// TestCredentialRepositoryOptimisticRotation verifies scoped reads, retries, and stale conflicts.
+func TestCredentialRepositoryOptimisticRotation(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	created := putCredential(t, database.ctx, store, credentialWrite(fixture, "credential-v1", 0))
+	if created.Revision != 1 {
+		t.Fatalf("created credential revision = %d, want 1", created.Revision)
+	}
+
+	retried := putCredential(t, database.ctx, store, credentialWrite(fixture, "credential-v1", 0))
+	if retried.Revision != created.Revision {
+		t.Fatalf("retried credential revision = %d, want %d", retried.Revision, created.Revision)
+	}
+	conflictingCreate := credentialWrite(fixture, "credential-conflict", 0)
+	err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		_, err := repository.PutCredential(database.ctx, conflictingCreate)
+		return err
+	})
+	if !errors.Is(err, persistence.ErrConflict) {
+		t.Fatalf("conflicting PutCredential() error = %v, want ErrConflict", err)
+	}
+
+	rotatedWrite := credentialWrite(fixture, "credential-v2", created.Revision)
+	rotated := putCredential(t, database.ctx, store, rotatedWrite)
+	if rotated.Revision != 2 || !rotated.UpdatedAt.After(rotated.CreatedAt) {
+		t.Fatalf("rotated credential = %#v, want revision 2 with a later update", rotated)
+	}
+	retryWrite := rotatedWrite
+	retryWrite.Payload.Ciphertext = []byte("different-randomized-ciphertext")
+	retriedRotation := putCredential(t, database.ctx, store, retryWrite)
+	if retriedRotation.Revision != rotated.Revision ||
+		string(retriedRotation.Payload.Ciphertext) == string(retryWrite.Payload.Ciphertext) {
+		t.Fatalf("retried rotated credential = %#v, want existing logical revision", retriedRotation)
+	}
+
+	staleWrite := credentialWrite(fixture, "credential-v3", created.Revision)
+	err = store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		_, err := repository.PutCredential(database.ctx, staleWrite)
+		return err
+	})
+	if !errors.Is(err, persistence.ErrConflict) {
+		t.Fatalf("stale PutCredential() error = %v, want ErrConflict", err)
+	}
+
+	loaded := loadCredential(t, database.ctx, store, rotated.CredentialKey)
+	if loaded.Revision != rotated.Revision || loaded.Payload.Fingerprint != rotated.Payload.Fingerprint {
+		t.Fatalf("Credential() = %#v, want rotated revision", loaded)
+	}
+	crossProjectKey := rotated.CredentialKey
+	crossProjectKey.ProjectID = "other-project"
+	err = store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		_, err := repository.Credential(database.ctx, crossProjectKey)
+		return err
+	})
+	if !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("cross-project Credential() error = %v, want ErrNotFound", err)
+	}
+	assertTableCount(t, database, "application_credentials", 1)
 }
 
 // TestOpenStoreValidatesURL verifies fail-fast pool configuration errors.
@@ -321,6 +386,65 @@ func repositoryProtectedValue(plaintext string) protection.Value {
 	}
 }
 
+// credentialWrite builds one protected optimistic credential mutation.
+func credentialWrite(
+	fixture catalogFixture,
+	plaintext string,
+	expectedRevision int64,
+) persistence.CredentialWrite {
+	return persistence.CredentialWrite{
+		CredentialKey: persistence.CredentialKey{
+			ProjectID:     core.ProjectID(fixture.projectID),
+			ApplicationID: core.ApplicationID(fixture.applicationID),
+			Kind:          repositoryCredentialKind,
+		},
+		ContentType:      repositoryContentType,
+		SchemaVersion:    repositoryCredentialSchemaVersion,
+		Payload:          repositoryProtectedValue(plaintext),
+		ExpectedRevision: expectedRevision,
+	}
+}
+
+// putCredential persists one credential mutation or fails the current test.
+func putCredential(
+	t *testing.T,
+	ctx context.Context,
+	store *postgres.Store,
+	write persistence.CredentialWrite,
+) persistence.CredentialRecord {
+	t.Helper()
+	var record persistence.CredentialRecord
+	err := store.Transact(ctx, func(repository persistence.Transaction) error {
+		var err error
+		record, err = repository.PutCredential(ctx, write)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("PutCredential() error = %v", err)
+	}
+	return record
+}
+
+// loadCredential resolves one credential record or fails the current test.
+func loadCredential(
+	t *testing.T,
+	ctx context.Context,
+	store *postgres.Store,
+	key persistence.CredentialKey,
+) persistence.CredentialRecord {
+	t.Helper()
+	var record persistence.CredentialRecord
+	err := store.Transact(ctx, func(repository persistence.Transaction) error {
+		var err error
+		record, err = repository.Credential(ctx, key)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("Credential() error = %v", err)
+	}
+	return record
+}
+
 // openRepositoryStore opens a pool against the configured integration database.
 func openRepositoryStore(t *testing.T, ctx context.Context) *postgres.Store {
 	t.Helper()
@@ -338,11 +462,12 @@ func assertTableCount(t *testing.T, database *testDatabase, table string, expect
 	t.Helper()
 
 	allowedTables := map[string]struct{}{
-		"customer_entitlements": {},
-		"outbox_events":         {},
-		"provider_references":   {},
-		"purchase_evidence":     {},
-		"purchase_observations": {},
+		"application_credentials": {},
+		"customer_entitlements":   {},
+		"outbox_events":           {},
+		"provider_references":     {},
+		"purchase_evidence":       {},
+		"purchase_observations":   {},
 	}
 	if _, allowed := allowedTables[table]; !allowed {
 		t.Fatalf("table %q is not allowed by test helper", table)

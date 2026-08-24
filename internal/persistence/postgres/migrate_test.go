@@ -68,6 +68,7 @@ func TestMigrationLifecycle(t *testing.T) {
 		"purchase_observations",
 		"customer_entitlements",
 		"outbox_events",
+		"application_credentials",
 	}
 
 	for version := int32(1); version <= postgres.LatestVersion; version++ {
@@ -86,6 +87,40 @@ func TestMigrationLifecycle(t *testing.T) {
 		t.Fatalf("Up() error = %v", err)
 	}
 	assertVersion(t, database, postgres.LatestVersion)
+}
+
+// TestApplicationCredentialMigrationConstraints verifies protected values and project isolation.
+func TestApplicationCredentialMigrationConstraints(t *testing.T) {
+	database := openTestDatabase(t, 5)
+	fixture := seedCatalog(t, database)
+	fingerprint := bytes.Repeat([]byte{9}, 32)
+
+	mustExec(t, database, credentialInsertSQL(),
+		fixture.projectID,
+		fixture.applicationID,
+		"server_api",
+		fingerprint,
+	)
+	expectConstraint(t, database, "application_credentials_pkey", credentialInsertSQL(),
+		fixture.projectID,
+		fixture.applicationID,
+		"server_api",
+		bytes.Repeat([]byte{10}, 32),
+	)
+	expectConstraint(t, database, "application_credentials_fingerprint_valid", credentialInsertSQL(),
+		fixture.projectID,
+		fixture.applicationID,
+		"invalid_fingerprint",
+		[]byte("short"),
+	)
+
+	mustExec(t, database, `INSERT INTO projects (id) VALUES ('project-2')`)
+	expectConstraint(t, database, "application_credentials_application_fk", credentialInsertSQL(),
+		"project-2",
+		fixture.applicationID,
+		"cross_project",
+		bytes.Repeat([]byte{11}, 32),
+	)
 }
 
 // TestCatalogMigrationConstraints verifies catalog uniqueness and project isolation.
@@ -469,6 +504,19 @@ func outboxInsertSQL() string {
 		) VALUES (
 			$1, $2, $3, 'entitlement.changed', 'customer', 'customer-1',
 			'{"entitlement":"pro"}'::jsonb, $4, now(), now()
+		)
+	`
+}
+
+// credentialInsertSQL returns one valid protected application credential insert.
+func credentialInsertSQL() string {
+	return `
+		INSERT INTO application_credentials (
+			project_id, application_id, kind, content_type, schema_version,
+			payload_ciphertext, payload_fingerprint, encryption_key_id
+		) VALUES (
+			$1, $2, $3, 'application/json', 1,
+			'ciphertext', $4, 'test-key'
 		)
 	`
 }
