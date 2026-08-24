@@ -66,9 +66,15 @@ Configuration is supplied through environment variables:
 | `IAPSTACK_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline |
 | `IAPSTACK_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `IAPSTACK_DATABASE_URL` | none | PostgreSQL connection string required by database-backed modes |
+| `IAPSTACK_BOOTSTRAP_ADMIN_KEY` | none | Installation-only administrator bearer used to create stored API keys |
 | `IAPSTACK_PROTECTION_ACTIVE_KEY_ID` | none | Encryption key ID used for new protected values |
 | `IAPSTACK_PROTECTION_KEYS` | none | JSON object mapping key IDs to base64-encoded 32-byte encryption root keys |
 | `IAPSTACK_PROTECTION_FINGERPRINT_KEY` | none | Base64-encoded 32-byte stable fingerprint root key |
+| `IAPSTACK_WORKER_ID` | `worker-1` | Unique durable queue worker identity |
+| `IAPSTACK_WORKER_HTTP_ADDRESS` | `:8081` | Worker health, readiness, and metrics listen address |
+| `IAPSTACK_WORKER_CONCURRENCY` | `4` | Maximum concurrent job attempts |
+| `IAPSTACK_WORKER_BATCH_SIZE` | `16` | Maximum records claimed per queue poll |
+| `IAPSTACK_WORKER_MAX_ATTEMPTS` | `12` | Attempts before a record enters terminal failed state |
 
 Modes that handle provider evidence initialize the protection keyring before serving
 work and fail fast when any protection variable is missing or malformed. Generate every
@@ -124,8 +130,14 @@ executable code last. Related constants stay together; unrelated constant groups
 separated by a blank line. Every constant, function, and method has an English
 explanatory comment.
 
-The `worker` process mode remains reserved and will be implemented with its inbox,
-reconciliation, and outbox responsibilities in a later delivery phase.
+The `worker` process handles the protected Huawei notification inbox, scheduled
+reconciliation, and signed application webhook outbox with bounded concurrency,
+stale-lock recovery, and exponential full-jitter retries.
+
+Operational deployment, backup, queue recovery, and upgrade procedures are documented
+in [the operations guide](docs/operations.md). The authenticated v1 endpoints, Huawei
+credential/evidence contracts, and webhook verification rules are documented in
+[the HTTP API guide](docs/api-v1.md).
 
 ## Planned architecture
 
@@ -148,9 +160,9 @@ reconciliation, and outbox responsibilities in a later delivery phase.
 
 ## Roadmap
 
-- [ ] Define the core domain, public API contracts, and persistence model
-- [ ] Implement the Huawei AppGallery adapter from official specifications
-- [ ] Add PostgreSQL migrations and a production-ready Docker setup
+- [x] Define the core domain, public API contracts, and persistence model
+- [x] Implement the Huawei AppGallery adapter from official specifications
+- [x] Add PostgreSQL migrations and a production-ready Docker setup
 - [ ] Build the initial dashboard and Flutter SDK
 - [ ] Add Apple App Store and Google Play adapters
 - [ ] Add Amazon Appstore and additional store adapters
