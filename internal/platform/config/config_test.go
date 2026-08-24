@@ -8,6 +8,26 @@ import (
 	"github.com/imariman/iapstack/internal/platform/config"
 )
 
+const (
+	// httpAddressEnvironment names the HTTP listen-address setting used by tests.
+	httpAddressEnvironment = "IAPSTACK_HTTP_ADDRESS"
+	// shutdownTimeoutEnvironment names the graceful-shutdown setting used by tests.
+	shutdownTimeoutEnvironment = "IAPSTACK_SHUTDOWN_TIMEOUT"
+	// logLevelEnvironment names the structured-log-level setting used by tests.
+	logLevelEnvironment = "IAPSTACK_LOG_LEVEL"
+	// databaseURLEnvironment names the PostgreSQL connection setting used by tests.
+	databaseURLEnvironment = "IAPSTACK_DATABASE_URL"
+
+	// defaultHTTPAddress is the expected listen address when no override is configured.
+	defaultHTTPAddress = ":8080"
+	// overriddenHTTPAddress is the non-default listen address used by override tests.
+	overriddenHTTPAddress = "127.0.0.1:9090"
+	// overriddenShutdownTimeout is the non-default graceful-shutdown duration used by tests.
+	overriddenShutdownTimeout time.Duration = 3 * time.Second
+	// testDatabaseURL is the canonical PostgreSQL connection string used by configuration tests.
+	testDatabaseURL = "postgres://iapstack:secret@localhost/iapstack"
+)
+
 // TestLoadDefaults verifies configuration defaults when no environment values are set.
 func TestLoadDefaults(t *testing.T) {
 	t.Parallel()
@@ -17,14 +37,17 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if cfg.HTTPAddress != ":8080" {
-		t.Errorf("HTTPAddress = %q, want :8080", cfg.HTTPAddress)
+	if cfg.HTTPAddress != defaultHTTPAddress {
+		t.Errorf("HTTPAddress = %q, want %q", cfg.HTTPAddress, defaultHTTPAddress)
 	}
 	if cfg.ShutdownTimeout != 10*time.Second {
 		t.Errorf("ShutdownTimeout = %v, want 10s", cfg.ShutdownTimeout)
 	}
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Errorf("LogLevel = %v, want info", cfg.LogLevel)
+	}
+	if cfg.DatabaseURL != "" {
+		t.Errorf("DatabaseURL = %q, want empty", cfg.DatabaseURL)
 	}
 }
 
@@ -33,22 +56,26 @@ func TestLoadOverrides(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := config.Load(env(map[string]string{
-		"IAPSTACK_HTTP_ADDRESS":     "127.0.0.1:9090",
-		"IAPSTACK_SHUTDOWN_TIMEOUT": "3s",
-		"IAPSTACK_LOG_LEVEL":        "debug",
+		httpAddressEnvironment:     overriddenHTTPAddress,
+		shutdownTimeoutEnvironment: overriddenShutdownTimeout.String(),
+		logLevelEnvironment:        "debug",
+		databaseURLEnvironment:     " " + testDatabaseURL + " ",
 	}))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if cfg.HTTPAddress != "127.0.0.1:9090" {
-		t.Errorf("HTTPAddress = %q, want 127.0.0.1:9090", cfg.HTTPAddress)
+	if cfg.HTTPAddress != overriddenHTTPAddress {
+		t.Errorf("HTTPAddress = %q, want %q", cfg.HTTPAddress, overriddenHTTPAddress)
 	}
-	if cfg.ShutdownTimeout != 3*time.Second {
-		t.Errorf("ShutdownTimeout = %v, want 3s", cfg.ShutdownTimeout)
+	if cfg.ShutdownTimeout != overriddenShutdownTimeout {
+		t.Errorf("ShutdownTimeout = %v, want %v", cfg.ShutdownTimeout, overriddenShutdownTimeout)
 	}
 	if cfg.LogLevel != slog.LevelDebug {
 		t.Errorf("LogLevel = %v, want debug", cfg.LogLevel)
+	}
+	if cfg.DatabaseURL != testDatabaseURL {
+		t.Errorf("DatabaseURL = %q, want %q", cfg.DatabaseURL, testDatabaseURL)
 	}
 }
 
@@ -60,11 +87,11 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		name   string
 		values map[string]string
 	}{
-		{name: "address shape", values: map[string]string{"IAPSTACK_HTTP_ADDRESS": "8080"}},
-		{name: "address port", values: map[string]string{"IAPSTACK_HTTP_ADDRESS": ":0"}},
-		{name: "shutdown syntax", values: map[string]string{"IAPSTACK_SHUTDOWN_TIMEOUT": "later"}},
-		{name: "shutdown sign", values: map[string]string{"IAPSTACK_SHUTDOWN_TIMEOUT": "-1s"}},
-		{name: "log level", values: map[string]string{"IAPSTACK_LOG_LEVEL": "verbose"}},
+		{name: "address shape", values: map[string]string{httpAddressEnvironment: "8080"}},
+		{name: "address port", values: map[string]string{httpAddressEnvironment: ":0"}},
+		{name: "shutdown syntax", values: map[string]string{shutdownTimeoutEnvironment: "later"}},
+		{name: "shutdown sign", values: map[string]string{shutdownTimeoutEnvironment: "-1s"}},
+		{name: "log level", values: map[string]string{logLevelEnvironment: "verbose"}},
 	}
 
 	for _, tt := range tests {

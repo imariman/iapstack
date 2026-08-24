@@ -16,10 +16,12 @@ const (
 	defaultShutdownTimeout = 10 * time.Second
 )
 
+// Config contains validated process configuration shared by IAPStack modes.
 type Config struct {
 	HTTPAddress     string
 	ShutdownTimeout time.Duration
 	LogLevel        slog.Level
+	DatabaseURL     string
 }
 
 // Load reads and validates process configuration from environment values.
@@ -28,6 +30,7 @@ func Load(getenv func(string) string) (Config, error) {
 		HTTPAddress:     valueOrDefault(getenv("IAPSTACK_HTTP_ADDRESS"), defaultHTTPAddress),
 		ShutdownTimeout: defaultShutdownTimeout,
 		LogLevel:        slog.LevelInfo,
+		DatabaseURL:     strings.TrimSpace(getenv("IAPSTACK_DATABASE_URL")),
 	}
 
 	if raw := strings.TrimSpace(getenv("IAPSTACK_SHUTDOWN_TIMEOUT")); raw != "" {

@@ -65,6 +65,15 @@ Configuration is supplied through environment variables:
 | `IAPSTACK_HTTP_ADDRESS` | `:8080` | API listen address in `host:port` form |
 | `IAPSTACK_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline |
 | `IAPSTACK_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
+| `IAPSTACK_DATABASE_URL` | none | PostgreSQL connection string required by database-backed modes |
+
+Start a local PostgreSQL instance and apply every pending migration with:
+
+```sh
+docker compose -f deploy/compose.yaml up -d postgres
+IAPSTACK_DATABASE_URL='postgres://iapstack:iapstack@localhost:5432/iapstack?sslmode=disable' \
+  go run ./cmd/iapstack migrate
+```
 
 Run the local quality checks with:
 
@@ -74,13 +83,17 @@ go vet ./...
 go test -race -count=1 ./...
 ```
 
+PostgreSQL integration tests activate when `IAPSTACK_TEST_DATABASE_URL` is set. CI
+runs them against a clean PostgreSQL service and verifies every migration can be
+applied, rolled back, and reapplied.
+
 Go source files place constants first, type and struct declarations second, and
 executable code last. Related constants stay together; unrelated constant groups are
 separated by a blank line. Every constant, function, and method has an English
 explanatory comment.
 
-The `worker` and `migrate` process modes are reserved by the architecture and will be
-implemented with their persistence responsibilities in the next delivery phases.
+The `worker` process mode remains reserved and will be implemented with its inbox,
+reconciliation, and outbox responsibilities in a later delivery phase.
 
 ## Planned architecture
 

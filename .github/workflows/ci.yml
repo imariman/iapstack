@@ -38,6 +38,24 @@ jobs:
     name: Go checks
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: iapstack_test
+          POSTGRES_USER: iapstack
+          POSTGRES_PASSWORD: iapstack
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U iapstack -d iapstack_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+
+    env:
+      IAPSTACK_TEST_DATABASE_URL: postgres://iapstack:iapstack@localhost:5432/iapstack_test?sslmode=disable
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
