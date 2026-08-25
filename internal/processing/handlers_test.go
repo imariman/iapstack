@@ -3,11 +3,13 @@ package processing
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/imariman/iapstack/internal/core"
+	"github.com/imariman/iapstack/internal/jobs"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/stores"
@@ -29,7 +31,21 @@ type googleLookupTransaction struct {
 
 // processingProtection provides deterministic scoped fingerprints for processing tests.
 type processingProtection struct {
-	scope protection.Scope
+	scope     protection.Scope
+	opened    []byte
+	protected []byte
+}
+
+// reconciliationStore records future generations and rejects provider preparation for ordering tests.
+type reconciliationStore struct {
+	saved             *persistence.ReconciliationJob
+	applicationCalled bool
+}
+
+// reconciliationTransaction implements the scheduling and application lookup test ports.
+type reconciliationTransaction struct {
+	persistence.OperationsTransaction
+	store *reconciliationStore
 }
 
 // TestGooglePlayVerificationPayloadResolvesProtectedPurchaseScope verifies RTDN customer and catalog binding.
@@ -107,9 +123,64 @@ func TestGooglePlayVerificationPayloadRetriesUnknownPurchaseAndRejectsScopeMisma
 	}
 }
 
+// TestReconciliationSchedulesNextGenerationBeforeProviderRefresh verifies terminal failures cannot stop the chain.
+func TestReconciliationSchedulesNextGenerationBeforeProviderRefresh(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC)
+	payload, err := json.Marshal(jobs.ReconciliationPayload{
+		Verification: jobs.VerificationPayload{
+			ExternalCustomerID: "account-1",
+			ClaimedProducts:    []core.ProviderProductID{"iapstack.pro"},
+			Evidence:           json.RawMessage(`{"product_kind":"subscription"}`),
+		},
+		ScheduledFor: now,
+	})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	fingerprint := sha256.Sum256(payload)
+	store := &reconciliationStore{}
+	protector := &processingProtection{opened: payload}
+	service := &Service{
+		store: store, protection: protector, clock: func() time.Time { return now },
+	}
+	message := persistence.QueueMessage{
+		Queue: persistence.QueueReconciliation, ID: "reconcile-1",
+		ProjectID: "project-1", ApplicationID: "application-1", CustomerID: "customer-1",
+		ProtectedPayload: protection.Value{
+			Ciphertext: []byte{1}, Fingerprint: fingerprint, KeyID: "test-key",
+		},
+	}
+
+	err = service.HandleReconciliation(context.Background(), message)
+	if !errors.Is(err, persistence.ErrUnavailable) {
+		t.Fatalf("HandleReconciliation() error = %v, want unavailable", err)
+	}
+	if !store.applicationCalled || store.saved == nil {
+		t.Fatalf("reconciliation ordering = (application=%t, saved=%#v)", store.applicationCalled, store.saved)
+	}
+	wantAvailableAt := nextReconciliationTime(now)
+	if store.saved.CustomerID != message.CustomerID || !store.saved.AvailableAt.Equal(wantAvailableAt) {
+		t.Fatalf("next reconciliation = %#v, want customer %q at %v", store.saved, message.CustomerID, wantAvailableAt)
+	}
+	var next jobs.ReconciliationPayload
+	if err := json.Unmarshal(protector.protected, &next); err != nil {
+		t.Fatalf("Unmarshal() protected payload error = %v", err)
+	}
+	if !next.ScheduledFor.Equal(wantAvailableAt) || next.Verification.ExternalCustomerID != "account-1" {
+		t.Fatalf("next reconciliation payload = %#v", next)
+	}
+}
+
 // Operate executes one provider reference lookup callback against deterministic state.
 func (store *googleLookupStore) Operate(ctx context.Context, operation persistence.OperationsFunc) error {
 	return operation(&googleLookupTransaction{store: store})
+}
+
+// Operate executes one scheduling or application lookup callback against deterministic state.
+func (store *reconciliationStore) Operate(ctx context.Context, operation persistence.OperationsFunc) error {
+	return operation(&reconciliationTransaction{store: store})
 }
 
 // PurchaseContextByReference records the protected lookup and returns its configured result.
@@ -121,6 +192,29 @@ func (transaction *googleLookupTransaction) PurchaseContextByReference(
 	return transaction.store.purchase, transaction.store.err
 }
 
+// SaveReconciliationJob records the next generation before provider preparation begins.
+func (transaction *reconciliationTransaction) SaveReconciliationJob(
+	_ context.Context,
+	job persistence.ReconciliationJob,
+) (string, error) {
+	copy := job
+	transaction.store.saved = &copy
+	return job.ID, nil
+}
+
+// Application verifies scheduling already happened and simulates a retryable provider preparation failure.
+func (transaction *reconciliationTransaction) Application(
+	_ context.Context,
+	_ core.ProjectID,
+	_ core.ApplicationID,
+) (core.Application, error) {
+	transaction.store.applicationCalled = true
+	if transaction.store.saved == nil {
+		return core.Application{}, errors.New("application lookup happened before reconciliation scheduling")
+	}
+	return core.Application{}, persistence.ErrUnavailable
+}
+
 // Protect creates a deterministic non-empty protected value for one scoped plaintext.
 func (service *processingProtection) Protect(
 	_ context.Context,
@@ -130,11 +224,15 @@ func (service *processingProtection) Protect(
 		return protection.Value{}, err
 	}
 	service.scope = request.Scope
-	fingerprint := sha256.Sum256(request.Bytes())
+	service.protected = request.Bytes()
+	fingerprint := sha256.Sum256(service.protected)
 	return protection.Value{Ciphertext: []byte{1}, Fingerprint: fingerprint, KeyID: "test-key"}, nil
 }
 
-// Open is unused because these tests exercise lookup preparation after protected inbox decoding.
-func (*processingProtection) Open(context.Context, protection.OpenRequest) ([]byte, error) {
-	return nil, errors.New("not implemented")
+// Open returns one deterministic payload for protected worker handler tests.
+func (service *processingProtection) Open(_ context.Context, request protection.OpenRequest) ([]byte, error) {
+	if err := request.Validate(); err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), service.opened...), nil
 }

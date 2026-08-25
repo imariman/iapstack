@@ -222,11 +222,17 @@ func (service *Service) HandleReconciliation(ctx context.Context, message persis
 	if err := decodeStrict(payload, &scheduled); err != nil {
 		return fmt.Errorf("decode reconciliation request: %w", err)
 	}
-	result, err := service.verify(ctx, message.ProjectID, message.ApplicationID, scheduled.Verification)
-	if err != nil {
+	if err := service.schedule(
+		ctx,
+		message.ProjectID,
+		message.ApplicationID,
+		message.CustomerID,
+		scheduled.Verification,
+	); err != nil {
 		return err
 	}
-	return service.schedule(ctx, message.ProjectID, message.ApplicationID, result.Customer.ID, scheduled.Verification)
+	_, err = service.verify(ctx, message.ProjectID, message.ApplicationID, scheduled.Verification)
+	return err
 }
 
 // verify converts one protected job into the provider-neutral verification command.
