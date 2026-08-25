@@ -188,7 +188,7 @@ Pending purchases and already acknowledged purchases never create this action. A
 retryable acknowledgement failure is returned after the durable result so the API
 submission, RTDN job, or scheduled reconciliation can safely retry and re-query the
 current acknowledgement state. Multi-line subscription add-ons, consumable fulfillment,
-the Flutter Billing companion, and the Google Play sandbox gate remain release work.
+and the real Google Play internal-testing lifecycle gate remain release work.
 
 ## Notifications and reconciliation
 
@@ -254,6 +254,21 @@ setup and never commit `agconnect-services.json`, keystores, or application
 keys. It calls Huawei's sandbox activation API before enabling purchase or
 restore and displays the request ID used to correlate secret-free release
 evidence with server logs.
+
+Google Play applications add `sdk/flutter/iapstack_google_play`. The companion
+uses Flutter's official `in_app_purchase` implementation, checks queried product
+kinds against an explicit local catalog, passes the opaque external customer ID
+as `obfuscatedAccountId`, submits purchase-token evidence, queries owned purchases,
+deduplicates restores, and sends batches of at most 100. It deliberately does not
+call client-side `completePurchase`: IAPStack owns Android Publisher acknowledgement
+after the authoritative transaction commits.
+
+The Android harness under `sdk/flutter/iapstack_google_play/example` accepts only
+application-scoped test configuration through `--dart-define`, subscribes to the
+purchase stream during startup, never renders or persists the bearer or purchase
+token, and shows request IDs for redacted correlation. Install a signed build from
+the Play Console internal-testing track for real Billing flows; a sideloaded debug
+APK is only a local UI and connectivity smoke test.
 
 ## Huawei sandbox release gate
 

@@ -55,12 +55,14 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 - [v0.1.0 Huawei sandbox release gate](docs/releases/v0.1.0.md)
 - [Provider-neutral Flutter SDK](sdk/flutter/iapstack/README.md)
 - [Huawei Flutter SDK and sandbox example](sdk/flutter/iapstack_huawei/README.md)
+- [Google Play Flutter SDK and internal-testing example](sdk/flutter/iapstack_google_play/README.md)
 
 The server currently has production-shaped Huawei verification plus initial Apple
 App Store and Google Play server slices. Google Play includes authenticated RTDN
-ingestion, authoritative worker reconciliation, and post-commit purchase acknowledgement.
-Apple notifications and renewal-status queries, Google Play consumable fulfillment,
-both Flutter companions, and real provider sandbox release gates are still required
+ingestion, authoritative worker reconciliation, post-commit purchase acknowledgement,
+and a Flutter Billing companion with an Android internal-testing harness. Apple
+notifications and renewal-status queries, the Apple Flutter companion, Google Play
+consumable fulfillment, and real provider sandbox release gates are still required
 before either new provider is stable.
 
 ## Development
@@ -132,12 +134,17 @@ Run the Flutter SDK checks with:
 (cd sdk/flutter/iapstack && dart pub get && dart analyze && dart test)
 (cd sdk/flutter/iapstack_huawei && flutter pub get && flutter analyze && flutter test)
 (cd sdk/flutter/iapstack_huawei/example && flutter pub get && flutter analyze && flutter test)
+(cd sdk/flutter/iapstack_google_play && flutter pub get && flutter analyze && flutter test)
+(cd sdk/flutter/iapstack_google_play/example && flutter pub get && flutter analyze && flutter test)
 ```
 
 The provider-neutral package owns `/v1` transport, timeout/retry behavior,
 models, and stable error mapping. The Huawei companion uses the official
 `huawei_iap` plugin to preserve signed purchase data, paginate restore results,
-and batch submissions. Its Android example is the manual sandbox harness.
+and batch submissions. The Google Play companion uses Flutter's official
+`in_app_purchase` implementation, binds checkout through an opaque account ID,
+and leaves post-commit acknowledgement to IAPStack. Each companion includes a
+manual Android provider-test harness.
 
 PostgreSQL integration tests activate when `IAPSTACK_TEST_DATABASE_URL` is set. CI
 runs them against a clean PostgreSQL service and verifies every migration can be
@@ -214,7 +221,7 @@ credential/evidence and notification contracts, and webhook verification rules a
 │   ├── platform/          # Concrete configuration, logging, and protection implementations
 │   └── verification/      # Provider-neutral purchase verification orchestration
 ├── dashboard/             # Self-hosted web dashboard
-├── sdk/flutter/           # Provider-neutral Flutter SDK and Huawei companion
+├── sdk/flutter/           # Provider-neutral, Huawei, and Google Play Flutter SDKs
 ├── contracts/             # Public API and webhook contracts
 └── deploy/                # Docker and deployment templates
 ```
@@ -224,7 +231,7 @@ credential/evidence and notification contracts, and webhook verification rules a
 - [x] Define the core domain, public API contracts, and persistence model
 - [x] Implement the Huawei AppGallery adapter from official specifications
 - [x] Add PostgreSQL migrations and a production-ready Docker setup
-- [x] Build the initial provider-neutral Flutter SDK and Huawei companion
+- [x] Build the initial provider-neutral, Huawei, and Google Play Flutter SDKs
 - [x] Build the initial dashboard
 - [x] Support lifecycle reconciliation and signed outbound webhooks
 - [x] Publish a machine-readable v1 API contract with client compatibility checks
