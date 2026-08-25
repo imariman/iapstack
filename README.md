@@ -56,6 +56,11 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 - [Provider-neutral Flutter SDK](sdk/flutter/iapstack/README.md)
 - [Huawei Flutter SDK and sandbox example](sdk/flutter/iapstack_huawei/README.md)
 
+The server currently has production-shaped Huawei verification and an initial Apple
+App Store Server API slice for StoreKit 2 signed transaction verification. Apple
+notifications, renewal-status reconciliation, its Flutter companion, and the real
+sandbox release gate are still required before Apple is considered stable.
+
 ## Development
 
 IAPStack currently requires Go 1.24 or newer. Run the API locally with:
@@ -222,7 +227,7 @@ credential/evidence contracts, and webhook verification rules are documented in
 - [x] Support lifecycle reconciliation and signed outbound webhooks
 - [x] Publish a machine-readable v1 API contract with client compatibility checks
 - [ ] Complete the Huawei sandbox release gate and publish stable v0.1
-- [ ] Add Apple App Store and Google Play adapters
+- [ ] Complete Apple App Store lifecycle support and add the Google Play adapter
 - [ ] Add Amazon Appstore and additional store adapters
 - [ ] Support customer migration and alias consolidation
 

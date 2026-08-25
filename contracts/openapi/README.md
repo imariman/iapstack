@@ -1,7 +1,7 @@
 # IAPStack OpenAPI contracts
 
 `v1.yaml` is the canonical machine-readable contract for the self-hosted IAPStack HTTP API.
-It covers the administrator control plane, application purchase and entitlement operations,
+It covers the administrator control plane, Apple and Huawei purchase and entitlement operations,
 and Huawei lifecycle notification ingestion.
 
 ## Change policy

@@ -159,10 +159,10 @@ func (repository *transaction) adminApplications(
 ) ([]persistence.AdminApplication, error) {
 	rows, err := repository.tx.Query(ctx, `
 		SELECT a.id, a.provider, a.environment, a.provider_application_id, a.created_at,
-			CASE WHEN a.provider = 'huawei_appgallery' THEN COALESCE((
-				SELECT credential.revision FROM application_credentials AS credential
-				WHERE credential.application_id = a.id AND credential.kind = 'huawei_server_api'
-			), 0) ELSE 0 END,
+			COALESCE((
+				SELECT max(credential.revision) FROM application_credentials AS credential
+				WHERE credential.application_id = a.id
+			), 0),
 			COALESCE((
 				SELECT webhook.revision FROM webhook_endpoints AS webhook
 				WHERE webhook.application_id = a.id
