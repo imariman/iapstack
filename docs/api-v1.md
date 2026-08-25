@@ -14,6 +14,25 @@ All request and response bodies are JSON. Error responses use:
 
 Administration and application calls use `Authorization: Bearer <key>`. Stored keys are returned once and only an Argon2id verifier is retained.
 
+## API key lifecycle
+
+Administrator key rotation uses three endpoints:
+
+- `GET /v1/admin/api-keys` returns at most 200 secret-free lifecycle records, newest
+  first. Revoked records remain visible for audit context, and a stored key marks the
+  record authenticating the request with `current: true`.
+- `POST /v1/admin/api-keys` creates an administrator or application key and returns
+  its bearer once. The bearer, salt, hash, and verifier are never returned by the list
+  endpoint.
+- `DELETE /v1/admin/api-keys/{key_id}` idempotently revokes a stored key. A stored
+  administrator cannot revoke the key authenticating its current request, and the
+  final active administrator key cannot be revoked.
+
+Rotate a key by creating its replacement, storing the new bearer in the deployment
+secret manager, connecting with the replacement, and only then revoking the old key.
+Bootstrap authentication has no stored key identity, so it never appears as `current`;
+remove the bootstrap secret from the runtime after durable administrator provisioning.
+
 ## Bootstrap sequence
 
 1. Use `IAPSTACK_BOOTSTRAP_ADMIN_KEY` to create a stored admin key with `POST /v1/admin/api-keys` and `{"role":"admin"}`.

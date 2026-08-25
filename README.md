@@ -66,6 +66,8 @@ go run ./cmd/iapstack api
 The API listens on `:8080` by default and exposes `GET /healthz` and `GET /readyz`.
 The embedded operations dashboard is available at `http://localhost:8080/dashboard/`
 and uses the same authenticated `/v1/admin` API as external administration clients.
+Its access-key workspace supports secret-free inventory, one-time administrator key
+creation, and guarded revocation for routine credential rotation.
 Configuration is supplied through environment variables:
 
 | Variable | Default | Purpose |

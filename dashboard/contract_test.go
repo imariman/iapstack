@@ -33,7 +33,9 @@ func TestDashboardUsesDocumentedAdminOperations(t *testing.T) {
 		path        string
 		operationID string
 	}{
+		{method: http.MethodGet, path: "/v1/admin/api-keys", operationID: "listApiKeys"},
 		{method: http.MethodPost, path: "/v1/admin/api-keys", operationID: "createApiKey"},
+		{method: http.MethodDelete, path: "/v1/admin/api-keys/{key_id}", operationID: "revokeApiKey"},
 		{method: http.MethodGet, path: "/v1/admin/projects", operationID: "listAdminProjects"},
 		{method: http.MethodGet, path: "/v1/admin/projects/{project_id}/overview", operationID: "getAdminProjectOverview"},
 		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}", operationID: "putAdminProject"},

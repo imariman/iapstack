@@ -47,8 +47,9 @@ func TestServiceCreatesAndAuthenticatesScopedKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authenticate() error = %v", err)
 	}
-	if authenticated != principal {
-		t.Fatalf("Authenticate() = %#v, want %#v", authenticated, principal)
+	if authenticated.KeyID == "" || authenticated.Role != principal.Role ||
+		authenticated.ProjectID != principal.ProjectID || authenticated.ApplicationID != principal.ApplicationID {
+		t.Fatalf("Authenticate() = %#v, want stored key identity with scope %#v", authenticated, principal)
 	}
 	if _, err := service.Authenticate(context.Background(), bearer+"tampered"); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("tampered Authenticate() error = %v, want ErrUnauthorized", err)

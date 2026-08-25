@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -126,6 +127,22 @@ type keyRequest struct {
 	ApplicationID core.ApplicationID     `json:"application_id,omitempty"`
 }
 
+// apiKeyCollectionResponse contains bounded secret-free administrator key metadata.
+type apiKeyCollectionResponse struct {
+	APIKeys []apiKeyResponse `json:"api_keys"`
+}
+
+// apiKeyResponse describes one API key lifecycle without its bearer or verifier.
+type apiKeyResponse struct {
+	ID            string                 `json:"id"`
+	Role          persistence.APIKeyRole `json:"role"`
+	ProjectID     core.ProjectID         `json:"project_id,omitempty"`
+	ApplicationID core.ApplicationID     `json:"application_id,omitempty"`
+	CreatedAt     time.Time              `json:"created_at"`
+	RevokedAt     *time.Time             `json:"revoked_at,omitempty"`
+	Current       bool                   `json:"current"`
+}
+
 // verificationRequest is the public alias of the protected worker verification payload.
 type verificationRequest = jobs.VerificationPayload
 
@@ -185,7 +202,9 @@ func New(dependencies Dependencies) (*API, error) {
 // v1Routes returns the complete machine-checked public operation registry.
 func (api *API) v1Routes() []v1Route {
 	return []v1Route{
+		{Method: http.MethodGet, Path: "/v1/admin/api-keys", OperationID: "listApiKeys", Handler: api.listAPIKeys},
 		{Method: http.MethodPost, Path: "/v1/admin/api-keys", OperationID: "createApiKey", Handler: api.createAPIKey},
+		{Method: http.MethodDelete, Path: "/v1/admin/api-keys/{key_id}", OperationID: "revokeApiKey", Handler: api.revokeAPIKey},
 		{Method: http.MethodGet, Path: "/v1/admin/projects", OperationID: "listAdminProjects", Handler: api.adminProjects},
 		{Method: http.MethodGet, Path: "/v1/admin/projects/{project_id}/overview", OperationID: "getAdminProjectOverview", Handler: api.adminProjectOverview},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}", OperationID: "putAdminProject", Handler: api.putProject},
@@ -201,6 +220,24 @@ func (api *API) v1Routes() []v1Route {
 		{Method: http.MethodGet, Path: "/v1/applications/{application_id}/customers/{external_customer_id}/entitlements", OperationID: "getCustomerEntitlements", Handler: api.customerEntitlements},
 		{Method: http.MethodPost, Path: "/v1/providers/huawei/applications/{application_id}/notifications", OperationID: "acceptHuaweiNotification", Handler: api.huaweiNotification},
 	}
+}
+
+// listAPIKeys returns bounded secret-free lifecycle metadata for rotation workflows.
+func (api *API) listAPIKeys(writer http.ResponseWriter, request *http.Request) {
+	principal, ok := api.requireAdmin(writer, request)
+	if !ok {
+		return
+	}
+	summaries, err := api.authentication.Keys(request.Context())
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	responses := make([]apiKeyResponse, 0, len(summaries))
+	for _, summary := range summaries {
+		responses = append(responses, apiKeyFromSummary(summary, principal.KeyID))
+	}
+	writeJSON(writer, http.StatusOK, apiKeyCollectionResponse{APIKeys: responses})
 }
 
 // ServeHTTP dispatches one versioned API request.
@@ -230,6 +267,25 @@ func (api *API) createAPIKey(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	writeJSON(writer, http.StatusCreated, map[string]string{"key": bearer})
+}
+
+// revokeAPIKey idempotently disables a non-current key while preserving one active administrator.
+func (api *API) revokeAPIKey(writer http.ResponseWriter, request *http.Request) {
+	principal, ok := api.requireAdmin(writer, request)
+	if !ok {
+		return
+	}
+	id := request.PathValue("key_id")
+	if principal.KeyID != "" && principal.KeyID == id {
+		api.writeError(writer, request, fmt.Errorf("revoke current API key: %w", persistence.ErrConflict))
+		return
+	}
+	summary, err := api.authentication.Revoke(request.Context(), id)
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, apiKeyFromSummary(summary, principal.KeyID))
 }
 
 // putProject idempotently creates one project identity.
@@ -737,6 +793,15 @@ func (api *API) writeError(writer http.ResponseWriter, request *http.Request, er
 func responseFromResult(result verification.Result) verificationResponse {
 	return verificationResponse{VerifiedAt: result.VerifiedAt, CustomerID: result.Customer.ID,
 		Entitlements: entitlementResponses(result.Entitlements)}
+}
+
+// apiKeyFromSummary maps secret-free lifecycle metadata and identifies the active request key.
+func apiKeyFromSummary(summary persistence.APIKeySummary, currentKeyID string) apiKeyResponse {
+	return apiKeyResponse{
+		ID: summary.ID, Role: summary.Role, ProjectID: summary.ProjectID,
+		ApplicationID: summary.ApplicationID, CreatedAt: summary.CreatedAt,
+		RevokedAt: summary.RevokedAt, Current: currentKeyID != "" && summary.ID == currentKeyID,
+	}
 }
 
 // entitlementResponses removes internal source identities from public entitlement snapshots.

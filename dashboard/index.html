@@ -71,6 +71,7 @@
           </div>
           <div class="topbar-actions">
             <span id="updated-at" class="updated-at">Not refreshed yet</span>
+            <button class="secondary-button" id="open-api-keys" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 7a5 5 0 1 0-4.6 5H12l2 2h2v2h2v2h3v-3l-6.1-6.1A5 5 0 0 0 15 7Z"/></svg><span>Access keys</span></button>
             <button class="secondary-button" id="refresh" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span>Refresh</span></button>
             <button class="text-button" id="logout" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M14 4h5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5"/></svg><span>Sign out</span></button>
           </div>
@@ -251,6 +252,38 @@
       </div>
     </dialog>
 
+    <dialog id="api-key-dialog" class="setup-dialog api-key-dialog">
+      <div class="api-key-shell">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">Credential rotation</p><h2>Access keys</h2></div>
+          <button class="icon-button" id="close-api-keys" type="button" aria-label="Close access keys"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <div class="key-control-row">
+          <p class="dialog-copy">See every stored key without exposing its bearer. Create a replacement first, connect with it, then revoke the old key.</p>
+          <button class="secondary-button" id="create-admin-key" type="button">Create admin key</button>
+        </div>
+        <div class="key-vitals" aria-label="Access key status">
+          <article><span>Active admins</span><strong id="active-admin-keys">—</strong></article>
+          <article><span>Active apps</span><strong id="active-application-keys">—</strong></article>
+          <article><span>Revoked</span><strong id="revoked-keys">—</strong></article>
+        </div>
+        <p class="form-message" id="api-key-message" role="status"></p>
+        <div class="api-key-list" id="api-key-list" aria-live="polite"></div>
+      </div>
+    </dialog>
+
+    <dialog id="revoke-key-dialog" class="setup-dialog small-dialog revoke-key-dialog">
+      <div class="key-reveal">
+        <div class="dialog-heading">
+          <div><p class="eyebrow danger-eyebrow">Immediate cutoff</p><h2>Revoke access key?</h2></div>
+          <button class="icon-button" id="close-revoke-key" type="button" aria-label="Close revocation confirmation"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <p class="dialog-copy">Requests using this bearer will fail immediately. This action cannot be undone.</p>
+        <code class="revoke-key-identity" id="revoke-key-identity"></code>
+        <div class="dialog-actions"><button type="button" class="text-button" id="cancel-revoke-key">Keep active</button><button type="button" class="danger-button" id="confirm-revoke-key">Revoke key</button></div>
+      </div>
+    </dialog>
+
     <dialog id="customer-dialog" class="setup-dialog small-dialog">
       <form id="customer-form" method="dialog">
         <div class="dialog-heading">
@@ -269,9 +302,9 @@
 
     <dialog id="key-dialog" class="setup-dialog small-dialog key-dialog">
       <div class="key-reveal">
-        <div class="dialog-heading"><div><p class="eyebrow">Shown once</p><h2>Application key ready</h2></div><button class="icon-button" id="close-key" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        <div class="dialog-heading"><div><p class="eyebrow">Shown once</p><h2 id="revealed-key-title">Application key ready</h2></div><button class="icon-button" id="close-key" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
         <p class="dialog-copy">This value cannot be retrieved again. Copy it to your secure secret store before closing this dialog.</p>
-        <label class="revealed-key-label">Application bearer<textarea id="revealed-key" rows="4" readonly spellcheck="false"></textarea></label>
+        <label class="revealed-key-label"><span id="revealed-key-label">Application bearer</span><textarea id="revealed-key" rows="4" readonly spellcheck="false"></textarea></label>
         <p class="form-message" id="copy-message" role="status"></p>
         <div class="dialog-actions"><button type="button" class="secondary-button" id="copy-key">Copy key</button><button type="button" class="primary-button" id="done-key">Done</button></div>
       </div>

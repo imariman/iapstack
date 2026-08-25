@@ -41,6 +41,24 @@ type purchaseWrites struct {
 	outbox      persistence.OutboxEvent
 }
 
+// apiKeyRecord creates one deterministic valid verifier record for lifecycle tests.
+func apiKeyRecord(
+	id string,
+	role persistence.APIKeyRole,
+	projectID core.ProjectID,
+	applicationID core.ApplicationID,
+	createdAt time.Time,
+) persistence.APIKeyRecord {
+	var salt [16]byte
+	var hash [32]byte
+	salt[0] = 1
+	hash[0] = 1
+	return persistence.APIKeyRecord{
+		ID: id, Role: role, ProjectID: projectID, ApplicationID: applicationID,
+		SecretSalt: salt, SecretHash: hash, CreatedAt: createdAt,
+	}
+}
+
 // TestCredentialRepositoryOptimisticRotation verifies scoped reads, retries, and stale conflicts.
 func TestCredentialRepositoryOptimisticRotation(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)
@@ -100,6 +118,143 @@ func TestCredentialRepositoryOptimisticRotation(t *testing.T) {
 		t.Fatalf("cross-project Credential() error = %v, want ErrNotFound", err)
 	}
 	assertTableCount(t, database, "application_credentials", 1)
+}
+
+// TestAPIKeyLifecycleListsAndRevokesWithoutLosingFinalAdmin verifies secret-free metadata and lifecycle invariants.
+func TestAPIKeyLifecycleListsAndRevokesWithoutLosingFinalAdmin(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	createdAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	records := []persistence.APIKeyRecord{
+		apiKeyRecord("admin-key-1", persistence.APIKeyRoleAdmin, "", "", createdAt),
+		apiKeyRecord("admin-key-2", persistence.APIKeyRoleAdmin, "", "", createdAt.Add(time.Minute)),
+		apiKeyRecord("application-key-1", persistence.APIKeyRoleApplication,
+			core.ProjectID(fixture.projectID), core.ApplicationID(fixture.applicationID), createdAt.Add(2*time.Minute)),
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		for _, record := range records {
+			if err := repository.PutAPIKey(database.ctx, record); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("PutAPIKey() error = %v", err)
+	}
+
+	var listed []persistence.APIKeySummary
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var err error
+		listed, err = repository.APIKeys(database.ctx)
+		return err
+	}); err != nil {
+		t.Fatalf("APIKeys() error = %v", err)
+	}
+	if len(listed) != len(records) || listed[0].ID != "application-key-1" {
+		t.Fatalf("APIKeys() = %#v, want three newest-first summaries", listed)
+	}
+
+	revokedAt := time.Now().UTC().Truncate(time.Microsecond)
+	var revoked persistence.APIKeySummary
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var err error
+		revoked, err = repository.RevokeAPIKey(database.ctx, "application-key-1", revokedAt)
+		return err
+	}); err != nil {
+		t.Fatalf("RevokeAPIKey() application error = %v", err)
+	}
+	if revoked.RevokedAt == nil || !revoked.RevokedAt.Equal(revokedAt) {
+		t.Fatalf("revoked application key = %#v, want revocation time %v", revoked, revokedAt)
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		_, err := repository.APIKey(database.ctx, "application-key-1")
+		return err
+	}); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("revoked APIKey() error = %v, want ErrNotFound", err)
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		retried, err := repository.RevokeAPIKey(database.ctx, "application-key-1", revokedAt.Add(time.Hour))
+		if err == nil && (retried.RevokedAt == nil || !retried.RevokedAt.Equal(revokedAt)) {
+			t.Fatalf("retried RevokeAPIKey() = %#v, want original lifecycle", retried)
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("retried RevokeAPIKey() error = %v", err)
+	}
+
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		_, err := repository.RevokeAPIKey(database.ctx, "admin-key-1", revokedAt)
+		return err
+	}); err != nil {
+		t.Fatalf("RevokeAPIKey() first admin error = %v", err)
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		_, err := repository.RevokeAPIKey(database.ctx, "admin-key-2", revokedAt)
+		return err
+	}); !errors.Is(err, persistence.ErrConflict) {
+		t.Fatalf("RevokeAPIKey() final admin error = %v, want ErrConflict", err)
+	}
+}
+
+// TestConcurrentAPIKeyRevocationPreservesOneAdmin verifies advisory locking across competing requests.
+func TestConcurrentAPIKeyRevocationPreservesOneAdmin(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	store := openRepositoryStore(t, database.ctx)
+	createdAt := time.Now().UTC().Add(-time.Hour)
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		for _, id := range []string{"admin-key-1", "admin-key-2"} {
+			if err := repository.PutAPIKey(database.ctx, apiKeyRecord(
+				id, persistence.APIKeyRoleAdmin, "", "", createdAt,
+			)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("PutAPIKey() error = %v", err)
+	}
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var workers sync.WaitGroup
+	for _, id := range []string{"admin-key-1", "admin-key-2"} {
+		workers.Add(1)
+		go func(keyID string) {
+			defer workers.Done()
+			<-start
+			results <- store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+				_, err := repository.RevokeAPIKey(database.ctx, keyID, time.Now().UTC())
+				return err
+			})
+		}(id)
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	successes, conflicts := 0, 0
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, persistence.ErrConflict):
+			conflicts++
+		default:
+			t.Fatalf("concurrent RevokeAPIKey() error = %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("concurrent revocation outcomes = (%d success, %d conflict), want (1, 1)", successes, conflicts)
+	}
+	var activeAdministrators int
+	if err := database.conn.QueryRow(database.ctx, `
+		SELECT count(*) FROM api_keys WHERE role = 'admin' AND revoked_at IS NULL
+	`).Scan(&activeAdministrators); err != nil {
+		t.Fatalf("count active administrators: %v", err)
+	}
+	if activeAdministrators != 1 {
+		t.Fatalf("active administrator count = %d, want 1", activeAdministrators)
+	}
 }
 
 // TestOpenStoreValidatesURL verifies fail-fast pool configuration errors.

@@ -4,10 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
 )
+
+const (
+	// apiKeyListLimit bounds lifecycle metadata returned to one administrator request.
+	apiKeyListLimit = 200
+	// apiKeyLifecycleLockID serializes revocations that could remove the final active administrator.
+	apiKeyLifecycleLockID int64 = 0x4941504b45594144
+)
+
+// apiKeySummaryScanner reads one secret-free API key lifecycle row.
+type apiKeySummaryScanner interface {
+	// Scan copies one row into the supplied lifecycle destinations.
+	Scan(...any) error
+}
 
 // APIKey returns one non-revoked API key verifier by public identity.
 func (repository *transaction) APIKey(ctx context.Context, id string) (persistence.APIKeyRecord, error) {
@@ -41,6 +55,33 @@ func (repository *transaction) APIKey(ctx context.Context, id string) (persisten
 	return record, nil
 }
 
+// APIKeys returns bounded lifecycle metadata without bearer secrets or verifiers.
+func (repository *transaction) APIKeys(ctx context.Context) ([]persistence.APIKeySummary, error) {
+	rows, err := repository.tx.Query(ctx, `
+		SELECT id, role, project_id, application_id, created_at, revoked_at
+		FROM api_keys
+		ORDER BY created_at DESC, id
+		LIMIT $1
+	`, apiKeyListLimit)
+	if err != nil {
+		return nil, classifyError("list API keys", err)
+	}
+	defer rows.Close()
+
+	summaries := make([]persistence.APIKeySummary, 0)
+	for rows.Next() {
+		summary, scanErr := scanAPIKeySummary(rows)
+		if scanErr != nil {
+			return nil, classifyError("scan API key", scanErr)
+		}
+		summaries = append(summaries, summary)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, classifyError("iterate API keys", err)
+	}
+	return summaries, nil
+}
+
 // PutAPIKey creates one API key verifier without storing its bearer secret.
 func (repository *transaction) PutAPIKey(ctx context.Context, record persistence.APIKeyRecord) error {
 	if err := record.Validate(); err != nil {
@@ -57,6 +98,61 @@ func (repository *transaction) PutAPIKey(ctx context.Context, record persistence
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, record.ID, record.Role, projectID, applicationID, record.SecretSalt[:], record.SecretHash[:], record.CreatedAt)
 	return classifyError("put API key", err)
+}
+
+// RevokeAPIKey idempotently revokes one key and atomically preserves an active administrator.
+func (repository *transaction) RevokeAPIKey(
+	ctx context.Context,
+	id string,
+	revokedAt time.Time,
+) (persistence.APIKeySummary, error) {
+	if err := validateText("API key ID", id); err != nil {
+		return persistence.APIKeySummary{}, err
+	}
+	if revokedAt.IsZero() {
+		return persistence.APIKeySummary{}, errors.New("API key revocation time is required")
+	}
+	if _, err := repository.tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, apiKeyLifecycleLockID); err != nil {
+		return persistence.APIKeySummary{}, classifyError("lock API key lifecycle", err)
+	}
+	summary, err := scanAPIKeySummary(repository.tx.QueryRow(ctx, `
+		SELECT id, role, project_id, application_id, created_at, revoked_at
+		FROM api_keys
+		WHERE id = $1
+		FOR UPDATE
+	`, id))
+	if err != nil {
+		return persistence.APIKeySummary{}, classifyError("load API key lifecycle", err)
+	}
+	if summary.RevokedAt != nil {
+		return summary, nil
+	}
+	if summary.Role == persistence.APIKeyRoleAdmin {
+		var activeAdministrators int64
+		if err := repository.tx.QueryRow(ctx, `
+			SELECT count(*) FROM api_keys WHERE role = 'admin' AND revoked_at IS NULL
+		`).Scan(&activeAdministrators); err != nil {
+			return persistence.APIKeySummary{}, classifyError("count active administrator API keys", err)
+		}
+		if activeAdministrators <= 1 {
+			return persistence.APIKeySummary{}, fmt.Errorf("revoke final administrator API key: %w", persistence.ErrConflict)
+		}
+	}
+	revokedAt = revokedAt.UTC()
+	command, err := repository.tx.Exec(ctx, `
+		UPDATE api_keys SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL
+	`, id, revokedAt)
+	if err != nil {
+		return persistence.APIKeySummary{}, classifyError("revoke API key", err)
+	}
+	if command.RowsAffected() != 1 {
+		return persistence.APIKeySummary{}, fmt.Errorf("revoke API key: %w", persistence.ErrConflict)
+	}
+	summary.RevokedAt = &revokedAt
+	if err := summary.Validate(); err != nil {
+		return persistence.APIKeySummary{}, fmt.Errorf("validate revoked API key: %w", err)
+	}
+	return summary, nil
 }
 
 // PutWebhookEndpoint creates or rotates one application webhook with optimistic revision control.
@@ -133,4 +229,30 @@ func (repository *transaction) WebhookEndpoint(
 		return persistence.WebhookEndpointRecord{}, fmt.Errorf("validate stored webhook endpoint: %w", err)
 	}
 	return record, nil
+}
+
+// scanAPIKeySummary converts nullable scope and lifecycle columns into a validated public summary.
+func scanAPIKeySummary(scanner apiKeySummaryScanner) (persistence.APIKeySummary, error) {
+	var summary persistence.APIKeySummary
+	var projectID, applicationID *string
+	if err := scanner.Scan(
+		&summary.ID,
+		&summary.Role,
+		&projectID,
+		&applicationID,
+		&summary.CreatedAt,
+		&summary.RevokedAt,
+	); err != nil {
+		return persistence.APIKeySummary{}, err
+	}
+	if projectID != nil {
+		summary.ProjectID = core.ProjectID(*projectID)
+	}
+	if applicationID != nil {
+		summary.ApplicationID = core.ApplicationID(*applicationID)
+	}
+	if err := summary.Validate(); err != nil {
+		return persistence.APIKeySummary{}, err
+	}
+	return summary, nil
 }
