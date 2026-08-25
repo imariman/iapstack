@@ -35,6 +35,7 @@ jobs:
           test -s assets/iapstack-gopher.png
           test -s dashboard/index.html
           test -s dashboard/app.css
+          test -s contracts/openapi/v1.yaml
           node --check dashboard/app.js
           test -x deploy/e2e/run.sh
 
@@ -91,6 +92,10 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+
+      - name: Validate OpenAPI contract
+        if: steps.module.outputs.present == 'true'
+        run: go test -count=1 -run '^(TestOpenAPIContract.*|TestGoResponsesMatchOpenAPI)$' ./internal/transport/httpapi
 
       - name: Run go vet
         if: steps.module.outputs.present == 'true'

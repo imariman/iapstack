@@ -49,6 +49,7 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 - [v0.1 scope and architecture](docs/v0.1-scope.md)
 - [Architecture Decision Records](docs/adr/README.md)
 - [HTTP API v1 and Huawei sandbox gate](docs/api-v1.md)
+- [Machine-readable OpenAPI v1 contract](contracts/openapi/v1.yaml)
 - [Operations and dashboard guide](docs/operations.md)
 - [Provider-neutral Flutter SDK](sdk/flutter/iapstack/README.md)
 - [Huawei Flutter SDK and sandbox example](sdk/flutter/iapstack_huawei/README.md)
@@ -192,10 +193,12 @@ credential/evidence contracts, and webhook verification rules are documented in
 - [x] Add PostgreSQL migrations and a production-ready Docker setup
 - [x] Build the initial provider-neutral Flutter SDK and Huawei companion
 - [x] Build the initial dashboard
+- [x] Support lifecycle reconciliation and signed outbound webhooks
+- [x] Publish a machine-readable v1 API contract with client compatibility checks
+- [ ] Complete the Huawei sandbox release gate and publish stable v0.1
 - [ ] Add Apple App Store and Google Play adapters
 - [ ] Add Amazon Appstore and additional store adapters
-- [ ] Support customer migration, reconciliation, and signed outbound webhooks
-- [ ] Publish the first stable release and production hardening guide
+- [ ] Support customer migration and alias consolidation
 
 The order above describes the initial implementation sequence, not a limitation of the architecture. IAPStack is intended to treat every store as a first-class adapter.
 

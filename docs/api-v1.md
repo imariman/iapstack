@@ -1,5 +1,11 @@
 # IAPStack HTTP API v1
 
+The canonical machine-readable contract is [`contracts/openapi/v1.yaml`](../contracts/openapi/v1.yaml).
+CI validates the document, checks it against every registered Go route, validates representative
+server responses, and verifies that the Flutter SDK and embedded dashboard only depend on declared
+operations and fields. Public v1 changes must update the contract and affected compatibility tests
+in the same pull request.
+
 All request and response bodies are JSON. Error responses use:
 
 ```json
