@@ -478,7 +478,7 @@ func (api *API) verifyPurchase(writer http.ResponseWriter, request *http.Request
 		api.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, responseFromResult(result))
+	writeJSON(writer, http.StatusOK, responseFromResult(result, api.clock().UTC()))
 }
 
 // restorePurchases verifies a bounded list sequentially so each item remains independently idempotent.
@@ -507,7 +507,7 @@ func (api *API) restorePurchases(writer http.ResponseWriter, request *http.Reque
 			api.writeError(writer, request, err)
 			return
 		}
-		results = append(results, responseFromResult(result))
+		results = append(results, responseFromResult(result, api.clock().UTC()))
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"results": results})
 }
@@ -534,7 +534,10 @@ func (api *API) customerEntitlements(writer http.ResponseWriter, request *http.R
 		api.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"customer_id": customer.ID, "entitlements": entitlementResponses(entitlements)})
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"customer_id":  customer.ID,
+		"entitlements": entitlementResponses(entitlements, api.clock().UTC()),
+	})
 }
 
 // huaweiNotification verifies local signature and scope before durable protected inbox insertion.
@@ -907,10 +910,10 @@ func strictBearerToken(header string) (string, bool) {
 	return token, true
 }
 
-// responseFromResult maps internal projections to the stable public response.
-func responseFromResult(result verification.Result) verificationResponse {
+// responseFromResult maps internal projections to the stable time-aware public response.
+func responseFromResult(result verification.Result, now time.Time) verificationResponse {
 	return verificationResponse{VerifiedAt: result.VerifiedAt, CustomerID: result.Customer.ID,
-		Entitlements: entitlementResponses(result.Entitlements)}
+		Entitlements: entitlementResponses(result.Entitlements, now)}
 }
 
 // apiKeyFromSummary maps secret-free lifecycle metadata and identifies the active request key.
@@ -922,8 +925,8 @@ func apiKeyFromSummary(summary persistence.APIKeySummary, currentKeyID string) a
 	}
 }
 
-// entitlementResponses removes internal source identities from public entitlement snapshots.
-func entitlementResponses(values []persistence.CustomerEntitlement) []entitlementResponse {
+// entitlementResponses removes internal source identities and fails closed at effective-period expiry.
+func entitlementResponses(values []persistence.CustomerEntitlement, now time.Time) []entitlementResponse {
 	result := make([]entitlementResponse, 0, len(values))
 	for _, value := range values {
 		var startsAt *time.Time
@@ -931,13 +934,26 @@ func entitlementResponses(values []persistence.CustomerEntitlement) []entitlemen
 			start := value.Projection.EffectivePeriod.StartsAt
 			startsAt = &start
 		}
+		access, reason := effectiveEntitlementAccess(value.Projection, now)
 		result = append(result, entitlementResponse{
-			Key: value.Key, Access: value.Projection.Access, Reason: value.Projection.AccessReason,
+			Key: value.Key, Access: access, Reason: reason,
 			EffectiveStartsAt: startsAt, EffectiveEndsAt: value.Projection.EffectivePeriod.EndsAt,
 			Version: value.Version,
 		})
 	}
 	return result
+}
+
+// effectiveEntitlementAccess derives the safe access decision at one response instant.
+func effectiveEntitlementAccess(
+	projection persistence.EntitlementProjection,
+	now time.Time,
+) (core.AccessStatus, core.AccessReason) {
+	endsAt := projection.EffectivePeriod.EndsAt
+	if projection.Access == core.AccessAllowed && endsAt != nil && !now.Before(*endsAt) {
+		return core.AccessDenied, core.AccessReasonExpired
+	}
+	return projection.Access, projection.AccessReason
 }
 
 // requiresReconciliation reports whether signed evidence describes a time-sensitive subscription.

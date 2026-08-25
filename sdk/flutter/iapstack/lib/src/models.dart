@@ -83,8 +83,17 @@ final class Entitlement {
   /// Exclusive access period end, when applicable.
   final DateTime? effectiveEndsAt;
 
-  /// Whether the current authoritative projection permits access.
-  bool get grantsAccess => access == 'allowed';
+  /// Whether the current authoritative projection permits access now.
+  bool get grantsAccess => grantsAccessAt(DateTime.now());
+
+  /// Whether the projection permits access at the supplied instant.
+  bool grantsAccessAt(DateTime instant) {
+    if (access != 'allowed') {
+      return false;
+    }
+    final endsAt = effectiveEndsAt;
+    return endsAt == null || instant.toUtc().isBefore(endsAt);
+  }
 
   /// Decodes one v1 entitlement object.
   factory Entitlement.fromJson(Map<String, Object?> json) => Entitlement(

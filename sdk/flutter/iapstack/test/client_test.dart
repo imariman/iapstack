@@ -65,6 +65,27 @@ void main() {
       expect(result.results, hasLength(2));
     });
 
+    test('fails closed when an allowed entitlement reaches its effective end',
+        () {
+      final endsAt = DateTime.utc(2026, 8, 26, 12);
+      final entitlement = Entitlement(
+        key: 'premium',
+        access: 'allowed',
+        reason: 'canceled_at_period_end',
+        version: 7,
+        effectiveStartsAt: endsAt.subtract(const Duration(days: 30)),
+        effectiveEndsAt: endsAt,
+      );
+
+      expect(
+          entitlement
+              .grantsAccessAt(endsAt.subtract(const Duration(microseconds: 1))),
+          isTrue);
+      expect(entitlement.grantsAccessAt(endsAt), isFalse);
+      expect(entitlement.grantsAccessAt(endsAt.add(const Duration(hours: 1))),
+          isFalse);
+    });
+
     test('escapes customer identifiers as one path segment', () async {
       late Uri captured;
       final client = IapStackClient(
