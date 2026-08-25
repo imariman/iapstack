@@ -135,8 +135,12 @@ type OutboxRepository interface {
 type OperationsRepository interface {
 	// APIKey returns one non-revoked API key verifier by public identity.
 	APIKey(context.Context, string) (APIKeyRecord, error)
+	// APIKeys returns a bounded secret-free API key lifecycle collection.
+	APIKeys(context.Context) ([]APIKeySummary, error)
 	// PutAPIKey creates one API key verifier without storing the bearer secret.
 	PutAPIKey(context.Context, APIKeyRecord) error
+	// RevokeAPIKey idempotently disables one key while preserving the final active administrator.
+	RevokeAPIKey(context.Context, string, time.Time) (APIKeySummary, error)
 	// PutWebhookEndpoint creates or rotates one protected application webhook endpoint.
 	PutWebhookEndpoint(context.Context, WebhookEndpointWrite) (WebhookEndpointRecord, error)
 	// WebhookEndpoint returns protected delivery configuration for one application.
@@ -281,6 +285,16 @@ type APIKeyRecord struct {
 	CreatedAt     time.Time
 }
 
+// APIKeySummary contains lifecycle metadata without a bearer secret or verifier.
+type APIKeySummary struct {
+	ID            string
+	Role          APIKeyRole
+	ProjectID     core.ProjectID
+	ApplicationID core.ApplicationID
+	CreatedAt     time.Time
+	RevokedAt     *time.Time
+}
+
 // WebhookEndpointWrite describes protected application delivery configuration.
 type WebhookEndpointWrite struct {
 	ProjectID        core.ProjectID
@@ -370,26 +384,33 @@ var (
 
 // Validate checks API key identity, role scope, verifier bytes, and creation time.
 func (record APIKeyRecord) Validate() error {
-	var scopeError error
-	switch record.Role {
-	case APIKeyRoleAdmin:
-		if record.ProjectID != "" || record.ApplicationID != "" {
-			scopeError = errors.New("admin API key must not have application scope")
-		}
-	case APIKeyRoleApplication:
-		scopeError = errors.Join(record.ProjectID.Validate(), record.ApplicationID.Validate())
-	default:
-		scopeError = fmt.Errorf("unsupported API key role %q", record.Role)
-	}
 	var verifierError error
 	if record.SecretSalt == ([16]byte{}) || record.SecretHash == ([32]byte{}) {
 		verifierError = errors.New("API key verifier is required")
 	}
 	return errors.Join(
 		validateText("API key ID", record.ID),
-		scopeError,
+		validateAPIKeyScope(record.Role, record.ProjectID, record.ApplicationID),
 		verifierError,
 		validateTime("API key creation time", record.CreatedAt),
+	)
+}
+
+// Validate checks secret-free API key scope and lifecycle timestamps.
+func (summary APIKeySummary) Validate() error {
+	var lifecycleError error
+	if summary.RevokedAt != nil {
+		if summary.RevokedAt.IsZero() {
+			lifecycleError = errors.New("API key revocation time must not be zero")
+		} else if !summary.CreatedAt.IsZero() && summary.RevokedAt.Before(summary.CreatedAt) {
+			lifecycleError = errors.New("API key revocation time cannot precede creation")
+		}
+	}
+	return errors.Join(
+		validateText("API key ID", summary.ID),
+		validateAPIKeyScope(summary.Role, summary.ProjectID, summary.ApplicationID),
+		validateTime("API key creation time", summary.CreatedAt),
+		lifecycleError,
 	)
 }
 
@@ -686,6 +707,21 @@ func validateHTTPSURL(value string) error {
 		return errors.New("webhook URL must be an absolute HTTPS URL without user information")
 	}
 	return nil
+}
+
+// validateAPIKeyScope enforces role-specific project and application ownership.
+func validateAPIKeyScope(role APIKeyRole, projectID core.ProjectID, applicationID core.ApplicationID) error {
+	switch role {
+	case APIKeyRoleAdmin:
+		if projectID != "" || applicationID != "" {
+			return errors.New("admin API key must not have application scope")
+		}
+		return nil
+	case APIKeyRoleApplication:
+		return errors.Join(projectID.Validate(), applicationID.Validate())
+	default:
+		return fmt.Errorf("unsupported API key role %q", role)
+	}
 }
 
 // validateNonNegative checks optimistic revision inputs that allow zero for creation.

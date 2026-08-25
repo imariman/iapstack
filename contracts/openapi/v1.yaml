@@ -18,6 +18,25 @@ tags:
   - name: Huawei notifications
 paths:
   /v1/admin/api-keys:
+    get:
+      tags: [Administration]
+      operationId: listApiKeys
+      summary: List bounded secret-free API key lifecycle metadata
+      security:
+        - adminBearer: []
+      responses:
+        '200':
+          description: API keys ordered newest first, including revoked metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCollection'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     post:
       tags: [Administration]
       operationId: createApiKey
@@ -47,6 +66,33 @@ paths:
           $ref: '#/components/responses/RequestTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/api-keys/{key_id}:
+    delete:
+      tags: [Administration]
+      operationId: revokeApiKey
+      summary: Idempotently revoke a non-current stored API key
+      description: The final active administrator key cannot be revoked.
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ApiKeyId'
+      responses:
+        '200':
+          description: Revoked lifecycle metadata, or the existing metadata for an idempotent retry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKey'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -523,6 +569,13 @@ components:
       bearerFormat: opaque-application-key
       description: Application-scoped bearer bound to the application path.
   parameters:
+    ApiKeyId:
+      name: key_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-f0-9]{24}$'
     ProjectId:
       name: project_id
       in: path
@@ -671,6 +724,39 @@ components:
           type: string
           minLength: 1
           description: Returned once and never retrievable after this response.
+    ApiKeyCollection:
+      type: object
+      additionalProperties: false
+      required: [api_keys]
+      properties:
+        api_keys:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/ApiKey'
+    ApiKey:
+      type: object
+      additionalProperties: false
+      required: [id, role, created_at, current]
+      properties:
+        id:
+          type: string
+          pattern: '^[a-f0-9]{24}$'
+        role:
+          type: string
+          enum: [admin, application]
+        project_id:
+          $ref: '#/components/schemas/Identifier'
+        application_id:
+          $ref: '#/components/schemas/Identifier'
+        created_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+        current:
+          type: boolean
     ApplicationRequest:
       type: object
       additionalProperties: false

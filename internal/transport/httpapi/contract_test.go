@@ -14,6 +14,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/credentials"
+	"github.com/imariman/iapstack/internal/persistence"
 )
 
 const (
@@ -93,6 +94,8 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 		"ErrorEnvelope":        {"error"},
 		"AdminProjectOverview": {"project", "applications", "products", "customers", "recent_transactions", "queues", "recent_webhook_events"},
 		"CredentialMetadata":   {"project_id", "application_id", "kind", "content_type", "schema_version", "revision", "created_at", "updated_at"},
+		"ApiKeyCollection":     {"api_keys"},
+		"ApiKey":               {"id", "role", "created_at", "current"},
 	} {
 		schemaReference, exists := document.Components.Schemas[name]
 		if !exists || schemaReference.Value == nil {
@@ -131,6 +134,12 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 		}},
 		{name: "project collection", schema: "AdminProjects", value: adminProjectsResponse{
 			Projects: []adminProjectResponse{{ID: "project-1", CreatedAt: now}},
+		}},
+		{name: "API key collection", schema: "ApiKeyCollection", value: apiKeyCollectionResponse{
+			APIKeys: []apiKeyResponse{{
+				ID: "0123456789abcdef01234567", Role: persistence.APIKeyRoleApplication,
+				ProjectID: "project-1", ApplicationID: "application-1", CreatedAt: now, Current: false,
+			}},
 		}},
 		{name: "project overview", schema: "AdminProjectOverview", value: adminOverviewResponse{
 			Project:      adminProjectResponse{ID: "project-1", CreatedAt: now},

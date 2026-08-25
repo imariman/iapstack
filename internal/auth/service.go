@@ -39,6 +39,7 @@ const (
 
 // Principal is one authenticated administration or application identity.
 type Principal struct {
+	KeyID         string
 	Role          persistence.APIKeyRole
 	ProjectID     core.ProjectID
 	ApplicationID core.ApplicationID
@@ -110,6 +111,34 @@ func (service *Service) Create(ctx context.Context, principal Principal) (string
 	return bearerPrefix + id + "." + base64.RawURLEncoding.EncodeToString(secret), nil
 }
 
+// Keys returns bounded API key lifecycle metadata without bearer secrets or verifiers.
+func (service *Service) Keys(ctx context.Context) ([]persistence.APIKeySummary, error) {
+	var summaries []persistence.APIKeySummary
+	err := service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var loadErr error
+		summaries, loadErr = repository.APIKeys(ctx)
+		return loadErr
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list API keys: %w", err)
+	}
+	return summaries, nil
+}
+
+// Revoke idempotently disables one stored API key at the service clock time.
+func (service *Service) Revoke(ctx context.Context, id string) (persistence.APIKeySummary, error) {
+	var summary persistence.APIKeySummary
+	err := service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var revokeErr error
+		summary, revokeErr = repository.RevokeAPIKey(ctx, id, service.clock().UTC())
+		return revokeErr
+	})
+	if err != nil {
+		return persistence.APIKeySummary{}, fmt.Errorf("revoke API key: %w", err)
+	}
+	return summary, nil
+}
+
 // Authenticate verifies a bootstrap administrator or stored scoped bearer key.
 func (service *Service) Authenticate(ctx context.Context, bearer string) (Principal, error) {
 	bearer = strings.TrimSpace(bearer)
@@ -137,7 +166,7 @@ func (service *Service) Authenticate(ctx context.Context, bearer string) (Princi
 	if subtle.ConstantTimeCompare(hash[:], record.SecretHash[:]) != 1 {
 		return Principal{}, ErrUnauthorized
 	}
-	return Principal{Role: record.Role, ProjectID: record.ProjectID, ApplicationID: record.ApplicationID}, nil
+	return Principal{KeyID: record.ID, Role: record.Role, ProjectID: record.ProjectID, ApplicationID: record.ApplicationID}, nil
 }
 
 // Validate checks that principal scope matches its role.
