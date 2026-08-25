@@ -12,14 +12,14 @@ IAPStack as `external_customer_id`.
 ## Purchase flow
 
 Create the listener before querying products so unfinished transactions are not
-missed. Never persist or log the signed transaction JWS or application bearer.
+missed. Never persist or log the signed transaction JWS or customer session.
 
 ```dart
 final backend = IapStackClient(
   IapStackConfig(
     baseUri: Uri.parse('https://iap.example.com'),
     applicationId: 'ios-production',
-    applicationKey: runtimeApplicationKey,
+    customerToken: runtimeCustomerToken,
   ),
 );
 final apple = AppleIapStack(

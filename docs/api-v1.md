@@ -12,7 +12,10 @@ All request and response bodies are JSON. Error responses use:
 {"error":{"code":"invalid_request","message":"request values are invalid","request_id":"..."}}
 ```
 
-Administration and application calls use `Authorization: Bearer <key>`. Stored keys are returned once and only an Argon2id verifier is retained.
+Administration and trusted host-backend calls use `Authorization: Bearer <key>`.
+Stored keys are returned once and only an Argon2id verifier is retained. Mobile
+data-plane calls use a short-lived customer session instead of the durable
+application key.
 
 ## API key lifecycle
 
@@ -39,6 +42,10 @@ remove the bootstrap secret from the runtime after durable administrator provisi
 2. Create the project, provider application, entitlement, product, provider-product mapping, and customer using the idempotent `/v1/admin/projects/...` PUT endpoints.
 3. Store the provider's versioned credential package and an HTTPS webhook configuration.
 4. Create an application key with `{"role":"application","project_id":"...","application_id":"..."}`.
+5. Keep that application key in the trusted host backend. After authenticating a
+   user, mint a 15-minute customer session with
+   `POST /v1/applications/{application_id}/customer-sessions` and
+   `{"external_customer_id":"..."}`. Return only the resulting token to the mobile client.
 
 The Huawei credential uses schema version 1 and media type `application/vnd.iapstack.huawei-credentials+json`:
 
@@ -121,9 +128,15 @@ credential fields, and protected values are never included in the read model.
 
 ## Application operations
 
+- `POST /v1/applications/{application_id}/customer-sessions`
 - `POST /v1/applications/{application_id}/purchases:verify`
 - `POST /v1/applications/{application_id}/purchases:restore`
 - `GET /v1/applications/{application_id}/customers/{external_customer_id}/entitlements`
+
+Only the trusted host backend calls the first endpoint, using its durable application
+bearer after authenticating the user. The remaining endpoints require the returned
+customer session and reject requests whose application or external customer ID does
+not exactly match the authenticated session.
 
 A purchase item contains an external customer ID, claimed products, optional customer bindings, and one provider evidence object. Huawei uses `application/vnd.iapstack.huawei-purchase+json`:
 
@@ -256,9 +269,10 @@ Reject timestamps outside the application's replay window and deduplicate by eve
 ## Flutter SDK
 
 The provider-neutral Dart/Flutter package is in `sdk/flutter/iapstack`. It
-implements application-scoped authentication, bounded response reads,
+implements customer-scoped session authentication, bounded response reads,
 timeouts, transient retries, request ID propagation, v1 models, and stable
-error envelopes. It does not persist or log the application bearer.
+error envelopes. It does not persist or log the customer bearer; the durable
+application bearer remains in the trusted host backend.
 
 Huawei applications add `sdk/flutter/iapstack_huawei`. The companion uses the
 official `huawei_iap` plugin, retains the exact signed `InAppPurchaseData` JSON
@@ -269,8 +283,8 @@ of at most 100. Consumables remain outside v0.1.
 The runnable Android harness under `sdk/flutter/iapstack_huawei/example` takes
 all IAPStack values through `--dart-define`; AppGallery Connect configuration
 and signing files are deliberately gitignored. Follow its README for device
-setup and never commit `agconnect-services.json`, keystores, or application
-keys. It calls Huawei's sandbox activation API before enabling purchase or
+setup and never commit `agconnect-services.json`, keystores, or customer
+sessions. It calls Huawei's sandbox activation API before enabling purchase or
 restore and displays the request ID used to correlate secret-free release
 evidence with server logs.
 
@@ -283,7 +297,7 @@ call client-side `completePurchase`: IAPStack owns Android Publisher acknowledge
 after the authoritative transaction commits.
 
 The Android harness under `sdk/flutter/iapstack_google_play/example` accepts only
-application-scoped test configuration through `--dart-define`, subscribes to the
+customer-scoped test configuration through `--dart-define`, subscribes to the
 purchase stream during startup, never renders or persists the bearer or purchase
 token, and shows request IDs for redacted correlation. Install a signed build from
 the Play Console internal-testing track for real Billing flows; a sideloaded debug
@@ -295,7 +309,7 @@ and sends only the compact transaction JWS from `serverVerificationData` to IAPS
 It listens for unfinished transactions from startup and calls `completePurchase` only
 after authoritative server verification succeeds. Restore synchronizes App Store
 ownership, reads StoreKit 2 transaction history, deduplicates transaction IDs, and
-sends batches of at most 100. Signed evidence and application bearers stay in memory
+sends batches of at most 100. Signed evidence and customer sessions stay in memory
 and are redacted from string representations.
 
 The iOS harness under `sdk/flutter/iapstack_apple/example` contains a shared Xcode

@@ -118,7 +118,7 @@ func (customer Customer) Validate() error {
 	return errors.Join(
 		customer.ID.Validate(),
 		customer.ProjectID.Validate(),
-		validateIdentifier("external customer ID", customer.ExternalID),
+		ValidateExternalCustomerID(customer.ExternalID),
 	)
 }
 

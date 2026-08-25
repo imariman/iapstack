@@ -18,7 +18,7 @@ void main() {
         config: ExampleConfig(
           baseUrl: '',
           applicationId: '',
-          applicationKey: 'must-not-render',
+          customerToken: 'must-not-render',
           externalCustomerId: '',
           subscriptionProductId: 'premium_monthly',
           nonConsumableProductId: 'premium_lifetime',

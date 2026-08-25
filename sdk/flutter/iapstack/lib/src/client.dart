@@ -162,7 +162,7 @@ final class IapStackClient {
   ) async {
     final request = http.Request(method, uri)
       ..headers['Accept'] = 'application/json'
-      ..headers['Authorization'] = 'Bearer ${_config.applicationKey}'
+      ..headers['Authorization'] = 'Bearer ${_config.customerToken}'
       ..headers['X-IAPStack-SDK'] = 'flutter/$_sdkVersion';
     if (requestId != null && requestId.trim().isNotEmpty) {
       request.headers['X-Request-ID'] = requestId.trim();

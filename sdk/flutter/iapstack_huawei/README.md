@@ -10,7 +10,7 @@ final backend = IapStackClient(
   IapStackConfig(
     baseUri: Uri.parse('https://iap.example.com'),
     applicationId: 'my-application',
-    applicationKey: const String.fromEnvironment('IAPSTACK_APPLICATION_KEY'),
+    customerToken: runtimeCustomerToken,
   ),
 );
 final huawei = HuaweiIapStack(client: backend);

@@ -36,7 +36,7 @@ final backend = IapStackClient(
   IapStackConfig(
     baseUri: Uri.parse('https://iap.example.com'),
     applicationId: 'my-google-play-application',
-    applicationKey: const String.fromEnvironment('IAPSTACK_APPLICATION_KEY'),
+    customerToken: runtimeCustomerToken,
   ),
 );
 

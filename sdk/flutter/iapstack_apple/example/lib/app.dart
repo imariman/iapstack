@@ -32,7 +32,7 @@ class ExampleAppState extends State<ExampleApp> {
         IapStackConfig(
           baseUri: Uri.parse(widget.config.baseUrl),
           applicationId: widget.config.applicationId,
-          applicationKey: widget.config.applicationKey,
+          customerToken: widget.config.customerToken,
         ),
       );
       final apple = AppleIapStack(

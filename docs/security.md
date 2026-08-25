@@ -35,7 +35,7 @@ and encrypted backups.
 
 ```text
 Flutter application
-    | application bearer + signed Huawei purchase over TLS
+    | customer session + signed provider purchase over TLS
     v
 TLS ingress -> API/dashboard -> PostgreSQL
                  |                 ^
@@ -59,8 +59,10 @@ The model assumes an attacker may send arbitrary HTTP methods, headers, JSON, si
 evidence copied from another user or application, duplicate notifications, stale
 webhook events, malicious webhook URLs, slow requests, oversized responses, invalid
 provider responses, and concurrent requests. An attacker may know project and
-application identifiers and may obtain one application bearer. That bearer must not
-authorize another application or any administrator route.
+application identifiers and may obtain one customer session. That session must not
+authorize another application, customer, or any administrator route. Durable
+application bearers remain restricted to trusted host backends that mint sessions
+after authenticating their users.
 
 The model also assumes a database-only attacker does not possess the protection roots,
 and a network attacker does not defeat correctly configured TLS. If those assumptions
@@ -70,7 +72,7 @@ fail, incident response and secret rotation are required.
 
 | ID | Threat | Application controls | Required operational control or residual risk |
 | --- | --- | --- | --- |
-| T01 | Stolen or guessed administrator/application bearer | Generated keys contain 256-bit random secrets, only Argon2id verifiers are stored, bootstrap comparison is constant-time, bootstrap keys shorter than 32 bytes are rejected, and every route enforces role and application scope. Stored-key listing is secret-free; revocation is idempotent and atomically preserves the final active administrator. | TLS and ingress rate limits are mandatory. Remove the bootstrap key after provisioning. Rotate through a replacement bearer before revoking the old key, and reserve direct database revocation for documented break-glass response. |
+| T01 | Stolen or guessed administrator/application bearer or customer session | Generated keys contain 256-bit random secrets, only Argon2id verifiers are stored, bootstrap comparison is constant-time, bootstrap keys shorter than 32 bytes are rejected, and every route enforces role and application scope. Customer sessions are encrypted, customer-bound, expire after 15 minutes, and require a still-active issuer key. Stored-key listing is secret-free; revocation is idempotent and atomically preserves the final active administrator. | TLS and ingress rate limits are mandatory. Keep durable application bearers in trusted host backends, remove the bootstrap key after provisioning, and rotate through a replacement bearer before revoking the old key. |
 | T02 | Cross-project or cross-application access | Principals carry durable project/application scope; repositories and protection authenticated data include both identifiers; scope failures return the same unauthorized envelope. | Treat identifier disclosure as expected and rely on authorization, not identifier secrecy. Keep scope regression tests in the release gate. |
 | T03 | Webhook SSRF, DNS rebinding, or redirect escape | Only absolute HTTPS URLs without user information or fragments are accepted. Every A/AAAA result is validated at connection time, the connection is pinned to a validated IP, mixed public/private answers are rejected, proxies and redirects are disabled, and response size/time are bounded. | Private-network delivery is disabled by default. When explicitly enabled, infrastructure egress allowlisting becomes mandatory because application-level address blocking is intentionally bypassed. |
 | T04 | Forged, cross-customer, or replayed provider notification | Huawei signed purchase bytes and customer scope are verified before acknowledgement. Google Play pushes require a Google-signed OIDC token with exact audience and verified service-account email, exact Pub/Sub subscription and package scope, and one strict RTDN variant. Strict normalized envelopes share one protected inbox identity. Workers query authoritative provider state; Google purchase tokens must resolve to a previously verified protected reference before customer access can change. | Apply ingress limits to bound repeated valid evidence. Compromised Huawei signing material or a compromised configured Google push principal is outside this boundary. |
@@ -91,8 +93,9 @@ The following conditions are release-blocking:
    protection, provider, or transaction failure.
 2. Duplicate verification, restore, notification, reconciliation, or worker recovery
    does not create an additional logical entitlement change or outbox event.
-3. A bearer for one application cannot read or mutate another application, and an
-   application bearer cannot use administrator routes.
+3. A bearer for one application cannot read or mutate another application, an
+   application bearer cannot use administrator routes, and a customer session
+   cannot read or mutate another customer.
 4. Plaintext credentials, signing secrets, access tokens, purchase tokens, purchase
    payloads, ciphertext, and fingerprints do not appear in HTTP errors, dashboard
    responses, access logs, provider logs, or metric labels.

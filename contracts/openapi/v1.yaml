@@ -416,13 +416,51 @@ paths:
           $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /v1/applications/{application_id}/customer-sessions:
+    post:
+      tags: [Customer sessions]
+      operationId: createCustomerSession
+      summary: Mint one short-lived customer-bound mobile bearer
+      description: >-
+        This operation is for a trusted host backend after it authenticates its
+        own user. The durable application bearer must never be shipped in a
+        mobile application.
+      security:
+        - applicationBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ApplicationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerSessionRequest'
+      responses:
+        '201':
+          description: Opaque customer bearer returned exactly once
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerSession'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /v1/applications/{application_id}/purchases:verify:
     post:
       tags: [Purchases]
       operationId: verifyPurchase
       summary: Verify one signed purchase and return current projections
       security:
-        - applicationBearer: []
+        - customerSessionBearer: []
       parameters:
         - $ref: '#/components/parameters/ApplicationId'
       requestBody:
@@ -462,7 +500,7 @@ paths:
       operationId: restorePurchases
       summary: Verify a bounded batch of signed purchases in request order
       security:
-        - applicationBearer: []
+        - customerSessionBearer: []
       parameters:
         - $ref: '#/components/parameters/ApplicationId'
       requestBody:
@@ -502,7 +540,7 @@ paths:
       operationId: getCustomerEntitlements
       summary: Load the current entitlement projection for one customer
       security:
-        - applicationBearer: []
+        - customerSessionBearer: []
       parameters:
         - $ref: '#/components/parameters/ApplicationId'
         - $ref: '#/components/parameters/ExternalCustomerId'
@@ -652,7 +690,12 @@ components:
       type: http
       scheme: bearer
       bearerFormat: opaque-application-key
-      description: Application-scoped bearer bound to the application path.
+      description: Durable host-backend bearer used only to mint customer sessions.
+    customerSessionBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-customer-session
+      description: Short-lived bearer bound to one application and external customer identity.
     googlePubSubOIDC:
       type: http
       scheme: bearer
@@ -1126,6 +1169,26 @@ components:
         product_kind:
           type: string
           enum: [subscription, non_consumable]
+    CustomerSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [external_customer_id]
+      properties:
+        external_customer_id:
+          $ref: '#/components/schemas/Identifier'
+    CustomerSession:
+      type: object
+      additionalProperties: false
+      required: [token, expires_at]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: Short-lived opaque bearer returned exactly once.
+        expires_at:
+          type: string
+          format: date-time
     PurchaseSubmission:
       type: object
       additionalProperties: false

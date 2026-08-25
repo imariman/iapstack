@@ -6,7 +6,7 @@ final class ExampleConfig {
   const ExampleConfig({
     required this.baseUrl,
     required this.applicationId,
-    required this.applicationKey,
+    required this.customerToken,
     required this.externalCustomerId,
     required this.productId,
     required this.productKind,
@@ -16,8 +16,7 @@ final class ExampleConfig {
   factory ExampleConfig.fromEnvironment() => ExampleConfig(
         baseUrl: const String.fromEnvironment('IAPSTACK_BASE_URL'),
         applicationId: const String.fromEnvironment('IAPSTACK_APPLICATION_ID'),
-        applicationKey:
-            const String.fromEnvironment('IAPSTACK_APPLICATION_KEY'),
+        customerToken: const String.fromEnvironment('IAPSTACK_CUSTOMER_TOKEN'),
         externalCustomerId:
             const String.fromEnvironment('IAPSTACK_EXTERNAL_CUSTOMER_ID'),
         productId: const String.fromEnvironment('IAPSTACK_HUAWEI_PRODUCT_ID'),
@@ -35,8 +34,8 @@ final class ExampleConfig {
   /// Application scope.
   final String applicationId;
 
-  /// Runtime-only application bearer.
-  final String applicationKey;
+  /// Runtime-only customer session bearer.
+  final String customerToken;
 
   /// Current host-application customer binding.
   final String externalCustomerId;
@@ -54,7 +53,7 @@ final class ExampleConfig {
   List<String> get missingValues => <String>[
         if (baseUrl.trim().isEmpty) 'IAPSTACK_BASE_URL',
         if (applicationId.trim().isEmpty) 'IAPSTACK_APPLICATION_ID',
-        if (applicationKey.trim().isEmpty) 'IAPSTACK_APPLICATION_KEY',
+        if (customerToken.trim().isEmpty) 'IAPSTACK_CUSTOMER_TOKEN',
         if (externalCustomerId.trim().isEmpty) 'IAPSTACK_EXTERNAL_CUSTOMER_ID',
         if (productId.trim().isEmpty) 'IAPSTACK_HUAWEI_PRODUCT_ID',
       ];

@@ -1,12 +1,16 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
+	platformprotection "github.com/imariman/iapstack/internal/platform/protection"
 )
 
 const (
@@ -66,6 +70,84 @@ func TestNewServiceRejectsShortBootstrapKey(t *testing.T) {
 	if _, err := NewService(store, "bootstrap-secret"); err == nil {
 		t.Fatal("NewService() short bootstrap key error = nil, want validation error")
 	}
+}
+
+// TestCustomerSessionsBindCustomerExpiryAndIssuer verifies the complete short-lived bearer boundary.
+func TestCustomerSessionsBindCustomerExpiryAndIssuer(t *testing.T) {
+	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}
+	apiKeys, err := NewService(store, "")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	bearer, err := apiKeys.Create(context.Background(), Principal{
+		Role: persistence.APIKeyRoleApplication, ProjectID: "project-1", ApplicationID: "application-1",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	issuer, err := apiKeys.Authenticate(context.Background(), bearer)
+	if err != nil {
+		t.Fatalf("Authenticate() issuer error = %v", err)
+	}
+	keyring := newCustomerSessionKeyring(t)
+	sessions, err := NewCustomerSessions(store, keyring)
+	if err != nil {
+		t.Fatalf("NewCustomerSessions() error = %v", err)
+	}
+	now := time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC)
+	sessions.clock = func() time.Time { return now }
+
+	session, err := sessions.Mint(context.Background(), issuer, "customer-external")
+	if err != nil {
+		t.Fatalf("Mint() error = %v", err)
+	}
+	if !strings.HasPrefix(session.Token, customerSessionPrefix) ||
+		!session.ExpiresAt.Equal(now.Add(defaultCustomerSessionTTL)) {
+		t.Fatalf("Mint() = %#v", session)
+	}
+	principal, err := sessions.Authenticate(context.Background(), session.Token)
+	if err != nil {
+		t.Fatalf("Authenticate() session error = %v", err)
+	}
+	if principal.ExternalCustomerID != "customer-external" || principal.KeyID != issuer.KeyID ||
+		principal.ProjectID != issuer.ProjectID || principal.ApplicationID != issuer.ApplicationID {
+		t.Fatalf("Authenticate() session = %#v", principal)
+	}
+
+	replacement := byte('A')
+	if session.Token[len(session.Token)-1] == replacement {
+		replacement = 'B'
+	}
+	tampered := session.Token[:len(session.Token)-1] + string(replacement)
+	if _, err := sessions.Authenticate(context.Background(), tampered); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("tampered session error = %v, want unauthorized", err)
+	}
+	sessions.clock = func() time.Time { return session.ExpiresAt }
+	if _, err := sessions.Authenticate(context.Background(), session.Token); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expired session error = %v, want unauthorized", err)
+	}
+	sessions.clock = func() time.Time { return now }
+	delete(store.records, issuer.KeyID)
+	if _, err := sessions.Authenticate(context.Background(), session.Token); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("revoked issuer session error = %v, want unauthorized", err)
+	}
+}
+
+// newCustomerSessionKeyring constructs deterministic root material for session tests.
+func newCustomerSessionKeyring(t *testing.T) *platformprotection.Keyring {
+	t.Helper()
+
+	config, err := platformprotection.NewConfig(
+		"session-key", map[string][]byte{"session-key": bytes.Repeat([]byte{1}, 32)}, bytes.Repeat([]byte{2}, 32),
+	)
+	if err != nil {
+		t.Fatalf("NewConfig() error = %v", err)
+	}
+	keyring, err := platformprotection.New(config)
+	if err != nil {
+		t.Fatalf("New() keyring error = %v", err)
+	}
+	return keyring
 }
 
 // Operate executes one fake atomic operations callback.

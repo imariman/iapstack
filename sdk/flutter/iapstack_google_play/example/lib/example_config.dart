@@ -6,7 +6,7 @@ final class ExampleConfig {
   const ExampleConfig({
     required this.baseUrl,
     required this.applicationId,
-    required this.applicationKey,
+    required this.customerToken,
     required this.externalCustomerId,
     required this.subscriptionProductId,
     required this.nonConsumableProductId,
@@ -16,7 +16,7 @@ final class ExampleConfig {
   factory ExampleConfig.fromEnvironment() => const ExampleConfig(
     baseUrl: String.fromEnvironment('IAPSTACK_BASE_URL'),
     applicationId: String.fromEnvironment('IAPSTACK_APPLICATION_ID'),
-    applicationKey: String.fromEnvironment('IAPSTACK_APPLICATION_KEY'),
+    customerToken: String.fromEnvironment('IAPSTACK_CUSTOMER_TOKEN'),
     externalCustomerId: String.fromEnvironment('IAPSTACK_EXTERNAL_CUSTOMER_ID'),
     subscriptionProductId: String.fromEnvironment(
       'IAPSTACK_GOOGLE_PLAY_SUBSCRIPTION_ID',
@@ -32,8 +32,8 @@ final class ExampleConfig {
   /// IAPStack application scope.
   final String applicationId;
 
-  /// Runtime-only application bearer that is never rendered or persisted.
-  final String applicationKey;
+  /// Runtime-only customer session that is never rendered or persisted.
+  final String customerToken;
 
   /// Opaque, non-PII customer binding sent to Google Play and IAPStack.
   final String externalCustomerId;
@@ -60,7 +60,7 @@ final class ExampleConfig {
   List<String> get missingValues => <String>[
     if (baseUrl.trim().isEmpty) 'IAPSTACK_BASE_URL',
     if (applicationId.trim().isEmpty) 'IAPSTACK_APPLICATION_ID',
-    if (applicationKey.trim().isEmpty) 'IAPSTACK_APPLICATION_KEY',
+    if (customerToken.trim().isEmpty) 'IAPSTACK_CUSTOMER_TOKEN',
     if (externalCustomerId.trim().isEmpty) 'IAPSTACK_EXTERNAL_CUSTOMER_ID',
     if (subscriptionProductId.trim().isEmpty &&
         nonConsumableProductId.trim().isEmpty)

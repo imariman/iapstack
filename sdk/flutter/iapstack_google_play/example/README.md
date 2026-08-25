@@ -18,7 +18,7 @@ entitlement reads. It is a manual provider test harness, not a production app.
 4. Configure an IAPStack Google Play application whose
    `provider_application_id` equals the Android package. Add matching catalog
    mappings, the Android Publisher service-account credential, the customer,
-   and an application-scoped bearer.
+   and a customer session minted by the trusted host backend.
 5. Use an opaque, stable, non-PII customer identifier of at most 64 characters.
    The same value must be sent to Play Billing and IAPStack; do not use an email
    address or Google ID.
@@ -35,18 +35,17 @@ Pass configuration without committing it to source:
 flutter run \
   --dart-define=IAPSTACK_BASE_URL=https://iap.example.com \
   --dart-define=IAPSTACK_APPLICATION_ID=application-1 \
-  --dart-define=IAPSTACK_APPLICATION_KEY=replace-at-runtime \
+  --dart-define=IAPSTACK_CUSTOMER_TOKEN=replace-at-runtime \
   --dart-define=IAPSTACK_EXTERNAL_CUSTOMER_ID=opaque-customer-1 \
   --dart-define=IAPSTACK_GOOGLE_PLAY_SUBSCRIPTION_ID=premium_monthly \
   --dart-define=IAPSTACK_GOOGLE_PLAY_NON_CONSUMABLE_ID=premium_lifetime
 ```
 
-At least one product define is required. The application bearer is compiled
-into this test build, so use only an application-scoped test key, distribute the
-APK through the restricted testing track, and revoke the key after the run.
-Never use an administrator bearer in a mobile application.
+At least one product define is required. Mint a short-lived customer session
+immediately before the run and compile only that token into this test build.
+Never place an application or administrator bearer in a mobile application.
 
-The UI never renders the application bearer or purchase token and does not use
+The UI never renders the customer session or purchase token and does not use
 local persistence. Request IDs are shown so an operator can correlate safe
 client observations with redacted server logs.
 
@@ -69,7 +68,7 @@ webhook receiver:
 - Renewal, cancellation, grace period, account hold, pause, expiration, refund,
   and revocation converge through Android Publisher and RTDN reconciliation.
 
-Do not record purchase tokens, Billing payloads, application keys, service
+Do not record purchase tokens, Billing payloads, customer sessions, service
 account values, or customer identifiers in screenshots, CI logs, issues, or
 release evidence.
 

@@ -7,13 +7,13 @@ void main() {
     await tester.pumpWidget(
       const MaterialApp(
         home: ConfigurationPage(
-          missingValues: <String>['IAPSTACK_APPLICATION_KEY'],
+          missingValues: <String>['IAPSTACK_CUSTOMER_TOKEN'],
         ),
       ),
     );
 
     expect(find.text('Runtime configuration required'), findsOneWidget);
-    expect(find.text('IAPSTACK_APPLICATION_KEY'), findsOneWidget);
+    expect(find.text('IAPSTACK_CUSTOMER_TOKEN'), findsOneWidget);
     expect(find.textContaining('Bearer'), findsNothing);
   });
 }

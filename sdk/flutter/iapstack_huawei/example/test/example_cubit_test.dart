@@ -15,7 +15,7 @@ void main() {
       IapStackConfig(
         baseUri: Uri.parse('https://iap.example'),
         applicationId: 'application-1',
-        applicationKey: 'application-key',
+        customerToken: 'customer-token',
       ),
       httpClient: MockClient((request) async {
         observedRequestId = request.headers['X-Request-ID'];
@@ -52,7 +52,7 @@ void main() {
       IapStackConfig(
         baseUri: Uri.parse('https://iap.example'),
         applicationId: 'application-1',
-        applicationKey: 'application-key',
+        customerToken: 'customer-token',
       ),
       httpClient: MockClient((request) async {
         backendCalled = true;

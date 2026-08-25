@@ -19,12 +19,12 @@ Run the harness with runtime-only configuration:
 flutter run \
   --dart-define=IAPSTACK_BASE_URL=https://iap.example.com \
   --dart-define=IAPSTACK_APPLICATION_ID=ios-sandbox \
-  --dart-define=IAPSTACK_APPLICATION_KEY=replace-at-runtime \
+  --dart-define=IAPSTACK_CUSTOMER_TOKEN=replace-at-runtime \
   --dart-define=IAPSTACK_EXTERNAL_CUSTOMER_ID=018f59d0-a200-7000-8000-000000000001
 ```
 
 The customer value must be a canonical lowercase UUID because StoreKit uses it
-as `appAccountToken`. The application key is never rendered or persisted.
+as `appAccountToken`. The customer session is never rendered or persisted.
 
 For App Store sandbox testing, replace the product identifiers with the values
 configured in App Store Connect by adding

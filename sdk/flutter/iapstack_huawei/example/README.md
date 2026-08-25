@@ -1,7 +1,7 @@
 # Huawei sandbox example
 
 This Android example is the manual device harness for IAPStack release
-candidates. It never writes the application key or purchase payloads to local
+candidates. It never writes the customer session or purchase payloads to local
 storage, logs, or analytics.
 
 ## AppGallery Connect setup
@@ -22,7 +22,7 @@ Run on a Huawei device with HMS Core:
 flutter run \
   --dart-define=IAPSTACK_BASE_URL=https://iap.example.com \
   --dart-define=IAPSTACK_APPLICATION_ID=my-application \
-  --dart-define=IAPSTACK_APPLICATION_KEY=replace-at-runtime \
+  --dart-define=IAPSTACK_CUSTOMER_TOKEN=replace-at-runtime \
   --dart-define=IAPSTACK_EXTERNAL_CUSTOMER_ID=customer-123 \
   --dart-define=IAPSTACK_HUAWEI_PRODUCT_ID=premium_monthly \
   --dart-define=IAPSTACK_HUAWEI_PRODUCT_KIND=subscription

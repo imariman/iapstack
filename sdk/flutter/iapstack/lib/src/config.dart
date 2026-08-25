@@ -1,12 +1,12 @@
 import 'package:iapstack/src/retry_policy.dart';
 
-/// Runtime-only configuration for one application-scoped IAPStack client.
+/// Runtime-only configuration for one customer-scoped IAPStack client.
 final class IapStackConfig {
   /// Creates an immutable client configuration.
   const IapStackConfig({
     required this.baseUri,
     required this.applicationId,
-    required this.applicationKey,
+    required this.customerToken,
     this.timeout = const Duration(seconds: 10),
     this.retryPolicy = const IapStackRetryPolicy(),
     this.maxResponseBytes = 1024 * 1024,
@@ -19,8 +19,8 @@ final class IapStackConfig {
   /// Application scope encoded in every public API path.
   final String applicationId;
 
-  /// Application bearer retained only in memory by this SDK.
-  final String applicationKey;
+  /// Short-lived customer bearer retained only in memory by this SDK.
+  final String customerToken;
 
   /// Maximum duration of one HTTP attempt, including response streaming.
   final Duration timeout;
@@ -51,10 +51,9 @@ final class IapStackConfig {
       throw ArgumentError.value(
           applicationId, 'applicationId', 'must be one non-empty path segment');
     }
-    if (applicationKey.trim().isEmpty ||
-        applicationKey.contains(RegExp(r'\s'))) {
+    if (customerToken.trim().isEmpty || customerToken.contains(RegExp(r'\s'))) {
       throw ArgumentError.value(
-          '<redacted>', 'applicationKey', 'must be a non-empty bearer token');
+          '<redacted>', 'customerToken', 'must be a non-empty bearer token');
     }
     if (timeout <= Duration.zero) {
       throw ArgumentError.value(timeout, 'timeout', 'must be positive');

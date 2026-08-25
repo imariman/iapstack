@@ -39,36 +39,38 @@ const (
 
 // API owns versioned routes and application services without direct database access.
 type API struct {
-	store          persistence.Store
-	operations     persistence.OperationsStore
-	admin          persistence.AdminQueryStore
-	authentication *auth.Service
-	credentials    *credentials.Service
-	webhooks       *webhooks.Service
-	verification   *verification.Service
-	huawei         *huawei.Adapter
-	apple          *apple.Adapter
-	googlePlay     *googleplay.Adapter
-	protection     protection.Service
-	bodyLimit      int64
-	clock          func() time.Time
-	handler        http.Handler
+	store            persistence.Store
+	operations       persistence.OperationsStore
+	admin            persistence.AdminQueryStore
+	authentication   *auth.Service
+	customerSessions *auth.CustomerSessions
+	credentials      *credentials.Service
+	webhooks         *webhooks.Service
+	verification     *verification.Service
+	huawei           *huawei.Adapter
+	apple            *apple.Adapter
+	googlePlay       *googleplay.Adapter
+	protection       protection.Service
+	bodyLimit        int64
+	clock            func() time.Time
+	handler          http.Handler
 }
 
 // Dependencies contains the services required by the public HTTP contract.
 type Dependencies struct {
-	Store          persistence.Store
-	Operations     persistence.OperationsStore
-	Admin          persistence.AdminQueryStore
-	Authentication *auth.Service
-	Credentials    *credentials.Service
-	Webhooks       *webhooks.Service
-	Verification   *verification.Service
-	Huawei         *huawei.Adapter
-	Apple          *apple.Adapter
-	GooglePlay     *googleplay.Adapter
-	Protection     protection.Service
-	BodyLimit      int64
+	Store            persistence.Store
+	Operations       persistence.OperationsStore
+	Admin            persistence.AdminQueryStore
+	Authentication   *auth.Service
+	CustomerSessions *auth.CustomerSessions
+	Credentials      *credentials.Service
+	Webhooks         *webhooks.Service
+	Verification     *verification.Service
+	Huawei           *huawei.Adapter
+	Apple            *apple.Adapter
+	GooglePlay       *googleplay.Adapter
+	Protection       protection.Service
+	BodyLimit        int64
 }
 
 // errorEnvelope is the stable v1 failure contract.
@@ -93,6 +95,17 @@ type applicationRequest struct {
 // customerRequest creates one stable external customer binding.
 type customerRequest struct {
 	ExternalID string `json:"external_id"`
+}
+
+// customerSessionRequest selects the host-authenticated customer bound to one mobile session.
+type customerSessionRequest struct {
+	ExternalCustomerID string `json:"external_customer_id"`
+}
+
+// customerSessionResponse returns one short-lived opaque bearer exactly once.
+type customerSessionResponse struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // entitlementRequest creates one named entitlement definition.
@@ -185,6 +198,7 @@ type v1Route struct {
 // New validates dependencies and registers the complete v1 route surface.
 func New(dependencies Dependencies) (*API, error) {
 	if dependencies.Store == nil || dependencies.Operations == nil || dependencies.Admin == nil || dependencies.Authentication == nil ||
+		dependencies.CustomerSessions == nil ||
 		dependencies.Credentials == nil || dependencies.Webhooks == nil || dependencies.Verification == nil ||
 		dependencies.Huawei == nil || dependencies.Apple == nil || dependencies.GooglePlay == nil ||
 		dependencies.Protection == nil || dependencies.BodyLimit <= 0 {
@@ -192,8 +206,9 @@ func New(dependencies Dependencies) (*API, error) {
 	}
 	api := &API{
 		store: dependencies.Store, operations: dependencies.Operations, admin: dependencies.Admin,
-		authentication: dependencies.Authentication, credentials: dependencies.Credentials,
-		webhooks: dependencies.Webhooks, verification: dependencies.Verification,
+		authentication: dependencies.Authentication, customerSessions: dependencies.CustomerSessions,
+		credentials: dependencies.Credentials,
+		webhooks:    dependencies.Webhooks, verification: dependencies.Verification,
 		huawei: dependencies.Huawei, apple: dependencies.Apple, googlePlay: dependencies.GooglePlay,
 		protection: dependencies.Protection,
 		bodyLimit:  dependencies.BodyLimit, clock: time.Now,
@@ -223,6 +238,7 @@ func (api *API) v1Routes() []v1Route {
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}/store-products/{provider_product_id}", OperationID: "putAdminStoreProduct", Handler: api.putStoreProduct},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}/credentials/{kind}", OperationID: "putAdminCredential", Handler: api.putCredential},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}/webhook", OperationID: "putAdminWebhook", Handler: api.putWebhook},
+		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/customer-sessions", OperationID: "createCustomerSession", Handler: api.createCustomerSession},
 		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/purchases:verify", OperationID: "verifyPurchase", Handler: api.verifyPurchase},
 		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/purchases:restore", OperationID: "restorePurchases", Handler: api.restorePurchases},
 		{Method: http.MethodGet, Path: "/v1/applications/{application_id}/customers/{external_customer_id}/entitlements", OperationID: "getCustomerEntitlements", Handler: api.customerEntitlements},
@@ -230,6 +246,26 @@ func (api *API) v1Routes() []v1Route {
 		{Method: http.MethodPost, Path: "/v1/providers/apple/projects/{project_id}/applications/{application_id}/notifications", OperationID: "acceptAppleNotification", Handler: api.appleNotification},
 		{Method: http.MethodPost, Path: "/v1/providers/google-play/projects/{project_id}/applications/{application_id}/notifications", OperationID: "acceptGooglePlayNotification", Handler: api.googlePlayNotification},
 	}
+}
+
+// createCustomerSession mints one short-lived customer bearer for a trusted host backend.
+func (api *API) createCustomerSession(writer http.ResponseWriter, request *http.Request) {
+	principal, ok := api.requireApplication(writer, request)
+	if !ok {
+		return
+	}
+	var input customerSessionRequest
+	if !api.decode(writer, request, &input) {
+		return
+	}
+	session, err := api.customerSessions.Mint(request.Context(), principal, input.ExternalCustomerID)
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, customerSessionResponse{
+		Token: session.Token, ExpiresAt: session.ExpiresAt,
+	})
 }
 
 // listAPIKeys returns bounded secret-free lifecycle metadata for rotation workflows.
@@ -464,7 +500,7 @@ func (api *API) putWebhook(writer http.ResponseWriter, request *http.Request) {
 
 // verifyPurchase verifies one signed purchase and returns the current entitlement snapshot.
 func (api *API) verifyPurchase(writer http.ResponseWriter, request *http.Request) {
-	principal, ok := api.requireApplication(writer, request)
+	principal, ok := api.requireCustomerSession(writer, request)
 	if !ok {
 		return
 	}
@@ -472,8 +508,12 @@ func (api *API) verifyPurchase(writer http.ResponseWriter, request *http.Request
 	if !api.decode(writer, request, &input) {
 		return
 	}
+	if input.ExternalCustomerID != principal.ExternalCustomerID {
+		writeAPIError(writer, request, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
 	defer zero(input.Evidence)
-	result, err := api.verify(request.Context(), principal, input)
+	result, err := api.verify(request.Context(), principal.Principal, input)
 	if err != nil {
 		api.writeError(writer, request, err)
 		return
@@ -483,7 +523,7 @@ func (api *API) verifyPurchase(writer http.ResponseWriter, request *http.Request
 
 // restorePurchases verifies a bounded list sequentially so each item remains independently idempotent.
 func (api *API) restorePurchases(writer http.ResponseWriter, request *http.Request) {
-	principal, ok := api.requireApplication(writer, request)
+	principal, ok := api.requireCustomerSession(writer, request)
 	if !ok {
 		return
 	}
@@ -495,6 +535,12 @@ func (api *API) restorePurchases(writer http.ResponseWriter, request *http.Reque
 		writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", "purchases must contain between 1 and 100 items")
 		return
 	}
+	for _, purchase := range input.Purchases {
+		if purchase.ExternalCustomerID != principal.ExternalCustomerID {
+			writeAPIError(writer, request, http.StatusUnauthorized, "unauthorized", "authentication required")
+			return
+		}
+	}
 	defer func() {
 		for index := range input.Purchases {
 			zero(input.Purchases[index].Evidence)
@@ -502,7 +548,7 @@ func (api *API) restorePurchases(writer http.ResponseWriter, request *http.Reque
 	}()
 	results := make([]verificationResponse, 0, len(input.Purchases))
 	for _, purchase := range input.Purchases {
-		result, err := api.verify(request.Context(), principal, purchase)
+		result, err := api.verify(request.Context(), principal.Principal, purchase)
 		if err != nil {
 			api.writeError(writer, request, err)
 			return
@@ -514,11 +560,15 @@ func (api *API) restorePurchases(writer http.ResponseWriter, request *http.Reque
 
 // customerEntitlements returns one application-scoped customer's current projection snapshot.
 func (api *API) customerEntitlements(writer http.ResponseWriter, request *http.Request) {
-	principal, ok := api.requireApplication(writer, request)
+	principal, ok := api.requireCustomerSession(writer, request)
 	if !ok {
 		return
 	}
 	externalID := request.PathValue("external_customer_id")
+	if externalID != principal.ExternalCustomerID {
+		writeAPIError(writer, request, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
 	var customer core.Customer
 	var entitlements []persistence.CustomerEntitlement
 	err := api.store.Transact(request.Context(), func(repository persistence.Transaction) error {
@@ -780,6 +830,24 @@ func (api *API) requireApplication(writer http.ResponseWriter, request *http.Req
 		string(principal.ApplicationID) != request.PathValue("application_id") {
 		writeAPIError(writer, request, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return auth.Principal{}, false
+	}
+	return principal, true
+}
+
+// requireCustomerSession authenticates and path-binds one short-lived customer bearer.
+func (api *API) requireCustomerSession(
+	writer http.ResponseWriter,
+	request *http.Request,
+) (auth.CustomerPrincipal, bool) {
+	token, ok := strictBearerToken(request.Header.Get("Authorization"))
+	if !ok {
+		writeAPIError(writer, request, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return auth.CustomerPrincipal{}, false
+	}
+	principal, err := api.customerSessions.Authenticate(request.Context(), token)
+	if err != nil || string(principal.ApplicationID) != request.PathValue("application_id") {
+		writeAPIError(writer, request, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return auth.CustomerPrincipal{}, false
 	}
 	return principal, true
 }

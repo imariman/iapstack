@@ -10,7 +10,7 @@ void main() {
     const config = ExampleConfig(
       baseUrl: '',
       applicationId: 'application-1',
-      applicationKey: secret,
+      customerToken: secret,
       externalCustomerId: 'opaque-customer-1',
       subscriptionProductId: '',
       nonConsumableProductId: '',
@@ -31,7 +31,7 @@ void main() {
     const config = ExampleConfig(
       baseUrl: 'https://iap.example',
       applicationId: 'application-1',
-      applicationKey: 'application-key',
+      customerToken: 'customer-token',
       externalCustomerId: 'opaque-customer-1',
       subscriptionProductId: 'premium_monthly',
       nonConsumableProductId: 'premium_lifetime',

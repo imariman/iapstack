@@ -10,7 +10,7 @@ class ExamplePage extends StatelessWidget {
   /// Creates the sandbox controls page.
   const ExamplePage({required this.config, super.key});
 
-  /// Safe display configuration; the application key is never rendered.
+  /// Safe display configuration; the customer session is never rendered.
   final ExampleConfig config;
 
   @override

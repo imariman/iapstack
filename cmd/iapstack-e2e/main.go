@@ -70,6 +70,12 @@ type keyResponse struct {
 	Key string `json:"key"`
 }
 
+// customerSessionResponse contains one short-lived customer bearer minted by the trusted gate client.
+type customerSessionResponse struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 // entitlementSnapshot is the application-facing customer projection response.
 type entitlementSnapshot struct {
 	CustomerID   string        `json:"customer_id"`
@@ -205,6 +211,10 @@ func (client *gateClient) bootstrap(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	customerSession, err := client.createCustomerSession(ctx, applicationKey, scenario.ExternalCustomerID)
+	if err != nil {
+		return err
+	}
 	verification := map[string]any{
 		"external_customer_id": scenario.ExternalCustomerID,
 		"claimed_products":     []string{scenario.ProviderProductID},
@@ -213,7 +223,7 @@ func (client *gateClient) bootstrap(ctx context.Context) error {
 	for attempt := 0; attempt < 2; attempt++ {
 		body, err := client.request(ctx, http.MethodPost,
 			client.apiBaseURL+"/v1/applications/"+applicationID+"/purchases:verify",
-			applicationKey, verification, nil, http.StatusOK)
+			customerSession, verification, nil, http.StatusOK)
 		if err != nil {
 			return err
 		}
@@ -224,7 +234,7 @@ func (client *gateClient) bootstrap(ctx context.Context) error {
 	if err := client.waitForDeliveries(ctx, 1, 1); err != nil {
 		return err
 	}
-	if err := client.assertEntitlement(ctx, applicationKey, scenario.ExternalCustomerID,
+	if err := client.assertEntitlement(ctx, customerSession, scenario.ExternalCustomerID,
 		"allowed", "purchase_valid", 1); err != nil {
 		return err
 	}
@@ -261,7 +271,11 @@ func (client *gateClient) enqueueNotification(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := client.assertEntitlement(ctx, applicationKey, scenario.ExternalCustomerID,
+	customerSession, err := client.createCustomerSession(ctx, applicationKey, scenario.ExternalCustomerID)
+	if err != nil {
+		return err
+	}
+	if err := client.assertEntitlement(ctx, customerSession, scenario.ExternalCustomerID,
 		"allowed", "purchase_valid", 1); err != nil {
 		return fmt.Errorf("worker stopped projection changed unexpectedly: %w", err)
 	}
@@ -282,8 +296,12 @@ func (client *gateClient) assertRecovery(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	customerSession, err := client.createCustomerSession(ctx, applicationKey, scenario.ExternalCustomerID)
+	if err != nil {
+		return err
+	}
 	if err := waitFor(ctx, func() (bool, error) {
-		err := client.assertEntitlement(ctx, applicationKey, scenario.ExternalCustomerID,
+		err := client.assertEntitlement(ctx, customerSession, scenario.ExternalCustomerID,
 			"denied", "refunded", 2)
 		return err == nil, nil
 	}); err != nil {
@@ -347,6 +365,32 @@ func (client *gateClient) createApplicationKey(ctx context.Context) (string, err
 	})
 }
 
+// createCustomerSession exchanges one trusted application key for a customer-bound bearer.
+func (client *gateClient) createCustomerSession(
+	ctx context.Context,
+	applicationKey string,
+	externalID string,
+) (string, error) {
+	body, err := client.request(
+		ctx,
+		http.MethodPost,
+		client.apiBaseURL+"/v1/applications/"+applicationID+"/customer-sessions",
+		applicationKey,
+		map[string]any{"external_customer_id": externalID},
+		nil,
+		http.StatusCreated,
+	)
+	if err != nil {
+		return "", err
+	}
+	var response customerSessionResponse
+	if err := json.Unmarshal(body, &response); err != nil || response.Token == "" ||
+		!response.ExpiresAt.After(time.Now().UTC()) {
+		return "", errors.New("customer session response was invalid")
+	}
+	return response.Token, nil
+}
+
 // createKey calls the one-time key creation contract and returns the bearer only in memory.
 func (client *gateClient) createKey(ctx context.Context, adminBearer string, input any) (string, error) {
 	body, err := client.request(ctx, http.MethodPost, client.apiBaseURL+"/v1/admin/api-keys",
@@ -364,7 +408,7 @@ func (client *gateClient) createKey(ctx context.Context, adminBearer string, inp
 // assertEntitlement loads and validates one exact customer entitlement snapshot.
 func (client *gateClient) assertEntitlement(
 	ctx context.Context,
-	applicationKey string,
+	customerSession string,
 	externalID string,
 	access string,
 	reason string,
@@ -372,7 +416,7 @@ func (client *gateClient) assertEntitlement(
 ) error {
 	body, err := client.request(ctx, http.MethodGet,
 		client.apiBaseURL+"/v1/applications/"+applicationID+"/customers/"+externalID+"/entitlements",
-		applicationKey, nil, nil, http.StatusOK)
+		customerSession, nil, nil, http.StatusOK)
 	if err != nil {
 		return err
 	}

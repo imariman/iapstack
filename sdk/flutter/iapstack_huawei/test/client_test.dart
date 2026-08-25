@@ -227,7 +227,7 @@ IapStackClient _backend(Future<http.Response> Function(http.Request) handler) =>
       IapStackConfig(
         baseUri: Uri.parse('https://iap.example'),
         applicationId: 'application-1',
-        applicationKey: 'application-key',
+        customerToken: 'customer-token',
         retryPolicy: const IapStackRetryPolicy(maxAttempts: 1),
       ),
       httpClient: MockClient(handler),

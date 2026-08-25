@@ -23,7 +23,7 @@ void main() {
       expect(captured.method, 'POST');
       expect(captured.url.path,
           '/proxy/v1/applications/application-1/purchases:verify');
-      expect(captured.headers['Authorization'], 'Bearer application-key');
+      expect(captured.headers['Authorization'], 'Bearer customer-token');
       expect(captured.headers['Content-Type'], 'application/json');
       expect(captured.headers['X-Request-ID'], 'request-client-1');
       expect(captured.headers['X-IAPStack-SDK'], startsWith('flutter/'));
@@ -216,7 +216,7 @@ void main() {
           IapStackConfig(
             baseUri: Uri.parse('http://iap.example'),
             applicationId: 'application-1',
-            applicationKey: 'application-key',
+            customerToken: 'customer-token',
           ),
           httpClient: MockClient((request) async => http.Response('{}', 200)),
         ),
@@ -230,7 +230,7 @@ void main() {
           IapStackConfig(
             baseUri: Uri.parse('https://iap.example'),
             applicationId: 'application-1',
-            applicationKey: 'secret with spaces',
+            customerToken: 'secret with spaces',
           ),
           httpClient: MockClient((request) async => http.Response('{}', 200)),
         ),
@@ -249,7 +249,7 @@ IapStackConfig _config({
     IapStackConfig(
       baseUri: Uri.parse('https://iap.example/proxy'),
       applicationId: 'application-1',
-      applicationKey: 'application-key',
+      customerToken: 'customer-token',
       timeout: timeout,
       retryPolicy: retryPolicy,
       maxResponseBytes: maxResponseBytes,

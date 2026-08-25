@@ -21,7 +21,7 @@ class ConfigurationPage extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           const Text(
-            'Pass these values with --dart-define. The application bearer and purchase tokens are never displayed or persisted.',
+            'Pass these values with --dart-define. The customer session and purchase tokens are never displayed or persisted.',
           ),
           const SizedBox(height: 16),
           for (final value in missingValues)

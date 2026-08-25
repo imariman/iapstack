@@ -17,6 +17,11 @@ type ObservationID string
 type ProviderApplicationID string
 type ProviderProductID string
 
+// ValidateExternalCustomerID checks one application-owned customer identity.
+func ValidateExternalCustomerID(value string) error {
+	return validateIdentifier("external customer ID", value)
+}
+
 // Validate checks that the project ID is present and well formed.
 func (id ProjectID) Validate() error {
 	return validateIdentifier("project ID", string(id))
