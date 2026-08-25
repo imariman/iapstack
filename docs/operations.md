@@ -39,16 +39,32 @@ bearer outside the database because IAPStack returns it only once.
   `<unix_timestamp>.<raw_body>`, reject stale timestamps, and deduplicate the stable
   `IAPStack-Event-ID` before applying an event.
 
-For emergency stored-key revocation, extract the public key ID between `iap_` and the
-period in the bearer and run the following transaction using a restricted database
-operator. Authentication reads `revoked_at` on every request, so no process restart is
-required:
+Use `GET /v1/admin/api-keys` to inspect secret-free lifecycle metadata and
+`DELETE /v1/admin/api-keys/{key_id}` to revoke a stored key. Revocation is idempotent,
+authentication reads `revoked_at` on every request, and no process restart is required.
+The API rejects revocation of the key authenticating the current request and preserves
+the final active administrator. Rotate by creating the replacement, storing it, signing
+in with it, and then revoking the old key.
+
+If every administrator bearer is unavailable during an incident, temporarily restore
+the bootstrap administrator through the runtime secret configuration and use the API.
+The following restricted database operation is break-glass only. It uses the same
+lifecycle lock and final-administrator predicate as the repository, but bypasses the
+API's current-session safeguard. Confirm the exact public key ID and an active
+replacement before running it:
 
 ```sql
 BEGIN;
+SELECT pg_advisory_xact_lock(5278588522471178564);
 UPDATE api_keys
 SET revoked_at = now()
-WHERE id = '<public-key-id>' AND revoked_at IS NULL;
+WHERE id = '<public-key-id>'
+  AND revoked_at IS NULL
+  AND (
+    role <> 'admin'
+    OR 1 < (SELECT count(*) FROM api_keys WHERE role = 'admin' AND revoked_at IS NULL)
+  )
+RETURNING id, role, revoked_at;
 COMMIT;
 ```
 
@@ -77,6 +93,9 @@ expose the API over plaintext outside local development.
 The project overview shows application credential/webhook coverage, catalog mappings,
 customer access counts, recent normalized purchase observations, queue outcomes, and
 webhook delivery metadata. It never renders protected provider payloads or secrets.
+The access-key workspace lists active and revoked administrator/application key
+metadata, identifies the current stored key, creates one-time administrator bearers,
+and requires explicit confirmation before revocation.
 The quick-start dialog creates a Huawei project, application, entitlement, product,
 and provider-product mapping. Open an application card to create or rotate its Huawei
 server credential, configure signed webhook delivery, and create a one-time application
