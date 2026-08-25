@@ -36,6 +36,7 @@ jobs:
           test -s dashboard/index.html
           test -s dashboard/app.css
           test -s contracts/openapi/v1.yaml
+          test -s .github/workflows/release.yml
           node --check dashboard/app.js
           test -x deploy/e2e/run.sh
 

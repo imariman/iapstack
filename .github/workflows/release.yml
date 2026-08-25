@@ -1,0 +1,199 @@
+name: Stable release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable semantic version to publish
+        required: true
+        default: v0.1.0
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+  attestations: write
+  artifact-metadata: write
+  id-token: write
+
+concurrency:
+  group: stable-release
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  release:
+    name: Validate and publish stable release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: stable-release
+
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate immutable release evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Stable releases must be dispatched from main."
+            exit 1
+          fi
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must be a stable semantic tag such as v0.1.0."
+            exit 1
+          fi
+
+          evidence_path="docs/releases/${VERSION}-sandbox-evidence.json"
+          test -s "$evidence_path"
+          go run ./cmd/iapstack-release "$evidence_path"
+
+          evidence_release="$(jq -r '.release' "$evidence_path")"
+          candidate="$(jq -r '.commit' "$evidence_path")"
+          test "$evidence_release" = "$VERSION"
+          git cat-file -e "${candidate}^{commit}"
+          git merge-base --is-ancestor "$candidate" "$GITHUB_SHA"
+
+          changed_files="$(git diff --name-only "$candidate" "$GITHUB_SHA")"
+          if [[ "$changed_files" != "$evidence_path" ]]; then
+            echo "Only the release evidence file may differ from the tested candidate."
+            git diff --name-only "$candidate" "$GITHUB_SHA"
+            exit 1
+          fi
+
+          candidate_ci_url="$(jq -r '.automated.ci_run_url' "$evidence_path")"
+          candidate_run_id="${candidate_ci_url##*/}"
+          if [[ ! "$candidate_run_id" =~ ^[0-9]+$ ]]; then
+            echo "Evidence CI URL must end with a GitHub Actions run ID."
+            exit 1
+          fi
+          candidate_ci="$(gh run view "$candidate_run_id" --json headSha,status,conclusion,url)"
+          test "$(jq -r '.url' <<<"$candidate_ci")" = "$candidate_ci_url"
+          test "$(jq -r '.headSha' <<<"$candidate_ci")" = "$candidate"
+          test "$(jq -r '.status' <<<"$candidate_ci")" = "completed"
+          test "$(jq -r '.conclusion' <<<"$candidate_ci")" = "success"
+
+          head_ci="$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --event push --limit 1 --json status,conclusion)"
+          test "$(jq -r '.[0].status' <<<"$head_ci")" = "completed"
+          test "$(jq -r '.[0].conclusion' <<<"$head_ci")" = "success"
+
+          if git show-ref --verify --quiet "refs/tags/$VERSION"; then
+            echo "Tag $VERSION already exists."
+            exit 1
+          fi
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists."
+            exit 1
+          fi
+
+          echo "EVIDENCE_PATH=$evidence_path" >> "$GITHUB_ENV"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate container metadata
+        id: metadata
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ inputs.version }}
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=IAPStack
+            org.opencontainers.image.description=Self-hosted in-app purchase verification and entitlement infrastructure
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Build and publish multi-platform image
+        id: image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Attest container provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+      - name: Prepare stable release notes
+        env:
+          VERSION: ${{ inputs.version }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$(jq -r '.commit' "$EVIDENCE_PATH")"
+          candidate_ci_url="$(jq -r '.automated.ci_run_url' "$EVIDENCE_PATH")"
+          image_reference="${REGISTRY}/${IMAGE_NAME}@${IMAGE_DIGEST}"
+          notes_path="$RUNNER_TEMP/release-notes.md"
+
+          # shellcheck disable=SC2016
+          {
+            printf '# IAPStack %s\n\n' "$VERSION"
+            printf 'This stable release passed the automated and real-device Huawei v0.1 release gates.\n\n'
+            printf '## Immutable inputs\n\n'
+            printf -- '- Tested candidate: `%s`\n' "$candidate"
+            printf -- '- Candidate CI: %s\n' "$candidate_ci_url"
+            printf -- '- Release evidence: `%s`\n\n' "$EVIDENCE_PATH"
+            printf '## Container image\n\n'
+            printf -- '- Version tag: `%s/%s:%s`\n' "$REGISTRY" "$IMAGE_NAME" "$VERSION"
+            printf -- '- Immutable digest: `%s`\n\n' "$image_reference"
+            printf 'Verify its GitHub build provenance with:\n\n'
+            printf '```sh\n'
+            printf 'gh attestation verify oci://%s -R %s\n' "$image_reference" "$GITHUB_REPOSITORY"
+            printf '```\n'
+          } > "$notes_path"
+
+          echo "RELEASE_NOTES=$notes_path" >> "$GITHUB_ENV"
+
+      - name: Create stable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$VERSION" \
+            "$EVIDENCE_PATH#Huawei sandbox release evidence" \
+            --target "$GITHUB_SHA" \
+            --title "IAPStack $VERSION" \
+            --notes-file "$RELEASE_NOTES" \
+            --latest
