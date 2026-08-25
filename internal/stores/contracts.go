@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/imariman/iapstack/internal/core"
@@ -25,10 +26,25 @@ type ReconciliationRequest struct {
 	QueryReferences          []core.StoreReference
 }
 
+// PostCommitAction describes one provider operation that is safe only after durable entitlement persistence.
+type PostCommitAction struct {
+	Kind            string
+	ProductID       core.ProviderProductID
+	ProductKind     core.ProductKind
+	QueryReferences []core.StoreReference
+}
+
+// PostCommitRequest scopes provider operations to one authoritative application.
+type PostCommitRequest struct {
+	Application core.Application
+	Actions     []PostCommitAction
+}
+
 type VerificationResult struct {
-	VerifiedAt   time.Time
-	Artifacts    []VerifiedArtifact
-	Observations []core.PurchaseObservation
+	VerifiedAt        time.Time
+	Artifacts         []VerifiedArtifact
+	Observations      []core.PurchaseObservation
+	PostCommitActions []PostCommitAction
 }
 
 type Verifier interface {
@@ -41,11 +57,55 @@ type Reconciler interface {
 	Reconcile(context.Context, ReconciliationRequest) (VerificationResult, error)
 }
 
+// PostCommitter executes provider operations after verified state is durably committed.
+type PostCommitter interface {
+	// PostCommit completes provider actions that correspond to an already persisted result.
+	PostCommit(context.Context, PostCommitRequest) error
+}
+
 type Adapter interface {
 	// Provider identifies the purchase provider implemented by the adapter.
 	Provider() core.Provider
 	Verifier
 	Reconciler
+}
+
+// Validate checks a post-commit action's kind, product identity, and opaque query references.
+func (action PostCommitAction) Validate() error {
+	if action.Kind == "" {
+		return errors.New("post-commit action kind is required")
+	}
+	if strings.TrimSpace(action.Kind) != action.Kind {
+		return errors.New("post-commit action kind must not have leading or trailing whitespace")
+	}
+	if err := errors.Join(action.ProductID.Validate(), action.ProductKind.Validate()); err != nil {
+		return err
+	}
+	if len(action.QueryReferences) == 0 {
+		return errors.New("post-commit action requires at least one query reference")
+	}
+	return validateReferencesWithRole(action.QueryReferences, core.ReferenceQuery)
+}
+
+// Validate checks a post-commit request's application scope and action set.
+func (request PostCommitRequest) Validate() error {
+	if err := request.Application.Validate(); err != nil {
+		return err
+	}
+	if len(request.Actions) == 0 {
+		return errors.New("post-commit request requires at least one action")
+	}
+	for index, action := range request.Actions {
+		if err := action.Validate(); err != nil {
+			return fmt.Errorf("post-commit action %d: %w", index, err)
+		}
+		for previous := 0; previous < index; previous++ {
+			if samePostCommitAction(action, request.Actions[previous]) {
+				return fmt.Errorf("duplicate post-commit action %d", index)
+			}
+		}
+	}
+	return nil
 }
 
 // Validate checks verification scope, customer identity, claims, bindings, and evidence.
@@ -158,6 +218,28 @@ func (result VerificationResult) validate(
 			return fmt.Errorf("observation %d does not match a reconciliation query reference", i)
 		}
 	}
+	for index, action := range result.PostCommitActions {
+		if err := action.Validate(); err != nil {
+			return fmt.Errorf("post-commit action %d: %w", index, err)
+		}
+		matched := false
+		for _, observation := range result.Observations {
+			if action.ProductID == observation.ProductID &&
+				action.ProductKind == observation.ProductKind &&
+				hasMatchingReference(action.QueryReferences, observation.ReferencesFor(core.ReferenceQuery)) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("post-commit action %d does not match an observation", index)
+		}
+		for previous := 0; previous < index; previous++ {
+			if samePostCommitAction(action, result.PostCommitActions[previous]) {
+				return fmt.Errorf("duplicate post-commit action %d", index)
+			}
+		}
+	}
 
 	if len(expectedProducts) == 0 {
 		return nil
@@ -171,6 +253,20 @@ func (result VerificationResult) validate(
 		}
 	}
 	return nil
+}
+
+// samePostCommitAction reports whether two actions target the same provider operation and opaque references.
+func samePostCommitAction(left, right PostCommitAction) bool {
+	if left.Kind != right.Kind || left.ProductID != right.ProductID ||
+		left.ProductKind != right.ProductKind || len(left.QueryReferences) != len(right.QueryReferences) {
+		return false
+	}
+	for _, reference := range left.QueryReferences {
+		if !hasMatchingReference([]core.StoreReference{reference}, right.QueryReferences) {
+			return false
+		}
+	}
+	return true
 }
 
 // validateReferencesWithRole checks validity, role consistency, and uniqueness.

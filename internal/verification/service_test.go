@@ -51,9 +51,11 @@ type fakeProtector struct {
 
 // fakeAdapter returns one configured provider result or failure.
 type fakeAdapter struct {
-	result stores.VerificationResult
-	err    error
-	calls  int
+	result          stores.VerificationResult
+	err             error
+	calls           int
+	postCommitCalls int
+	postCommit      func(stores.PostCommitRequest) error
 }
 
 // fakeStore applies copy-on-commit semantics around an in-memory repository.
@@ -229,6 +231,53 @@ func TestServiceRollsBackWhenOutboxFails(t *testing.T) {
 	assertNoDurableWrites(t, store.repository)
 }
 
+// TestServiceRunsPostCommitAfterDurablePersistence verifies retryable provider completion never precedes entitlement commit.
+func TestServiceRunsPostCommitAfterDurablePersistence(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	queryReference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", "sensitive-purchase-token")
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	fixture.result.Observations[0].References = append(fixture.result.Observations[0].References, queryReference)
+	fixture.result.PostCommitActions = []stores.PostCommitAction{{
+		Kind: "acknowledge_purchase", ProductID: verificationProviderProductID,
+		ProductKind: core.ProductKindNonConsumable, QueryReferences: []core.StoreReference{queryReference},
+	}}
+	store := newFakeStore(fixture)
+	providerFailure := stores.NewFailure(
+		core.ProviderHuaweiAppGallery,
+		"acknowledge",
+		stores.FailureTemporary,
+		0,
+		context.DeadlineExceeded,
+	)
+	adapter := &fakeAdapter{result: fixture.result}
+	adapter.postCommit = func(request stores.PostCommitRequest) error {
+		if len(store.repository.entitlements) != 1 || len(store.repository.outbox) != 1 {
+			t.Fatalf("PostCommit() observed repository before durable commit: %#v", store.repository)
+		}
+		if request.Application != fixture.application || !reflect.DeepEqual(request.Actions, fixture.result.PostCommitActions) {
+			t.Fatalf("PostCommit() request = %#v", request)
+		}
+		return providerFailure
+	}
+	service := newVerificationService(t, store, adapter, &fakeProtector{}, fixture.clock)
+
+	_, err = service.Verify(context.Background(), fixture.command)
+	var actualFailure *stores.Failure
+	if !errors.As(err, &actualFailure) || actualFailure != providerFailure {
+		t.Fatalf("Verify() error = %v, want post-commit provider failure", err)
+	}
+	if adapter.postCommitCalls != 1 {
+		t.Fatalf("PostCommit() calls = %d, want 1", adapter.postCommitCalls)
+	}
+	if len(store.repository.entitlements) != 1 || len(store.repository.outbox) != 1 {
+		t.Fatalf("repository lost durable result after post-commit failure: %#v", store.repository)
+	}
+}
+
 // TestDefaultProjectorPreservesIndependentAllowedSource verifies conservative multi-product access.
 func TestDefaultProjectorPreservesIndependentAllowedSource(t *testing.T) {
 	t.Parallel()
@@ -310,6 +359,15 @@ func (adapter *fakeAdapter) Reconcile(
 	_ stores.ReconciliationRequest,
 ) (stores.VerificationResult, error) {
 	return stores.VerificationResult{}, errors.New("fake reconciliation is unavailable")
+}
+
+// PostCommit runs the configured provider completion callback after persistence.
+func (adapter *fakeAdapter) PostCommit(_ context.Context, request stores.PostCommitRequest) error {
+	adapter.postCommitCalls++
+	if adapter.postCommit == nil {
+		return nil
+	}
+	return adapter.postCommit(request)
 }
 
 // Ping reports that the in-memory fake store is available.

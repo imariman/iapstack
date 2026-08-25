@@ -170,12 +170,38 @@ func (service *Service) Verify(ctx context.Context, command Command) (Result, er
 	if err := providerResult.ValidateForVerification(request); err != nil {
 		return Result{}, fmt.Errorf("validate provider verification result: %w", err)
 	}
+	var postCommitter stores.PostCommitter
+	var postCommitRequest stores.PostCommitRequest
+	if len(providerResult.PostCommitActions) > 0 {
+		var supported bool
+		postCommitter, supported = adapter.(stores.PostCommitter)
+		if !supported {
+			return Result{}, errors.New("store adapter returned unsupported post-commit actions")
+		}
+		postCommitRequest = stores.PostCommitRequest{
+			Application: application,
+			Actions:     clonePostCommitActions(providerResult.PostCommitActions),
+		}
+		if err := postCommitRequest.Validate(); err != nil {
+			return Result{}, fmt.Errorf("validate provider post-commit request: %w", err)
+		}
+	}
 
 	prepared, err := service.prepare(ctx, command, customer, providerResult, receivedAt)
 	if err != nil {
 		return Result{}, err
 	}
-	return service.persist(ctx, command, application, customer, providerResult, prepared)
+	result, err := service.persist(ctx, command, application, customer, providerResult, prepared)
+	if err != nil {
+		return Result{}, err
+	}
+	if postCommitter == nil {
+		return result, nil
+	}
+	if err := postCommitter.PostCommit(ctx, postCommitRequest); err != nil {
+		return Result{}, fmt.Errorf("complete purchase with %s: %w", application.Store.Provider, err)
+	}
+	return result, nil
 }
 
 // Validate checks command scope, external customer identity, product claims, bindings, and evidence.
@@ -487,6 +513,16 @@ func observationProductIDs(observations []core.PurchaseObservation) []core.Provi
 		productIDs = append(productIDs, observation.ProductID)
 	}
 	return productIDs
+}
+
+// clonePostCommitActions defensively copies opaque provider references before adapter execution.
+func clonePostCommitActions(actions []stores.PostCommitAction) []stores.PostCommitAction {
+	cloned := make([]stores.PostCommitAction, len(actions))
+	for index, action := range actions {
+		cloned[index] = action
+		cloned[index].QueryReferences = append([]core.StoreReference(nil), action.QueryReferences...)
+	}
+	return cloned
 }
 
 // indexCatalogProducts validates product kind consistency and indexes provider mappings.

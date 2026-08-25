@@ -49,6 +49,19 @@ func (adapter *ObservedAdapter) Reconcile(
 	return result, err
 }
 
+// PostCommit forwards durable-result provider actions and records their bounded outcome.
+func (adapter *ObservedAdapter) PostCommit(ctx context.Context, request PostCommitRequest) error {
+	committer, ok := adapter.adapter.(PostCommitter)
+	if !ok {
+		err := errors.New("store adapter does not support post-commit actions")
+		adapter.metrics.ObserveProvider(string(adapter.Provider()), "post_commit", providerOutcome(err))
+		return err
+	}
+	err := committer.PostCommit(ctx, request)
+	adapter.metrics.ObserveProvider(string(adapter.Provider()), "post_commit", providerOutcome(err))
+	return err
+}
+
 // providerOutcome maps private failures to one bounded metrics label.
 func providerOutcome(err error) string {
 	if err == nil {
