@@ -277,6 +277,7 @@ textarea {
 
 .primary-button,
 .secondary-button,
+.danger-button,
 .text-button,
 .icon-button {
   align-items: center;
@@ -292,6 +293,7 @@ textarea {
 
 .primary-button svg,
 .secondary-button svg,
+.danger-button svg,
 .text-button svg,
 .icon-button svg {
   fill: none;
@@ -328,6 +330,19 @@ textarea {
   background: var(--surface-hover);
   border-color: var(--primary);
   color: #fff;
+}
+
+.danger-button {
+  background: var(--danger);
+  border: 1px solid var(--danger);
+  color: #18070a;
+  padding: 0 16px;
+}
+
+.danger-button:hover:not(:disabled),
+.danger-button:active:not(:disabled) {
+  background: #ff8795;
+  border-color: #ff8795;
 }
 
 .text-button {
@@ -1261,8 +1276,155 @@ td strong {
 
 .setup-dialog > form,
 .commissioning-shell,
+.api-key-shell,
 .key-reveal {
   padding: clamp(20px, 4vw, 32px);
+}
+
+.api-key-dialog {
+  max-width: 920px;
+}
+
+.key-control-row {
+  align-items: center;
+  display: grid;
+  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.key-control-row .dialog-copy {
+  margin-bottom: 16px;
+}
+
+.key-vitals {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 16px;
+}
+
+.key-vitals article {
+  background: #0d1626;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.key-vitals span {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.key-vitals strong {
+  font-family: var(--font-data);
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.api-key-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(470px, 52dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.api-key-card {
+  align-items: center;
+  background: #0d1626;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-control);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(150px, 0.9fr) auto;
+  padding: 13px 14px;
+}
+
+.api-key-card.revoked {
+  border-left-color: var(--danger);
+  opacity: 0.72;
+}
+
+.api-key-identity,
+.api-key-scope {
+  min-width: 0;
+}
+
+.api-key-identity > div {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.api-key-identity code,
+.revoke-key-identity {
+  color: var(--foreground);
+  font-family: var(--font-data);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.api-key-identity small,
+.api-key-scope small {
+  color: var(--muted);
+  display: block;
+  font-family: var(--font-data);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.api-key-scope strong {
+  display: block;
+  font-family: var(--font-data);
+  font-size: 12px;
+  margin-bottom: 4px;
+  overflow-wrap: anywhere;
+}
+
+.api-key-card .text-button {
+  color: var(--danger);
+  min-height: 38px;
+}
+
+.api-key-card .text-button:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+.api-key-card .text-button:disabled {
+  cursor: not-allowed;
+}
+
+.current-key-badge {
+  background: var(--primary-soft);
+  border: 1px solid rgba(110, 168, 254, 0.24);
+  border-radius: 999px;
+  color: #9fc4ff;
+  font-family: var(--font-data);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 6px;
+  text-transform: uppercase;
+}
+
+.danger-eyebrow {
+  color: var(--danger);
+}
+
+.revoke-key-identity {
+  background: #09111f;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  display: block;
+  padding: 14px;
 }
 
 .dialog-heading,
@@ -1604,6 +1766,14 @@ td strong {
     min-height: 0;
   }
 
+  .api-key-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .api-key-scope {
+    grid-column: 1;
+  }
+
   .commissioning-route {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     row-gap: 14px;
@@ -1631,8 +1801,16 @@ td strong {
 
   .key-row,
   .form-grid,
-  .metric-grid {
+  .metric-grid,
+  .key-control-row,
+  .key-vitals,
+  .api-key-card {
     grid-template-columns: 1fr;
+  }
+
+  .api-key-card .text-button {
+    justify-self: stretch;
+    width: 100%;
   }
 
   .primary-button,

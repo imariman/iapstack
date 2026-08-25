@@ -8,6 +8,8 @@ const state = {
   selectedProject: "",
   managedApplication: null,
   overview: null,
+  apiKeys: [],
+  pendingRevokeKey: null,
 };
 
 const elements = {
@@ -21,6 +23,7 @@ const elements = {
   updatedAt: document.querySelector("#updated-at"),
   globalMessage: document.querySelector("#global-message"),
   refresh: document.querySelector("#refresh"),
+  openAPIKeys: document.querySelector("#open-api-keys"),
   logout: document.querySelector("#logout"),
   setupDialog: document.querySelector("#setup-dialog"),
   setupForm: document.querySelector("#setup-form"),
@@ -32,10 +35,19 @@ const elements = {
   webhookMessage: document.querySelector("#webhook-message"),
   applicationKeyForm: document.querySelector("#application-key-form"),
   applicationKeyMessage: document.querySelector("#application-key-message"),
+  apiKeyDialog: document.querySelector("#api-key-dialog"),
+  apiKeyList: document.querySelector("#api-key-list"),
+  apiKeyMessage: document.querySelector("#api-key-message"),
+  createAdminKey: document.querySelector("#create-admin-key"),
+  revokeKeyDialog: document.querySelector("#revoke-key-dialog"),
+  revokeKeyIdentity: document.querySelector("#revoke-key-identity"),
+  confirmRevokeKey: document.querySelector("#confirm-revoke-key"),
   customerDialog: document.querySelector("#customer-dialog"),
   customerForm: document.querySelector("#customer-form"),
   customerMessage: document.querySelector("#customer-message"),
   keyDialog: document.querySelector("#key-dialog"),
+  revealedKeyTitle: document.querySelector("#revealed-key-title"),
+  revealedKeyLabel: document.querySelector("#revealed-key-label"),
   revealedKey: document.querySelector("#revealed-key"),
   copyMessage: document.querySelector("#copy-message"),
 };
@@ -386,11 +398,137 @@ async function createApplicationKey() {
   });
 }
 
-function revealApplicationKey(value) {
-  closeApplicationManager();
+// revealKey presents a newly generated bearer once with role-specific language.
+function revealKey(value, role) {
+  if (elements.applicationDialog.open) closeApplicationManager();
+  if (elements.apiKeyDialog.open) elements.apiKeyDialog.close();
+  elements.revealedKeyTitle.textContent = role === "admin" ? "Admin key ready" : "Application key ready";
+  elements.revealedKeyLabel.textContent = role === "admin" ? "Administrator bearer" : "Application bearer";
   elements.revealedKey.value = value;
   elements.copyMessage.textContent = "";
   elements.keyDialog.showModal();
+}
+
+// openAPIKeyManager opens the lifecycle workspace and refreshes authoritative metadata.
+async function openAPIKeyManager() {
+  state.pendingRevokeKey = null;
+  elements.apiKeyDialog.showModal();
+  await loadAPIKeys();
+}
+
+// loadAPIKeys refreshes bounded secret-free lifecycle metadata from the admin API.
+async function loadAPIKeys(successMessage = "") {
+  elements.apiKeyMessage.textContent = "Loading access keys…";
+  elements.apiKeyMessage.className = "form-message working";
+  elements.createAdminKey.disabled = true;
+  try {
+    const response = await apiRequest("/v1/admin/api-keys");
+    state.apiKeys = response.api_keys || [];
+    renderAPIKeys();
+    setFormMessage(elements.apiKeyMessage, successMessage, successMessage ? "success" : "error");
+  } catch (error) {
+    if (error.status === 401) {
+      if (elements.apiKeyDialog.open) elements.apiKeyDialog.close();
+      logout();
+      elements.authMessage.textContent = errorMessage(error);
+      return;
+    }
+    setFormMessage(elements.apiKeyMessage, errorMessage(error));
+  } finally {
+    elements.createAdminKey.disabled = false;
+  }
+}
+
+// renderAPIKeys draws role, scope, lifecycle, and safe rotation actions as an operational rail.
+function renderAPIKeys() {
+  elements.apiKeyList.replaceChildren();
+  const activeAdmins = state.apiKeys.filter((key) => key.role === "admin" && !key.revoked_at).length;
+  const activeApplications = state.apiKeys.filter((key) => key.role === "application" && !key.revoked_at).length;
+  const revoked = state.apiKeys.filter((key) => key.revoked_at).length;
+  setText("active-admin-keys", activeAdmins);
+  setText("active-application-keys", activeApplications);
+  setText("revoked-keys", revoked);
+  if (!state.apiKeys.length) {
+    elements.apiKeyList.append(node("p", "empty-state", "No stored keys yet. Create an administrator key before removing the bootstrap credential."));
+    return;
+  }
+  for (const key of state.apiKeys) {
+    const revokedKey = Boolean(key.revoked_at);
+    const card = node("article", `api-key-card${revokedKey ? " revoked" : ""}`);
+    const identity = node("div", "api-key-identity");
+    const identityLine = node("div");
+    identityLine.append(
+      node("span", `status-badge ${revokedKey ? "revoked" : "active"}`, revokedKey ? "Revoked" : "Active"),
+      node("code", "", key.id),
+    );
+    if (key.current) identityLine.append(node("span", "current-key-badge", "Current"));
+    identity.append(identityLine, node("small", "", `Created ${formatTime(key.created_at)}${revokedKey ? ` · Revoked ${formatTime(key.revoked_at)}` : ""}`));
+
+    const scope = node("div", "api-key-scope");
+    if (key.role === "admin") {
+      scope.append(node("strong", "", "Administrator"), node("small", "", "All control-plane projects"));
+    } else {
+      scope.append(node("strong", "", key.application_id || "Application"), node("small", "", key.project_id || "Unknown project"));
+    }
+
+    const revoke = node("button", "text-button", revokedKey ? "Revoked" : "Revoke");
+    revoke.type = "button";
+    const finalAdmin = key.role === "admin" && activeAdmins <= 1;
+    revoke.disabled = revokedKey || key.current || finalAdmin;
+    if (key.current) revoke.title = "Connect with a replacement key before revoking this session.";
+    if (finalAdmin && !key.current) revoke.title = "Create another administrator key before revoking the final active administrator.";
+    if (!revoke.disabled) revoke.addEventListener("click", () => openRevokeKeyConfirmation(key));
+    card.append(identity, scope, revoke);
+    elements.apiKeyList.append(card);
+  }
+}
+
+// createAdministratorKey creates a replacement administrator bearer without revoking existing access.
+async function createAdministratorKey() {
+  elements.createAdminKey.disabled = true;
+  setFormMessage(elements.apiKeyMessage, "Creating administrator key…", "working");
+  try {
+    const response = await apiRequest("/v1/admin/api-keys", {
+      method: "POST",
+      body: JSON.stringify({ role: "admin" }),
+    });
+    revealKey(response.key, "admin");
+  } catch (error) {
+    setFormMessage(elements.apiKeyMessage, errorMessage(error));
+  } finally {
+    elements.createAdminKey.disabled = false;
+  }
+}
+
+// openRevokeKeyConfirmation prepares an explicit irreversible-action confirmation.
+function openRevokeKeyConfirmation(key) {
+  state.pendingRevokeKey = key;
+  elements.revokeKeyIdentity.textContent = `${key.role === "admin" ? "Administrator" : "Application"} · ${key.id}`;
+  elements.revokeKeyDialog.showModal();
+}
+
+// closeRevokeKeyConfirmation clears pending destructive-action state.
+function closeRevokeKeyConfirmation() {
+  state.pendingRevokeKey = null;
+  elements.revokeKeyIdentity.textContent = "";
+  if (elements.revokeKeyDialog.open) elements.revokeKeyDialog.close();
+}
+
+// revokePendingAPIKey performs one idempotent revocation and refreshes lifecycle metadata.
+async function revokePendingAPIKey() {
+  const key = state.pendingRevokeKey;
+  if (!key) return;
+  elements.confirmRevokeKey.disabled = true;
+  try {
+    await apiRequest(`/v1/admin/api-keys/${encodeURIComponent(key.id)}`, { method: "DELETE" });
+    closeRevokeKeyConfirmation();
+    await loadAPIKeys("Access key revoked.");
+  } catch (error) {
+    closeRevokeKeyConfirmation();
+    setFormMessage(elements.apiKeyMessage, errorMessage(error));
+  } finally {
+    elements.confirmRevokeKey.disabled = false;
+  }
 }
 
 function closeKeyDialog() {
@@ -599,10 +737,15 @@ function logout() {
   state.selectedProject = "";
   state.managedApplication = null;
   state.overview = null;
+  state.apiKeys = [];
+  state.pendingRevokeKey = null;
   elements.credentialForm.reset();
   elements.webhookForm.reset();
   elements.revealedKey.value = "";
-  for (const dialog of [elements.applicationDialog, elements.customerDialog, elements.keyDialog, elements.setupDialog]) {
+  for (const dialog of [
+    elements.applicationDialog, elements.apiKeyDialog, elements.revokeKeyDialog,
+    elements.customerDialog, elements.keyDialog, elements.setupDialog,
+  ]) {
     if (dialog.open) dialog.close();
   }
   sessionWrite("");
@@ -647,6 +790,17 @@ elements.authForm.addEventListener("submit", (event) => {
 
 elements.refresh.addEventListener("click", () => {
   if (state.selectedProject) loadOverview(state.selectedProject);
+});
+
+elements.openAPIKeys.addEventListener("click", openAPIKeyManager);
+document.querySelector("#close-api-keys").addEventListener("click", () => elements.apiKeyDialog.close());
+elements.createAdminKey.addEventListener("click", createAdministratorKey);
+document.querySelector("#close-revoke-key").addEventListener("click", closeRevokeKeyConfirmation);
+document.querySelector("#cancel-revoke-key").addEventListener("click", closeRevokeKeyConfirmation);
+elements.confirmRevokeKey.addEventListener("click", revokePendingAPIKey);
+elements.revokeKeyDialog.addEventListener("close", () => {
+  state.pendingRevokeKey = null;
+  elements.revokeKeyIdentity.textContent = "";
 });
 
 elements.logout.addEventListener("click", logout);
@@ -726,7 +880,7 @@ elements.applicationKeyForm.addEventListener("submit", async (event) => {
   setFormMessage(elements.applicationKeyMessage, "Creating application key…", "working");
   try {
     const response = await createApplicationKey();
-    revealApplicationKey(response.key);
+    revealKey(response.key, "application");
   } catch (error) {
     setFormMessage(elements.applicationKeyMessage, errorMessage(error));
   } finally {
@@ -772,7 +926,7 @@ elements.customerForm.addEventListener("submit", async (event) => {
 document.querySelector("#copy-key").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(elements.revealedKey.value);
-    setFormMessage(elements.copyMessage, "Application key copied to the clipboard.", "success");
+    setFormMessage(elements.copyMessage, "Access key copied to the clipboard.", "success");
   } catch (_) {
     elements.revealedKey.focus();
     elements.revealedKey.select();
