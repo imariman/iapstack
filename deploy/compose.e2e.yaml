@@ -25,6 +25,7 @@ services:
   api:
     environment:
       SSL_CERT_FILE: /e2e/tls.crt
+      IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS: "true"
     volumes:
       - ${IAPSTACK_E2E_CERT_DIR:?set IAPSTACK_E2E_CERT_DIR}/tls.crt:/e2e/tls.crt:ro
     depends_on:
@@ -34,6 +35,7 @@ services:
   worker:
     environment:
       SSL_CERT_FILE: /e2e/tls.crt
+      IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS: "true"
     ports:
       - "${IAPSTACK_E2E_WORKER_PORT:-18081}:8081"
     volumes:

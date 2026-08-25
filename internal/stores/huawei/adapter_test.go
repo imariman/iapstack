@@ -197,6 +197,98 @@ func TestVerifySignatureRejectsTampering(t *testing.T) {
 	}
 }
 
+// TestValidateNotificationCanonicalizesEquivalentPayloads verifies replay identity ignores harmless JSON formatting.
+func TestValidateNotificationCanonicalizesEquivalentPayloads(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	purchase := purchaseData{
+		ApplicationID: "provider-app-1", ProductID: "lifetime", OrderID: "order-1",
+		PurchaseToken: "purchase-token-1", PurchaseState: 0, PurchaseTime: time.Now().UTC().UnixMilli(),
+		DeveloperPayload: "customer-1", Quantity: 1,
+	}
+	purchaseJSON, err := json.Marshal(purchase)
+	if err != nil {
+		t.Fatalf("Marshal() purchase error = %v", err)
+	}
+	signature := signFixture(t, privateKey, purchaseJSON)
+	credentialJSON, err := json.Marshal(credentialPayload{
+		ClientID: "client", ClientSecret: "secret", PublicKey: publicKeyFixture(t, &privateKey.PublicKey),
+		TokenURL: "https://provider.example/token", OrderURL: "https://provider.example/order",
+		SubscriptionURL: "https://provider.example/subscription",
+	})
+	if err != nil {
+		t.Fatalf("Marshal() credential error = %v", err)
+	}
+	credential, err := stores.NewCredential(CredentialKind, CredentialContentType, CredentialSchemaVersion, credentialJSON)
+	if err != nil {
+		t.Fatalf("NewCredential() error = %v", err)
+	}
+	adapter, err := New(fakeCredentialSource{credential: credential}, time.Second)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	application := core.Application{ID: "application-1", ProjectID: "project-1", Store: core.StoreApplication{
+		Provider: core.ProviderHuaweiAppGallery, Environment: core.EnvironmentSandbox, ID: "provider-app-1",
+	}}
+	firstPurchase, err := json.Marshal(clientEvidence{
+		PurchaseData: string(purchaseJSON), Signature: signature, ProductKind: core.ProductKindNonConsumable,
+	})
+	if err != nil {
+		t.Fatalf("Marshal() first evidence error = %v", err)
+	}
+	secondPurchase, err := json.Marshal(map[string]any{
+		"signature": signature, "product_kind": core.ProductKindNonConsumable,
+		"purchase_data": string(purchaseJSON),
+	})
+	if err != nil {
+		t.Fatalf("Marshal() second evidence error = %v", err)
+	}
+	firstPayload, err := json.Marshal(NotificationEnvelope{
+		ExternalCustomerID: "customer-1", ClaimedProducts: []core.ProviderProductID{"lifetime"}, Purchase: firstPurchase,
+	})
+	if err != nil {
+		t.Fatalf("Marshal() first notification error = %v", err)
+	}
+	secondPayload, err := json.Marshal(map[string]any{
+		"purchase": json.RawMessage(secondPurchase), "claimed_products": []string{"lifetime"},
+		"external_customer_id": "customer-1",
+	})
+	if err != nil {
+		t.Fatalf("Marshal() second notification error = %v", err)
+	}
+	first, err := adapter.ValidateNotification(context.Background(), application, firstPayload)
+	if err != nil {
+		t.Fatalf("ValidateNotification() first error = %v", err)
+	}
+	second, err := adapter.ValidateNotification(context.Background(), application, secondPayload)
+	if err != nil {
+		t.Fatalf("ValidateNotification() second error = %v", err)
+	}
+	firstCanonical, err := json.Marshal(first)
+	if err != nil {
+		t.Fatalf("Marshal() first canonical notification error = %v", err)
+	}
+	secondCanonical, err := json.Marshal(second)
+	if err != nil {
+		t.Fatalf("Marshal() second canonical notification error = %v", err)
+	}
+	if string(firstCanonical) != string(secondCanonical) {
+		t.Fatalf("canonical notifications differ:\nfirst:  %s\nsecond: %s", firstCanonical, secondCanonical)
+	}
+
+	duplicateClaims := first
+	duplicateClaims.ClaimedProducts = []core.ProviderProductID{"lifetime", "lifetime"}
+	duplicatePayload, err := json.Marshal(duplicateClaims)
+	if err != nil {
+		t.Fatalf("Marshal() duplicate notification error = %v", err)
+	}
+	if _, err := adapter.ValidateNotification(context.Background(), application, duplicatePayload); err == nil {
+		t.Fatal("ValidateNotification() duplicate claims error = nil, want rejection")
+	}
+}
+
 // Credential returns the configured opaque Huawei fixture.
 func (source fakeCredentialSource) Credential(
 	_ context.Context,

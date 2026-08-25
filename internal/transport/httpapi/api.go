@@ -490,11 +490,18 @@ func (api *API) huaweiNotification(writer http.ResponseWriter, request *http.Req
 		api.writeError(writer, request, err)
 		return
 	}
-	if _, err := api.huawei.ValidateNotification(request.Context(), application, payload); err != nil {
+	notification, err := api.huawei.ValidateNotification(request.Context(), application, payload)
+	if err != nil {
 		api.writeError(writer, request, err)
 		return
 	}
-	protected, err := api.protect(request.Context(), application, inboxProtectionPurpose, payload)
+	validatedPayload, err := json.Marshal(notification)
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	defer zero(validatedPayload)
+	protected, err := api.protect(request.Context(), application, inboxProtectionPurpose, validatedPayload)
 	if err != nil {
 		api.writeError(writer, request, err)
 		return
@@ -801,6 +808,7 @@ func writeAPIError(writer http.ResponseWriter, request *http.Request, status int
 
 // writeJSON writes one JSON response with a stable content type.
 func writeJSON(writer http.ResponseWriter, status int, value any) {
+	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)

@@ -92,7 +92,12 @@ func Run(
 	if err != nil {
 		return err
 	}
-	webhookService, err := webhooks.NewService(store, keyring, cfg.WebhookTimeout)
+	webhookService, err := webhooks.NewService(
+		store,
+		keyring,
+		cfg.WebhookTimeout,
+		cfg.WebhookAllowPrivateNetworks,
+	)
 	if err != nil {
 		return err
 	}
