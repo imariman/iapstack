@@ -47,6 +47,12 @@ const (
 	assertionLifetime = 5 * time.Minute
 	// maximumProviderResponse bounds OAuth and Android Publisher response bodies.
 	maximumProviderResponse int64 = 2 << 20
+	// acknowledgeActionKind identifies a Google Play purchase acknowledgement after durable entitlement persistence.
+	acknowledgeActionKind = "acknowledge_purchase"
+	// acknowledgementStatePending identifies a purchase that Google still expects the backend to acknowledge.
+	acknowledgementStatePending = "ACKNOWLEDGEMENT_STATE_PENDING"
+	// acknowledgementStateAcknowledged identifies a purchase already completed with Google Play.
+	acknowledgementStateAcknowledged = "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED"
 
 	// productStatePurchased identifies a completed Google Play one-time purchase.
 	productStatePurchased = "PURCHASED"
@@ -178,8 +184,9 @@ type externalAccountIdentifiers struct {
 
 // queryResult contains one authoritative provider artifact and its normalized observations.
 type queryResult struct {
-	artifact     stores.Evidence
-	observations []core.PurchaseObservation
+	artifact          stores.Evidence
+	observations      []core.PurchaseObservation
+	postCommitActions []stores.PostCommitAction
 }
 
 // New constructs a bounded Google Play Android Publisher adapter.
@@ -232,9 +239,10 @@ func (adapter *Adapter) Verify(
 		return stores.VerificationResult{}, err
 	}
 	verificationResult := stores.VerificationResult{
-		VerifiedAt:   adapter.clock().UTC(),
-		Artifacts:    []stores.VerifiedArtifact{{Kind: "google_play_server_response", Evidence: result.artifact}},
-		Observations: result.observations,
+		VerifiedAt:        adapter.clock().UTC(),
+		Artifacts:         []stores.VerifiedArtifact{{Kind: "google_play_server_response", Evidence: result.artifact}},
+		Observations:      result.observations,
+		PostCommitActions: result.postCommitActions,
 	}
 	if err := verificationResult.ValidateForVerification(request); err != nil {
 		return stores.VerificationResult{}, invalid("verify", err)
@@ -282,14 +290,39 @@ func (adapter *Adapter) Reconcile(
 		return stores.VerificationResult{}, err
 	}
 	verificationResult := stores.VerificationResult{
-		VerifiedAt:   adapter.clock().UTC(),
-		Artifacts:    []stores.VerifiedArtifact{{Kind: "google_play_server_response", Evidence: result.artifact}},
-		Observations: result.observations,
+		VerifiedAt:        adapter.clock().UTC(),
+		Artifacts:         []stores.VerifiedArtifact{{Kind: "google_play_server_response", Evidence: result.artifact}},
+		Observations:      result.observations,
+		PostCommitActions: result.postCommitActions,
 	}
 	if err := verificationResult.ValidateForReconciliation(request); err != nil {
 		return stores.VerificationResult{}, invalid("reconcile", err)
 	}
 	return verificationResult, nil
+}
+
+// PostCommit acknowledges verified Google Play purchases only after their durable state has committed.
+func (adapter *Adapter) PostCommit(ctx context.Context, request stores.PostCommitRequest) error {
+	if err := request.Validate(); err != nil {
+		return invalid("acknowledge", err)
+	}
+	if request.Application.Store.Provider != adapter.Provider() {
+		return invalid("acknowledge", errors.New("Google Play post-commit application scope is invalid"))
+	}
+	configuration, err := adapter.configuration(ctx, request.Application)
+	if err != nil {
+		return err
+	}
+	accessToken, err := adapter.accessToken(ctx, configuration)
+	if err != nil {
+		return err
+	}
+	for index, action := range request.Actions {
+		if err := adapter.acknowledge(ctx, request.Application, accessToken, action); err != nil {
+			return fmt.Errorf("acknowledge Google Play purchase action %d: %w", index, err)
+		}
+	}
+	return nil
 }
 
 // configuration opens and validates one application-scoped Google Play credential payload.
@@ -371,7 +404,11 @@ func (adapter *Adapter) query(
 		if err != nil {
 			return queryResult{}, err
 		}
-		return queryResult{artifact: artifact, observations: observations}, nil
+		actions, err := acknowledgementActions(observations[0], purchase.SubscriptionState, purchase.AcknowledgementState)
+		if err != nil {
+			return queryResult{}, invalid("normalize", err)
+		}
+		return queryResult{artifact: artifact, observations: observations, postCommitActions: actions}, nil
 	}
 	var purchase productPurchase
 	if err := json.Unmarshal(body, &purchase); err != nil {
@@ -381,7 +418,73 @@ func (adapter *Adapter) query(
 	if err != nil {
 		return queryResult{}, err
 	}
-	return queryResult{artifact: artifact, observations: observations}, nil
+	actions, err := acknowledgementActions(
+		observations[0],
+		purchase.PurchaseStateContext.PurchaseState,
+		purchase.AcknowledgementState,
+	)
+	if err != nil {
+		return queryResult{}, invalid("normalize", err)
+	}
+	return queryResult{artifact: artifact, observations: observations, postCommitActions: actions}, nil
+}
+
+// acknowledge sends one bounded Android Publisher acknowledgement for a verified purchase token.
+func (adapter *Adapter) acknowledge(
+	ctx context.Context,
+	application core.Application,
+	accessToken string,
+	action stores.PostCommitAction,
+) error {
+	if action.Kind != acknowledgeActionKind {
+		return invalid("acknowledge", fmt.Errorf("unsupported Google Play post-commit action %q", action.Kind))
+	}
+	purchaseToken := ""
+	for _, reference := range action.QueryReferences {
+		if reference.Kind != "purchase_token" {
+			continue
+		}
+		if purchaseToken != "" {
+			return invalid("acknowledge", errors.New("Google Play acknowledgement has multiple purchase tokens"))
+		}
+		purchaseToken = reference.Value()
+	}
+	if purchaseToken == "" {
+		return invalid("acknowledge", errors.New("Google Play acknowledgement requires a purchase token"))
+	}
+	packageName := url.PathEscape(string(application.Store.ID))
+	productID := url.PathEscape(string(action.ProductID))
+	token := url.PathEscape(purchaseToken)
+	path := "/androidpublisher/v3/applications/" + packageName + "/purchases/products/" + productID + "/tokens/" + token + ":acknowledge"
+	if action.ProductKind == core.ProductKindSubscription {
+		path = "/androidpublisher/v3/applications/" + packageName + "/purchases/subscriptions/" + productID + "/tokens/" + token + ":acknowledge"
+	} else if action.ProductKind != core.ProductKindNonConsumable {
+		return invalid("acknowledge", fmt.Errorf("unsupported Google Play acknowledgement product kind %q", action.ProductKind))
+	}
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		strings.TrimRight(adapter.publisherURL, "/")+path,
+		bytes.NewBufferString("{}"),
+	)
+	if err != nil {
+		return stores.NewFailure(adapter.Provider(), "acknowledge", stores.FailurePermanent, 0, err)
+	}
+	request.Header.Set("Authorization", "Bearer "+accessToken)
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
+	_, status, responseHeader, err := adapter.do(request)
+	if err != nil {
+		return err
+	}
+	failure := adapter.statusFailure("acknowledge", status, responseHeader)
+	if failure != nil && failure.Kind == stores.FailureConflict {
+		failure.Kind = stores.FailureTemporary
+	}
+	if failure != nil {
+		return failure
+	}
+	return nil
 }
 
 // accessToken exchanges one signed service-account assertion for an OAuth bearer.
@@ -570,6 +673,46 @@ func googleReferences(purchaseToken, orderID, linkedToken, accountID string) ([]
 		references = append(references, reference)
 	}
 	return references, nil
+}
+
+// acknowledgementActions creates one safe post-commit action for a completed unacknowledged purchase.
+func acknowledgementActions(
+	observation core.PurchaseObservation,
+	providerState string,
+	acknowledgementState string,
+) ([]stores.PostCommitAction, error) {
+	eligible := false
+	switch observation.ProductKind {
+	case core.ProductKindNonConsumable:
+		eligible = providerState == productStatePurchased
+	case core.ProductKindSubscription:
+		switch providerState {
+		case subscriptionStateActive,
+			subscriptionStatePaused,
+			subscriptionStateGrace,
+			subscriptionStateOnHold,
+			subscriptionStateCanceled:
+			eligible = true
+		}
+	default:
+		return nil, fmt.Errorf("unsupported Google Play acknowledgement product kind %q", observation.ProductKind)
+	}
+	if !eligible || acknowledgementState == acknowledgementStateAcknowledged {
+		return nil, nil
+	}
+	if acknowledgementState != acknowledgementStatePending {
+		return nil, fmt.Errorf("completed Google Play purchase has acknowledgement state %q", acknowledgementState)
+	}
+	queryReferences := observation.ReferencesFor(core.ReferenceQuery)
+	if len(queryReferences) == 0 {
+		return nil, errors.New("Google Play acknowledgement requires a query reference")
+	}
+	return []stores.PostCommitAction{{
+		Kind:            acknowledgeActionKind,
+		ProductID:       observation.ProductID,
+		ProductKind:     observation.ProductKind,
+		QueryReferences: append([]core.StoreReference(nil), queryReferences...),
+	}}, nil
 }
 
 // normalizeProductState maps ProductPurchaseV2 states into shared access semantics.
