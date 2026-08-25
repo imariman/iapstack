@@ -499,6 +499,10 @@ paths:
       tags: [Purchases]
       operationId: restorePurchases
       summary: Verify a bounded batch of signed purchases in request order
+      description: >-
+        Processing is sequential, idempotent, and bounded by a 25-second server
+        budget. A timeout returns a retryable 503; items committed before that
+        timeout remain durable and are safe to submit again.
       security:
         - customerSessionBearer: []
       parameters:

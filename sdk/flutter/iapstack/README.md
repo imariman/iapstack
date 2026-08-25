@@ -1,7 +1,8 @@
 # IAPStack Dart/Flutter SDK
 
 Provider-neutral client for the application-facing IAPStack v1 API. The SDK
-keeps a short-lived customer bearer in memory, applies bounded timeouts and retries,
+keeps a short-lived customer bearer in memory, applies abortable per-attempt timeouts
+and full-jitter bounded retries,
 and exposes stable API error codes with request IDs.
 
 ```dart

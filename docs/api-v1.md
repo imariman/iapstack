@@ -138,6 +138,10 @@ bearer after authenticating the user. The remaining endpoints require the return
 customer session and reject requests whose application or external customer ID does
 not exactly match the authenticated session.
 
+Restore processes items sequentially under a 25-second server budget. If that budget
+expires, the API returns retryable `503 request_timeout`; already completed items remain
+durable, and resubmitting the same batch is safe because each verification is idempotent.
+
 A purchase item contains an external customer ID, claimed products, optional customer bindings, and one provider evidence object. Huawei uses `application/vnd.iapstack.huawei-purchase+json`:
 
 ```json
@@ -270,7 +274,7 @@ Reject timestamps outside the application's replay window and deduplicate by eve
 
 The provider-neutral Dart/Flutter package is in `sdk/flutter/iapstack`. It
 implements customer-scoped session authentication, bounded response reads,
-timeouts, transient retries, request ID propagation, v1 models, and stable
+abortable per-attempt timeouts, full-jitter transient retries, request ID propagation, v1 models, and stable
 error envelopes. It does not persist or log the customer bearer; the durable
 application bearer remains in the trusted host backend.
 

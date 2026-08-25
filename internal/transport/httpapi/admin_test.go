@@ -209,6 +209,22 @@ func TestAuthenticationCapacityReturnsServiceUnavailable(t *testing.T) {
 	}
 }
 
+// TestRequestDeadlineReturnsRetryableServiceUnavailable verifies bounded restore work has a stable response.
+func TestRequestDeadlineReturnsRetryableServiceUnavailable(t *testing.T) {
+	t.Parallel()
+
+	api := &API{}
+	request := httptest.NewRequest(http.MethodPost, "/v1/applications/application-1/purchases:restore", nil)
+	recorder := httptest.NewRecorder()
+	api.writeError(recorder, request, context.DeadlineExceeded)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("deadline status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"request_timeout"`) {
+		t.Fatalf("deadline response = %s", recorder.Body.String())
+	}
+}
+
 // Operate executes one deterministic API key lifecycle callback.
 func (store *keyLifecycleStore) Operate(ctx context.Context, operation persistence.OperationsFunc) error {
 	return operation(&keyLifecycleTransaction{store: store})

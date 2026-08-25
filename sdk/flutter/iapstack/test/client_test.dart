@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -207,6 +208,38 @@ void main() {
       await expectLater(client.verifyPurchase(_purchase()),
           throwsA(isA<IapStackTimeoutException>()));
     });
+
+    test('aborts the underlying HTTP request when an attempt times out',
+        () async {
+      final transport = _AbortTrackingClient();
+      final client = IapStackClient(
+        _config(
+          timeout: const Duration(milliseconds: 1),
+          retryPolicy: const IapStackRetryPolicy(maxAttempts: 1),
+        ),
+        httpClient: transport,
+      );
+
+      await expectLater(client.verifyPurchase(_purchase()),
+          throwsA(isA<IapStackTimeoutException>()));
+      await transport.aborted.timeout(const Duration(seconds: 1));
+    });
+  });
+
+  group('IapStackRetryPolicy', () {
+    test('applies full jitter within the exponential cap', () {
+      const policy = IapStackRetryPolicy(
+        baseDelay: Duration(milliseconds: 100),
+        maxDelay: Duration(milliseconds: 250),
+      );
+
+      expect(policy.delayAfter(1, randomValue: 0), Duration.zero);
+      expect(policy.delayAfter(1, randomValue: 0.5),
+          const Duration(milliseconds: 50));
+      expect(policy.delayAfter(4, randomValue: 1),
+          const Duration(milliseconds: 250));
+      expect(() => policy.delayAfter(1, randomValue: 1.1), throwsArgumentError);
+    });
   });
 
   group('IapStackConfig', () {
@@ -279,3 +312,21 @@ final Map<String, Object?> _verificationJson = <String, Object?>{
     },
   ],
 };
+
+final class _AbortTrackingClient extends http.BaseClient {
+  final Completer<void> _aborted = Completer<void>();
+
+  Future<void> get aborted => _aborted.future;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    if (request is! http.Abortable || request.abortTrigger == null) {
+      throw StateError('request was not abortable');
+    }
+    await request.abortTrigger;
+    if (!_aborted.isCompleted) {
+      _aborted.complete();
+    }
+    throw http.RequestAbortedException(request.url);
+  }
+}

@@ -35,6 +35,8 @@ const (
 	reconciliationProtectionPurpose = "reconciliation_request"
 	// defaultReconciliationDelay schedules a conservative daily authoritative refresh.
 	defaultReconciliationDelay = 24 * time.Hour
+	// restoreRequestTimeout keeps sequential restore work inside the HTTP server write budget.
+	restoreRequestTimeout = 25 * time.Second
 )
 
 // API owns versioned routes and application services without direct database access.
@@ -547,8 +549,10 @@ func (api *API) restorePurchases(writer http.ResponseWriter, request *http.Reque
 		}
 	}()
 	results := make([]verificationResponse, 0, len(input.Purchases))
+	restoreContext, cancel := context.WithTimeout(request.Context(), restoreRequestTimeout)
+	defer cancel()
 	for _, purchase := range input.Purchases {
-		result, err := api.verify(request.Context(), principal.Principal, purchase)
+		result, err := api.verify(restoreContext, principal.Principal, purchase)
 		if err != nil {
 			api.writeError(writer, request, err)
 			return
@@ -950,7 +954,9 @@ func (api *API) writeMutation(writer http.ResponseWriter, request *http.Request,
 // writeError maps domain and provider failures onto the stable v1 error envelope.
 func (api *API) writeError(writer http.ResponseWriter, request *http.Request, err error) {
 	status, code, message := http.StatusInternalServerError, "internal_error", "the request could not be completed"
-	if errors.Is(err, auth.ErrCapacity) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		status, code, message = http.StatusServiceUnavailable, "request_timeout", "the request exceeded its processing deadline"
+	} else if errors.Is(err, auth.ErrCapacity) {
 		status, code, message = http.StatusServiceUnavailable, "authentication_unavailable", "authentication is temporarily unavailable"
 	} else if errors.Is(err, googleplay.ErrNotificationUnauthorized) {
 		status, code, message = http.StatusUnauthorized, "unauthorized", "notification authentication failed"

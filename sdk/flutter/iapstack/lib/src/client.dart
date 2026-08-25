@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
@@ -15,13 +16,15 @@ final class IapStackClient {
   IapStackClient(IapStackConfig config, {http.Client? httpClient})
       : _config = config,
         _httpClient = httpClient ?? http.Client(),
-        _ownsHttpClient = httpClient == null {
+        _ownsHttpClient = httpClient == null,
+        _retryRandom = Random() {
     config.validate();
   }
 
   final IapStackConfig _config;
   final http.Client _httpClient;
   final bool _ownsHttpClient;
+  final Random _retryRandom;
 
   /// Verifies one signed store purchase and returns current projections.
   Future<VerificationResult> verifyPurchase(
@@ -120,9 +123,22 @@ final class IapStackClient {
         attempt <= _config.retryPolicy.maxAttempts;
         attempt++) {
       _RawResponse response;
+      final abortTrigger = Completer<void>();
       try {
-        response =
-            await _send(method, uri, body, requestId).timeout(_config.timeout);
+        response = await _send(
+          method,
+          uri,
+          body,
+          requestId,
+          abortTrigger.future,
+        ).timeout(
+          _config.timeout,
+          onTimeout: () {
+            abortTrigger.complete();
+            throw TimeoutException(
+                'IAPStack HTTP attempt exceeded its deadline');
+          },
+        );
       } on TimeoutException catch (error) {
         if (attempt < _config.retryPolicy.maxAttempts) {
           await _delay(attempt);
@@ -159,8 +175,13 @@ final class IapStackClient {
     Uri uri,
     Map<String, Object?>? body,
     String? requestId,
+    Future<void> abortTrigger,
   ) async {
-    final request = http.Request(method, uri)
+    final request = http.AbortableRequest(
+      method,
+      uri,
+      abortTrigger: abortTrigger,
+    )
       ..headers['Accept'] = 'application/json'
       ..headers['Authorization'] = 'Bearer ${_config.customerToken}'
       ..headers['X-IAPStack-SDK'] = 'flutter/$_sdkVersion';
@@ -194,8 +215,12 @@ final class IapStackClient {
     return builder.takeBytes();
   }
 
-  Future<void> _delay(int attempt) =>
-      Future<void>.delayed(_config.retryPolicy.delayAfter(attempt));
+  Future<void> _delay(int attempt) => Future<void>.delayed(
+        _config.retryPolicy.delayAfter(
+          attempt,
+          randomValue: _retryRandom.nextDouble(),
+        ),
+      );
 
   IapStackApiException _apiException(_RawResponse response) {
     var code = 'http_error';
