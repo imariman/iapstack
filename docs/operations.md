@@ -104,6 +104,57 @@ Credential and signing-secret fields are cleared after submission and never retu
 by the admin read API. Store every newly displayed application bearer immediately in
 your deployment secret manager; the dashboard cannot recover it after the dialog closes.
 
+## Google Play RTDN push setup
+
+Configure one authenticated Pub/Sub push subscription per Google Play application.
+The push endpoint embeds both IAPStack scope identifiers because Pub/Sub does not add
+application-defined headers:
+
+```text
+https://iapstack.example/v1/providers/google-play/projects/<project_id>/applications/<application_id>/notifications
+```
+
+Grant `google-play-developer-notifications@system.gserviceaccount.com` the Pub/Sub
+Publisher role on the topic. Create a dedicated push-auth service account, allow the
+Pub/Sub service agent to mint its OIDC tokens, and configure the subscription with an
+explicit audience. For example:
+
+```sh
+gcloud pubsub topics add-iam-policy-binding "${RTDN_TOPIC}" \
+  --member='serviceAccount:google-play-developer-notifications@system.gserviceaccount.com' \
+  --role='roles/pubsub.publisher'
+
+gcloud iam service-accounts add-iam-policy-binding "${RTDN_PUSH_SERVICE_ACCOUNT}" \
+  --member="serviceAccount:service-${GOOGLE_CLOUD_PROJECT_NUMBER}@gcp-sa-pubsub.iam.gserviceaccount.com" \
+  --role='roles/iam.serviceAccountTokenCreator'
+
+gcloud pubsub subscriptions create "${RTDN_SUBSCRIPTION}" \
+  --topic="${RTDN_TOPIC}" \
+  --push-endpoint="${IAPSTACK_GOOGLE_PLAY_NOTIFICATION_URL}" \
+  --push-auth-service-account="${RTDN_PUSH_SERVICE_ACCOUNT}" \
+  --push-auth-token-audience="${IAPSTACK_GOOGLE_PLAY_NOTIFICATION_AUDIENCE}"
+```
+
+Store the resulting full subscription resource name, push service-account email, and
+audience in the protected Google Play credential `rtdn` object. The configured audience
+must exactly match the token audience; it may equal the endpoint URL. IAPStack also
+requires the OIDC token's verified email claim to equal the configured service account.
+Use Play Console's test notification after deployment, confirm one completed inbox
+record, then test a sandbox purchase and authoritative worker reconciliation. Repeated
+`401` responses indicate OIDC email/audience mismatch; `400` indicates an invalid
+Pub/Sub or DeveloperNotification envelope; `502` indicates incomplete provider
+credential configuration.
+
+For a completed non-consumable or new subscription purchase, confirm that the Android
+Publisher query reports `ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED` after IAPStack commits the
+entitlement. IAPStack deliberately sends the acknowledgement after its database
+transaction: a transient Google failure leaves the entitlement durable and causes the
+API request or worker job to retry. Google `409` concurrent updates, `429` rate limits,
+and `5xx` responses are retryable. A persistent `401` or `403` means the protected
+service account credential or Play Console application permission must be corrected.
+Consumable products are not accepted by this slice and require a future fulfillment
+policy before `purchases.products.consume` can be enabled safely.
+
 ## Backup and restore rehearsal
 
 Create a compressed logical backup:

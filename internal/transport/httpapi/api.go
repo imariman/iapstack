@@ -21,13 +21,14 @@ import (
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/stores"
+	"github.com/imariman/iapstack/internal/stores/googleplay"
 	"github.com/imariman/iapstack/internal/stores/huawei"
 	"github.com/imariman/iapstack/internal/verification"
 	"github.com/imariman/iapstack/internal/webhooks"
 )
 
 const (
-	// inboxProtectionPurpose authenticates protected Huawei notification bytes.
+	// inboxProtectionPurpose authenticates protected provider notification bytes.
 	inboxProtectionPurpose = "inbox_notification"
 	// reconciliationProtectionPurpose authenticates protected periodic verification requests.
 	reconciliationProtectionPurpose = "reconciliation_request"
@@ -45,6 +46,7 @@ type API struct {
 	webhooks       *webhooks.Service
 	verification   *verification.Service
 	huawei         *huawei.Adapter
+	googlePlay     *googleplay.Adapter
 	protection     protection.Service
 	bodyLimit      int64
 	clock          func() time.Time
@@ -61,6 +63,7 @@ type Dependencies struct {
 	Webhooks       *webhooks.Service
 	Verification   *verification.Service
 	Huawei         *huawei.Adapter
+	GooglePlay     *googleplay.Adapter
 	Protection     protection.Service
 	BodyLimit      int64
 }
@@ -180,15 +183,17 @@ type v1Route struct {
 func New(dependencies Dependencies) (*API, error) {
 	if dependencies.Store == nil || dependencies.Operations == nil || dependencies.Admin == nil || dependencies.Authentication == nil ||
 		dependencies.Credentials == nil || dependencies.Webhooks == nil || dependencies.Verification == nil ||
-		dependencies.Huawei == nil || dependencies.Protection == nil || dependencies.BodyLimit <= 0 {
+		dependencies.Huawei == nil || dependencies.GooglePlay == nil ||
+		dependencies.Protection == nil || dependencies.BodyLimit <= 0 {
 		return nil, errors.New("HTTP API dependencies are incomplete")
 	}
 	api := &API{
 		store: dependencies.Store, operations: dependencies.Operations, admin: dependencies.Admin,
 		authentication: dependencies.Authentication, credentials: dependencies.Credentials,
 		webhooks: dependencies.Webhooks, verification: dependencies.Verification,
-		huawei: dependencies.Huawei, protection: dependencies.Protection,
-		bodyLimit: dependencies.BodyLimit, clock: time.Now,
+		huawei: dependencies.Huawei, googlePlay: dependencies.GooglePlay,
+		protection: dependencies.Protection,
+		bodyLimit:  dependencies.BodyLimit, clock: time.Now,
 	}
 	mux := http.NewServeMux()
 	for _, route := range api.v1Routes() {
@@ -219,6 +224,7 @@ func (api *API) v1Routes() []v1Route {
 		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/purchases:restore", OperationID: "restorePurchases", Handler: api.restorePurchases},
 		{Method: http.MethodGet, Path: "/v1/applications/{application_id}/customers/{external_customer_id}/entitlements", OperationID: "getCustomerEntitlements", Handler: api.customerEntitlements},
 		{Method: http.MethodPost, Path: "/v1/providers/huawei/applications/{application_id}/notifications", OperationID: "acceptHuaweiNotification", Handler: api.huaweiNotification},
+		{Method: http.MethodPost, Path: "/v1/providers/google-play/projects/{project_id}/applications/{application_id}/notifications", OperationID: "acceptGooglePlayNotification", Handler: api.googlePlayNotification},
 	}
 }
 
@@ -579,6 +585,64 @@ func (api *API) huaweiNotification(writer http.ResponseWriter, request *http.Req
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "accepted"})
 }
 
+// googlePlayNotification authenticates one Pub/Sub push before durable protected inbox insertion.
+func (api *API) googlePlayNotification(writer http.ResponseWriter, request *http.Request) {
+	bearerToken, ok := strictBearerToken(request.Header.Get("Authorization"))
+	if !ok {
+		writeAPIError(writer, request, http.StatusUnauthorized, "unauthorized", "notification authentication required")
+		return
+	}
+	payload, ok := api.readBody(writer, request)
+	if !ok {
+		return
+	}
+	defer zero(payload)
+	applicationID := core.ApplicationID(request.PathValue("application_id"))
+	projectID := core.ProjectID(request.PathValue("project_id"))
+	var application core.Application
+	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
+		var loadErr error
+		application, loadErr = repository.Application(request.Context(), projectID, applicationID)
+		return loadErr
+	})
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	notification, err := api.googlePlay.ValidateNotification(request.Context(), application, bearerToken, payload)
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	validatedPayload, err := json.Marshal(notification)
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	defer zero(validatedPayload)
+	protected, err := api.protect(request.Context(), application, inboxProtectionPurpose, validatedPayload)
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	now := api.clock().UTC()
+	id := deterministicID("inbox", protected.Fingerprint)
+	err = api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
+		_, saveErr := repository.SaveInboxMessage(request.Context(), persistence.InboxMessage{
+			ID: id, ProjectID: application.ProjectID, ApplicationID: application.ID,
+			Provider: application.Store.Provider, Kind: "google_play_rtdn",
+			ContentType: googleplay.NotificationContentType,
+			Payload:     protected, ReceivedAt: now, AvailableAt: now,
+		})
+		return saveErr
+	})
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "accepted"})
+}
+
 // verify converts one API item into the provider-neutral verification command.
 func (api *API) verify(
 	ctx context.Context,
@@ -662,11 +726,11 @@ func (api *API) requireApplication(writer http.ResponseWriter, request *http.Req
 
 // authenticate extracts one strict bearer token without logging it.
 func (api *API) authenticate(request *http.Request) (auth.Principal, error) {
-	header := request.Header.Get("Authorization")
-	if !strings.HasPrefix(header, "Bearer ") || strings.Contains(strings.TrimPrefix(header, "Bearer "), " ") {
+	token, ok := strictBearerToken(request.Header.Get("Authorization"))
+	if !ok {
 		return auth.Principal{}, auth.ErrUnauthorized
 	}
-	return api.authentication.Authenticate(request.Context(), strings.TrimPrefix(header, "Bearer "))
+	return api.authentication.Authenticate(request.Context(), token)
 }
 
 // application loads one authoritative project-scoped application.
@@ -742,7 +806,11 @@ func (api *API) writeMutation(writer http.ResponseWriter, request *http.Request,
 // writeError maps domain and provider failures onto the stable v1 error envelope.
 func (api *API) writeError(writer http.ResponseWriter, request *http.Request, err error) {
 	status, code, message := http.StatusInternalServerError, "internal_error", "the request could not be completed"
-	if errors.Is(err, persistence.ErrNotFound) {
+	if errors.Is(err, googleplay.ErrNotificationUnauthorized) {
+		status, code, message = http.StatusUnauthorized, "unauthorized", "notification authentication failed"
+	} else if errors.Is(err, googleplay.ErrNotificationInvalid) {
+		status, code, message = http.StatusBadRequest, "invalid_notification", "notification payload is invalid"
+	} else if errors.Is(err, persistence.ErrNotFound) {
 		status, code, message = http.StatusNotFound, "not_found", "the requested resource was not found"
 	} else if errors.Is(err, persistence.ErrConflict) {
 		status, code, message = http.StatusConflict, "conflict", "the request conflicts with current state"
@@ -768,6 +836,18 @@ func (api *API) writeError(writer http.ResponseWriter, request *http.Request, er
 		}
 	}
 	writeAPIError(writer, request, status, code, message)
+}
+
+// strictBearerToken extracts one non-empty bearer without accepting whitespace or alternate schemes.
+func strictBearerToken(header string) (string, bool) {
+	if !strings.HasPrefix(header, "Bearer ") {
+		return "", false
+	}
+	token := strings.TrimPrefix(header, "Bearer ")
+	if token == "" || strings.ContainsAny(token, " \t\r\n") {
+		return "", false
+	}
+	return token, true
 }
 
 // responseFromResult maps internal projections to the stable public response.

@@ -48,7 +48,7 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 
 - [v0.1 scope and architecture](docs/v0.1-scope.md)
 - [Architecture Decision Records](docs/adr/README.md)
-- [HTTP API v1 and Huawei sandbox gate](docs/api-v1.md)
+- [HTTP API v1 and provider notification contracts](docs/api-v1.md)
 - [Machine-readable OpenAPI v1 contract](contracts/openapi/v1.yaml)
 - [Operations and dashboard guide](docs/operations.md)
 - [v0.1 threat model and security release checklist](docs/security.md)
@@ -57,9 +57,11 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 - [Huawei Flutter SDK and sandbox example](sdk/flutter/iapstack_huawei/README.md)
 
 The server currently has production-shaped Huawei verification plus initial Apple
-App Store and Google Play server slices. Apple notifications and renewal-status
-queries, Google Play RTDN ingestion, both Flutter companions, and real provider
-sandbox release gates are still required before either new provider is considered stable.
+App Store and Google Play server slices. Google Play includes authenticated RTDN
+ingestion, authoritative worker reconciliation, and post-commit purchase acknowledgement.
+Apple notifications and renewal-status queries, Google Play consumable fulfillment,
+both Flutter companions, and real provider sandbox release gates are still required
+before either new provider is stable.
 
 ## Development
 
@@ -189,13 +191,13 @@ executable code last. Related constants stay together; unrelated constant groups
 separated by a blank line. Every constant, function, and method has an English
 explanatory comment.
 
-The `worker` process handles the protected Huawei notification inbox, scheduled
-reconciliation, and signed application webhook outbox with bounded concurrency,
+The `worker` process handles the protected Huawei and Google Play notification inbox,
+scheduled reconciliation, and signed application webhook outbox with bounded concurrency,
 River-managed stale-job recovery, and exponential retry scheduling.
 
 Operational deployment, backup, queue recovery, and upgrade procedures are documented
-in [the operations guide](docs/operations.md). The authenticated v1 endpoints, Huawei
-credential/evidence contracts, and webhook verification rules are documented in
+in [the operations guide](docs/operations.md). The authenticated v1 endpoints, provider
+credential/evidence and notification contracts, and webhook verification rules are documented in
 [the HTTP API guide](docs/api-v1.md).
 
 ## Planned architecture

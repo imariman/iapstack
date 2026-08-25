@@ -87,19 +87,22 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 
 	document := loadOpenAPIContract(t)
 	for name, required := range map[string][]string{
-		"AppleCredentialPayload":      {"issuer_id", "key_id", "bundle_id", "private_key", "root_certificates"},
-		"AppleEvidence":               {"signed_transaction", "product_kind"},
-		"GooglePlayCredentialPayload": {"client_email", "private_key_id", "private_key"},
-		"GooglePlayEvidence":          {"purchase_token", "product_kind"},
-		"PurchaseSubmission":          {"external_customer_id", "claimed_products", "evidence"},
-		"VerificationResult":          {"verified_at", "customer_id", "entitlements"},
-		"RestoreResult":               {"results"},
-		"EntitlementSnapshot":         {"customer_id", "entitlements"},
-		"ErrorEnvelope":               {"error"},
-		"AdminProjectOverview":        {"project", "applications", "products", "customers", "recent_transactions", "queues", "recent_webhook_events"},
-		"CredentialMetadata":          {"project_id", "application_id", "kind", "content_type", "schema_version", "revision", "created_at", "updated_at"},
-		"ApiKeyCollection":            {"api_keys"},
-		"ApiKey":                      {"id", "role", "created_at", "current"},
+		"AppleCredentialPayload":       {"issuer_id", "key_id", "bundle_id", "private_key", "root_certificates"},
+		"AppleEvidence":                {"signed_transaction", "product_kind"},
+		"GooglePlayCredentialPayload":  {"client_email", "private_key_id", "private_key"},
+		"GooglePlayRTDNConfiguration":  {"subscription", "push_service_account_email", "audience"},
+		"GooglePlayEvidence":           {"purchase_token", "product_kind"},
+		"GooglePlayPubSubPushEnvelope": {"message", "subscription"},
+		"GooglePlayPubSubMessage":      {"data", "messageId"},
+		"PurchaseSubmission":           {"external_customer_id", "claimed_products", "evidence"},
+		"VerificationResult":           {"verified_at", "customer_id", "entitlements"},
+		"RestoreResult":                {"results"},
+		"EntitlementSnapshot":          {"customer_id", "entitlements"},
+		"ErrorEnvelope":                {"error"},
+		"AdminProjectOverview":         {"project", "applications", "products", "customers", "recent_transactions", "queues", "recent_webhook_events"},
+		"CredentialMetadata":           {"project_id", "application_id", "kind", "content_type", "schema_version", "revision", "created_at", "updated_at"},
+		"ApiKeyCollection":             {"api_keys"},
+		"ApiKey":                       {"id", "role", "created_at", "current"},
 	} {
 		schemaReference, exists := document.Components.Schemas[name]
 		if !exists || schemaReference.Value == nil {

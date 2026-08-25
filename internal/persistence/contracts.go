@@ -59,6 +59,7 @@ type OperationsTransaction interface {
 	CatalogRepository
 	CatalogWriter
 	OperationsRepository
+	ProviderReferenceRepository
 	QueueRepository
 }
 
@@ -115,6 +116,12 @@ type PurchaseRepository interface {
 	SaveArtifact(context.Context, ArtifactWrite) error
 	// SaveObservation stores one immutable observation and its protected references idempotently.
 	SaveObservation(context.Context, ObservationWrite) error
+}
+
+// ProviderReferenceRepository resolves previously verified purchases from protected provider identities.
+type ProviderReferenceRepository interface {
+	// PurchaseContextByReference returns the latest customer and product bound to one protected reference.
+	PurchaseContextByReference(context.Context, ProviderReferenceLookup) (PurchaseReferenceContext, error)
 }
 
 // EntitlementRepository stores and reads current customer entitlement projections.
@@ -358,6 +365,22 @@ type QueueMessage struct {
 	Failed           bool
 }
 
+// ProviderReferenceLookup identifies one protected provider value without exposing its plaintext.
+type ProviderReferenceLookup struct {
+	ProjectID     core.ProjectID
+	ApplicationID core.ApplicationID
+	Role          core.ReferenceRole
+	Kind          string
+	Fingerprint   [32]byte
+}
+
+// PurchaseReferenceContext contains the verified customer and catalog identity bound to a provider reference.
+type PurchaseReferenceContext struct {
+	Customer          core.Customer
+	ProviderProductID core.ProviderProductID
+	ProductKind       core.ProductKind
+}
+
 // QueueCompletion records one successful terminal job outcome.
 type QueueCompletion struct {
 	Queue       QueueName
@@ -462,6 +485,30 @@ func (message InboxMessage) Validate() error {
 		validateTime("inbox receipt time", message.ReceivedAt),
 		validateTime("inbox availability time", message.AvailableAt),
 		scheduleError,
+	)
+}
+
+// Validate checks the application scope, reference metadata, and protected fingerprint.
+func (lookup ProviderReferenceLookup) Validate() error {
+	var fingerprintError error
+	if lookup.Fingerprint == ([32]byte{}) {
+		fingerprintError = errors.New("provider reference fingerprint is required")
+	}
+	return errors.Join(
+		lookup.ProjectID.Validate(),
+		lookup.ApplicationID.Validate(),
+		validateText("provider reference role", string(lookup.Role)),
+		validateText("provider reference kind", lookup.Kind),
+		fingerprintError,
+	)
+}
+
+// Validate checks the verified customer and provider product identity returned by a reference lookup.
+func (purchase PurchaseReferenceContext) Validate() error {
+	return errors.Join(
+		purchase.Customer.Validate(),
+		purchase.ProviderProductID.Validate(),
+		purchase.ProductKind.Validate(),
 	)
 }
 

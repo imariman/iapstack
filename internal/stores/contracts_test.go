@@ -221,6 +221,62 @@ func TestReconciliationResultMustMatchQueryReference(t *testing.T) {
 	}
 }
 
+// TestVerificationResultBindsPostCommitActionsToObservations verifies provider actions cannot escape verified purchase scope.
+func TestVerificationResultBindsPostCommitActionsToObservations(t *testing.T) {
+	t.Parallel()
+
+	application := googleApplication()
+	evidence, err := stores.NewEvidence("application/json", []byte(`{"state":"active"}`))
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	request := stores.VerificationRequest{
+		Application: application, CustomerID: "customer_1",
+		ClaimedProducts: []core.ProviderProductID{"pro_lifetime"}, Evidence: evidence,
+	}
+	observation := productObservation(t, application, "observation_1", "pro_lifetime")
+	observation.ProductKind = core.ProductKindNonConsumable
+	queryReference := observation.ReferencesFor(core.ReferenceQuery)[0]
+	result := stores.VerificationResult{
+		VerifiedAt:   time.Now().UTC(),
+		Artifacts:    []stores.VerifiedArtifact{{Kind: "provider_response", Evidence: evidence}},
+		Observations: []core.PurchaseObservation{observation},
+		PostCommitActions: []stores.PostCommitAction{{
+			Kind: "acknowledge_purchase", ProductID: observation.ProductID,
+			ProductKind: observation.ProductKind, QueryReferences: []core.StoreReference{queryReference},
+		}},
+	}
+
+	if err := result.ValidateForVerification(request); err != nil {
+		t.Fatalf("ValidateForVerification() matching action error = %v", err)
+	}
+	result.PostCommitActions[0].QueryReferences = []core.StoreReference{
+		storeReference(t, core.ReferenceQuery, "purchase_token", "other-token"),
+	}
+	if err := result.ValidateForVerification(request); err == nil {
+		t.Fatal("ValidateForVerification() unbound action error = nil")
+	}
+}
+
+// TestPostCommitRequestRejectsDuplicateActions verifies duplicate provider effects cannot be requested together.
+func TestPostCommitRequestRejectsDuplicateActions(t *testing.T) {
+	t.Parallel()
+
+	action := stores.PostCommitAction{
+		Kind: "acknowledge_purchase", ProductID: "pro_lifetime", ProductKind: core.ProductKindNonConsumable,
+		QueryReferences: []core.StoreReference{
+			storeReference(t, core.ReferenceQuery, "purchase_token", "purchase-token"),
+		},
+	}
+	request := stores.PostCommitRequest{
+		Application: googleApplication(),
+		Actions:     []stores.PostCommitAction{action, action},
+	}
+	if err := request.Validate(); err == nil {
+		t.Fatal("Validate() duplicate action error = nil")
+	}
+}
+
 // TestRegistrySupportsBuiltInAndFutureProviders verifies extensible and duplicate-safe registration.
 func TestRegistrySupportsBuiltInAndFutureProviders(t *testing.T) {
 	t.Parallel()

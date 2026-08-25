@@ -31,6 +31,12 @@ const (
 	fixturePurchaseToken = "purchase-token-0123456789"
 	// fixtureAccountID identifies the obfuscated application customer used by adapter tests.
 	fixtureAccountID = "account_7d9c7b1a3e7046c9"
+	// fixtureRTDNSubscription identifies the Pub/Sub subscription bound to notification fixtures.
+	fixtureRTDNSubscription = "projects/example-project/subscriptions/iapstack-google-play"
+	// fixtureRTDNAudience identifies the configured OIDC audience for Pub/Sub push fixtures.
+	fixtureRTDNAudience = "https://iapstack.example/v1/providers/google-play/projects/project-1/applications/application-1/notifications"
+	// fixtureRTDNServiceAccount identifies the authenticated Pub/Sub push principal.
+	fixtureRTDNServiceAccount = "iapstack-push@example-project.iam.gserviceaccount.com"
 )
 
 // fakeCredentialSource returns one protected Google Play credential fixture.
@@ -66,7 +72,7 @@ func TestAdapterVerifiesAuthoritativeNonConsumable(t *testing.T) {
 		OrderID:                     "GPA.1234-5678-9012-34567",
 		ObfuscatedExternalAccountID: fixtureAccountID,
 		PurchaseCompletionTime:      fixture.now.Add(-time.Hour),
-		AcknowledgementState:        "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
+		AcknowledgementState:        acknowledgementStatePending,
 	}
 	fixture.adapter.client.Transport = providerTransport(t, fixture, purchase)
 	result, err := fixture.adapter.Verify(context.Background(), verificationRequest(t, core.EnvironmentProduction, core.ProductKindNonConsumable))
@@ -84,6 +90,121 @@ func TestAdapterVerifiesAuthoritativeNonConsumable(t *testing.T) {
 	if len(result.Artifacts) != 1 || result.Artifacts[0].Kind != "google_play_server_response" {
 		t.Fatalf("Verify() artifacts = %#v", result.Artifacts)
 	}
+	if len(result.PostCommitActions) != 1 || result.PostCommitActions[0].Kind != acknowledgeActionKind ||
+		result.PostCommitActions[0].ProductID != fixtureProductID ||
+		result.PostCommitActions[0].ProductKind != core.ProductKindNonConsumable {
+		t.Fatalf("Verify() post-commit actions = %#v", result.PostCommitActions)
+	}
+}
+
+// TestAdapterPostsProductAndSubscriptionAcknowledgements verifies both documented Android Publisher paths and request shape.
+func TestAdapterPostsProductAndSubscriptionAcknowledgements(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		kind         core.ProductKind
+		pathFragment string
+	}{
+		{name: "non-consumable", kind: core.ProductKindNonConsumable, pathFragment: "/purchases/products/"},
+		{name: "subscription", kind: core.ProductKindSubscription, pathFragment: "/purchases/subscriptions/"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := newAdapterFixture(t, core.EnvironmentProduction)
+			acknowledgementSeen := false
+			fixture.adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.String() == fixture.adapter.tokenURL {
+					verifyAssertionRequest(t, fixture, request)
+					return jsonResponse(t, http.StatusOK, tokenResponse{
+						AccessToken: "provider-access-token", TokenType: "Bearer", ExpiresIn: 3600,
+					}, nil), nil
+				}
+				acknowledgementSeen = true
+				if request.Method != http.MethodPost || request.Header.Get("Authorization") != "Bearer provider-access-token" ||
+					request.Header.Get("Content-Type") != "application/json" {
+					t.Fatalf("acknowledgement request = %s, authorization = %q, content type = %q",
+						request.Method, request.Header.Get("Authorization"), request.Header.Get("Content-Type"))
+				}
+				wantSuffix := test.pathFragment + fixtureProductID + "/tokens/" + fixturePurchaseToken + ":acknowledge"
+				if !strings.Contains(request.URL.Path, "/applications/"+fixturePackageName) ||
+					!strings.HasSuffix(request.URL.Path, wantSuffix) {
+					t.Fatalf("acknowledgement path = %q, want suffix %q", request.URL.Path, wantSuffix)
+				}
+				body, err := io.ReadAll(request.Body)
+				if err != nil {
+					t.Fatalf("ReadAll() acknowledgement body error = %v", err)
+				}
+				if string(body) != "{}" {
+					t.Fatalf("acknowledgement body = %q, want {}", body)
+				}
+				return jsonResponse(t, http.StatusOK, map[string]any{}, nil), nil
+			})
+
+			if err := fixture.adapter.PostCommit(context.Background(), postCommitRequest(t, test.kind)); err != nil {
+				t.Fatalf("PostCommit() error = %v", err)
+			}
+			if !acknowledgementSeen {
+				t.Fatal("PostCommit() did not send an acknowledgement")
+			}
+		})
+	}
+}
+
+// TestAdapterRetriesConcurrentAcknowledgement verifies Google-documented concurrent updates remain retryable.
+func TestAdapterRetriesConcurrentAcknowledgement(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentProduction)
+	fixture.adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() == fixture.adapter.tokenURL {
+			return jsonResponse(t, http.StatusOK, tokenResponse{
+				AccessToken: "provider-access-token", TokenType: "Bearer", ExpiresIn: 3600,
+			}, nil), nil
+		}
+		return jsonResponse(t, http.StatusConflict, map[string]any{"error": "concurrent update"}, nil), nil
+	})
+
+	err := fixture.adapter.PostCommit(
+		context.Background(),
+		postCommitRequest(t, core.ProductKindNonConsumable),
+	)
+	var failure *stores.Failure
+	if !errors.As(err, &failure) || failure.Kind != stores.FailureTemporary || !failure.Retryable() {
+		t.Fatalf("PostCommit() conflict error = %#v", err)
+	}
+}
+
+// TestAcknowledgementActionsExcludePendingAndCompletedWork verifies only completed unacknowledged purchases create effects.
+func TestAcknowledgementActionsExcludePendingAndCompletedWork(t *testing.T) {
+	t.Parallel()
+
+	reference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", fixturePurchaseToken)
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	observation := core.PurchaseObservation{
+		ProductID: fixtureProductID, ProductKind: core.ProductKindNonConsumable,
+		References: []core.StoreReference{reference},
+	}
+	for _, test := range []struct {
+		name                 string
+		state                string
+		acknowledgementState string
+	}{
+		{name: "pending purchase", state: productStatePending, acknowledgementState: acknowledgementStatePending},
+		{name: "already acknowledged", state: productStatePurchased, acknowledgementState: acknowledgementStateAcknowledged},
+	} {
+		actions, err := acknowledgementActions(observation, test.state, test.acknowledgementState)
+		if err != nil {
+			t.Fatalf("%s acknowledgementActions() error = %v", test.name, err)
+		}
+		if len(actions) != 0 {
+			t.Fatalf("%s acknowledgementActions() = %#v, want none", test.name, actions)
+		}
+	}
 }
 
 // TestAdapterNormalizesSandboxGraceSubscription verifies test scope, grace access, and renewal state.
@@ -100,7 +221,7 @@ func TestAdapterNormalizesSandboxGraceSubscription(t *testing.T) {
 		}},
 		StartTime: fixture.now.Add(-24 * time.Hour), SubscriptionState: subscriptionStateGrace,
 		LatestOrderID: "GPA.2234-5678-9012-34567", TestPurchase: &struct{}{},
-		AcknowledgementState: "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
+		AcknowledgementState: acknowledgementStatePending,
 		ExternalAccountIdentifiers: externalAccountIdentifiers{
 			ObfuscatedExternalAccountID: fixtureAccountID,
 		},
@@ -115,6 +236,9 @@ func TestAdapterNormalizesSandboxGraceSubscription(t *testing.T) {
 		observation.AccessReason != core.AccessReasonGracePeriod || observation.Renewal.Mode != core.RenewalAuto ||
 		observation.Renewal.Status != core.RenewalEnabled {
 		t.Fatalf("Verify() observation = %#v", observation)
+	}
+	if len(result.PostCommitActions) != 1 || result.PostCommitActions[0].ProductKind != core.ProductKindSubscription {
+		t.Fatalf("Verify() post-commit actions = %#v", result.PostCommitActions)
 	}
 }
 
@@ -236,6 +360,10 @@ func newAdapterFixture(t *testing.T, environment core.Environment) adapterFixtur
 	payload, err := json.Marshal(credentialPayload{
 		ClientEmail: "iapstack@example-project.iam.gserviceaccount.com", PrivateKeyID: "0123456789abcdef",
 		PrivateKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded})),
+		RTDN: &rtdnConfiguration{
+			Subscription: fixtureRTDNSubscription, Audience: fixtureRTDNAudience,
+			PushServiceAccountEmail: fixtureRTDNServiceAccount,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Marshal() credential error = %v", err)
@@ -349,6 +477,22 @@ func verificationRequest(
 		},
 		CustomerID: "customer-1", ClaimedProducts: []core.ProviderProductID{fixtureProductID},
 		ExpectedCustomerBindings: []core.StoreReference{binding}, Evidence: evidence,
+	}
+}
+
+// postCommitRequest builds one validated Google Play acknowledgement request fixture.
+func postCommitRequest(t *testing.T, kind core.ProductKind) stores.PostCommitRequest {
+	t.Helper()
+	reference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", fixturePurchaseToken)
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	return stores.PostCommitRequest{
+		Application: verificationRequest(t, core.EnvironmentProduction, kind).Application,
+		Actions: []stores.PostCommitAction{{
+			Kind: acknowledgeActionKind, ProductID: fixtureProductID, ProductKind: kind,
+			QueryReferences: []core.StoreReference{reference},
+		}},
 	}
 }
 

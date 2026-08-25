@@ -20,6 +20,51 @@ type referenceIdentity struct {
 	fingerprint [32]byte
 }
 
+// PurchaseContextByReference returns the latest verified customer and product for one protected provider value.
+func (repository *transaction) PurchaseContextByReference(
+	ctx context.Context,
+	lookup persistence.ProviderReferenceLookup,
+) (persistence.PurchaseReferenceContext, error) {
+	if err := lookup.Validate(); err != nil {
+		return persistence.PurchaseReferenceContext{}, err
+	}
+	result := persistence.PurchaseReferenceContext{}
+	err := repository.tx.QueryRow(ctx, `
+		SELECT customer.id, customer.project_id, customer.external_id,
+			observation.provider_product_id, observation.product_kind
+		FROM provider_references AS reference
+		JOIN observation_references AS observation_reference
+			ON observation_reference.reference_id = reference.id
+			AND observation_reference.application_id = reference.application_id
+		JOIN purchase_observations AS observation
+			ON observation.id = observation_reference.observation_id
+			AND observation.application_id = observation_reference.application_id
+		JOIN customers AS customer
+			ON customer.id = observation.customer_id
+			AND customer.project_id = observation.project_id
+		WHERE observation.project_id = $1
+			AND reference.application_id = $2
+			AND reference.role = $3
+			AND reference.kind = $4
+			AND reference.value_fingerprint = $5
+		ORDER BY observation.observed_at DESC, observation.created_at DESC, observation.id DESC
+		LIMIT 1
+	`, lookup.ProjectID, lookup.ApplicationID, lookup.Role, lookup.Kind, lookup.Fingerprint[:]).Scan(
+		&result.Customer.ID,
+		&result.Customer.ProjectID,
+		&result.Customer.ExternalID,
+		&result.ProviderProductID,
+		&result.ProductKind,
+	)
+	if err != nil {
+		return persistence.PurchaseReferenceContext{}, classifyError("resolve provider reference context", err)
+	}
+	if err := result.Validate(); err != nil {
+		return persistence.PurchaseReferenceContext{}, fmt.Errorf("validate provider reference context: %w", err)
+	}
+	return result, nil
+}
+
 // SaveEvidence stores client evidence idempotently and returns its durable identity.
 func (repository *transaction) SaveEvidence(ctx context.Context, write persistence.EvidenceWrite) (int64, error) {
 	if err := write.Validate(); err != nil {
