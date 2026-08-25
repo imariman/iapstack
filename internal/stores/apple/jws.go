@@ -35,65 +35,79 @@ type trustedRoots struct {
 
 // verifyTransactionJWS verifies Apple's ES256 signature and certificate chain before decoding a transaction.
 func verifyTransactionJWS(signed string, roots trustedRoots) (transactionPayload, error) {
+	var payload transactionPayload
+	if err := verifyAppleJWS(signed, roots, &payload); err != nil {
+		return transactionPayload{}, err
+	}
+	return payload, nil
+}
+
+// verifyAppleJWS authenticates one Apple compact JWS before decoding its typed payload.
+func verifyAppleJWS(signed string, roots trustedRoots, destination any) error {
 	parts := strings.Split(signed, ".")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return transactionPayload{}, errors.New("Apple transaction is not a compact JWS")
+		return errors.New("Apple payload is not a compact JWS")
 	}
 	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return transactionPayload{}, errors.New("Apple JWS header is not base64url")
+		return errors.New("Apple JWS header is not base64url")
 	}
 	var header jwsHeader
 	if err := json.Unmarshal(headerBytes, &header); err != nil {
-		return transactionPayload{}, errors.New("Apple JWS header is not valid JSON")
+		return errors.New("Apple JWS header is not valid JSON")
 	}
 	if header.Algorithm != "ES256" || len(header.Chain) != 3 {
-		return transactionPayload{}, errors.New("Apple JWS must use ES256 with a three-certificate chain")
+		return errors.New("Apple JWS must use ES256 with a three-certificate chain")
 	}
 	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return transactionPayload{}, errors.New("Apple JWS payload is not base64url")
+		return errors.New("Apple JWS payload is not base64url")
 	}
-	var payload transactionPayload
-	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
-		return transactionPayload{}, errors.New("Apple JWS payload is not valid JSON")
+	var metadata struct {
+		SignedDate int64 `json:"signedDate"`
 	}
-	if payload.SignedDate <= 0 {
-		return transactionPayload{}, errors.New("Apple transaction signed date is required")
+	if err := json.Unmarshal(payloadBytes, &metadata); err != nil {
+		return errors.New("Apple JWS payload is not valid JSON")
+	}
+	if metadata.SignedDate <= 0 {
+		return errors.New("Apple JWS signed date is required")
 	}
 	certificates, err := parseJWSCertificates(header.Chain)
 	if err != nil {
-		return transactionPayload{}, err
+		return err
 	}
 	if _, trusted := roots.fingerprints[sha256.Sum256(certificates[2].Raw)]; !trusted {
-		return transactionPayload{}, errors.New("Apple JWS root certificate is not trusted")
+		return errors.New("Apple JWS root certificate is not trusted")
 	}
 	if !hasExtension(certificates[1], appleWWDRIntermediateOID) {
-		return transactionPayload{}, errors.New("Apple JWS intermediate certificate is not a WWDR certificate")
+		return errors.New("Apple JWS intermediate certificate is not a WWDR certificate")
 	}
 	intermediates := x509.NewCertPool()
 	intermediates.AddCert(certificates[1])
 	if _, err := certificates[0].Verify(x509.VerifyOptions{
 		Roots:         roots.pool,
 		Intermediates: intermediates,
-		CurrentTime:   milliseconds(payload.SignedDate),
+		CurrentTime:   milliseconds(metadata.SignedDate),
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}); err != nil {
-		return transactionPayload{}, fmt.Errorf("verify Apple JWS certificate chain: %w", err)
+		return fmt.Errorf("verify Apple JWS certificate chain: %w", err)
 	}
 	publicKey, ok := certificates[0].PublicKey.(*ecdsa.PublicKey)
 	if !ok || publicKey.Curve != elliptic.P256() {
-		return transactionPayload{}, errors.New("Apple JWS leaf key is not P-256 ECDSA")
+		return errors.New("Apple JWS leaf key is not P-256 ECDSA")
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil || len(signature) != 64 {
-		return transactionPayload{}, errors.New("Apple JWS signature is not an ES256 signature")
+		return errors.New("Apple JWS signature is not an ES256 signature")
 	}
 	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
 	if !ecdsa.Verify(publicKey, digest[:], new(big.Int).SetBytes(signature[:32]), new(big.Int).SetBytes(signature[32:])) {
-		return transactionPayload{}, errors.New("Apple JWS signature verification failed")
+		return errors.New("Apple JWS signature verification failed")
 	}
-	return payload, nil
+	if err := json.Unmarshal(payloadBytes, destination); err != nil {
+		return errors.New("Apple JWS payload does not match its contract")
+	}
+	return nil
 }
 
 // parseTrustedRoots parses one or more configured Apple root certificates from PEM.
