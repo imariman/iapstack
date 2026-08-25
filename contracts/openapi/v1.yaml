@@ -1,0 +1,1225 @@
+openapi: 3.0.3
+info:
+  title: IAPStack HTTP API
+  version: 1.0.0
+  description: >-
+    Versioned administration, purchase verification, entitlement, and Huawei
+    lifecycle notification contracts for the self-hosted IAPStack control plane.
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+servers:
+  - url: /
+    description: Current self-hosted IAPStack deployment
+tags:
+  - name: Administration
+  - name: Purchases
+  - name: Entitlements
+  - name: Huawei notifications
+paths:
+  /v1/admin/api-keys:
+    post:
+      tags: [Administration]
+      operationId: createApiKey
+      summary: Create an administrator or application bearer
+      security:
+        - adminBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyRequest'
+      responses:
+        '201':
+          description: The bearer, returned once
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreated'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects:
+    get:
+      tags: [Administration]
+      operationId: listAdminProjects
+      summary: List bounded project summaries
+      security:
+        - adminBearer: []
+      responses:
+        '200':
+          description: Project summaries ordered by stable identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminProjects'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}:
+    put:
+      tags: [Administration]
+      operationId: putAdminProject
+      summary: Idempotently create a project
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          $ref: '#/components/responses/MutationAccepted'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/overview:
+    get:
+      tags: [Administration]
+      operationId: getAdminProjectOverview
+      summary: Load one secret-free operational project snapshot
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Bounded operational datasets used by the dashboard
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminProjectOverview'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/applications/{application_id}:
+    put:
+      tags: [Administration]
+      operationId: putAdminApplication
+      summary: Idempotently create a provider application
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ApplicationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplicationRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/MutationAccepted'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/customers/{customer_id}:
+    put:
+      tags: [Administration]
+      operationId: putAdminCustomer
+      summary: Idempotently create a stable customer binding
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/CustomerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerRequest'
+      responses:
+        '200':
+          description: Stored customer identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/entitlements/{entitlement_id}:
+    put:
+      tags: [Administration]
+      operationId: putAdminEntitlement
+      summary: Idempotently create an entitlement definition
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/EntitlementId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntitlementDefinitionRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/MutationAccepted'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/products/{product_id}:
+    put:
+      tags: [Administration]
+      operationId: putAdminProduct
+      summary: Idempotently create a product and its entitlement grants
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ProductId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/MutationAccepted'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/applications/{application_id}/store-products/{provider_product_id}:
+    put:
+      tags: [Administration]
+      operationId: putAdminStoreProduct
+      summary: Idempotently map a provider product to an internal product
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ApplicationId'
+        - $ref: '#/components/parameters/ProviderProductId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StoreProductRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/MutationAccepted'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/applications/{application_id}/credentials/{kind}:
+    put:
+      tags: [Administration]
+      operationId: putAdminCredential
+      summary: Create or rotate a protected provider credential package
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ApplicationId'
+        - $ref: '#/components/parameters/CredentialKind'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialRequest'
+      responses:
+        '200':
+          description: Secret-free credential revision metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialMetadata'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/applications/{application_id}/webhook:
+    put:
+      tags: [Administration]
+      operationId: putAdminWebhook
+      summary: Create or rotate a signed outbound webhook endpoint
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ApplicationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookRequest'
+      responses:
+        '200':
+          description: Secret-free webhook revision metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookConfiguration'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/applications/{application_id}/purchases:verify:
+    post:
+      tags: [Purchases]
+      operationId: verifyPurchase
+      summary: Verify one signed purchase and return current projections
+      security:
+        - applicationBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ApplicationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PurchaseSubmission'
+      responses:
+        '200':
+          description: Current entitlement snapshot after authoritative verification
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationResult'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/InvalidPurchase'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/applications/{application_id}/purchases:restore:
+    post:
+      tags: [Purchases]
+      operationId: restorePurchases
+      summary: Verify a bounded batch of signed purchases in request order
+      security:
+        - applicationBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ApplicationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreRequest'
+      responses:
+        '200':
+          description: Per-purchase verification snapshots in request order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreResult'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/InvalidPurchase'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/applications/{application_id}/customers/{external_customer_id}/entitlements:
+    get:
+      tags: [Entitlements]
+      operationId: getCustomerEntitlements
+      summary: Load the current entitlement projection for one customer
+      security:
+        - applicationBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ApplicationId'
+        - $ref: '#/components/parameters/ExternalCustomerId'
+      responses:
+        '200':
+          description: Current application-scoped customer projection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntitlementSnapshot'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/providers/huawei/applications/{application_id}/notifications:
+    post:
+      tags: [Huawei notifications]
+      operationId: acceptHuaweiNotification
+      summary: Validate and durably accept one Huawei lifecycle notification
+      parameters:
+        - $ref: '#/components/parameters/ApplicationId'
+        - $ref: '#/components/parameters/ProjectScopeHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HuaweiNotification'
+      responses:
+        '200':
+          description: Notification validated and persisted before acknowledgement
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptedStatus'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/InvalidPurchase'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+components:
+  securitySchemes:
+    adminBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-admin-key
+      description: Bootstrap or stored administrator bearer.
+    applicationBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-application-key
+      description: Application-scoped bearer bound to the application path.
+  parameters:
+    ProjectId:
+      name: project_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    ApplicationId:
+      name: application_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    CustomerId:
+      name: customer_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    EntitlementId:
+      name: entitlement_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    ProductId:
+      name: product_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    ProviderProductId:
+      name: provider_product_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    ExternalCustomerId:
+      name: external_customer_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    CredentialKind:
+      name: kind
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [huawei_server_api]
+    ProjectScopeHeader:
+      name: X-IAPStack-Project-ID
+      in: header
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+  responses:
+    MutationAccepted:
+      description: Idempotent mutation completed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OperationStatus'
+    InvalidRequest:
+      description: Invalid JSON or request values
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Unauthorized:
+      description: Missing, invalid, or incorrectly scoped bearer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Resource was not found in the authenticated scope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Conflict:
+      description: Mutation conflicts with current durable state or revision
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    RequestTooLarge:
+      description: JSON body exceeds the configured request limit
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    UnsupportedMediaType:
+      description: Content-Type is not application/json
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    InvalidPurchase:
+      description: Signed purchase evidence could not be verified
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ProviderError:
+      description: Provider rejected credentials or returned a permanent upstream failure
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    InternalError:
+      description: Safe internal failure envelope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ServiceUnavailable:
+      description: Durable storage or provider is temporarily unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    Identifier:
+      type: string
+      minLength: 1
+      pattern: '^[^[:cntrl:]]+$'
+    ApiKeyRequest:
+      type: object
+      additionalProperties: false
+      required: [role]
+      properties:
+        role:
+          type: string
+          enum: [admin, application]
+        project_id:
+          $ref: '#/components/schemas/Identifier'
+        application_id:
+          $ref: '#/components/schemas/Identifier'
+    ApiKeyCreated:
+      type: object
+      additionalProperties: false
+      required: [key]
+      properties:
+        key:
+          type: string
+          minLength: 1
+          description: Returned once and never retrievable after this response.
+    ApplicationRequest:
+      type: object
+      additionalProperties: false
+      required: [provider, environment, provider_application_id]
+      properties:
+        provider:
+          type: string
+          enum: [huawei_appgallery]
+        environment:
+          type: string
+          enum: [production, sandbox, test]
+        provider_application_id:
+          $ref: '#/components/schemas/Identifier'
+    CustomerRequest:
+      type: object
+      additionalProperties: false
+      required: [external_id]
+      properties:
+        external_id:
+          $ref: '#/components/schemas/Identifier'
+    Customer:
+      type: object
+      additionalProperties: false
+      required: [id, project_id, external_id]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        project_id:
+          $ref: '#/components/schemas/Identifier'
+        external_id:
+          $ref: '#/components/schemas/Identifier'
+    EntitlementDefinitionRequest:
+      type: object
+      additionalProperties: false
+      required: [key]
+      properties:
+        key:
+          $ref: '#/components/schemas/Identifier'
+    ProductRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, entitlement_ids]
+      properties:
+        kind:
+          type: string
+          enum: [subscription, non_consumable, consumable]
+        entitlement_ids:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Identifier'
+    StoreProductRequest:
+      type: object
+      additionalProperties: false
+      required: [product_id]
+      properties:
+        product_id:
+          $ref: '#/components/schemas/Identifier'
+    CredentialRequest:
+      type: object
+      additionalProperties: false
+      required: [content_type, schema_version, expected_revision, payload]
+      properties:
+        content_type:
+          type: string
+          enum: [application/vnd.iapstack.huawei-credentials+json]
+        schema_version:
+          type: integer
+          enum: [1]
+        expected_revision:
+          type: integer
+          format: int64
+          minimum: 0
+        payload:
+          $ref: '#/components/schemas/HuaweiCredentialPayload'
+    HuaweiCredentialPayload:
+      type: object
+      additionalProperties: false
+      required: [client_id, client_secret, public_key, order_url, subscription_url]
+      properties:
+        client_id:
+          type: string
+          minLength: 1
+        client_secret:
+          type: string
+          minLength: 1
+          writeOnly: true
+        public_key:
+          type: string
+          minLength: 1
+        token_url:
+          type: string
+          format: uri
+        order_url:
+          type: string
+          format: uri
+        subscription_url:
+          type: string
+          format: uri
+    CredentialMetadata:
+      type: object
+      additionalProperties: false
+      required: [project_id, application_id, kind, content_type, schema_version, revision, created_at, updated_at]
+      properties:
+        project_id:
+          $ref: '#/components/schemas/Identifier'
+        application_id:
+          $ref: '#/components/schemas/Identifier'
+        kind:
+          type: string
+          enum: [huawei_server_api]
+        content_type:
+          type: string
+        schema_version:
+          type: integer
+          minimum: 1
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    WebhookRequest:
+      type: object
+      additionalProperties: false
+      required: [url, signing_secret, expected_revision]
+      properties:
+        url:
+          type: string
+          format: uri
+          pattern: '^https://'
+        signing_secret:
+          type: string
+          minLength: 32
+          writeOnly: true
+        expected_revision:
+          type: integer
+          format: int64
+          minimum: 0
+    WebhookConfiguration:
+      type: object
+      additionalProperties: false
+      required: [url, revision]
+      properties:
+        url:
+          type: string
+          format: uri
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+    CustomerBinding:
+      type: object
+      additionalProperties: false
+      required: [kind, value]
+      properties:
+        kind:
+          $ref: '#/components/schemas/Identifier'
+        value:
+          $ref: '#/components/schemas/Identifier'
+    HuaweiEvidence:
+      type: object
+      additionalProperties: false
+      required: [purchase_data, signature, product_kind]
+      properties:
+        purchase_data:
+          type: string
+          minLength: 1
+          description: Exact signed InAppPurchaseData JSON string returned by the Huawei SDK.
+        signature:
+          type: string
+          minLength: 1
+          description: Base64-encoded detached RSA-SHA256 signature.
+        product_kind:
+          type: string
+          enum: [subscription, non_consumable]
+    PurchaseSubmission:
+      type: object
+      additionalProperties: false
+      required: [external_customer_id, claimed_products, evidence]
+      properties:
+        external_customer_id:
+          $ref: '#/components/schemas/Identifier'
+        claimed_products:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Identifier'
+        customer_bindings:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/CustomerBinding'
+        evidence:
+          $ref: '#/components/schemas/HuaweiEvidence'
+    RestoreRequest:
+      type: object
+      additionalProperties: false
+      required: [purchases]
+      properties:
+        purchases:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/PurchaseSubmission'
+    Entitlement:
+      type: object
+      additionalProperties: false
+      required: [key, access, reason, version]
+      properties:
+        key:
+          $ref: '#/components/schemas/Identifier'
+        access:
+          type: string
+          enum: [allowed, denied, unresolved]
+        reason:
+          type: string
+          enum:
+            - purchase_valid
+            - grace_period
+            - pending_payment
+            - canceled_at_period_end
+            - expired
+            - billing_issue
+            - paused
+            - refunded
+            - revoked
+            - provider_decision
+            - unresolved
+        effective_starts_at:
+          type: string
+          format: date-time
+          nullable: true
+        effective_ends_at:
+          type: string
+          format: date-time
+          nullable: true
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+    VerificationResult:
+      type: object
+      additionalProperties: false
+      required: [verified_at, customer_id, entitlements]
+      properties:
+        verified_at:
+          type: string
+          format: date-time
+        customer_id:
+          $ref: '#/components/schemas/Identifier'
+        entitlements:
+          type: array
+          items:
+            $ref: '#/components/schemas/Entitlement'
+    RestoreResult:
+      type: object
+      additionalProperties: false
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/VerificationResult'
+    EntitlementSnapshot:
+      type: object
+      additionalProperties: false
+      required: [customer_id, entitlements]
+      properties:
+        customer_id:
+          $ref: '#/components/schemas/Identifier'
+        entitlements:
+          type: array
+          items:
+            $ref: '#/components/schemas/Entitlement'
+    HuaweiNotification:
+      type: object
+      additionalProperties: false
+      required: [external_customer_id, claimed_products, purchase]
+      properties:
+        external_customer_id:
+          $ref: '#/components/schemas/Identifier'
+        claimed_products:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Identifier'
+        purchase:
+          $ref: '#/components/schemas/HuaweiEvidence'
+    OperationStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+    AcceptedStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ApiError'
+    ApiError:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          minLength: 1
+        message:
+          type: string
+          minLength: 1
+        request_id:
+          type: string
+          minLength: 1
+    AdminProjects:
+      type: object
+      additionalProperties: false
+      required: [projects]
+      properties:
+        projects:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/AdminProject'
+    AdminProject:
+      type: object
+      additionalProperties: false
+      required: [id, application_count, customer_count, product_count, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        application_count:
+          type: integer
+          format: int64
+          minimum: 0
+        customer_count:
+          type: integer
+          format: int64
+          minimum: 0
+        product_count:
+          type: integer
+          format: int64
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+    AdminProjectOverview:
+      type: object
+      additionalProperties: false
+      required: [project, applications, products, customers, recent_transactions, queues, recent_webhook_events]
+      properties:
+        project:
+          $ref: '#/components/schemas/AdminProject'
+        applications:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/AdminApplication'
+        products:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/AdminProduct'
+        customers:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/AdminCustomer'
+        recent_transactions:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/AdminTransaction'
+        queues:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminQueue'
+        recent_webhook_events:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/AdminWebhookEvent'
+    AdminApplication:
+      type: object
+      additionalProperties: false
+      required: [id, provider, environment, provider_application_id, credential_configured, credential_revision, webhook_configured, webhook_revision, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        provider:
+          type: string
+        environment:
+          type: string
+          enum: [production, sandbox, test]
+        provider_application_id:
+          $ref: '#/components/schemas/Identifier'
+        credential_configured:
+          type: boolean
+        credential_revision:
+          type: integer
+          format: int64
+          minimum: 0
+        webhook_configured:
+          type: boolean
+        webhook_revision:
+          type: integer
+          format: int64
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+    AdminProduct:
+      type: object
+      additionalProperties: false
+      required: [id, kind, entitlement_keys, store_mapping_count, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        kind:
+          type: string
+        entitlement_keys:
+          type: array
+          items:
+            type: string
+        store_mapping_count:
+          type: integer
+          format: int64
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+    AdminCustomer:
+      type: object
+      additionalProperties: false
+      required: [id, external_id, entitlement_count, allowed_count, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        external_id:
+          $ref: '#/components/schemas/Identifier'
+        entitlement_count:
+          type: integer
+          format: int64
+          minimum: 0
+        allowed_count:
+          type: integer
+          format: int64
+          minimum: 0
+        last_observed_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    AdminTransaction:
+      type: object
+      additionalProperties: false
+      required: [id, application_id, customer_id, product_id, provider_product_id, lifecycle_state, access, access_reason, observed_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        application_id:
+          $ref: '#/components/schemas/Identifier'
+        customer_id:
+          $ref: '#/components/schemas/Identifier'
+        product_id:
+          $ref: '#/components/schemas/Identifier'
+        provider_product_id:
+          $ref: '#/components/schemas/Identifier'
+        lifecycle_state:
+          type: string
+        access:
+          type: string
+          enum: [allowed, denied, unresolved]
+        access_reason:
+          type: string
+        observed_at:
+          type: string
+          format: date-time
+        effective_ends_at:
+          type: string
+          format: date-time
+          nullable: true
+    AdminQueue:
+      type: object
+      additionalProperties: false
+      required: [name, pending, completed, failed]
+      properties:
+        name:
+          type: string
+          enum: [inbox, reconciliation, outbox]
+        pending:
+          type: integer
+          format: int64
+          minimum: 0
+        completed:
+          type: integer
+          format: int64
+          minimum: 0
+        failed:
+          type: integer
+          format: int64
+          minimum: 0
+    AdminWebhookEvent:
+      type: object
+      additionalProperties: false
+      required: [id, application_id, event_type, aggregate_id, status, occurred_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        application_id:
+          $ref: '#/components/schemas/Identifier'
+        event_type:
+          type: string
+        aggregate_id:
+          type: string
+        status:
+          type: string
+        error_code:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        delivered_at:
+          type: string
+          format: date-time
+          nullable: true
+        failed_at:
+          type: string
+          format: date-time
+          nullable: true
