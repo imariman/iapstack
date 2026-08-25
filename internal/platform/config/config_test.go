@@ -19,6 +19,8 @@ const (
 	logLevelEnvironment = "IAPSTACK_LOG_LEVEL"
 	// databaseURLEnvironment names the PostgreSQL connection setting used by tests.
 	databaseURLEnvironment = "IAPSTACK_DATABASE_URL"
+	// webhookPrivateNetworksEnvironment names the explicit private webhook target opt-in.
+	webhookPrivateNetworksEnvironment = "IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS"
 
 	// defaultHTTPAddress is the expected listen address when no override is configured.
 	defaultHTTPAddress = ":8080"
@@ -60,6 +62,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.QueueRetention != 30*24*time.Hour {
 		t.Errorf("QueueRetention = %v, want 720h", cfg.QueueRetention)
 	}
+	if cfg.WebhookAllowPrivateNetworks {
+		t.Error("WebhookAllowPrivateNetworks = true, want secure default false")
+	}
 }
 
 // TestLoadOverrides verifies supported environment configuration overrides.
@@ -67,10 +72,11 @@ func TestLoadOverrides(t *testing.T) {
 	t.Parallel()
 
 	cfg, err := config.Load(env(map[string]string{
-		httpAddressEnvironment:     overriddenHTTPAddress,
-		shutdownTimeoutEnvironment: overriddenShutdownTimeout.String(),
-		logLevelEnvironment:        "debug",
-		databaseURLEnvironment:     " " + testDatabaseURL + " ",
+		httpAddressEnvironment:            overriddenHTTPAddress,
+		shutdownTimeoutEnvironment:        overriddenShutdownTimeout.String(),
+		logLevelEnvironment:               "debug",
+		databaseURLEnvironment:            " " + testDatabaseURL + " ",
+		webhookPrivateNetworksEnvironment: "true",
 	}))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -87,6 +93,9 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.DatabaseURL != testDatabaseURL {
 		t.Errorf("DatabaseURL = %q, want %q", cfg.DatabaseURL, testDatabaseURL)
+	}
+	if !cfg.WebhookAllowPrivateNetworks {
+		t.Error("WebhookAllowPrivateNetworks = false, want true override")
 	}
 }
 
@@ -105,6 +114,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "shutdown sign", values: map[string]string{shutdownTimeoutEnvironment: "-1s"}},
 		{name: "log level", values: map[string]string{logLevelEnvironment: "verbose"}},
 		{name: "worker attempts", values: map[string]string{"IAPSTACK_WORKER_MAX_ATTEMPTS": "0"}},
+		{name: "private webhook setting", values: map[string]string{webhookPrivateNetworksEnvironment: "yes"}},
 	}
 
 	for _, tt := range tests {

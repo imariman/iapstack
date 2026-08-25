@@ -5,8 +5,11 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strconv"
 	"testing"
 	"time"
@@ -30,6 +33,16 @@ type fakeOperationsTransaction struct {
 // fakeProtection opens one configured webhook signing secret.
 type fakeProtection struct {
 	secret []byte
+}
+
+// fakeAddressResolver returns deterministic DNS answers to network policy tests.
+type fakeAddressResolver struct {
+	addresses []netip.Addr
+}
+
+// recordingConnectionDialer records whether an address passed policy enforcement.
+type recordingConnectionDialer struct {
+	calls int
 }
 
 // TestSignUsesTimestampDotRawBody verifies the stable v1 webhook signature contract.
@@ -70,6 +83,7 @@ func TestDeliverSignsAndClassifiesResponses(t *testing.T) {
 	service := &Service{
 		store: store, protection: fakeProtection{secret: []byte("signing-secret")},
 		client: server.Client(), clock: func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		allowPrivateNetworks: true,
 	}
 	message := persistence.QueueMessage{
 		Queue: persistence.QueueOutbox, ID: "event-1", ProjectID: "project-1",
@@ -92,6 +106,61 @@ func TestDeliverSignsAndClassifiesResponses(t *testing.T) {
 	failure, ok = err.(*DeliveryError)
 	if !ok || failure.Retryable() {
 		t.Fatalf("400 Deliver() error = %#v, want permanent DeliveryError", err)
+	}
+}
+
+// TestWebhookAddressPolicyRejectsNonPublicRanges verifies the Internet-only destination boundary.
+func TestWebhookAddressPolicyRejectsNonPublicRanges(t *testing.T) {
+	tests := []struct {
+		address string
+		allowed bool
+	}{
+		{address: "8.8.8.8", allowed: true},
+		{address: "2606:4700:4700::1111", allowed: true},
+		{address: "127.0.0.1", allowed: false},
+		{address: "::1", allowed: false},
+		{address: "10.0.0.1", allowed: false},
+		{address: "169.254.169.254", allowed: false},
+		{address: "100.64.0.1", allowed: false},
+		{address: "198.18.0.1", allowed: false},
+		{address: "::ffff:127.0.0.1", allowed: false},
+		{address: "ff02::1", allowed: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.address, func(t *testing.T) {
+			address := netip.MustParseAddr(tt.address)
+			if got := isPublicWebhookAddress(address); got != tt.allowed {
+				t.Fatalf("isPublicWebhookAddress(%q) = %t, want %t", tt.address, got, tt.allowed)
+			}
+		})
+	}
+}
+
+// TestRestrictedDialerRejectsMixedDNSAnswers verifies one private answer blocks DNS-rebinding delivery.
+func TestRestrictedDialerRejectsMixedDNSAnswers(t *testing.T) {
+	connectionDialer := &recordingConnectionDialer{}
+	dialer := &restrictedDialer{
+		resolver: fakeAddressResolver{addresses: []netip.Addr{
+			netip.MustParseAddr("8.8.8.8"),
+			netip.MustParseAddr("127.0.0.1"),
+		}},
+		dialer: connectionDialer,
+	}
+	if _, err := dialer.DialContext(context.Background(), "tcp", "example.com:443"); err == nil {
+		t.Fatal("DialContext() mixed DNS error = nil, want policy rejection")
+	}
+	if connectionDialer.calls != 0 {
+		t.Fatalf("DialContext() connection calls = %d, want 0", connectionDialer.calls)
+	}
+}
+
+// TestWebhookDestinationPrivateNetworkOptIn verifies private destinations require an explicit policy override.
+func TestWebhookDestinationPrivateNetworkOptIn(t *testing.T) {
+	if err := validateWebhookDestination("https://127.0.0.1/hooks", false); err == nil {
+		t.Fatal("validateWebhookDestination() default error = nil, want private-address rejection")
+	}
+	if err := validateWebhookDestination("https://127.0.0.1/hooks", true); err != nil {
+		t.Fatalf("validateWebhookDestination() opt-in error = %v", err)
 	}
 }
 
@@ -119,4 +188,21 @@ func (service fakeProtection) Protect(_ context.Context, _ protection.Request) (
 // Open returns one defensive copy of the configured signing secret.
 func (service fakeProtection) Open(_ context.Context, _ protection.OpenRequest) ([]byte, error) {
 	return append([]byte(nil), service.secret...), nil
+}
+
+// LookupNetIP returns deterministic addresses without consulting external DNS.
+func (resolver fakeAddressResolver) LookupNetIP(
+	_ context.Context,
+	_, _ string,
+) ([]netip.Addr, error) {
+	return append([]netip.Addr(nil), resolver.addresses...), nil
+}
+
+// DialContext records a permitted dial attempt and returns a deterministic transport failure.
+func (dialer *recordingConnectionDialer) DialContext(
+	_ context.Context,
+	_, _ string,
+) (net.Conn, error) {
+	dialer.calls++
+	return nil, errors.New("test dial failure")
 }

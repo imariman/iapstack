@@ -25,6 +25,8 @@ const (
 	keyIDBytes = 12
 	// secretBytes controls bearer secret entropy.
 	secretBytes = 32
+	// minimumBootstrapAdminKeyBytes prevents trivially brute-forced installation credentials.
+	minimumBootstrapAdminKeyBytes = 32
 	// argonTime controls Argon2id iterations.
 	argonTime uint32 = 2
 	// argonMemory controls Argon2id memory in KiB.
@@ -62,6 +64,9 @@ func NewService(store persistence.OperationsStore, bootstrapAdminKey string) (*S
 	}
 	service := &Service{store: store, clock: time.Now}
 	if bootstrapAdminKey = strings.TrimSpace(bootstrapAdminKey); bootstrapAdminKey != "" {
+		if len(bootstrapAdminKey) < minimumBootstrapAdminKeyBytes {
+			return nil, errors.New("bootstrap administrator key must contain at least 32 bytes")
+		}
 		service.bootstrapAdminHash = sha256.Sum256([]byte(bootstrapAdminKey))
 		service.hasBootstrapAdmin = true
 	}

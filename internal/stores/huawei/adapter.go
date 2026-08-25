@@ -240,12 +240,15 @@ func (adapter *Adapter) ValidateNotification(
 	if err != nil {
 		return NotificationEnvelope{}, invalid("notification", err)
 	}
+	request := stores.VerificationRequest{Application: application, CustomerID: core.CustomerID("notification-check"),
+		ClaimedProducts: envelope.ClaimedProducts, Evidence: evidence}
+	if err := request.Validate(); err != nil {
+		return NotificationEnvelope{}, invalid("notification", err)
+	}
 	purchaseEnvelope, purchase, err := parseEvidence(evidence)
 	if err != nil {
 		return NotificationEnvelope{}, invalid("notification", err)
 	}
-	request := stores.VerificationRequest{Application: application, CustomerID: core.CustomerID("notification-check"),
-		ClaimedProducts: envelope.ClaimedProducts, Evidence: evidence}
 	if err := validateSubmittedScope(request, purchase); err != nil {
 		return NotificationEnvelope{}, invalid("notification", err)
 	}
@@ -259,6 +262,11 @@ func (adapter *Adapter) ValidateNotification(
 	if err := verifySignature(publicKey, purchaseEnvelope.PurchaseData, purchaseEnvelope.Signature); err != nil {
 		return NotificationEnvelope{}, invalid("notification", err)
 	}
+	canonicalPurchase, err := json.Marshal(purchaseEnvelope)
+	if err != nil {
+		return NotificationEnvelope{}, invalid("notification", err)
+	}
+	envelope.Purchase = canonicalPurchase
 	return envelope, nil
 }
 
@@ -564,11 +572,7 @@ func validateSubmittedScope(request stores.VerificationRequest, purchase purchas
 		return errors.New("submitted Huawei application or purchase identity mismatch")
 	}
 	if len(request.ClaimedProducts) > 0 {
-		matched := false
-		for _, productID := range request.ClaimedProducts {
-			matched = matched || string(productID) == purchase.ProductID
-		}
-		if !matched {
+		if len(request.ClaimedProducts) != 1 || string(request.ClaimedProducts[0]) != purchase.ProductID {
 			return errors.New("submitted Huawei product does not match claim")
 		}
 	}

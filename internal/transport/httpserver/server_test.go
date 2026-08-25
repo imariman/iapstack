@@ -90,6 +90,31 @@ func TestRunStopsAfterCancellation(t *testing.T) {
 	}
 }
 
+// TestServerAppliesConnectionAndBrowserHardening verifies bounded resources and defensive response headers.
+func TestServerAppliesConnectionAndBrowserHardening(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer()
+	if server.server.ReadTimeout != readTimeout || server.server.WriteTimeout != writeTimeout ||
+		server.server.ReadHeaderTimeout != readHeaderTimeout || server.server.MaxHeaderBytes != maximumHeaderBytes {
+		t.Fatalf("HTTP limits = (%v, %v, %v, %d), want (%v, %v, %v, %d)",
+			server.server.ReadTimeout, server.server.WriteTimeout, server.server.ReadHeaderTimeout,
+			server.server.MaxHeaderBytes, readTimeout, writeTimeout, readHeaderTimeout, maximumHeaderBytes)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	request.Header.Set(requestIDHeader, "unsafe request id")
+	recorder := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(recorder, request)
+	if requestID := recorder.Header().Get(requestIDHeader); requestID == "" || requestID == "unsafe request id" {
+		t.Fatalf("response request ID = %q, want generated safe value", requestID)
+	}
+	if recorder.Header().Get("X-Content-Type-Options") != "nosniff" ||
+		recorder.Header().Get("X-Frame-Options") != "DENY" ||
+		recorder.Header().Get("Referrer-Policy") != "no-referrer" {
+		t.Fatalf("security headers = %#v", recorder.Header())
+	}
+}
+
 // newTestServer constructs an isolated loopback server for lifecycle tests.
 func newTestServer() *Server {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

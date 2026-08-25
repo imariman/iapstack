@@ -38,44 +38,46 @@ const (
 
 // Config contains validated process configuration shared by IAPStack modes.
 type Config struct {
-	HTTPAddress        string
-	WorkerHTTPAddress  string
-	ShutdownTimeout    time.Duration
-	ReadinessTimeout   time.Duration
-	LogLevel           slog.Level
-	DatabaseURL        string
-	BootstrapAdminKey  string
-	WorkerID           string
-	WorkerPollInterval time.Duration
-	WorkerJobTimeout   time.Duration
-	WorkerConcurrency  int
-	WorkerMaxAttempts  int
-	QueueRetention     time.Duration
-	HTTPBodyLimit      int64
-	ProviderTimeout    time.Duration
-	WebhookTimeout     time.Duration
+	HTTPAddress                 string
+	WorkerHTTPAddress           string
+	ShutdownTimeout             time.Duration
+	ReadinessTimeout            time.Duration
+	LogLevel                    slog.Level
+	DatabaseURL                 string
+	BootstrapAdminKey           string
+	WorkerID                    string
+	WorkerPollInterval          time.Duration
+	WorkerJobTimeout            time.Duration
+	WorkerConcurrency           int
+	WorkerMaxAttempts           int
+	QueueRetention              time.Duration
+	HTTPBodyLimit               int64
+	ProviderTimeout             time.Duration
+	WebhookTimeout              time.Duration
+	WebhookAllowPrivateNetworks bool
 }
 
 // Load reads and validates process configuration from environment values.
 func Load(getenv func(string) string) (Config, error) {
 	var err error
 	cfg := Config{
-		HTTPAddress:        valueOrDefault(getenv("IAPSTACK_HTTP_ADDRESS"), defaultHTTPAddress),
-		WorkerHTTPAddress:  valueOrDefault(getenv("IAPSTACK_WORKER_HTTP_ADDRESS"), defaultWorkerHTTPAddress),
-		ShutdownTimeout:    defaultShutdownTimeout,
-		ReadinessTimeout:   defaultReadinessTimeout,
-		LogLevel:           slog.LevelInfo,
-		DatabaseURL:        strings.TrimSpace(getenv("IAPSTACK_DATABASE_URL")),
-		BootstrapAdminKey:  strings.TrimSpace(getenv("IAPSTACK_BOOTSTRAP_ADMIN_KEY")),
-		WorkerID:           strings.TrimSpace(getenv("IAPSTACK_WORKER_ID")),
-		WorkerPollInterval: defaultWorkerPollInterval,
-		WorkerJobTimeout:   defaultWorkerJobTimeout,
-		WorkerConcurrency:  defaultWorkerConcurrency,
-		WorkerMaxAttempts:  defaultWorkerMaxAttempts,
-		QueueRetention:     defaultQueueRetention,
-		HTTPBodyLimit:      defaultHTTPBodyLimit,
-		ProviderTimeout:    defaultProviderTimeout,
-		WebhookTimeout:     defaultWebhookTimeout,
+		HTTPAddress:                 valueOrDefault(getenv("IAPSTACK_HTTP_ADDRESS"), defaultHTTPAddress),
+		WorkerHTTPAddress:           valueOrDefault(getenv("IAPSTACK_WORKER_HTTP_ADDRESS"), defaultWorkerHTTPAddress),
+		ShutdownTimeout:             defaultShutdownTimeout,
+		ReadinessTimeout:            defaultReadinessTimeout,
+		LogLevel:                    slog.LevelInfo,
+		DatabaseURL:                 strings.TrimSpace(getenv("IAPSTACK_DATABASE_URL")),
+		BootstrapAdminKey:           strings.TrimSpace(getenv("IAPSTACK_BOOTSTRAP_ADMIN_KEY")),
+		WorkerID:                    strings.TrimSpace(getenv("IAPSTACK_WORKER_ID")),
+		WorkerPollInterval:          defaultWorkerPollInterval,
+		WorkerJobTimeout:            defaultWorkerJobTimeout,
+		WorkerConcurrency:           defaultWorkerConcurrency,
+		WorkerMaxAttempts:           defaultWorkerMaxAttempts,
+		QueueRetention:              defaultQueueRetention,
+		HTTPBodyLimit:               defaultHTTPBodyLimit,
+		ProviderTimeout:             defaultProviderTimeout,
+		WebhookTimeout:              defaultWebhookTimeout,
+		WebhookAllowPrivateNetworks: false,
 	}
 
 	if raw := strings.TrimSpace(getenv("IAPSTACK_SHUTDOWN_TIMEOUT")); raw != "" {
@@ -113,6 +115,11 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if raw := strings.TrimSpace(getenv("IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS")); raw != "" {
+		if cfg.WebhookAllowPrivateNetworks, err = strictBoolean("IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS", raw); err != nil {
+			return Config{}, err
+		}
+	}
 	if raw := strings.TrimSpace(getenv("IAPSTACK_WORKER_CONCURRENCY")); raw != "" {
 		if cfg.WorkerConcurrency, err = positiveInteger("IAPSTACK_WORKER_CONCURRENCY", raw); err != nil {
 			return Config{}, err
@@ -147,6 +154,18 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// strictBoolean accepts explicit true or false configuration without permissive aliases.
+func strictBoolean(name, value string) (bool, error) {
+	switch strings.ToLower(value) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be true or false", name)
+	}
 }
 
 // positiveDuration parses one required positive duration setting.

@@ -30,10 +30,11 @@ const (
 
 // Service configures and delivers application webhooks.
 type Service struct {
-	store      persistence.OperationsStore
-	protection protection.Service
-	client     *http.Client
-	clock      func() time.Time
+	store                persistence.OperationsStore
+	protection           protection.Service
+	client               *http.Client
+	clock                func() time.Time
+	allowPrivateNetworks bool
 }
 
 // DeliveryError classifies one safe webhook delivery failure.
@@ -47,6 +48,7 @@ func NewService(
 	store persistence.OperationsStore,
 	protectionService protection.Service,
 	timeout time.Duration,
+	allowPrivateNetworks bool,
 ) (*Service, error) {
 	if store == nil || protectionService == nil {
 		return nil, errors.New("webhook store and protection service are required")
@@ -55,15 +57,11 @@ func NewService(
 		return nil, errors.New("webhook timeout must be positive")
 	}
 	return &Service{
-		store:      store,
-		protection: protectionService,
-		client: &http.Client{
-			Timeout: timeout,
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
-		clock: time.Now,
+		store:                store,
+		protection:           protectionService,
+		client:               newWebhookClient(timeout, allowPrivateNetworks),
+		clock:                time.Now,
+		allowPrivateNetworks: allowPrivateNetworks,
 	}, nil
 }
 
@@ -76,6 +74,9 @@ func (service *Service) Configure(
 	expectedRevision int64,
 ) (persistence.WebhookEndpointRecord, error) {
 	if err := application.Validate(); err != nil {
+		return persistence.WebhookEndpointRecord{}, err
+	}
+	if err := validateWebhookDestination(url, service.allowPrivateNetworks); err != nil {
 		return persistence.WebhookEndpointRecord{}, err
 	}
 	request, err := protection.NewRequest(webhookScope(application), secret)
@@ -124,6 +125,9 @@ func (service *Service) Deliver(ctx context.Context, message persistence.QueueMe
 	})
 	if err != nil {
 		return &DeliveryError{Code: "webhook_not_configured", CanRetry: false}
+	}
+	if err := validateWebhookDestination(endpoint.URL, service.allowPrivateNetworks); err != nil {
+		return &DeliveryError{Code: "webhook_destination_invalid", CanRetry: false}
 	}
 	openRequest, err := protection.NewOpenRequest(
 		protection.Scope{

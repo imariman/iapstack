@@ -14,6 +14,11 @@ import (
 	"github.com/imariman/iapstack/internal/persistence"
 )
 
+const (
+	// testBootstrapAdminKey is a sufficiently long installation credential used by HTTP API tests.
+	testBootstrapAdminKey = "bootstrap-administrator-secret-32-bytes"
+)
+
 // fakeAdminQueryStore provides deterministic secret-free dashboard records.
 type fakeAdminQueryStore struct{}
 
@@ -50,7 +55,7 @@ func (authOperationsStore) Operate(context.Context, persistence.OperationsFunc) 
 func TestAdminProjectsRequiresAdminAndReturnsStableJSON(t *testing.T) {
 	t.Parallel()
 
-	authentication, err := auth.NewService(authOperationsStore{}, "bootstrap-secret")
+	authentication, err := auth.NewService(authOperationsStore{}, testBootstrapAdminKey)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
@@ -63,7 +68,7 @@ func TestAdminProjectsRequiresAdminAndReturnsStableJSON(t *testing.T) {
 	}
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/admin/projects", nil)
-	request.Header.Set("Authorization", "Bearer bootstrap-secret")
+	request.Header.Set("Authorization", "Bearer "+testBootstrapAdminKey)
 	recorder := httptest.NewRecorder()
 	api.adminProjects(recorder, request)
 	if recorder.Code != http.StatusOK {

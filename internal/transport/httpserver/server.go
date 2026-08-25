@@ -19,8 +19,14 @@ import (
 const (
 	// readHeaderTimeout bounds the time allowed to receive HTTP request headers.
 	readHeaderTimeout = 5 * time.Second
+	// readTimeout bounds the time allowed to receive one complete HTTP request.
+	readTimeout = 30 * time.Second
+	// writeTimeout bounds the time allowed to write one complete HTTP response.
+	writeTimeout = 30 * time.Second
 	// idleTimeout bounds how long an idle keep-alive connection remains open.
 	idleTimeout = 60 * time.Second
+	// maximumHeaderBytes limits request-line and header memory consumption per connection.
+	maximumHeaderBytes = 32 << 10
 	// defaultReadinessTimeout bounds one dependency probe for compatibility constructors.
 	defaultReadinessTimeout = 2 * time.Second
 	// requestIDHeader carries one safe request correlation identity.
@@ -101,8 +107,11 @@ func NewWithOptions(options Options) *Server {
 	server.server = &http.Server{
 		Addr:              options.Address,
 		Handler:           server.observe(mux),
+		ReadTimeout:       readTimeout,
 		ReadHeaderTimeout: readHeaderTimeout,
+		WriteTimeout:      writeTimeout,
 		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maximumHeaderBytes,
 	}
 
 	return server
@@ -210,6 +219,9 @@ func (server *Server) observe(next http.Handler) http.Handler {
 			requestID = newRequestID()
 		}
 		writer.Header().Set(requestIDHeader, requestID)
+		writer.Header().Set("Referrer-Policy", "no-referrer")
+		writer.Header().Set("X-Content-Type-Options", "nosniff")
+		writer.Header().Set("X-Frame-Options", "DENY")
 		recorder := &statusRecorder{ResponseWriter: writer}
 		next.ServeHTTP(recorder, request)
 		if recorder.status == 0 {
@@ -246,7 +258,10 @@ func validRequestID(value string) bool {
 		return false
 	}
 	for _, character := range value {
-		if character < 0x21 || character > 0x7e {
+		if !((character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			strings.ContainsRune("._:-", character)) {
 			return false
 		}
 	}

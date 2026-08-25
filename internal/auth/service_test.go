@@ -9,6 +9,11 @@ import (
 	"github.com/imariman/iapstack/internal/persistence"
 )
 
+const (
+	// testBootstrapAdminKey is a sufficiently long installation credential used by authentication tests.
+	testBootstrapAdminKey = "bootstrap-administrator-secret-32-bytes"
+)
+
 // fakeOperationsStore retains API key verifiers for authentication tests.
 type fakeOperationsStore struct {
 	records map[string]persistence.APIKeyRecord
@@ -23,7 +28,7 @@ type fakeOperationsTransaction struct {
 // TestServiceCreatesAndAuthenticatesScopedKeys verifies one-time bearer creation and scope recovery.
 func TestServiceCreatesAndAuthenticatesScopedKeys(t *testing.T) {
 	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}
-	service, err := NewService(store, "bootstrap-secret")
+	service, err := NewService(store, testBootstrapAdminKey)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
@@ -48,9 +53,17 @@ func TestServiceCreatesAndAuthenticatesScopedKeys(t *testing.T) {
 	if _, err := service.Authenticate(context.Background(), bearer+"tampered"); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("tampered Authenticate() error = %v, want ErrUnauthorized", err)
 	}
-	admin, err := service.Authenticate(context.Background(), "bootstrap-secret")
+	admin, err := service.Authenticate(context.Background(), testBootstrapAdminKey)
 	if err != nil || admin.Role != persistence.APIKeyRoleAdmin {
 		t.Fatalf("bootstrap Authenticate() = %#v, %v", admin, err)
+	}
+}
+
+// TestNewServiceRejectsShortBootstrapKey verifies installation credentials meet the minimum brute-force boundary.
+func TestNewServiceRejectsShortBootstrapKey(t *testing.T) {
+	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}
+	if _, err := NewService(store, "bootstrap-secret"); err == nil {
+		t.Fatal("NewService() short bootstrap key error = nil, want validation error")
 	}
 }
 
