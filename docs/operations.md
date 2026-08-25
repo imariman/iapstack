@@ -166,3 +166,41 @@ The gate verifies:
 Ports default to `18080` for API, `18081` for worker metrics, `18082` for fixture controls, and `15432` for PostgreSQL. Override `IAPSTACK_HTTP_PORT`, `IAPSTACK_E2E_WORKER_PORT`, `IAPSTACK_E2E_FIXTURE_PORT`, or `IAPSTACK_POSTGRES_PORT` when those ports are occupied.
 
 On failure the harness prints Compose status and logs before cleanup. The fixture uses generated test-only RSA and TLS keys; it never contacts Huawei or an application-owned endpoint.
+
+## Stable release publication
+
+Stable releases are created only through `.github/workflows/release.yml`. Run the
+workflow manually from `main` after the version-specific sandbox evidence pull request
+has merged and main CI has succeeded. Supply a stable semantic version such as
+`v0.1.0`; do not create the Git tag first.
+
+Before any registry or release write, the workflow requires:
+
+1. A valid `docs/releases/<version>-sandbox-evidence.json` record.
+2. Evidence whose release matches the requested version.
+3. A tested candidate commit that is an ancestor of the release commit.
+4. Exactly one changed path between the candidate and release commit: the evidence
+   file itself.
+5. A successful candidate CI run at the exact URL recorded in evidence.
+6. A successful push CI run for the evidence merge commit.
+7. No existing Git tag or GitHub release for the requested version.
+
+The protected `stable-release` GitHub environment should require an operator review.
+After validation, the workflow publishes `linux/amd64` and `linux/arm64` images to
+GitHub Container Registry with version, minor, and `latest` tags. The image carries
+BuildKit provenance and SBOM attestations, and the workflow adds a signed GitHub build
+provenance attestation. It then creates the stable GitHub release and attaches the
+secret-free evidence file.
+
+Deploy by immutable digest from the release notes instead of a mutable tag. Verify the
+published provenance before deployment:
+
+```sh
+gh attestation verify \
+  oci://ghcr.io/imariman/iapstack@sha256:<release-digest> \
+  -R imariman/iapstack
+```
+
+If image publication succeeds but GitHub release creation fails, do not change or
+delete the image tags. Investigate the failed workflow and rerun the same version only
+while the Git tag and GitHub release remain absent; the digest must remain identical.
