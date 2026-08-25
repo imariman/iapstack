@@ -20,7 +20,7 @@ func TestCustomerSessionEndpointBindsApplicationAndCustomer(t *testing.T) {
 	store := &keyLifecycleStore{
 		records: make(map[string]persistence.APIKeyRecord), revokedAt: make(map[string]time.Time),
 	}
-	authentication, err := auth.NewService(store, testBootstrapAdminKey)
+	authentication, err := auth.NewService(store, testBootstrapAdminKey, 4)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}

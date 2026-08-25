@@ -817,7 +817,7 @@ func (api *API) scheduleReconciliation(
 func (api *API) requireAdmin(writer http.ResponseWriter, request *http.Request) (auth.Principal, bool) {
 	principal, err := api.authenticate(request)
 	if err != nil || principal.Role != persistence.APIKeyRoleAdmin {
-		writeAPIError(writer, request, http.StatusUnauthorized, "unauthorized", "authentication required")
+		api.writeAuthenticationFailure(writer, request, err)
 		return auth.Principal{}, false
 	}
 	return principal, true
@@ -828,7 +828,7 @@ func (api *API) requireApplication(writer http.ResponseWriter, request *http.Req
 	principal, err := api.authenticate(request)
 	if err != nil || principal.Role != persistence.APIKeyRoleApplication ||
 		string(principal.ApplicationID) != request.PathValue("application_id") {
-		writeAPIError(writer, request, http.StatusUnauthorized, "unauthorized", "authentication required")
+		api.writeAuthenticationFailure(writer, request, err)
 		return auth.Principal{}, false
 	}
 	return principal, true
@@ -859,6 +859,22 @@ func (api *API) authenticate(request *http.Request) (auth.Principal, error) {
 		return auth.Principal{}, auth.ErrUnauthorized
 	}
 	return api.authentication.Authenticate(request.Context(), token)
+}
+
+// writeAuthenticationFailure distinguishes bounded server capacity from invalid credentials.
+func (api *API) writeAuthenticationFailure(
+	writer http.ResponseWriter,
+	request *http.Request,
+	err error,
+) {
+	if errors.Is(err, auth.ErrCapacity) {
+		writeAPIError(
+			writer, request, http.StatusServiceUnavailable,
+			"authentication_unavailable", "authentication is temporarily unavailable",
+		)
+		return
+	}
+	writeAPIError(writer, request, http.StatusUnauthorized, "unauthorized", "authentication required")
 }
 
 // application loads one authoritative project-scoped application.
@@ -934,7 +950,9 @@ func (api *API) writeMutation(writer http.ResponseWriter, request *http.Request,
 // writeError maps domain and provider failures onto the stable v1 error envelope.
 func (api *API) writeError(writer http.ResponseWriter, request *http.Request, err error) {
 	status, code, message := http.StatusInternalServerError, "internal_error", "the request could not be completed"
-	if errors.Is(err, googleplay.ErrNotificationUnauthorized) {
+	if errors.Is(err, auth.ErrCapacity) {
+		status, code, message = http.StatusServiceUnavailable, "authentication_unavailable", "authentication is temporarily unavailable"
+	} else if errors.Is(err, googleplay.ErrNotificationUnauthorized) {
 		status, code, message = http.StatusUnauthorized, "unauthorized", "notification authentication failed"
 	} else if errors.Is(err, googleplay.ErrNotificationInvalid) || errors.Is(err, apple.ErrNotificationInvalid) {
 		status, code, message = http.StatusBadRequest, "invalid_notification", "notification payload is invalid"

@@ -151,7 +151,9 @@ func runAPI(
 	metricRegistry *metrics.Registry,
 	logger *slog.Logger,
 ) error {
-	authentication, err := auth.NewService(store, cfg.BootstrapAdminKey)
+	authentication, err := auth.NewService(
+		store, cfg.BootstrapAdminKey, cfg.AuthMaxConcurrentDerivations,
+	)
 	if err != nil {
 		return err
 	}

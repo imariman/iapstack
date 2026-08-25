@@ -15,8 +15,9 @@ export IAPSTACK_BOOTSTRAP_ADMIN_KEY="$(openssl rand -base64 48)"
 The fingerprint key must remain stable across encryption-key rotation. The bootstrap
 admin key is an installation credential and must contain at least 32 bytes: use it to
 create stored admin/application keys through `POST /v1/admin/api-keys`, then remove it
-from the API and worker environment and recreate those containers. Store every durable
-bearer outside the database because IAPStack returns it only once.
+from the runtime environment and recreate the API container. The default Compose worker
+and migration services never receive this secret. Store every durable bearer outside
+the database because IAPStack returns it only once.
 
 ## Production security baseline
 
@@ -25,7 +26,9 @@ bearer outside the database because IAPStack returns it only once.
   Internet.
 - Apply per-source and per-bearer request limits at the ingress. IAPStack bounds request
   bodies, headers, connection duration, provider calls, webhook calls, and worker
-  concurrency, but v0.1 does not include a distributed rate limiter.
+  concurrency. Memory-hard API-key derivations also fail fast at
+  `IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS`, but v0.1 does not include a distributed
+  rate limiter.
 - Restrict PostgreSQL and process egress with network policy. Use authenticated,
   certificate-verified PostgreSQL TLS whenever traffic leaves one trusted host.
 - Keep protection roots, provider credentials, webhook signing secrets, administrator

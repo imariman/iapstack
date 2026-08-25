@@ -8,7 +8,7 @@ services:
       IAPSTACK_E2E_TLS_KEY_FILE: /e2e/tls.key
       IAPSTACK_E2E_WEBHOOK_SECRET: ${IAPSTACK_E2E_WEBHOOK_SECRET:?set IAPSTACK_E2E_WEBHOOK_SECRET}
     ports:
-      - "${IAPSTACK_E2E_FIXTURE_PORT:-18082}:8082"
+      - "127.0.0.1:${IAPSTACK_E2E_FIXTURE_PORT:-18082}:8082"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8082/healthz"]
       interval: 2s
@@ -37,7 +37,7 @@ services:
       SSL_CERT_FILE: /e2e/tls.crt
       IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS: "true"
     ports:
-      - "${IAPSTACK_E2E_WORKER_PORT:-18081}:8081"
+      - "127.0.0.1:${IAPSTACK_E2E_WORKER_PORT:-18081}:8081"
     volumes:
       - ${IAPSTACK_E2E_CERT_DIR:?set IAPSTACK_E2E_CERT_DIR}/tls.crt:/e2e/tls.crt:ro
     depends_on:

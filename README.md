@@ -89,6 +89,7 @@ Configuration is supplied through environment variables:
 | `IAPSTACK_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `IAPSTACK_DATABASE_URL` | none | PostgreSQL connection string required by database-backed modes |
 | `IAPSTACK_BOOTSTRAP_ADMIN_KEY` | none | Installation-only administrator bearer; when set it must contain at least 32 bytes |
+| `IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS` | `4` | Fail-fast concurrency bound for memory-hard API-key creation and verification; maximum `32` |
 | `IAPSTACK_PROTECTION_ACTIVE_KEY_ID` | none | Encryption key ID used for new protected values |
 | `IAPSTACK_PROTECTION_KEYS` | none | JSON object mapping key IDs to base64-encoded 32-byte encryption root keys |
 | `IAPSTACK_PROTECTION_FINGERPRINT_KEY` | none | Base64-encoded 32-byte stable fingerprint root key |
@@ -121,6 +122,11 @@ docker compose -f deploy/compose.yaml up -d postgres
 IAPSTACK_DATABASE_URL='postgres://iapstack:iapstack@localhost:5432/iapstack?sslmode=disable' \
   go run ./cmd/iapstack migrate
 ```
+
+Compose publishes PostgreSQL and the API on `127.0.0.1` by default. Set
+`IAPSTACK_POSTGRES_BIND_ADDRESS` or `IAPSTACK_HTTP_BIND_ADDRESS` only when an
+explicit network boundary requires a different host address; keep production
+exposure behind authenticated TLS ingress and network policy.
 
 Run the local quality checks with:
 

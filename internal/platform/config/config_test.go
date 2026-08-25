@@ -21,6 +21,8 @@ const (
 	databaseURLEnvironment = "IAPSTACK_DATABASE_URL"
 	// webhookPrivateNetworksEnvironment names the explicit private webhook target opt-in.
 	webhookPrivateNetworksEnvironment = "IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS"
+	// authMaxDerivationsEnvironment names the memory-hard authentication concurrency setting.
+	authMaxDerivationsEnvironment = "IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS"
 
 	// defaultHTTPAddress is the expected listen address when no override is configured.
 	defaultHTTPAddress = ":8080"
@@ -62,6 +64,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.QueueRetention != 30*24*time.Hour {
 		t.Errorf("QueueRetention = %v, want 720h", cfg.QueueRetention)
 	}
+	if cfg.AuthMaxConcurrentDerivations != 4 {
+		t.Errorf("AuthMaxConcurrentDerivations = %d, want 4", cfg.AuthMaxConcurrentDerivations)
+	}
 	if cfg.WebhookAllowPrivateNetworks {
 		t.Error("WebhookAllowPrivateNetworks = true, want secure default false")
 	}
@@ -77,6 +82,7 @@ func TestLoadOverrides(t *testing.T) {
 		logLevelEnvironment:               "debug",
 		databaseURLEnvironment:            " " + testDatabaseURL + " ",
 		webhookPrivateNetworksEnvironment: "true",
+		authMaxDerivationsEnvironment:     "7",
 	}))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -97,6 +103,9 @@ func TestLoadOverrides(t *testing.T) {
 	if !cfg.WebhookAllowPrivateNetworks {
 		t.Error("WebhookAllowPrivateNetworks = false, want true override")
 	}
+	if cfg.AuthMaxConcurrentDerivations != 7 {
+		t.Errorf("AuthMaxConcurrentDerivations = %d, want 7", cfg.AuthMaxConcurrentDerivations)
+	}
 }
 
 // TestLoadRejectsInvalidValues verifies fail-fast validation for malformed configuration.
@@ -115,6 +124,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "log level", values: map[string]string{logLevelEnvironment: "verbose"}},
 		{name: "worker attempts", values: map[string]string{"IAPSTACK_WORKER_MAX_ATTEMPTS": "0"}},
 		{name: "private webhook setting", values: map[string]string{webhookPrivateNetworksEnvironment: "yes"}},
+		{name: "authentication derivations sign", values: map[string]string{authMaxDerivationsEnvironment: "0"}},
+		{name: "authentication derivations bound", values: map[string]string{authMaxDerivationsEnvironment: "33"}},
 	}
 
 	for _, tt := range tests {

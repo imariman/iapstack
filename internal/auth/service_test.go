@@ -32,7 +32,7 @@ type fakeOperationsTransaction struct {
 // TestServiceCreatesAndAuthenticatesScopedKeys verifies one-time bearer creation and scope recovery.
 func TestServiceCreatesAndAuthenticatesScopedKeys(t *testing.T) {
 	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}
-	service, err := NewService(store, testBootstrapAdminKey)
+	service, err := NewService(store, testBootstrapAdminKey, 4)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
@@ -67,15 +67,42 @@ func TestServiceCreatesAndAuthenticatesScopedKeys(t *testing.T) {
 // TestNewServiceRejectsShortBootstrapKey verifies installation credentials meet the minimum brute-force boundary.
 func TestNewServiceRejectsShortBootstrapKey(t *testing.T) {
 	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}
-	if _, err := NewService(store, "bootstrap-secret"); err == nil {
+	if _, err := NewService(store, "bootstrap-secret", 4); err == nil {
 		t.Fatal("NewService() short bootstrap key error = nil, want validation error")
+	}
+	if _, err := NewService(store, "", 0); err == nil {
+		t.Fatal("NewService() zero derivation capacity error = nil, want validation error")
+	}
+}
+
+// TestServiceBoundsConcurrentDerivations verifies excess memory-hard work fails fast and then recovers.
+func TestServiceBoundsConcurrentDerivations(t *testing.T) {
+	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}
+	service, err := NewService(store, "", 1)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	bearer, err := service.Create(context.Background(), Principal{
+		Role: persistence.APIKeyRoleApplication, ProjectID: "project-1", ApplicationID: "application-1",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	service.derivationSlots <- struct{}{}
+	if _, err := service.Authenticate(context.Background(), bearer); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("Authenticate() saturated error = %v, want ErrCapacity", err)
+	}
+	<-service.derivationSlots
+	if _, err := service.Authenticate(context.Background(), bearer); err != nil {
+		t.Fatalf("Authenticate() recovered error = %v", err)
 	}
 }
 
 // TestCustomerSessionsBindCustomerExpiryAndIssuer verifies the complete short-lived bearer boundary.
 func TestCustomerSessionsBindCustomerExpiryAndIssuer(t *testing.T) {
 	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}
-	apiKeys, err := NewService(store, "")
+	apiKeys, err := NewService(store, "", 4)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}

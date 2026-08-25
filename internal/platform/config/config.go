@@ -30,6 +30,10 @@ const (
 	defaultQueueRetention = 30 * 24 * time.Hour
 	// defaultHTTPBodyLimit bounds JSON and provider notification request bodies.
 	defaultHTTPBodyLimit int64 = 1 << 20
+	// defaultAuthMaxConcurrentDerivations bounds simultaneous memory-hard API key checks.
+	defaultAuthMaxConcurrentDerivations = 4
+	// maximumAuthConcurrentDerivations prevents unsafe memory allocation through configuration.
+	maximumAuthConcurrentDerivations = 32
 	// defaultProviderTimeout bounds one outbound provider call.
 	defaultProviderTimeout = 15 * time.Second
 	// defaultWebhookTimeout bounds one outbound application webhook call.
@@ -38,46 +42,48 @@ const (
 
 // Config contains validated process configuration shared by IAPStack modes.
 type Config struct {
-	HTTPAddress                 string
-	WorkerHTTPAddress           string
-	ShutdownTimeout             time.Duration
-	ReadinessTimeout            time.Duration
-	LogLevel                    slog.Level
-	DatabaseURL                 string
-	BootstrapAdminKey           string
-	WorkerID                    string
-	WorkerPollInterval          time.Duration
-	WorkerJobTimeout            time.Duration
-	WorkerConcurrency           int
-	WorkerMaxAttempts           int
-	QueueRetention              time.Duration
-	HTTPBodyLimit               int64
-	ProviderTimeout             time.Duration
-	WebhookTimeout              time.Duration
-	WebhookAllowPrivateNetworks bool
+	HTTPAddress                  string
+	WorkerHTTPAddress            string
+	ShutdownTimeout              time.Duration
+	ReadinessTimeout             time.Duration
+	LogLevel                     slog.Level
+	DatabaseURL                  string
+	BootstrapAdminKey            string
+	WorkerID                     string
+	WorkerPollInterval           time.Duration
+	WorkerJobTimeout             time.Duration
+	WorkerConcurrency            int
+	WorkerMaxAttempts            int
+	QueueRetention               time.Duration
+	HTTPBodyLimit                int64
+	AuthMaxConcurrentDerivations int
+	ProviderTimeout              time.Duration
+	WebhookTimeout               time.Duration
+	WebhookAllowPrivateNetworks  bool
 }
 
 // Load reads and validates process configuration from environment values.
 func Load(getenv func(string) string) (Config, error) {
 	var err error
 	cfg := Config{
-		HTTPAddress:                 valueOrDefault(getenv("IAPSTACK_HTTP_ADDRESS"), defaultHTTPAddress),
-		WorkerHTTPAddress:           valueOrDefault(getenv("IAPSTACK_WORKER_HTTP_ADDRESS"), defaultWorkerHTTPAddress),
-		ShutdownTimeout:             defaultShutdownTimeout,
-		ReadinessTimeout:            defaultReadinessTimeout,
-		LogLevel:                    slog.LevelInfo,
-		DatabaseURL:                 strings.TrimSpace(getenv("IAPSTACK_DATABASE_URL")),
-		BootstrapAdminKey:           strings.TrimSpace(getenv("IAPSTACK_BOOTSTRAP_ADMIN_KEY")),
-		WorkerID:                    strings.TrimSpace(getenv("IAPSTACK_WORKER_ID")),
-		WorkerPollInterval:          defaultWorkerPollInterval,
-		WorkerJobTimeout:            defaultWorkerJobTimeout,
-		WorkerConcurrency:           defaultWorkerConcurrency,
-		WorkerMaxAttempts:           defaultWorkerMaxAttempts,
-		QueueRetention:              defaultQueueRetention,
-		HTTPBodyLimit:               defaultHTTPBodyLimit,
-		ProviderTimeout:             defaultProviderTimeout,
-		WebhookTimeout:              defaultWebhookTimeout,
-		WebhookAllowPrivateNetworks: false,
+		HTTPAddress:                  valueOrDefault(getenv("IAPSTACK_HTTP_ADDRESS"), defaultHTTPAddress),
+		WorkerHTTPAddress:            valueOrDefault(getenv("IAPSTACK_WORKER_HTTP_ADDRESS"), defaultWorkerHTTPAddress),
+		ShutdownTimeout:              defaultShutdownTimeout,
+		ReadinessTimeout:             defaultReadinessTimeout,
+		LogLevel:                     slog.LevelInfo,
+		DatabaseURL:                  strings.TrimSpace(getenv("IAPSTACK_DATABASE_URL")),
+		BootstrapAdminKey:            strings.TrimSpace(getenv("IAPSTACK_BOOTSTRAP_ADMIN_KEY")),
+		WorkerID:                     strings.TrimSpace(getenv("IAPSTACK_WORKER_ID")),
+		WorkerPollInterval:           defaultWorkerPollInterval,
+		WorkerJobTimeout:             defaultWorkerJobTimeout,
+		WorkerConcurrency:            defaultWorkerConcurrency,
+		WorkerMaxAttempts:            defaultWorkerMaxAttempts,
+		QueueRetention:               defaultQueueRetention,
+		HTTPBodyLimit:                defaultHTTPBodyLimit,
+		AuthMaxConcurrentDerivations: defaultAuthMaxConcurrentDerivations,
+		ProviderTimeout:              defaultProviderTimeout,
+		WebhookTimeout:               defaultWebhookTimeout,
+		WebhookAllowPrivateNetworks:  false,
 	}
 
 	if raw := strings.TrimSpace(getenv("IAPSTACK_SHUTDOWN_TIMEOUT")); raw != "" {
@@ -136,6 +142,19 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("IAPSTACK_HTTP_BODY_LIMIT must be a positive integer")
 		}
 		cfg.HTTPBodyLimit = bodyLimit
+	}
+	if raw := strings.TrimSpace(getenv("IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS")); raw != "" {
+		derivations, parseErr := positiveInteger("IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS", raw)
+		if parseErr != nil {
+			return Config{}, parseErr
+		}
+		if derivations > maximumAuthConcurrentDerivations {
+			return Config{}, fmt.Errorf(
+				"IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS must not exceed %d",
+				maximumAuthConcurrentDerivations,
+			)
+		}
+		cfg.AuthMaxConcurrentDerivations = derivations
 	}
 
 	if raw := strings.TrimSpace(getenv("IAPSTACK_LOG_LEVEL")); raw != "" {

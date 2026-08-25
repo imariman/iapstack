@@ -50,20 +50,32 @@ type Service struct {
 	store              persistence.OperationsStore
 	bootstrapAdminHash [sha256.Size]byte
 	hasBootstrapAdmin  bool
+	derivationSlots    chan struct{}
 	clock              func() time.Time
 }
 
 var (
 	// ErrUnauthorized indicates missing or invalid bearer authentication.
 	ErrUnauthorized = errors.New("unauthorized")
+	// ErrCapacity indicates that every bounded Argon2id derivation slot is occupied.
+	ErrCapacity = errors.New("authentication capacity exhausted")
 )
 
 // NewService constructs authentication with an optional bootstrap administrator bearer.
-func NewService(store persistence.OperationsStore, bootstrapAdminKey string) (*Service, error) {
+func NewService(
+	store persistence.OperationsStore,
+	bootstrapAdminKey string,
+	maxConcurrentDerivations int,
+) (*Service, error) {
 	if store == nil {
 		return nil, errors.New("authentication operations store is required")
 	}
-	service := &Service{store: store, clock: time.Now}
+	if maxConcurrentDerivations <= 0 {
+		return nil, errors.New("maximum concurrent authentication derivations must be positive")
+	}
+	service := &Service{
+		store: store, derivationSlots: make(chan struct{}, maxConcurrentDerivations), clock: time.Now,
+	}
 	if bootstrapAdminKey = strings.TrimSpace(bootstrapAdminKey); bootstrapAdminKey != "" {
 		if len(bootstrapAdminKey) < minimumBootstrapAdminKeyBytes {
 			return nil, errors.New("bootstrap administrator key must contain at least 32 bytes")
@@ -93,7 +105,10 @@ func (service *Service) Create(ctx context.Context, principal Principal) (string
 		return "", fmt.Errorf("generate API key salt: %w", err)
 	}
 	id := hex.EncodeToString(idBytes)
-	hash := derive(secret, salt)
+	hash, err := service.deriveVerifier(ctx, secret, salt)
+	if err != nil {
+		return "", fmt.Errorf("derive API key verifier: %w", err)
+	}
 	record := persistence.APIKeyRecord{
 		ID:            id,
 		Role:          principal.Role,
@@ -162,7 +177,10 @@ func (service *Service) Authenticate(ctx context.Context, bearer string) (Princi
 	if err != nil {
 		return Principal{}, ErrUnauthorized
 	}
-	hash := derive(secret, record.SecretSalt)
+	hash, err := service.deriveVerifier(ctx, secret, record.SecretSalt)
+	if err != nil {
+		return Principal{}, err
+	}
 	if subtle.ConstantTimeCompare(hash[:], record.SecretHash[:]) != 1 {
 		return Principal{}, ErrUnauthorized
 	}
@@ -211,6 +229,24 @@ func derive(secret []byte, salt [16]byte) [32]byte {
 	copy(result[:], derived)
 	zero(derived)
 	return result
+}
+
+// deriveVerifier fails fast when the process-wide service capacity for expensive work is occupied.
+func (service *Service) deriveVerifier(
+	ctx context.Context,
+	secret []byte,
+	salt [16]byte,
+) ([32]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return [32]byte{}, err
+	}
+	select {
+	case service.derivationSlots <- struct{}{}:
+		defer func() { <-service.derivationSlots }()
+		return derive(secret, salt), nil
+	default:
+		return [32]byte{}, ErrCapacity
+	}
 }
 
 // zero overwrites temporary bearer material after use.

@@ -70,7 +70,7 @@ func TestAdminAPIKeyLifecycleListsAndSafelyRevokes(t *testing.T) {
 	store := &keyLifecycleStore{
 		records: make(map[string]persistence.APIKeyRecord), revokedAt: make(map[string]time.Time),
 	}
-	authentication, err := auth.NewService(store, testBootstrapAdminKey)
+	authentication, err := auth.NewService(store, testBootstrapAdminKey, 4)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
@@ -160,7 +160,7 @@ func TestAdminAPIKeyLifecycleListsAndSafelyRevokes(t *testing.T) {
 func TestAdminProjectsRequiresAdminAndReturnsStableJSON(t *testing.T) {
 	t.Parallel()
 
-	authentication, err := auth.NewService(authOperationsStore{}, testBootstrapAdminKey)
+	authentication, err := auth.NewService(authOperationsStore{}, testBootstrapAdminKey, 4)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
@@ -190,6 +190,22 @@ func TestAdminProjectsRequiresAdminAndReturnsStableJSON(t *testing.T) {
 		if strings.Contains(strings.ToLower(recorder.Body.String()), forbidden) {
 			t.Fatalf("projects response contains forbidden field %q: %s", forbidden, recorder.Body.String())
 		}
+	}
+}
+
+// TestAuthenticationCapacityReturnsServiceUnavailable verifies overload is not misreported as invalid credentials.
+func TestAuthenticationCapacityReturnsServiceUnavailable(t *testing.T) {
+	t.Parallel()
+
+	api := &API{}
+	request := httptest.NewRequest(http.MethodGet, "/v1/admin/projects", nil)
+	recorder := httptest.NewRecorder()
+	api.writeAuthenticationFailure(recorder, request, auth.ErrCapacity)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("capacity status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"authentication_unavailable"`) {
+		t.Fatalf("capacity response = %s", recorder.Body.String())
 	}
 }
 
