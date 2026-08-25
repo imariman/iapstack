@@ -13,6 +13,45 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
+  test('reports both sandbox account and APK eligibility', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      expect(call.method, 'isSandboxActivated');
+      return jsonEncode(<String, Object?>{
+        'returnCode': '0',
+        'isSandboxUser': true,
+        'isSandboxApk': true,
+        'versionFrMarket': '42',
+        'versionInApk': '43',
+      });
+    });
+
+    final status = await const HuaweiPluginPlatform().sandboxStatus();
+
+    expect(status.isActive, isTrue);
+    expect(status.isSandboxUser, isTrue);
+    expect(status.isSandboxApk, isTrue);
+    expect(status.marketVersion, '42');
+    expect(status.apkVersion, '43');
+  });
+
+  test('keeps an ineligible sandbox result observable', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      return jsonEncode(<String, Object?>{
+        'returnCode': '0',
+        'isSandboxUser': true,
+        'isSandboxApk': false,
+      });
+    });
+
+    final status = await const HuaweiPluginPlatform().sandboxStatus();
+
+    expect(status.isActive, isFalse);
+    expect(status.isSandboxUser, isTrue);
+    expect(status.isSandboxApk, isFalse);
+  });
+
   test('preserves exact purchase data from the official plugin raw response',
       () async {
     const purchaseData =

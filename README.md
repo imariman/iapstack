@@ -52,6 +52,7 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 - [Machine-readable OpenAPI v1 contract](contracts/openapi/v1.yaml)
 - [Operations and dashboard guide](docs/operations.md)
 - [v0.1 threat model and security release checklist](docs/security.md)
+- [v0.1.0 Huawei sandbox release gate](docs/releases/v0.1.0.md)
 - [Provider-neutral Flutter SDK](sdk/flutter/iapstack/README.md)
 - [Huawei Flutter SDK and sandbox example](sdk/flutter/iapstack_huawei/README.md)
 
@@ -142,6 +143,14 @@ Run the clean Compose release gate locally with:
 ```
 
 It exercises PostgreSQL migration, API bootstrap, signed Huawei verification, River worker restart recovery, duplicate notification handling, entitlement projection, and signed webhook delivery.
+
+The automated fixture does not replace Huawei-managed lifecycle testing. Before a
+stable v0.1.0 tag, complete the real-device [Huawei sandbox release gate](docs/releases/v0.1.0.md)
+and validate its secret-free evidence with:
+
+```sh
+go run ./cmd/iapstack-release docs/releases/v0.1.0-sandbox-evidence.json
+```
 
 Purchase verification is coordinated by the provider-neutral `internal/verification`
 use case. Provider network calls and protection of sensitive evidence happen before

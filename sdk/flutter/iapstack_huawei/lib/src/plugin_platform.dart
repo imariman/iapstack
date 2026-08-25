@@ -12,6 +12,26 @@ final class HuaweiPluginPlatform implements HuaweiIapPlatform {
   const HuaweiPluginPlatform();
 
   @override
+  Future<HuaweiSandboxStatus> sandboxStatus() async {
+    try {
+      final result = await IapClient.isSandboxActivated();
+      _requireSuccess(
+        result.returnCode,
+        result.errMsg,
+        operation: 'sandbox check',
+      );
+      return HuaweiSandboxStatus(
+        isSandboxUser: result.isSandboxUser == true,
+        isSandboxApk: result.isSandboxApk == true,
+        marketVersion: _nonEmpty(result.versionFrMarket),
+        apkVersion: _nonEmpty(result.versionInApk),
+      );
+    } on PlatformException catch (error) {
+      throw _platformException(error, operation: 'sandbox_check');
+    }
+  }
+
+  @override
   Future<HuaweiSignedPurchase> purchase({
     required String productId,
     required HuaweiProductKind productKind,
@@ -85,7 +105,9 @@ void _requireSuccess(String? code, String? providerMessage,
     return;
   }
   throw HuaweiIapStackException(
-    code: code?.isNotEmpty == true ? code! : 'huawei_${operation}_failed',
+    code: code?.isNotEmpty == true
+        ? code!
+        : 'huawei_${operation.replaceAll(' ', '_')}_failed',
     message: providerMessage?.isNotEmpty == true
         ? providerMessage!
         : 'Huawei IAP $operation failed',
@@ -126,6 +148,8 @@ String? _optionalString(Map<String, Object?> json, String key) {
   final value = json[key];
   return value is String && value.isNotEmpty ? value : null;
 }
+
+String? _nonEmpty(String? value) => value?.isNotEmpty == true ? value : null;
 
 List<String> _stringList(Map<String, Object?> json, String key,
     {required String operation}) {

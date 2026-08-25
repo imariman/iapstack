@@ -107,12 +107,17 @@ func TestNormalizeSubscriptionLifecycle(t *testing.T) {
 			RenewStatus: 1, ExpirationDate: now.Add(time.Hour).UnixMilli()}, state: core.LifecycleActive, access: core.AccessAllowed},
 		{name: "canceled at period end", purchase: purchaseData{PurchaseState: 0, SubIsValid: true,
 			RenewStatus: 0, ExpirationDate: now.Add(time.Hour).UnixMilli()}, state: core.LifecycleCanceled, access: core.AccessAllowed},
+		{name: "cancellation timestamp at period end", purchase: purchaseData{PurchaseState: 0, SubIsValid: true,
+			RenewStatus: 1, CancellationTime: now.Add(-time.Minute).UnixMilli(), ExpirationDate: now.Add(time.Hour).UnixMilli()},
+			state: core.LifecycleCanceled, access: core.AccessAllowed},
 		{name: "expired", purchase: purchaseData{PurchaseState: 0, SubIsValid: false,
 			ExpirationDate: now.Add(-time.Hour).UnixMilli()}, state: core.LifecycleExpired, access: core.AccessDenied},
 		{name: "grace", purchase: purchaseData{PurchaseState: 0, RetryFlag: 1,
 			GraceExpirationTime: now.Add(time.Hour).UnixMilli(), ExpirationDate: now.Add(-time.Minute).UnixMilli()},
 			state: core.LifecycleGracePeriod, access: core.AccessAllowed},
 		{name: "refunded", purchase: purchaseData{PurchaseState: 2}, state: core.LifecycleRefunded, access: core.AccessDenied},
+		{name: "revoked after refund", purchase: purchaseData{PurchaseState: 2,
+			CancelTime: now.Add(-time.Minute).UnixMilli()}, state: core.LifecycleRevoked, access: core.AccessDenied},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -178,6 +183,20 @@ func TestObservationSnapshotIdentitySeparatesLifecycleChangesButNotReceiptTime(t
 	}
 	if first.Observations[0].ID == canceled.Observations[0].ID {
 		t.Fatal("renewing and canceled observations share one identity")
+	}
+
+	revokedPurchase := purchase
+	revokedPurchase.PurchaseState = 2
+	revokedPurchase.CancelTime = firstTime.Add(30 * time.Minute).UnixMilli()
+	revoked, err := adapter.result(application, core.ProductKindSubscription, revokedPurchase, artifact)
+	if err != nil {
+		t.Fatalf("revoked result() error = %v", err)
+	}
+	if revoked.Observations[0].State != core.LifecycleRevoked {
+		t.Fatalf("revoked lifecycle = %q, want %q", revoked.Observations[0].State, core.LifecycleRevoked)
+	}
+	if first.Observations[0].ID == revoked.Observations[0].ID {
+		t.Fatal("active and revoked observations share one identity")
 	}
 }
 

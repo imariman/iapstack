@@ -26,6 +26,10 @@ class ExampleStatusPanel extends StatelessWidget {
               ? TextStyle(color: errorColor)
               : null,
         ),
+        if (state.requestId != null) ...<Widget>[
+          const SizedBox(height: 8),
+          SelectableText('Request ID: ${state.requestId}'),
+        ],
         const SizedBox(height: 16),
         if (state.entitlements.isEmpty)
           const Text('No entitlement projection returned yet.')

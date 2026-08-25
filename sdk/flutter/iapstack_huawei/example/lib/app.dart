@@ -40,7 +40,7 @@ class ExampleAppState extends State<ExampleApp> {
         externalCustomerId: widget.config.externalCustomerId,
         productId: widget.config.productId,
         productKind: widget.config.productKind,
-      );
+      )..checkSandbox();
     }
   }
 

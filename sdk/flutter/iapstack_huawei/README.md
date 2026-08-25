@@ -15,17 +15,27 @@ final backend = IapStackClient(
 );
 final huawei = HuaweiIapStack(client: backend);
 
+final sandbox = await huawei.sandboxStatus();
+if (!sandbox.isActive) {
+  throw StateError('Huawei account and APK are not sandbox eligible');
+}
+
 final verification = await huawei.purchaseAndVerify(
   externalCustomerId: 'customer-123',
   productId: 'premium_monthly',
   productKind: HuaweiProductKind.subscription,
+  requestId: 'checkout-session-123',
 );
 
 final restored = await huawei.restorePurchases(
   externalCustomerId: 'customer-123',
+  requestId: 'restore-session-123',
 );
 ```
 
 The host Android app must complete Huawei's official HMS IAP and AppGallery
 Connect setup, including `agconnect-services.json`. The SDK intentionally does
-not consume purchases because IAPStack v0.1 excludes consumables.
+not consume purchases because IAPStack v0.1 excludes consumables. The sandbox
+status call delegates to Huawei's `isSandboxActivated` API. Treat both the test
+account and APK flags as mandatory before opening purchase UI; the example app
+enforces that boundary and displays request IDs for release evidence.

@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:iapstack_huawei_example/example_config.dart';
 import 'package:iapstack_huawei_example/example_cubit.dart';
 import 'package:iapstack_huawei_example/example_status_panel.dart';
+import 'package:iapstack_huawei_example/sandbox_status_card.dart';
 
 /// Manual controls used by the Huawei sandbox release gate.
 class ExamplePage extends StatelessWidget {
@@ -29,15 +30,27 @@ class ExamplePage extends StatelessWidget {
                   Text(
                       'Product: ${config.productId} (${config.productKind.evidenceValue})'),
                   const SizedBox(height: 24),
+                  SandboxStatusCard(status: state.sandboxStatus),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: loading
+                        ? null
+                        : context.read<ExampleCubit>().checkSandbox,
+                    icon: const Icon(Icons.verified_user_outlined),
+                    label: const Text('Recheck sandbox'),
+                  ),
+                  const SizedBox(height: 24),
                   FilledButton(
-                    onPressed:
-                        loading ? null : context.read<ExampleCubit>().purchase,
+                    onPressed: loading || state.sandboxStatus?.isActive != true
+                        ? null
+                        : context.read<ExampleCubit>().purchase,
                     child: const Text('Purchase and verify'),
                   ),
                   const SizedBox(height: 12),
                   OutlinedButton(
-                    onPressed:
-                        loading ? null : context.read<ExampleCubit>().restore,
+                    onPressed: loading || state.sandboxStatus?.isActive != true
+                        ? null
+                        : context.read<ExampleCubit>().restore,
                     child: const Text('Restore purchases'),
                   ),
                   const SizedBox(height: 12),
