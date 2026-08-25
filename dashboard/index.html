@@ -1,50 +1,62 @@
 <!doctype html>
-<html lang="tr">
+<html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="light">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#080d17">
     <title>IAPStack Operations</title>
     <link rel="stylesheet" href="./app.css">
     <script src="./app.js" defer></script>
   </head>
   <body>
-    <a class="skip-link" href="#workspace">İçeriğe geç</a>
+    <a class="skip-link" href="#workspace">Skip to content</a>
 
     <main class="auth-stage" id="auth-stage">
       <section class="auth-card" aria-labelledby="auth-title">
-        <div class="brand-lockup" aria-label="IAPStack">
-          <span class="brand-mark" aria-hidden="true">IAP</span>
-          <span class="brand-word">STACK</span>
-        </div>
-        <p class="eyebrow">Self-hosted purchase operations</p>
-        <h1 id="auth-title">Satın alma akışının kontrol odası.</h1>
-        <p class="auth-copy">Admin anahtarınız yalnızca bu sekmenin oturum belleğinde tutulur. Sunucuda veya kalıcı tarayıcı depolamasında saklanmaz.</p>
-        <form id="auth-form" class="auth-form">
-          <label for="admin-key">Admin bearer key</label>
-          <div class="key-row">
-            <input id="admin-key" name="admin-key" type="password" autocomplete="off" spellcheck="false" required placeholder="iap_… veya bootstrap anahtarı">
-            <button type="submit" class="primary-button">Bağlan</button>
+        <div class="auth-main">
+          <div class="brand-lockup" aria-label="IAPStack">
+            <span class="brand-mark" aria-hidden="true">IS</span>
+            <span><span class="brand-word">IAPStack</span><small class="brand-caption">Control plane</small></span>
           </div>
-          <p class="form-message" id="auth-message" role="alert"></p>
-        </form>
-        <div class="auth-signal" aria-hidden="true">
-          <span>STORE</span><i></i><span>VERIFY</span><i></i><span>ACCESS</span><i></i><span>DELIVER</span>
+          <p class="eyebrow">Self-hosted purchase operations</p>
+          <h1 id="auth-title">Every purchase.<br>One control plane.</h1>
+          <p class="auth-copy">Connect with an admin bearer to configure store authority, inspect purchase verification, and monitor entitlement delivery.</p>
+          <form id="auth-form" class="auth-form">
+            <label for="admin-key">Admin bearer key</label>
+            <div class="key-row">
+              <input id="admin-key" name="admin-key" type="password" autocomplete="off" spellcheck="false" required placeholder="iap_… or bootstrap key">
+              <button type="submit" class="primary-button">Connect</button>
+            </div>
+            <p class="field-note">Kept only in this tab's session memory.</p>
+            <p class="form-message" id="auth-message" role="alert"></p>
+          </form>
         </div>
+        <aside class="auth-preview" aria-label="Purchase pipeline preview">
+          <div class="preview-header"><span>Live purchase route</span><span class="live-badge"><i aria-hidden="true"></i>System online</span></div>
+          <div class="preview-terminal" aria-hidden="true">
+            <span><b>01</b><code>store.authority</code><em>connected</em></span>
+            <span><b>02</b><code>purchase.verify</code><em>ready</em></span>
+            <span><b>03</b><code>access.project</code><em>atomic</em></span>
+            <span><b>04</b><code>webhook.deliver</code><em>signed</em></span>
+          </div>
+          <div class="auth-signal" aria-hidden="true"><span>STORE</span><i></i><span>VERIFY</span><i></i><span>ACCESS</span><i></i><span>DELIVER</span></div>
+          <p class="preview-note">Provider evidence is verified before access changes. Every state transition remains durable and observable.</p>
+        </aside>
       </section>
     </main>
 
     <div class="app-shell" id="app-shell" hidden>
       <aside class="sidebar">
         <div class="brand-lockup compact" aria-label="IAPStack">
-          <span class="brand-mark" aria-hidden="true">IAP</span>
-          <span class="brand-word">STACK</span>
+          <span class="brand-mark" aria-hidden="true">IS</span>
+          <span><span class="brand-word">IAPStack</span><small class="brand-caption">Control plane</small></span>
         </div>
         <div class="sidebar-heading">
-          <span>Projeler</span>
-          <button class="icon-button" id="open-setup" type="button" aria-label="Yeni proje ve uygulama ekle">+</button>
+          <span>Projects</span>
+          <button class="icon-button" id="open-setup" type="button" aria-label="Add a project and application"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
         </div>
-        <nav id="project-nav" class="project-nav" aria-label="Projeler"></nav>
+        <nav id="project-nav" class="project-nav" aria-label="Projects"></nav>
         <div class="sidebar-footer">
           <span class="system-dot" aria-hidden="true"></span>
           <span>Self-hosted control plane</span>
@@ -55,12 +67,12 @@
         <header class="topbar">
           <div>
             <p class="eyebrow">Project operations</p>
-            <h1 id="project-title">—</h1>
+            <div class="project-title-row"><h1 id="project-title">—</h1><span class="control-badge"><i aria-hidden="true"></i>Live control plane</span></div>
           </div>
           <div class="topbar-actions">
-            <span id="updated-at" class="updated-at">Henüz yenilenmedi</span>
-            <button class="secondary-button" id="refresh" type="button">Yenile</button>
-            <button class="text-button" id="logout" type="button">Çıkış</button>
+            <span id="updated-at" class="updated-at">Not refreshed yet</span>
+            <button class="secondary-button" id="refresh" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span>Refresh</span></button>
+            <button class="text-button" id="logout" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M14 4h5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5"/></svg><span>Sign out</span></button>
           </div>
         </header>
 
@@ -79,46 +91,48 @@
           </ol>
         </section>
 
-        <section class="metric-grid" aria-label="Proje özeti">
-          <article><span>Uygulama</span><strong id="metric-apps">0</strong><small id="metric-apps-note">—</small></article>
-          <article><span>Müşteri</span><strong id="metric-customers">0</strong><small id="metric-customers-note">—</small></article>
-          <article><span>Ürün</span><strong id="metric-products">0</strong><small id="metric-products-note">—</small></article>
-          <article><span>Bekleyen iş</span><strong id="metric-pending">0</strong><small id="metric-pending-note">—</small></article>
+        <section class="metric-grid" aria-label="Project overview">
+          <article><span>Applications</span><strong id="metric-apps">0</strong><small id="metric-apps-note">—</small></article>
+          <article><span>Customers</span><strong id="metric-customers">0</strong><small id="metric-customers-note">—</small></article>
+          <article><span>Products</span><strong id="metric-products">0</strong><small id="metric-products-note">—</small></article>
+          <article><span>Pending jobs</span><strong id="metric-pending">0</strong><small id="metric-pending-note">—</small></article>
         </section>
 
-        <section class="panel" aria-labelledby="apps-title">
-          <div class="panel-heading">
-            <div><p class="eyebrow">Configuration</p><h2 id="apps-title">Uygulamalar</h2></div>
-            <span class="panel-count" id="apps-count">0 kayıt</span>
+        <div class="dashboard-grid">
+          <section class="panel applications-panel" aria-labelledby="apps-title">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Configuration</p><h2 id="apps-title">Applications</h2></div>
+              <span class="panel-count" id="apps-count">0 records</span>
+            </div>
+            <div class="application-grid" id="application-grid"></div>
+          </section>
+
+          <div class="side-stack">
+            <section class="panel" aria-labelledby="catalog-title">
+              <div class="panel-heading">
+                <div><p class="eyebrow">Catalog</p><h2 id="catalog-title">Product map</h2></div>
+                <span class="panel-count" id="products-count">0 records</span>
+              </div>
+              <div class="stack-list" id="product-list"></div>
+            </section>
+
+            <section class="panel queue-panel" aria-labelledby="queue-title">
+              <div class="panel-heading">
+                <div><p class="eyebrow">Durability</p><h2 id="queue-title">Job queues</h2></div>
+              </div>
+              <div class="queue-list" id="queue-list"></div>
+            </section>
           </div>
-          <div class="application-grid" id="application-grid"></div>
-        </section>
-
-        <div class="split-grid">
-          <section class="panel" aria-labelledby="catalog-title">
-            <div class="panel-heading">
-              <div><p class="eyebrow">Catalog</p><h2 id="catalog-title">Ürün haritası</h2></div>
-              <span class="panel-count" id="products-count">0 kayıt</span>
-            </div>
-            <div class="stack-list" id="product-list"></div>
-          </section>
-
-          <section class="panel queue-panel" aria-labelledby="queue-title">
-            <div class="panel-heading">
-              <div><p class="eyebrow">Durability</p><h2 id="queue-title">İş kuyrukları</h2></div>
-            </div>
-            <div class="queue-list" id="queue-list"></div>
-          </section>
         </div>
 
         <section class="panel table-panel" aria-labelledby="transactions-title">
           <div class="panel-heading">
-            <div><p class="eyebrow">Latest evidence</p><h2 id="transactions-title">Son doğrulamalar</h2></div>
-            <span class="panel-count">Son 50</span>
+            <div><p class="eyebrow">Latest evidence</p><h2 id="transactions-title">Recent verifications</h2></div>
+            <span class="panel-count">Latest 50</span>
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Durum</th><th>Ürün</th><th>Müşteri</th><th>Erişim</th><th>Gözlem</th></tr></thead>
+              <thead><tr><th>Status</th><th>Product</th><th>Customer</th><th>Access</th><th>Observed</th></tr></thead>
               <tbody id="transaction-rows"></tbody>
             </table>
           </div>
@@ -127,12 +141,12 @@
         <div class="split-grid wide-left">
           <section class="panel table-panel" aria-labelledby="customers-title">
             <div class="panel-heading">
-              <div><p class="eyebrow">Identity</p><h2 id="customers-title">Müşteriler</h2></div>
-              <span class="panel-count">İlk 200</span>
+              <div><p class="eyebrow">Identity</p><h2 id="customers-title">Customers</h2></div>
+              <div class="panel-actions"><span class="panel-count">First 200</span><button class="secondary-button compact-button" id="open-customer" type="button">Add customer</button></div>
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Müşteri</th><th>Erişim</th><th>Son gözlem</th></tr></thead>
+                <thead><tr><th>Customer</th><th>Access</th><th>Last observed</th></tr></thead>
                 <tbody id="customer-rows"></tbody>
               </table>
             </div>
@@ -140,12 +154,12 @@
 
           <section class="panel table-panel" aria-labelledby="webhooks-title">
             <div class="panel-heading">
-              <div><p class="eyebrow">Outbound</p><h2 id="webhooks-title">Bildirim teslimatı</h2></div>
-              <span class="panel-count">Son 50</span>
+              <div><p class="eyebrow">Outbound</p><h2 id="webhooks-title">Notification delivery</h2></div>
+              <span class="panel-count">Latest 50</span>
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Event</th><th>Durum</th><th>Zaman</th></tr></thead>
+                <thead><tr><th>Event</th><th>Status</th><th>Time</th></tr></thead>
                 <tbody id="webhook-rows"></tbody>
               </table>
             </div>
@@ -157,10 +171,10 @@
     <dialog id="setup-dialog" class="setup-dialog">
       <form id="setup-form" method="dialog">
         <div class="dialog-heading">
-          <div><p class="eyebrow">Quick start</p><h2>Huawei katalog iskeleti</h2></div>
-          <button class="icon-button" id="close-setup" value="cancel" aria-label="Pencereyi kapat">×</button>
+          <div><p class="eyebrow">Quick start</p><h2>Huawei catalog setup</h2></div>
+          <button class="icon-button" id="close-setup" value="cancel" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
         </div>
-        <p class="dialog-copy">Proje, uygulama, entitlement, ürün ve store mapping kayıtlarını tek akışta oluşturur. Credential ve webhook secret’larını API üzerinden ayrıca ekleyin.</p>
+        <p class="dialog-copy">Create the project, application, entitlement, product, and store mapping in one guided flow. Then finish the secure connections from the application card.</p>
         <div class="form-grid">
           <label>Project ID<input name="project_id" required placeholder="my-project"></label>
           <label>Application ID<input name="application_id" required placeholder="mobile-app"></label>
@@ -174,10 +188,93 @@
         </div>
         <p class="form-message" id="setup-message" role="alert"></p>
         <div class="dialog-actions">
-          <button type="button" class="text-button" id="cancel-setup">Vazgeç</button>
-          <button type="submit" class="primary-button">Kataloğu oluştur</button>
+          <button type="button" class="text-button" id="cancel-setup">Cancel</button>
+          <button type="submit" class="primary-button">Create catalog</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="application-dialog" class="setup-dialog commissioning-dialog">
+      <div class="commissioning-shell">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">Application commissioning</p><h2 id="application-dialog-title">Application connections</h2><code id="application-dialog-meta"></code></div>
+          <button class="icon-button" id="close-application" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+
+        <ol class="commissioning-route" aria-label="Setup progress">
+          <li class="complete"><span>1</span><strong>Identity</strong><small>Ready</small></li>
+          <li id="credential-step"><span>2</span><strong>Huawei</strong><small id="credential-step-status">Missing</small></li>
+          <li id="webhook-step"><span>3</span><strong>Notifications</strong><small id="webhook-step-status">Missing</small></li>
+          <li><span>4</span><strong>App key</strong><small>Optional</small></li>
+        </ol>
+
+        <div class="commissioning-sections">
+          <section class="management-section" aria-labelledby="credential-title">
+            <div class="management-heading"><div><p class="eyebrow">Store authority</p><h3 id="credential-title">Huawei server connection</h3></div><span id="credential-revision" class="revision-badge">New</span></div>
+            <p>Used for server-side calls to Huawei token, order, and subscription services. Saved values are never shown again.</p>
+            <form id="credential-form" class="management-form">
+              <div class="form-grid">
+                <label>Client ID<input name="client_id" autocomplete="off" required></label>
+                <label>Client secret<input name="client_secret" type="password" autocomplete="new-password" required></label>
+                <label class="full-row">Public key<textarea name="public_key" rows="5" autocomplete="off" required placeholder="-----BEGIN PUBLIC KEY-----"></textarea></label>
+                <label class="full-row">Token URL<input name="token_url" type="url" required placeholder="https://oauth-login.cloud.huawei.com/oauth2/v3/token"></label>
+                <label class="full-row">Order service URL<input name="order_url" type="url" required placeholder="https://…"></label>
+                <label class="full-row">Subscription service URL<input name="subscription_url" type="url" required placeholder="https://…"></label>
+              </div>
+              <p class="form-message" id="credential-message" role="status"></p>
+              <div class="section-actions"><button type="submit" class="primary-button">Save Huawei connection</button></div>
+            </form>
+          </section>
+
+          <section class="management-section" aria-labelledby="webhook-config-title">
+            <div class="management-heading"><div><p class="eyebrow">Application delivery</p><h3 id="webhook-config-title">Backend notifications</h3></div><span id="webhook-revision" class="revision-badge">New</span></div>
+            <p>Sends entitlement changes to your application backend with an HMAC-SHA-256 signature. The signing secret is never shown again.</p>
+            <form id="webhook-form" class="management-form">
+              <div class="form-grid">
+                <label class="full-row">HTTPS endpoint<input name="url" type="url" required placeholder="https://api.example.com/iapstack/events"></label>
+                <label class="full-row">Signing secret<input name="signing_secret" type="password" autocomplete="new-password" minlength="32" required placeholder="At least 32 random characters"></label>
+              </div>
+              <p class="form-message" id="webhook-message" role="status"></p>
+              <div class="section-actions"><button type="submit" class="primary-button">Save notification connection</button></div>
+            </form>
+          </section>
+
+          <section class="management-section key-section" aria-labelledby="application-key-title">
+            <div class="management-heading"><div><p class="eyebrow">Client access</p><h3 id="application-key-title">Application key</h3></div></div>
+            <p>The bearer that connects the Flutter SDK to this application scope is shown only when created. New keys do not automatically revoke existing keys.</p>
+            <form id="application-key-form" class="management-form">
+              <p class="form-message" id="application-key-message" role="status"></p>
+              <div class="section-actions"><button type="submit" class="secondary-button">Create application key</button></div>
+            </form>
+          </section>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="customer-dialog" class="setup-dialog small-dialog">
+      <form id="customer-form" method="dialog">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">Customer identity</p><h2>Add customer</h2></div>
+          <button class="icon-button" id="close-customer" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <p class="dialog-copy">The internal ID is the stable record identifier. The external ID identifies the customer in Flutter SDK purchase and entitlement calls.</p>
+        <div class="form-grid">
+          <label>Internal customer ID<input name="customer_id" required placeholder="customer-42"></label>
+          <label>External customer ID<input name="external_id" required placeholder="auth-user-42"></label>
+        </div>
+        <p class="form-message" id="customer-message" role="status"></p>
+        <div class="dialog-actions"><button type="button" class="text-button" id="cancel-customer">Cancel</button><button type="submit" class="primary-button">Add customer</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="key-dialog" class="setup-dialog small-dialog key-dialog">
+      <div class="key-reveal">
+        <div class="dialog-heading"><div><p class="eyebrow">Shown once</p><h2>Application key ready</h2></div><button class="icon-button" id="close-key" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        <p class="dialog-copy">This value cannot be retrieved again. Copy it to your secure secret store before closing this dialog.</p>
+        <label class="revealed-key-label">Application bearer<textarea id="revealed-key" rows="4" readonly spellcheck="false"></textarea></label>
+        <p class="form-message" id="copy-message" role="status"></p>
+        <div class="dialog-actions"><button type="button" class="secondary-button" id="copy-key">Copy key</button><button type="button" class="primary-button" id="done-key">Done</button></div>
+      </div>
     </dialog>
   </body>
 </html>

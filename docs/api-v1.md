@@ -43,6 +43,11 @@ verifiers, credential payloads, ciphertext, fingerprints, provider references,
 purchase evidence, and webhook bodies. Unknown project scopes return the same
 `not_found` envelope used by other scoped resources.
 
+Application summaries expose only `credential_revision` and `webhook_revision` for
+optimistic dashboard updates. A zero revision means the corresponding configuration
+is absent. Revision values are not secrets; endpoint URLs, signing secrets, provider
+credential fields, and protected values are never included in the read model.
+
 ## Application operations
 
 - `POST /v1/applications/{application_id}/purchases:verify`

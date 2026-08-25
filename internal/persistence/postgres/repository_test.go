@@ -211,7 +211,8 @@ func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
 		t.Fatalf("AdminProjectOverview() error = %v", err)
 	}
 	if len(overview.Applications) != 1 || overview.Applications[0].CredentialConfigured ||
-		overview.Applications[0].WebhookConfigured {
+		overview.Applications[0].CredentialRevision != 0 || overview.Applications[0].WebhookConfigured ||
+		overview.Applications[0].WebhookRevision != 0 {
 		t.Fatalf("overview applications = %#v, want one unconfigured application", overview.Applications)
 	}
 	if len(overview.Products) != 1 || len(overview.Products[0].EntitlementKeys) != 1 ||
@@ -226,6 +227,32 @@ func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
 	}
 	if len(overview.RecentTransactions) != 0 || len(overview.RecentWebhookEvents) != 0 {
 		t.Fatalf("overview activity = (%#v, %#v), want empty activity", overview.RecentTransactions, overview.RecentWebhookEvents)
+	}
+	if _, err := database.conn.Exec(database.ctx, `
+		INSERT INTO application_credentials (
+			project_id, application_id, kind, content_type, schema_version,
+			payload_ciphertext, payload_fingerprint, encryption_key_id, revision
+		) VALUES ($1, $2, 'huawei_server_api', 'application/json', 1,
+			decode('01', 'hex'), decode(repeat('01', 32), 'hex'), 'test-key', 3)
+	`, fixture.projectID, fixture.applicationID); err != nil {
+		t.Fatalf("seed dashboard credential metadata: %v", err)
+	}
+	if _, err := database.conn.Exec(database.ctx, `
+		INSERT INTO webhook_endpoints (
+			project_id, application_id, url, secret_ciphertext,
+			secret_fingerprint, encryption_key_id, revision
+		) VALUES ($1, $2, 'https://example.com/iapstack', decode('01', 'hex'),
+			decode(repeat('02', 32), 'hex'), 'test-key', 2)
+	`, fixture.projectID, fixture.applicationID); err != nil {
+		t.Fatalf("seed dashboard webhook metadata: %v", err)
+	}
+	configured, err := store.AdminProjectOverview(database.ctx, core.ProjectID(fixture.projectID))
+	if err != nil {
+		t.Fatalf("configured AdminProjectOverview() error = %v", err)
+	}
+	if !configured.Applications[0].CredentialConfigured || configured.Applications[0].CredentialRevision != 3 ||
+		!configured.Applications[0].WebhookConfigured || configured.Applications[0].WebhookRevision != 2 {
+		t.Fatalf("configured application = %#v, want credential revision 3 and webhook revision 2", configured.Applications[0])
 	}
 
 	_, err = store.AdminProjectOverview(database.ctx, "missing-project")

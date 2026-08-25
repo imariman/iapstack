@@ -88,8 +88,11 @@ func TestAdminOverviewSerializesEmptyCollections(t *testing.T) {
 	t.Parallel()
 
 	overview := adminOverviewFromRecord(persistence.AdminProjectOverview{
-		Project:      persistence.AdminProject{ID: "project-1", CreatedAt: time.Now().UTC()},
-		Applications: []persistence.AdminApplication{}, Products: []persistence.AdminProduct{},
+		Project: persistence.AdminProject{ID: "project-1", CreatedAt: time.Now().UTC()},
+		Applications: []persistence.AdminApplication{{
+			ID: "application-1", CredentialConfigured: true, CredentialRevision: 3,
+			WebhookConfigured: true, WebhookRevision: 2,
+		}}, Products: []persistence.AdminProduct{},
 		Customers: []persistence.AdminCustomer{}, RecentTransactions: []persistence.AdminTransaction{},
 		Queues: []persistence.AdminQueue{}, RecentWebhookEvents: []persistence.AdminWebhookEvent{},
 	})
@@ -98,11 +101,16 @@ func TestAdminOverviewSerializesEmptyCollections(t *testing.T) {
 		t.Fatalf("Marshal() error = %v", err)
 	}
 	for _, field := range []string{
-		`"applications":[]`, `"products":[]`, `"customers":[]`,
+		`"credential_revision":3`, `"webhook_revision":2`, `"products":[]`, `"customers":[]`,
 		`"recent_transactions":[]`, `"queues":[]`, `"recent_webhook_events":[]`,
 	} {
 		if !strings.Contains(string(payload), field) {
 			t.Fatalf("overview JSON = %s, want %s", payload, field)
+		}
+	}
+	for _, forbidden := range []string{"ciphertext", "fingerprint", "signing_secret", "client_secret", "payload"} {
+		if strings.Contains(strings.ToLower(string(payload)), forbidden) {
+			t.Fatalf("overview JSON contains forbidden field %q: %s", forbidden, payload)
 		}
 	}
 }

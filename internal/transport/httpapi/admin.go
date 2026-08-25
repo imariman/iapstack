@@ -40,7 +40,9 @@ type adminApplicationResponse struct {
 	Environment           core.Environment           `json:"environment"`
 	ProviderApplicationID core.ProviderApplicationID `json:"provider_application_id"`
 	CredentialConfigured  bool                       `json:"credential_configured"`
+	CredentialRevision    int64                      `json:"credential_revision"`
 	WebhookConfigured     bool                       `json:"webhook_configured"`
+	WebhookRevision       int64                      `json:"webhook_revision"`
 	CreatedAt             time.Time                  `json:"created_at"`
 }
 
@@ -156,7 +158,9 @@ func adminOverviewFromRecord(overview persistence.AdminProjectOverview) adminOve
 			ID: application.ID, Provider: application.Provider, Environment: application.Environment,
 			ProviderApplicationID: application.ProviderApplicationID,
 			CredentialConfigured:  application.CredentialConfigured,
-			WebhookConfigured:     application.WebhookConfigured, CreatedAt: application.CreatedAt,
+			CredentialRevision:    application.CredentialRevision,
+			WebhookConfigured:     application.WebhookConfigured,
+			WebhookRevision:       application.WebhookRevision, CreatedAt: application.CreatedAt,
 		})
 	}
 	for _, product := range overview.Products {
