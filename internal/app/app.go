@@ -21,6 +21,7 @@ import (
 	"github.com/imariman/iapstack/internal/processing"
 	"github.com/imariman/iapstack/internal/stores"
 	"github.com/imariman/iapstack/internal/stores/apple"
+	"github.com/imariman/iapstack/internal/stores/googleplay"
 	"github.com/imariman/iapstack/internal/stores/huawei"
 	"github.com/imariman/iapstack/internal/transport/httpapi"
 	"github.com/imariman/iapstack/internal/transport/httpserver"
@@ -82,6 +83,10 @@ func Run(
 	if err != nil {
 		return err
 	}
+	googlePlayAdapter, err := googleplay.New(credentialService, cfg.ProviderTimeout)
+	if err != nil {
+		return err
+	}
 	metricRegistry := metrics.New()
 	observedHuawei, err := stores.NewObservedAdapter(huaweiAdapter, metricRegistry)
 	if err != nil {
@@ -91,7 +96,11 @@ func Run(
 	if err != nil {
 		return err
 	}
-	registry, err := stores.NewRegistry(observedHuawei, observedApple)
+	observedGooglePlay, err := stores.NewObservedAdapter(googlePlayAdapter, metricRegistry)
+	if err != nil {
+		return err
+	}
+	registry, err := stores.NewRegistry(observedHuawei, observedApple, observedGooglePlay)
 	if err != nil {
 		return err
 	}

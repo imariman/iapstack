@@ -87,17 +87,19 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 
 	document := loadOpenAPIContract(t)
 	for name, required := range map[string][]string{
-		"AppleCredentialPayload": {"issuer_id", "key_id", "bundle_id", "private_key", "root_certificates"},
-		"AppleEvidence":          {"signed_transaction", "product_kind"},
-		"PurchaseSubmission":     {"external_customer_id", "claimed_products", "evidence"},
-		"VerificationResult":     {"verified_at", "customer_id", "entitlements"},
-		"RestoreResult":          {"results"},
-		"EntitlementSnapshot":    {"customer_id", "entitlements"},
-		"ErrorEnvelope":          {"error"},
-		"AdminProjectOverview":   {"project", "applications", "products", "customers", "recent_transactions", "queues", "recent_webhook_events"},
-		"CredentialMetadata":     {"project_id", "application_id", "kind", "content_type", "schema_version", "revision", "created_at", "updated_at"},
-		"ApiKeyCollection":       {"api_keys"},
-		"ApiKey":                 {"id", "role", "created_at", "current"},
+		"AppleCredentialPayload":      {"issuer_id", "key_id", "bundle_id", "private_key", "root_certificates"},
+		"AppleEvidence":               {"signed_transaction", "product_kind"},
+		"GooglePlayCredentialPayload": {"client_email", "private_key_id", "private_key"},
+		"GooglePlayEvidence":          {"purchase_token", "product_kind"},
+		"PurchaseSubmission":          {"external_customer_id", "claimed_products", "evidence"},
+		"VerificationResult":          {"verified_at", "customer_id", "entitlements"},
+		"RestoreResult":               {"results"},
+		"EntitlementSnapshot":         {"customer_id", "entitlements"},
+		"ErrorEnvelope":               {"error"},
+		"AdminProjectOverview":        {"project", "applications", "products", "customers", "recent_transactions", "queues", "recent_webhook_events"},
+		"CredentialMetadata":          {"project_id", "application_id", "kind", "content_type", "schema_version", "revision", "created_at", "updated_at"},
+		"ApiKeyCollection":            {"api_keys"},
+		"ApiKey":                      {"id", "role", "created_at", "current"},
 	} {
 		schemaReference, exists := document.Components.Schemas[name]
 		if !exists || schemaReference.Value == nil {
@@ -157,6 +159,11 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 		{name: "Apple credential metadata", schema: "CredentialMetadata", value: credentials.Metadata{
 			ProjectID: "project-1", ApplicationID: "application-2", Kind: "apple_app_store_server_api",
 			ContentType: "application/vnd.iapstack.apple-credentials+json", SchemaVersion: 1,
+			Revision: 1, CreatedAt: now, UpdatedAt: now,
+		}},
+		{name: "Google Play credential metadata", schema: "CredentialMetadata", value: credentials.Metadata{
+			ProjectID: "project-1", ApplicationID: "application-3", Kind: "google_play_android_publisher",
+			ContentType: "application/vnd.iapstack.google-play-credentials+json", SchemaVersion: 1,
 			Revision: 1, CreatedAt: now, UpdatedAt: now,
 		}},
 		{name: "webhook metadata", schema: "WebhookConfiguration", value: map[string]any{
