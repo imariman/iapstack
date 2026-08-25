@@ -41,6 +41,24 @@ void main() {
       expect(result.entitlements.single.grantsAccess, isTrue);
     });
 
+    test('exposes device sandbox eligibility before purchase', () async {
+      const expected = HuaweiSandboxStatus(
+        isSandboxUser: true,
+        isSandboxApk: true,
+        marketVersion: '42',
+        apkVersion: '43',
+      );
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async => http.Response('{}', 500)),
+        platform: _FakePlatform(sandboxResult: expected),
+      );
+
+      final status = await huawei.sandboxStatus();
+
+      expect(status, same(expected));
+      expect(status.isActive, isTrue);
+    });
+
     test('paginates, deduplicates, and restores both supported kinds',
         () async {
       final lifetime =
@@ -107,11 +125,13 @@ void main() {
         },
       );
       final batchSizes = <int>[];
+      final requestIds = <String?>[];
       final huawei = HuaweiIapStack(
         client: _backend((request) async {
           final purchases = (jsonDecode(request.body)
               as Map<String, dynamic>)['purchases']! as List<dynamic>;
           batchSizes.add(purchases.length);
+          requestIds.add(request.headers['X-Request-ID']);
           return http.Response(
             jsonEncode(<String, Object?>{
               'results':
@@ -125,12 +145,17 @@ void main() {
 
       final result = await huawei.restorePurchases(
         externalCustomerId: 'customer-1',
+        requestId: 'sandbox-restore-1',
         productKinds: const <HuaweiProductKind>{
           HuaweiProductKind.nonConsumable
         },
       );
 
       expect(batchSizes, <int>[100, 1]);
+      expect(requestIds, <String?>[
+        'sandbox-restore-1',
+        'sandbox-restore-1-2',
+      ]);
       expect(result.results, hasLength(101));
     });
 
@@ -238,14 +263,22 @@ final Map<String, Object?> _verificationJson = <String, Object?>{
 final class _FakePlatform implements HuaweiIapPlatform {
   _FakePlatform(
       {this.purchaseResult,
+      this.sandboxResult = const HuaweiSandboxStatus(
+        isSandboxUser: false,
+        isSandboxApk: false,
+      ),
       Map<HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>? pages})
       : pages = pages ?? <HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>{};
 
   final HuaweiSignedPurchase? purchaseResult;
+  final HuaweiSandboxStatus sandboxResult;
   final Map<HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>> pages;
   final List<String> restoreCalls = <String>[];
   String? purchasedProductId;
   String? purchasedDeveloperPayload;
+
+  @override
+  Future<HuaweiSandboxStatus> sandboxStatus() async => sandboxResult;
 
   @override
   Future<HuaweiSignedPurchase> purchase({

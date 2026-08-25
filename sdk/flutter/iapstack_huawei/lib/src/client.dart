@@ -31,6 +31,9 @@ final class HuaweiIapStack {
   /// Maximum provider pages accepted for each product kind.
   final int maxRestorePagesPerKind;
 
+  /// Checks whether the current Huawei account and APK can use sandbox IAP.
+  Future<HuaweiSandboxStatus> sandboxStatus() => _platform.sandboxStatus();
+
   /// Opens Huawei purchase UI and verifies the resulting signed evidence.
   Future<VerificationResult> purchaseAndVerify({
     required String externalCustomerId,
@@ -64,6 +67,7 @@ final class HuaweiIapStack {
       HuaweiProductKind.nonConsumable,
       HuaweiProductKind.subscription,
     },
+    String? requestId,
   }) async {
     if (externalCustomerId.trim().isEmpty) {
       throw ArgumentError.value(
@@ -117,8 +121,10 @@ final class HuaweiIapStack {
     final results = <VerificationResult>[];
     for (var start = 0; start < submissions.length; start += 100) {
       final end = (start + 100).clamp(0, submissions.length);
-      final batch =
-          await _client.restorePurchases(submissions.sublist(start, end));
+      final batch = await _client.restorePurchases(
+        submissions.sublist(start, end),
+        requestId: _batchRequestId(requestId, start ~/ 100),
+      );
       results.addAll(batch.results);
     }
     return RestoreResult(
@@ -131,4 +137,12 @@ final class HuaweiIapStack {
     String? requestId,
   }) =>
       _client.getEntitlements(externalCustomerId, requestId: requestId);
+}
+
+String? _batchRequestId(String? requestId, int batchIndex) {
+  if (requestId == null || requestId.trim().isEmpty) {
+    return null;
+  }
+  final normalized = requestId.trim();
+  return batchIndex == 0 ? normalized : '$normalized-${batchIndex + 1}';
 }
