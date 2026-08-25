@@ -154,6 +154,8 @@ The following conditions are release-blocking:
   implementation and rejects tampered, stale, and duplicate events.
 - [ ] The secret-free evidence file passes `go run ./cmd/iapstack-release` and names
   the exact candidate commit and successful CI run.
+- [ ] The evidence-only merge passes main CI and the protected `Stable release`
+  workflow publishes the tag, image digest, SBOM, provenance, and evidence asset.
 
 Any unchecked release-blocking invariant or code gate prevents a v0.1 stable release.
 Operational checklist exceptions require a written deployment-specific risk acceptance.

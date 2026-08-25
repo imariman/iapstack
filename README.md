@@ -152,6 +152,13 @@ and validate its secret-free evidence with:
 go run ./cmd/iapstack-release docs/releases/v0.1.0-sandbox-evidence.json
 ```
 
+After an evidence-only pull request is merged and its main CI succeeds, dispatch the
+`Stable release` workflow from `main`. It revalidates the evidence, candidate ancestry,
+candidate and release-commit CI runs, and evidence-only diff before creating the Git
+tag and GitHub release. The workflow publishes signed-provenance, SBOM-bearing
+`linux/amd64` and `linux/arm64` images to `ghcr.io/imariman/iapstack`; stable tags must
+not be created manually.
+
 Purchase verification is coordinated by the provider-neutral `internal/verification`
 use case. Provider network calls and protection of sensitive evidence happen before
 the durable transaction. Catalog validation, evidence and observation persistence,
