@@ -17,6 +17,7 @@ import (
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
+	"github.com/imariman/iapstack/internal/validation"
 )
 
 const (
@@ -74,14 +75,19 @@ func (service *Service) Configure(
 	expectedRevision int64,
 ) (persistence.WebhookEndpointRecord, error) {
 	if err := application.Validate(); err != nil {
-		return persistence.WebhookEndpointRecord{}, err
+		return persistence.WebhookEndpointRecord{}, validation.Wrap(err)
+	}
+	if expectedRevision < 0 {
+		return persistence.WebhookEndpointRecord{}, validation.Wrap(
+			errors.New("webhook expected revision must not be negative"),
+		)
 	}
 	if err := validateWebhookDestination(url, service.allowPrivateNetworks); err != nil {
-		return persistence.WebhookEndpointRecord{}, err
+		return persistence.WebhookEndpointRecord{}, validation.Wrap(err)
 	}
 	request, err := protection.NewRequest(webhookScope(application), secret)
 	if err != nil {
-		return persistence.WebhookEndpointRecord{}, err
+		return persistence.WebhookEndpointRecord{}, validation.Wrap(err)
 	}
 	protected, err := service.protection.Protect(ctx, request)
 	if err != nil {

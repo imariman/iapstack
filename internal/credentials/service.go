@@ -12,6 +12,7 @@ import (
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/stores"
+	"github.com/imariman/iapstack/internal/validation"
 )
 
 const (
@@ -61,10 +62,10 @@ func (service *Service) Put(
 	expectedRevision int64,
 ) (Metadata, error) {
 	if err := errors.Join(application.Validate(), credential.Validate()); err != nil {
-		return Metadata{}, err
+		return Metadata{}, validation.Wrap(err)
 	}
 	if expectedRevision < 0 {
-		return Metadata{}, errors.New("credential expected revision must not be negative")
+		return Metadata{}, validation.Wrap(errors.New("credential expected revision must not be negative"))
 	}
 
 	plaintext := credential.Bytes()

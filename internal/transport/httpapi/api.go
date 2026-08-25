@@ -24,6 +24,7 @@ import (
 	"github.com/imariman/iapstack/internal/stores/apple"
 	"github.com/imariman/iapstack/internal/stores/googleplay"
 	"github.com/imariman/iapstack/internal/stores/huawei"
+	"github.com/imariman/iapstack/internal/validation"
 	"github.com/imariman/iapstack/internal/verification"
 	"github.com/imariman/iapstack/internal/webhooks"
 )
@@ -342,6 +343,9 @@ func (api *API) putProject(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	projectID := core.ProjectID(request.PathValue("project_id"))
+	if !api.requireValidInput(writer, request, projectID.Validate()) {
+		return
+	}
 	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
 		return repository.PutProject(request.Context(), projectID)
 	})
@@ -362,6 +366,9 @@ func (api *API) putApplication(writer http.ResponseWriter, request *http.Request
 		ProjectID: core.ProjectID(request.PathValue("project_id")),
 		Store:     core.StoreApplication{Provider: input.Provider, Environment: input.Environment, ID: input.ProviderApplicationID},
 	}
+	if !api.requireValidInput(writer, request, application.Validate()) {
+		return
+	}
 	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
 		return repository.PutApplication(request.Context(), application)
 	})
@@ -379,6 +386,9 @@ func (api *API) putCustomer(writer http.ResponseWriter, request *http.Request) {
 	}
 	customer := core.Customer{ID: core.CustomerID(request.PathValue("customer_id")),
 		ProjectID: core.ProjectID(request.PathValue("project_id")), ExternalID: input.ExternalID}
+	if !api.requireValidInput(writer, request, customer.Validate()) {
+		return
+	}
 	var stored core.Customer
 	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
 		var putErr error
@@ -405,6 +415,9 @@ func (api *API) putEntitlement(writer http.ResponseWriter, request *http.Request
 	}
 	entitlement := core.Entitlement{ID: core.EntitlementID(request.PathValue("entitlement_id")),
 		ProjectID: core.ProjectID(request.PathValue("project_id")), Key: input.Key}
+	if !api.requireValidInput(writer, request, entitlement.Validate()) {
+		return
+	}
 	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
 		return repository.PutEntitlementDefinition(request.Context(), entitlement)
 	})
@@ -423,6 +436,9 @@ func (api *API) putProduct(writer http.ResponseWriter, request *http.Request) {
 	product := core.Product{ID: core.ProductID(request.PathValue("product_id")),
 		ProjectID: core.ProjectID(request.PathValue("project_id")), Kind: input.Kind,
 		EntitlementIDs: input.EntitlementIDs}
+	if !api.requireValidInput(writer, request, product.Validate()) {
+		return
+	}
 	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
 		return repository.PutProduct(request.Context(), product)
 	})
@@ -441,6 +457,9 @@ func (api *API) putStoreProduct(writer http.ResponseWriter, request *http.Reques
 	projectID := core.ProjectID(request.PathValue("project_id"))
 	mapping := core.StoreProduct{ApplicationID: core.ApplicationID(request.PathValue("application_id")),
 		ProductID: input.ProductID, ProviderID: core.ProviderProductID(request.PathValue("provider_product_id"))}
+	if !api.requireValidInput(writer, request, errors.Join(projectID.Validate(), mapping.Validate())) {
+		return
+	}
 	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
 		return repository.PutStoreProduct(request.Context(), projectID, mapping)
 	})
@@ -465,7 +484,7 @@ func (api *API) putCredential(writer http.ResponseWriter, request *http.Request)
 	credential, err := stores.NewCredential(stores.CredentialKind(request.PathValue("kind")),
 		input.ContentType, input.SchemaVersion, input.Payload)
 	if err != nil {
-		api.writeError(writer, request, err)
+		api.writeError(writer, request, validation.Wrap(err))
 		return
 	}
 	metadata, err := api.credentials.Put(request.Context(), application, credential, input.ExpectedRevision)
@@ -601,14 +620,11 @@ func (api *API) huaweiNotification(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	defer zero(payload)
-	applicationID := core.ApplicationID(request.PathValue("application_id"))
-	projectID := core.ProjectID(strings.TrimSpace(request.Header.Get("X-IAPStack-Project-ID")))
-	var application core.Application
-	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
-		var loadErr error
-		application, loadErr = repository.Application(request.Context(), projectID, applicationID)
-		return loadErr
-	})
+	application, err := api.notificationApplication(
+		request.Context(),
+		strings.TrimSpace(request.Header.Get("X-IAPStack-Project-ID")),
+		request.PathValue("application_id"),
+	)
 	if err != nil {
 		api.writeError(writer, request, err)
 		return
@@ -658,14 +674,9 @@ func (api *API) googlePlayNotification(writer http.ResponseWriter, request *http
 		return
 	}
 	defer zero(payload)
-	applicationID := core.ApplicationID(request.PathValue("application_id"))
-	projectID := core.ProjectID(request.PathValue("project_id"))
-	var application core.Application
-	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
-		var loadErr error
-		application, loadErr = repository.Application(request.Context(), projectID, applicationID)
-		return loadErr
-	})
+	application, err := api.notificationApplication(
+		request.Context(), request.PathValue("project_id"), request.PathValue("application_id"),
+	)
 	if err != nil {
 		api.writeError(writer, request, err)
 		return
@@ -711,14 +722,9 @@ func (api *API) appleNotification(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	defer zero(payload)
-	applicationID := core.ApplicationID(request.PathValue("application_id"))
-	projectID := core.ProjectID(request.PathValue("project_id"))
-	var application core.Application
-	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
-		var loadErr error
-		application, loadErr = repository.Application(request.Context(), projectID, applicationID)
-		return loadErr
-	})
+	application, err := api.notificationApplication(
+		request.Context(), request.PathValue("project_id"), request.PathValue("application_id"),
+	)
 	if err != nil {
 		api.writeError(writer, request, err)
 		return
@@ -769,7 +775,7 @@ func (api *API) verify(
 	}
 	evidence, bindings, err := input.VerificationInputs(application.Store.Provider)
 	if err != nil {
-		return verification.Result{}, err
+		return verification.Result{}, validation.Wrap(err)
 	}
 	result, err := api.verification.Verify(ctx, verification.Command{
 		ProjectID: principal.ProjectID, ApplicationID: principal.ApplicationID,
@@ -883,10 +889,35 @@ func (api *API) writeAuthenticationFailure(
 
 // application loads one authoritative project-scoped application.
 func (api *API) application(ctx context.Context, project, application string) (core.Application, error) {
+	projectID := core.ProjectID(project)
+	applicationID := core.ApplicationID(application)
+	if err := errors.Join(projectID.Validate(), applicationID.Validate()); err != nil {
+		return core.Application{}, validation.Wrap(err)
+	}
 	var result core.Application
 	err := api.store.Transact(ctx, func(repository persistence.Transaction) error {
 		var loadErr error
-		result, loadErr = repository.Application(ctx, core.ProjectID(project), core.ApplicationID(application))
+		result, loadErr = repository.Application(ctx, projectID, applicationID)
+		return loadErr
+	})
+	return result, err
+}
+
+// notificationApplication validates and loads one provider-notification scope through operations storage.
+func (api *API) notificationApplication(
+	ctx context.Context,
+	project string,
+	application string,
+) (core.Application, error) {
+	projectID := core.ProjectID(project)
+	applicationID := core.ApplicationID(application)
+	if err := errors.Join(projectID.Validate(), applicationID.Validate()); err != nil {
+		return core.Application{}, validation.Wrap(err)
+	}
+	var result core.Application
+	err := api.operations.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var loadErr error
+		result, loadErr = repository.Application(ctx, projectID, applicationID)
 		return loadErr
 	})
 	return result, err
@@ -942,6 +973,19 @@ func (api *API) readBody(writer http.ResponseWriter, request *http.Request) ([]b
 	return payload, true
 }
 
+// requireValidInput writes the stable invalid-request envelope before operational work begins.
+func (api *API) requireValidInput(
+	writer http.ResponseWriter,
+	request *http.Request,
+	err error,
+) bool {
+	if err == nil {
+		return true
+	}
+	api.writeError(writer, request, validation.Wrap(err))
+	return false
+}
+
 // writeMutation writes a consistent idempotent mutation result or safe error.
 func (api *API) writeMutation(writer http.ResponseWriter, request *http.Request, err error) {
 	if err != nil {
@@ -983,7 +1027,7 @@ func (api *API) writeError(writer http.ResponseWriter, request *http.Request, er
 			default:
 				status, code, message = http.StatusBadGateway, "provider_error", "the provider request failed"
 			}
-		} else if isValidationError(err) {
+		} else if errors.Is(err, validation.ErrInvalid) {
 			status, code, message = http.StatusBadRequest, "invalid_request", "request values are invalid"
 		}
 	}
@@ -1065,29 +1109,6 @@ func nextReconciliationTime(now time.Time) time.Time {
 func deterministicID(prefix string, fingerprint [sha256.Size]byte) string {
 	digest := sha256.Sum256(append([]byte(prefix+"\x00"), fingerprint[:]...))
 	return prefix + "-" + hex.EncodeToString(digest[:16])
-}
-
-// isValidationError conservatively identifies errors produced before durable or provider effects.
-func isValidationError(err error) bool {
-	if err == nil || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	for _, operational := range []string{
-		"postgresql", "connection", "transaction", "protect ", "open protected", "query queue", "store api key",
-	} {
-		if strings.Contains(message, operational) {
-			return false
-		}
-	}
-	for _, validation := range []string{
-		" is required", " must ", "unsupported ", "duplicate ", "mismatch", "cannot ", "invalid ",
-	} {
-		if strings.Contains(message, validation) {
-			return true
-		}
-	}
-	return false
 }
 
 // writeAPIError writes one stable JSON error envelope.

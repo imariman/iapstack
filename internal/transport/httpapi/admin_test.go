@@ -14,6 +14,7 @@ import (
 	"github.com/imariman/iapstack/internal/auth"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/validation"
 )
 
 const (
@@ -222,6 +223,27 @@ func TestRequestDeadlineReturnsRetryableServiceUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"code":"request_timeout"`) {
 		t.Fatalf("deadline response = %s", recorder.Body.String())
+	}
+}
+
+// TestWriteErrorRequiresTypedValidation verifies operational error wording cannot change HTTP status.
+func TestWriteErrorRequiresTypedValidation(t *testing.T) {
+	t.Parallel()
+
+	api := &API{}
+	request := httptest.NewRequest(http.MethodPut, "/v1/admin/projects/project-1", nil)
+	typedRecorder := httptest.NewRecorder()
+	api.writeError(typedRecorder, request, validation.Wrap(errors.New("opaque rejected value")))
+	if typedRecorder.Code != http.StatusBadRequest ||
+		!strings.Contains(typedRecorder.Body.String(), `"code":"invalid_request"`) {
+		t.Fatalf("typed validation response = %d %s", typedRecorder.Code, typedRecorder.Body.String())
+	}
+
+	operationalRecorder := httptest.NewRecorder()
+	api.writeError(operationalRecorder, request, errors.New("invalid connection state"))
+	if operationalRecorder.Code != http.StatusInternalServerError ||
+		!strings.Contains(operationalRecorder.Body.String(), `"code":"internal_error"`) {
+		t.Fatalf("operational response = %d %s", operationalRecorder.Code, operationalRecorder.Body.String())
 	}
 }
 

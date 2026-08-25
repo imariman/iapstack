@@ -122,9 +122,13 @@ func (api *API) adminProjectOverview(writer http.ResponseWriter, request *http.R
 	if _, ok := api.requireAdmin(writer, request); !ok {
 		return
 	}
+	projectID := core.ProjectID(request.PathValue("project_id"))
+	if !api.requireValidInput(writer, request, projectID.Validate()) {
+		return
+	}
 	overview, err := api.admin.AdminProjectOverview(
 		request.Context(),
-		core.ProjectID(request.PathValue("project_id")),
+		projectID,
 	)
 	if err != nil {
 		api.writeError(writer, request, err)

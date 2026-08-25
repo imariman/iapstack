@@ -13,6 +13,7 @@ import (
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
+	"github.com/imariman/iapstack/internal/validation"
 )
 
 const (
@@ -84,7 +85,7 @@ func (service *CustomerSessions) Mint(
 	externalCustomerID string,
 ) (CustomerSession, error) {
 	if err := errors.Join(issuer.Validate(), core.ValidateExternalCustomerID(externalCustomerID)); err != nil {
-		return CustomerSession{}, err
+		return CustomerSession{}, validation.Wrap(err)
 	}
 	if issuer.Role != persistence.APIKeyRoleApplication || issuer.KeyID == "" {
 		return CustomerSession{}, ErrUnauthorized

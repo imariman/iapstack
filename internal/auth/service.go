@@ -15,6 +15,7 @@ import (
 
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/validation"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -89,7 +90,7 @@ func NewService(
 // Create generates a bearer once and stores only its public identity and Argon2id verifier.
 func (service *Service) Create(ctx context.Context, principal Principal) (string, error) {
 	if err := principal.Validate(); err != nil {
-		return "", err
+		return "", validation.Wrap(err)
 	}
 	idBytes := make([]byte, keyIDBytes)
 	secret := make([]byte, secretBytes)

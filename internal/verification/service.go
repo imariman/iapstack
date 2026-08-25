@@ -16,6 +16,7 @@ import (
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/stores"
+	"github.com/imariman/iapstack/internal/validation"
 )
 
 const (
@@ -141,7 +142,7 @@ func NewService(
 // Verify authenticates one purchase with its provider and atomically persists the result.
 func (service *Service) Verify(ctx context.Context, command Command) (Result, error) {
 	if err := command.Validate(); err != nil {
-		return Result{}, err
+		return Result{}, validation.Wrap(err)
 	}
 	receivedAt := service.clock.Now().UTC()
 	if receivedAt.IsZero() {
