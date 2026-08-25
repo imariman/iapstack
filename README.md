@@ -69,7 +69,7 @@ before the new providers are stable.
 
 ## Development
 
-IAPStack currently requires Go 1.24 or newer. Run the API locally with:
+IAPStack currently requires Go 1.25 or newer. Run the API locally with:
 
 ```sh
 go run ./cmd/iapstack api
