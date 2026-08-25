@@ -77,6 +77,23 @@ the private key in the protected credential payload, never in a mobile client or
 source control. IAPStack uses Apple's current production and sandbox
 `api.storekit.apple.com` domains rather than accepting credential-controlled API URLs.
 
+The initial Google Play credential uses kind `google_play_android_publisher`, schema
+version 1, and media type `application/vnd.iapstack.google-play-credentials+json`:
+
+```json
+{
+  "client_email": "iapstack@example-project.iam.gserviceaccount.com",
+  "private_key_id": "0123456789abcdef",
+  "private_key": "-----BEGIN PRIVATE KEY-----..."
+}
+```
+
+Grant the service account access to the application in Play Console and set the
+application's `provider_application_id` to its Android package name. IAPStack creates
+a five-minute RS256 service-account assertion, exchanges it at Google's fixed OAuth
+endpoint for the `androidpublisher` scope, and never accepts credential-controlled
+OAuth or Publisher API URLs.
+
 ## Administrative read model
 
 The initial dashboard uses two bounded, read-only administrator contracts:
@@ -138,6 +155,27 @@ transaction verification, restore submissions, expiry, refund/revocation, owners
 and idempotent projections. App Store Server Notifications, renewal-info/status
 queries, billing retry, and grace-period reconciliation remain release work; do not
 treat this slice alone as the Apple stable-release gate.
+
+Google Play uses `application/vnd.iapstack.google-play-purchase+json`:
+
+```json
+{
+  "purchase_token": "<token returned by Google Play Billing>",
+  "product_kind": "subscription"
+}
+```
+
+For Google Play applications, `external_customer_id` must be the same obfuscated
+identifier supplied to BillingFlowParams as `obfuscatedAccountId`. IAPStack queries
+the current `purchases.subscriptionsv2` or `purchases.productsv2` resource, verifies
+the product and customer binding, and stores the purchase token only through the
+protected evidence/reference boundaries. Subscription states including active,
+pending, canceled, expired, paused, grace period, and account hold are normalized.
+
+The initial Google Play server slice supports one current subscription line item or
+one non-consumable line item per purchase token. Multi-line subscription add-ons,
+acknowledgement/consumption commands, Real-time Developer Notifications, the Flutter
+Billing companion, and the Google Play sandbox gate remain release work.
 
 ## Notifications and reconciliation
 

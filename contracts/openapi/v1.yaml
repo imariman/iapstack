@@ -624,7 +624,7 @@ components:
       required: true
       schema:
         type: string
-        enum: [apple_app_store_server_api, huawei_server_api]
+        enum: [apple_app_store_server_api, google_play_android_publisher, huawei_server_api]
     ProjectScopeHeader:
       name: X-IAPStack-Project-ID
       in: header
@@ -764,7 +764,7 @@ components:
       properties:
         provider:
           type: string
-          enum: [apple_app_store, huawei_appgallery]
+          enum: [apple_app_store, google_play, huawei_appgallery]
         environment:
           type: string
           enum: [production, sandbox, test]
@@ -825,6 +825,7 @@ components:
           type: string
           enum:
             - application/vnd.iapstack.apple-credentials+json
+            - application/vnd.iapstack.google-play-credentials+json
             - application/vnd.iapstack.huawei-credentials+json
         schema_version:
           type: integer
@@ -836,6 +837,7 @@ components:
         payload:
           oneOf:
             - $ref: '#/components/schemas/AppleCredentialPayload'
+            - $ref: '#/components/schemas/GooglePlayCredentialPayload'
             - $ref: '#/components/schemas/HuaweiCredentialPayload'
     AppleCredentialPayload:
       type: object
@@ -893,6 +895,23 @@ components:
         subscription_url:
           type: string
           format: uri
+    GooglePlayCredentialPayload:
+      type: object
+      additionalProperties: false
+      required: [client_email, private_key_id, private_key]
+      properties:
+        client_email:
+          type: string
+          minLength: 1
+          description: Service-account email granted Android Publisher access in Play Console.
+        private_key_id:
+          type: string
+          minLength: 1
+        private_key:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: PKCS#8 PEM RSA private key from the service-account credential.
     CredentialMetadata:
       type: object
       additionalProperties: false
@@ -904,7 +923,7 @@ components:
           $ref: '#/components/schemas/Identifier'
         kind:
           type: string
-          enum: [apple_app_store_server_api, huawei_server_api]
+          enum: [apple_app_store_server_api, google_play_android_publisher, huawei_server_api]
         content_type:
           type: string
         schema_version:
@@ -986,6 +1005,18 @@ components:
         product_kind:
           type: string
           enum: [subscription, non_consumable]
+    GooglePlayEvidence:
+      type: object
+      additionalProperties: false
+      required: [purchase_token, product_kind]
+      properties:
+        purchase_token:
+          type: string
+          minLength: 1
+          description: Purchase token returned by Google Play Billing.
+        product_kind:
+          type: string
+          enum: [subscription, non_consumable]
     PurchaseSubmission:
       type: object
       additionalProperties: false
@@ -1007,6 +1038,7 @@ components:
         evidence:
           oneOf:
             - $ref: '#/components/schemas/AppleEvidence'
+            - $ref: '#/components/schemas/GooglePlayEvidence'
             - $ref: '#/components/schemas/HuaweiEvidence'
     RestoreRequest:
       type: object
