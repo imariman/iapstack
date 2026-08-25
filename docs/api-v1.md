@@ -153,15 +153,17 @@ For Apple applications, `external_customer_id` must be the same UUID supplied to
 StoreKit as `appAccountToken`. IAPStack verifies the ES256 signature, the three-entry
 `x5c` chain against configured Apple roots, the WWDR intermediate, bundle ID,
 environment, product, transaction identity, and customer binding before calling
-[Get Transaction Info](https://developer.apple.com/documentation/appstoreserverapi/get-transaction-info).
-The authoritative response is verified again before persistence. The API client JWT
+[Get Transaction Info](https://developer.apple.com/documentation/appstoreserverapi/get-transaction-info)
+for non-consumables. Subscription verification calls
+[Get All Subscription Statuses](https://developer.apple.com/documentation/appstoreserverapi/get-all-subscription-statuses)
+and independently verifies the latest transaction and renewal JWS values before persistence. The API client JWT
 uses ES256, the required App Store Connect claims, and a five-minute lifetime.
 
 The initial Apple server slice supports auto-renewable subscription and non-consumable
-transaction verification, restore submissions, expiry, refund/revocation, ownership,
-and idempotent projections. App Store Server Notifications, renewal-info/status
-queries, billing retry, and grace-period reconciliation remain release work; do not
-treat this slice alone as the Apple stable-release gate.
+transaction verification, restore submissions, renewal enabled/disabled status,
+billing retry, grace period, expiry, refund/revocation, ownership, and idempotent
+projections. Subscription verification and each daily reconciliation use the current
+App Store status rather than the original notification or client lifecycle claim.
 
 Google Play uses `application/vnd.iapstack.google-play-purchase+json`:
 
@@ -195,6 +197,23 @@ and the real Google Play internal-testing lifecycle gate remain release work.
 Huawei notification ingestion is `POST /v1/providers/huawei/applications/{application_id}/notifications` with the project identity in `X-IAPStack-Project-ID`. Its JSON envelope contains `external_customer_id`, `claimed_products`, and the signed `purchase` evidence above.
 
 The notification signature and application/product scope are checked before protected inbox persistence and acknowledgement. The worker then performs the authoritative Huawei query. Successful verification schedules a new uniquely fingerprinted lifecycle check every 24 hours.
+
+App Store Server Notifications V2 ingestion is
+`POST /v1/providers/apple/projects/{project_id}/applications/{application_id}/notifications`.
+Configure this complete HTTPS URL in App Store Connect. The request body contains only
+Apple's `signedPayload` compact JWS; it does not use an IAPStack bearer. Before durable
+inbox insertion, IAPStack verifies the outer ES256 signature and certificate chain,
+version, notification UUID, bundle ID, App Apple ID in production, and environment.
+When transaction or renewal JWS values are present, each signature and application,
+product, lineage, and `appAccountToken` binding is checked independently.
+
+The worker never grants access from `notificationType`, `subtype`, or the notification
+status field. It submits the signed transaction to the normal verification service,
+which queries the current App Store subscription status, atomically updates projections
+and outbox events, and schedules the next daily refresh. Signed audit-only notifications,
+including App Store test deliveries without transaction data, complete without an
+entitlement change. Exact duplicate deliveries normalize to the same protected inbox
+identity and downstream projection/outbox writes remain idempotent.
 
 Google Play RTDN ingestion is
 `POST /v1/providers/google-play/projects/{project_id}/applications/{application_id}/notifications`.
@@ -269,6 +288,20 @@ purchase stream during startup, never renders or persists the bearer or purchase
 token, and shows request IDs for redacted correlation. Install a signed build from
 the Play Console internal-testing track for real Billing flows; a sideloaded debug
 APK is only a local UI and connectivity smoke test.
+
+Apple applications add `sdk/flutter/iapstack_apple`. The companion requires a
+canonical lowercase UUID customer ID, passes it to StoreKit 2 as `appAccountToken`,
+and sends only the compact transaction JWS from `serverVerificationData` to IAPStack.
+It listens for unfinished transactions from startup and calls `completePurchase` only
+after authoritative server verification succeeds. Restore synchronizes App Store
+ownership, reads StoreKit 2 transaction history, deduplicates transaction IDs, and
+sends batches of at most 100. Signed evidence and application bearers stay in memory
+and are redacted from string representations.
+
+The iOS harness under `sdk/flutter/iapstack_apple/example` contains a shared Xcode
+scheme with a StoreKit Configuration file for local product, listener, cancellation,
+restore, and unfinished-transaction testing. Use App Store sandbox products and
+matching server credentials for full certificate-chain and backend lifecycle tests.
 
 ## Huawei sandbox release gate
 

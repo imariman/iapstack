@@ -137,9 +137,70 @@ func TestAdapterNormalizesExpiredSubscription(t *testing.T) {
 	}
 	observation := result.Observations[0]
 	if observation.State != core.LifecycleExpired || observation.Access != core.AccessDenied ||
-		observation.AccessReason != core.AccessReasonExpired || observation.Renewal.Status != core.RenewalStatusUnknown ||
+		observation.AccessReason != core.AccessReasonExpired || observation.Renewal.Status != core.RenewalDisabled ||
 		observation.ProviderState != string(core.LifecycleExpired) {
 		t.Fatalf("Verify() observation = %#v", observation)
+	}
+}
+
+// TestNormalizeSubscriptionStatusCoversAppleLifecycle verifies access and renewal decisions for all five statuses.
+func TestNormalizeSubscriptionStatusCoversAppleLifecycle(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 25, 11, 0, 0, 0, time.UTC)
+	transaction := transactionPayload{
+		PurchaseDate: now.Add(-time.Hour).UnixMilli(), ExpiresDate: now.Add(time.Hour).UnixMilli(),
+		Type: appleSubscriptionType, ProductID: fixtureProductID,
+	}
+	tests := []struct {
+		name         string
+		status       int
+		autoRenew    int
+		graceEndsAt  int64
+		wantState    core.LifecycleState
+		wantAccess   core.AccessStatus
+		wantReason   core.AccessReason
+		wantRenewal  core.RenewalStatus
+		wantGraceEnd bool
+	}{
+		{name: "active", status: subscriptionStatusActive, autoRenew: autoRenewEnabled,
+			wantState: core.LifecycleActive, wantAccess: core.AccessAllowed,
+			wantReason: core.AccessReasonPurchaseValid, wantRenewal: core.RenewalEnabled},
+		{name: "canceled at period end", status: subscriptionStatusActive, autoRenew: autoRenewDisabled,
+			wantState: core.LifecycleCanceled, wantAccess: core.AccessAllowed,
+			wantReason: core.AccessReasonCanceledAtPeriodEnd, wantRenewal: core.RenewalDisabled},
+		{name: "expired", status: subscriptionStatusExpired, autoRenew: autoRenewDisabled,
+			wantState: core.LifecycleExpired, wantAccess: core.AccessDenied,
+			wantReason: core.AccessReasonExpired, wantRenewal: core.RenewalDisabled},
+		{name: "billing retry", status: subscriptionStatusBillingRetry, autoRenew: autoRenewEnabled,
+			wantState: core.LifecycleOnHold, wantAccess: core.AccessDenied,
+			wantReason: core.AccessReasonBillingIssue, wantRenewal: core.RenewalEnabled},
+		{name: "grace period", status: subscriptionStatusGracePeriod, autoRenew: autoRenewEnabled,
+			graceEndsAt: now.Add(30 * time.Minute).UnixMilli(), wantGraceEnd: true,
+			wantState: core.LifecycleGracePeriod, wantAccess: core.AccessAllowed,
+			wantReason: core.AccessReasonGracePeriod, wantRenewal: core.RenewalEnabled},
+		{name: "revoked", status: subscriptionStatusRevoked, autoRenew: autoRenewDisabled,
+			wantState: core.LifecycleRevoked, wantAccess: core.AccessDenied,
+			wantReason: core.AccessReasonRevoked, wantRenewal: core.RenewalDisabled},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := subscriptionSnapshot{Status: test.status, Renewal: renewalPayload{
+				AutoRenewStatus: test.autoRenew, AutoRenewProductID: fixtureProductID,
+				RenewalDate: now.Add(time.Hour).UnixMilli(), GracePeriodExpiresDate: test.graceEndsAt,
+			}}
+			state, access, reason, endsAt, renewal := normalizeSubscriptionStatus(transaction, snapshot, now)
+			if state != test.wantState || access != test.wantAccess || reason != test.wantReason ||
+				renewal.Status != test.wantRenewal {
+				t.Fatalf("normalizeSubscriptionStatus() = (%q, %q, %q, %#v)", state, access, reason, renewal)
+			}
+			if test.wantGraceEnd && (endsAt == nil || !endsAt.Equal(milliseconds(test.graceEndsAt))) {
+				t.Fatalf("grace end = %v", endsAt)
+			}
+			if test.autoRenew == autoRenewEnabled && (renewal.NextProductID != fixtureProductID || renewal.NextRenewalAt == nil) {
+				t.Fatalf("enabled renewal = %#v", renewal)
+			}
+		})
 	}
 }
 
@@ -382,11 +443,17 @@ func credentialFixture(t *testing.T, fixture signingFixture, environment core.En
 // signTransactionFixture signs one transaction with the Apple-style leaf certificate chain.
 func signTransactionFixture(t *testing.T, fixture signingFixture, transaction transactionPayload) string {
 	t.Helper()
+	return signApplePayloadFixture(t, fixture, transaction)
+}
+
+// signApplePayloadFixture signs one typed Apple payload with the test certificate chain.
+func signApplePayloadFixture(t *testing.T, fixture signingFixture, value any) string {
+	t.Helper()
 	header, err := json.Marshal(jwsHeader{Algorithm: "ES256", Chain: fixture.chain})
 	if err != nil {
 		t.Fatalf("Marshal() JWS header error = %v", err)
 	}
-	payload, err := json.Marshal(transaction)
+	payload, err := json.Marshal(value)
 	if err != nil {
 		t.Fatalf("Marshal() JWS payload error = %v", err)
 	}
@@ -457,8 +524,36 @@ func adapterFixture(
 		t.Fatalf("New() error = %v", err)
 	}
 	adapter.clock = func() time.Time { return now }
-	adapter.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return jsonResponse(t, status, transactionInfoResponse{SignedTransactionInfo: signTransactionFixture(t, fixture, transaction)}, header), nil
+	adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var response any = transactionInfoResponse{SignedTransactionInfo: signTransactionFixture(t, fixture, transaction)}
+		if transaction.Type == appleSubscriptionType && status >= http.StatusOK && status < http.StatusMultipleChoices {
+			expectedPath := "/inApps/v1/subscriptions/" + transaction.OriginalTransactionID
+			if request.URL.Path != expectedPath {
+				t.Fatalf("subscription status path = %q, want %q", request.URL.Path, expectedPath)
+			}
+			subscriptionStatus := subscriptionStatusActive
+			if transaction.ExpiresDate <= now.UnixMilli() {
+				subscriptionStatus = subscriptionStatusExpired
+			}
+			response = statusResponse{
+				Environment: transaction.Environment, BundleID: transaction.BundleID,
+				Data: []subscriptionGroupIdentifierItem{{
+					SubscriptionGroupIdentifier: "subscription-group-1",
+					LastTransactions: []lastTransactionsItem{{
+						OriginalTransactionID: transaction.OriginalTransactionID,
+						Status:                subscriptionStatus,
+						SignedTransactionInfo: signTransactionFixture(t, fixture, transaction),
+						SignedRenewalInfo: signApplePayloadFixture(t, fixture, renewalPayload{
+							AppAccountToken: transaction.AppAccountToken, AutoRenewProductID: transaction.ProductID,
+							AutoRenewStatus: autoRenewDisabled, Environment: transaction.Environment,
+							OriginalTransactionID: transaction.OriginalTransactionID,
+							ProductID:             transaction.ProductID, SignedDate: now.UnixMilli(),
+						}),
+					}},
+				}},
+			}
+		}
+		return jsonResponse(t, status, response, header), nil
 	})
 	return adapter
 }

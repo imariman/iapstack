@@ -123,7 +123,7 @@ func Run(
 	switch mode {
 	case "api":
 		return runAPI(ctx, cfg, store, keyring, credentialService, webhookService,
-			verificationService, huaweiAdapter, googlePlayAdapter, metricRegistry, logger)
+			verificationService, huaweiAdapter, appleAdapter, googlePlayAdapter, metricRegistry, logger)
 	case "worker":
 		return runWorker(ctx, cfg, store, keyring, webhookService, verificationService, metricRegistry, logger)
 	default:
@@ -146,6 +146,7 @@ func runAPI(
 	webhookService *webhooks.Service,
 	verificationService *verification.Service,
 	huaweiAdapter *huawei.Adapter,
+	appleAdapter *apple.Adapter,
 	googlePlayAdapter *googleplay.Adapter,
 	metricRegistry *metrics.Registry,
 	logger *slog.Logger,
@@ -157,7 +158,7 @@ func runAPI(
 	api, err := httpapi.New(httpapi.Dependencies{
 		Store: store, Operations: store, Admin: store, Authentication: authentication,
 		Credentials: credentialService, Webhooks: webhookService,
-		Verification: verificationService, Huawei: huaweiAdapter, GooglePlay: googlePlayAdapter,
+		Verification: verificationService, Huawei: huaweiAdapter, Apple: appleAdapter, GooglePlay: googlePlayAdapter,
 		Protection: keyring, BodyLimit: cfg.HTTPBodyLimit,
 	})
 	if err != nil {

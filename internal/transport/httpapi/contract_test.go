@@ -89,6 +89,7 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 	for name, required := range map[string][]string{
 		"AppleCredentialPayload":       {"issuer_id", "key_id", "bundle_id", "private_key", "root_certificates"},
 		"AppleEvidence":                {"signed_transaction", "product_kind"},
+		"AppleNotificationV2":          {"signedPayload"},
 		"GooglePlayCredentialPayload":  {"client_email", "private_key_id", "private_key"},
 		"GooglePlayRTDNConfiguration":  {"subscription", "push_service_account_email", "audience"},
 		"GooglePlayEvidence":           {"purchase_token", "product_kind"},

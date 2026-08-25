@@ -80,6 +80,7 @@ type configuration struct {
 	issuerID   string
 	keyID      string
 	bundleID   string
+	appAppleID uint64
 	privateKey *ecdsa.PrivateKey
 	roots      trustedRoots
 }
@@ -165,6 +166,27 @@ func (adapter *Adapter) Verify(
 	if err := validateTransactionScope(request, configuration.bundleID, evidence.ProductKind, submitted); err != nil {
 		return stores.VerificationResult{}, invalid("verify", err)
 	}
+	if evidence.ProductKind == core.ProductKindSubscription {
+		transaction, renewal, status, artifact, queryErr := adapter.querySubscriptionStatus(
+			ctx, request.Application, configuration, submitted.OriginalTransactionID,
+		)
+		if queryErr != nil {
+			return stores.VerificationResult{}, queryErr
+		}
+		if err := validateTransactionScope(request, configuration.bundleID, evidence.ProductKind, transaction); err != nil {
+			return stores.VerificationResult{}, invalid("verify", err)
+		}
+		if transaction.OriginalTransactionID != submitted.OriginalTransactionID ||
+			transaction.AppAccountToken != submitted.AppAccountToken {
+			return stores.VerificationResult{}, invalid("verify", errors.New("Apple subscription lineage does not match submitted evidence"))
+		}
+		if err := validateRenewalScope(request.Application, transaction, renewal); err != nil {
+			return stores.VerificationResult{}, invalid("verify", err)
+		}
+		return adapter.result(request.Application, evidence.ProductKind, transaction, artifact, &subscriptionSnapshot{
+			Status: status, Renewal: renewal,
+		})
+	}
 	authoritativeJWS, artifact, err := adapter.query(ctx, request.Application, configuration, submitted.TransactionID)
 	if err != nil {
 		return stores.VerificationResult{}, err
@@ -179,7 +201,7 @@ func (adapter *Adapter) Verify(
 	if err := compareTransactions(submitted, authoritative); err != nil {
 		return stores.VerificationResult{}, invalid("verify", err)
 	}
-	return adapter.result(request.Application, evidence.ProductKind, authoritative, artifact)
+	return adapter.result(request.Application, evidence.ProductKind, authoritative, artifact, nil)
 }
 
 // Reconcile queries current Apple transaction state from one stored transaction reference.
@@ -227,7 +249,24 @@ func (adapter *Adapter) Reconcile(
 	if err := validateTransactionScope(verificationRequest, configuration.bundleID, productKind, authoritative); err != nil {
 		return stores.VerificationResult{}, invalid("reconcile", err)
 	}
-	return adapter.result(request.Application, productKind, authoritative, artifact)
+	if productKind == core.ProductKindSubscription {
+		transaction, renewal, status, statusArtifact, queryErr := adapter.querySubscriptionStatus(
+			ctx, request.Application, configuration, authoritative.OriginalTransactionID,
+		)
+		if queryErr != nil {
+			return stores.VerificationResult{}, queryErr
+		}
+		if err := validateTransactionScope(verificationRequest, configuration.bundleID, productKind, transaction); err != nil {
+			return stores.VerificationResult{}, invalid("reconcile", err)
+		}
+		if err := validateRenewalScope(request.Application, transaction, renewal); err != nil {
+			return stores.VerificationResult{}, invalid("reconcile", err)
+		}
+		return adapter.result(request.Application, productKind, transaction, statusArtifact, &subscriptionSnapshot{
+			Status: status, Renewal: renewal,
+		})
+	}
+	return adapter.result(request.Application, productKind, authoritative, artifact, nil)
 }
 
 // configuration opens and validates one application-scoped Apple credential payload.
@@ -268,7 +307,10 @@ func (adapter *Adapter) configuration(ctx context.Context, application core.Appl
 	if err != nil {
 		return configuration{}, stores.NewFailure(adapter.Provider(), "credentials", stores.FailurePermanent, 0, err)
 	}
-	return configuration{issuerID: payload.IssuerID, keyID: payload.KeyID, bundleID: payload.BundleID, privateKey: privateKey, roots: roots}, nil
+	return configuration{
+		issuerID: payload.IssuerID, keyID: payload.KeyID, bundleID: payload.BundleID,
+		appAppleID: payload.AppAppleID, privateKey: privateKey, roots: roots,
+	}, nil
 }
 
 // query requests one authoritative signed transaction by transaction identifier.
@@ -378,6 +420,7 @@ func (adapter *Adapter) result(
 	kind core.ProductKind,
 	transaction transactionPayload,
 	artifact stores.Evidence,
+	subscription *subscriptionSnapshot,
 ) (stores.VerificationResult, error) {
 	observedAt := adapter.clock().UTC()
 	state, access, reason := normalizeState(kind, transaction, observedAt)
@@ -390,6 +433,12 @@ func (adapter *Adapter) result(
 	renewal := core.Renewal{Mode: core.RenewalNone, Status: core.RenewalNotApplicable}
 	if kind == core.ProductKindSubscription {
 		renewal = core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalStatusUnknown}
+		if subscription == nil {
+			return stores.VerificationResult{}, invalid("normalize", errors.New("Apple subscription status is required"))
+		}
+		state, access, reason, endsAt, renewal = normalizeSubscriptionStatus(
+			transaction, *subscription, observedAt,
+		)
 	}
 	quantity := transaction.Quantity
 	if quantity == 0 {
@@ -446,7 +495,7 @@ func (adapter *Adapter) result(
 	}
 	return stores.VerificationResult{
 		VerifiedAt:   observedAt,
-		Artifacts:    []stores.VerifiedArtifact{{Kind: "apple_server_transaction", Evidence: artifact}},
+		Artifacts:    []stores.VerifiedArtifact{{Kind: appleArtifactKind(kind), Evidence: artifact}},
 		Observations: []core.PurchaseObservation{observation},
 	}, nil
 }
@@ -587,8 +636,17 @@ func observationSnapshotIdentity(
 		transaction.OwnershipType, revocationReason,
 		strconv.FormatInt(transaction.RevocationDate, 10), strconv.FormatBool(transaction.IsUpgraded),
 		transaction.Environment, string(state), string(access), string(reason), string(renewal.Mode),
-		string(renewal.Status), string(ownership),
+		string(renewal.Status), string(renewal.NextProductID), optionalTimeIdentity(renewal.NextRenewalAt),
+		string(ownership),
 	}, "\x00")))
+}
+
+// optionalTimeIdentity encodes one optional UTC time without introducing wall-clock formatting differences.
+func optionalTimeIdentity(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return strconv.FormatInt(value.UTC().UnixMilli(), 10)
 }
 
 // appleEnvironment maps the normalized application environment to Apple's signed value.
