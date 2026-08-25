@@ -157,6 +157,23 @@ jobs:
           flutter test
           flutter build apk --debug
 
+      - name: Check Google Play SDK
+        working-directory: sdk/flutter/iapstack_google_play
+        run: |
+          flutter pub get
+          dart format --output=none --set-exit-if-changed .
+          flutter analyze
+          flutter test
+
+      - name: Check Google Play internal-testing example
+        working-directory: sdk/flutter/iapstack_google_play/example
+        run: |
+          flutter pub get
+          dart format --output=none --set-exit-if-changed lib test
+          flutter analyze
+          flutter test
+          flutter build apk --debug
+
   container:
     name: Container build
     runs-on: ubuntu-latest

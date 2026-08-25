@@ -1,9 +1,10 @@
 # IAPStack v0.1 Threat Model and Security Release Checklist
 
 This document defines the security boundary for the self-hosted Huawei lifetime and
-subscription vertical slice. It applies to the `api`, `worker`, and `migrate` modes,
-PostgreSQL 17, the embedded operations dashboard, the Flutter SDKs, Huawei server
-integration, and outbound application webhooks.
+subscription vertical slice plus the initial Apple and Google Play server slices. It
+applies to the `api`, `worker`, and `migrate` modes, PostgreSQL 17, the embedded
+operations dashboard, the Flutter SDKs, provider integrations, and outbound
+application webhooks.
 
 ## Security objectives
 
@@ -73,7 +74,7 @@ fail, incident response and secret rotation are required.
 | T02 | Cross-project or cross-application access | Principals carry durable project/application scope; repositories and protection authenticated data include both identifiers; scope failures return the same unauthorized envelope. | Treat identifier disclosure as expected and rely on authorization, not identifier secrecy. Keep scope regression tests in the release gate. |
 | T03 | Webhook SSRF, DNS rebinding, or redirect escape | Only absolute HTTPS URLs without user information or fragments are accepted. Every A/AAAA result is validated at connection time, the connection is pinned to a validated IP, mixed public/private answers are rejected, proxies and redirects are disabled, and response size/time are bounded. | Private-network delivery is disabled by default. When explicitly enabled, infrastructure egress allowlisting becomes mandatory because application-level address blocking is intentionally bypassed. |
 | T04 | Forged, cross-customer, or replayed provider notification | Huawei signed purchase bytes and customer scope are verified before acknowledgement. Google Play pushes require a Google-signed OIDC token with exact audience and verified service-account email, exact Pub/Sub subscription and package scope, and one strict RTDN variant. Strict normalized envelopes share one protected inbox identity. Workers query authoritative provider state; Google purchase tokens must resolve to a previously verified protected reference before customer access can change. | Apply ingress limits to bound repeated valid evidence. Compromised Huawei signing material or a compromised configured Google push principal is outside this boundary. |
-| T05 | Forged or replayed purchase verification | Signed evidence is checked locally and against authoritative Huawei state. Application, product, purchase token, and customer bindings must match before the atomic persistence transaction. Duplicate evidence produces one logical projection. | Mobile clients are untrusted. Never grant access from Flutter SDK state without the server entitlement response. |
+| T05 | Forged or replayed purchase verification | Huawei and Apple signed evidence is checked locally; all providers are queried for authoritative server state. Application, product, purchase token or transaction identity, and customer bindings must match before the atomic persistence transaction. Duplicate evidence produces one logical projection. | Mobile clients are untrusted. Never grant access from Flutter SDK or store state without the server entitlement response. |
 | T06 | Webhook payload tampering or receiver replay | Each immutable outbox body is signed with HMAC-SHA-256 over `<timestamp>.<raw_body>` and carries a stable event ID. Redirects, response size, attempts, and retryable statuses are bounded. | Receivers must verify the raw body, enforce a timestamp tolerance, and atomically deduplicate event IDs. Delivery is at-least-once, not exactly-once. |
 | T07 | Queue race, crash, or duplicate side effects | River owns transactional claims, retries, stale-job recovery, unique scheduling, bounded attempts, and shutdown. Projection and outbox insertion share the verification transaction. | Monitor available, retryable, running, cancelled, and discarded queue states. Retain terminal metadata for the configured audit period. |
 | T08 | Database disclosure or ciphertext substitution | AES-256-GCM values use random nonces, versioned key IDs, HKDF-derived subkeys, and project/application/purpose authenticated data. Stable fingerprints use a separate HMAC root. API keys use one-way memory-hard verifiers. | A database plus runtime-root compromise exposes protected data. Separate database and secret-manager access, encrypt backups, and retain old encryption keys until rotation completes. |
