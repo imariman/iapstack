@@ -3,7 +3,7 @@ info:
   title: IAPStack HTTP API
   version: 1.0.0
   description: >-
-    Versioned administration, purchase verification, entitlement, and Huawei
+    Versioned administration, purchase verification, entitlement, and provider
     lifecycle notification contracts for the self-hosted IAPStack control plane.
   license:
     name: Apache-2.0
@@ -16,6 +16,7 @@ tags:
   - name: Purchases
   - name: Entitlements
   - name: Huawei notifications
+  - name: Google Play notifications
 paths:
   /v1/admin/api-keys:
     get:
@@ -556,6 +557,49 @@ paths:
           $ref: '#/components/responses/ProviderError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /v1/providers/google-play/projects/{project_id}/applications/{application_id}/notifications:
+    post:
+      tags: [Google Play notifications]
+      operationId: acceptGooglePlayNotification
+      summary: Authenticate and durably accept one wrapped Google Play RTDN push
+      description: >-
+        Validates the Google-signed Pub/Sub OIDC bearer, configured audience,
+        push service-account email, subscription resource, and Android package
+        before persisting a normalized protected notification.
+      security:
+        - googlePubSubOIDC: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ApplicationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GooglePlayPubSubPushEnvelope'
+      responses:
+        '200':
+          description: Notification authenticated and persisted before acknowledgement
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptedStatus'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 components:
   securitySchemes:
     adminBearer:
@@ -568,6 +612,11 @@ components:
       scheme: bearer
       bearerFormat: opaque-application-key
       description: Application-scoped bearer bound to the application path.
+    googlePubSubOIDC:
+      type: http
+      scheme: bearer
+      bearerFormat: Google-signed-OIDC-JWT
+      description: Authenticated Pub/Sub push token bound to the configured audience and service account.
   parameters:
     ApiKeyId:
       name: key_id
@@ -912,6 +961,25 @@ components:
           minLength: 1
           writeOnly: true
           description: PKCS#8 PEM RSA private key from the service-account credential.
+        rtdn:
+          $ref: '#/components/schemas/GooglePlayRTDNConfiguration'
+    GooglePlayRTDNConfiguration:
+      type: object
+      additionalProperties: false
+      required: [subscription, push_service_account_email, audience]
+      properties:
+        subscription:
+          type: string
+          pattern: '^projects/[^/]+/subscriptions/[^/]+$'
+          description: Exact Pub/Sub push subscription resource name.
+        push_service_account_email:
+          type: string
+          format: email
+          description: Exact service-account email included in the authenticated push OIDC token.
+        audience:
+          type: string
+          minLength: 1
+          description: Exact OIDC audience configured on the Pub/Sub push subscription.
     CredentialMetadata:
       type: object
       additionalProperties: false
@@ -1136,6 +1204,40 @@ components:
             $ref: '#/components/schemas/Identifier'
         purchase:
           $ref: '#/components/schemas/HuaweiEvidence'
+    GooglePlayPubSubPushEnvelope:
+      type: object
+      additionalProperties: false
+      required: [message, subscription]
+      properties:
+        message:
+          $ref: '#/components/schemas/GooglePlayPubSubMessage'
+        subscription:
+          type: string
+          pattern: '^projects/[^/]+/subscriptions/[^/]+$'
+        deliveryAttempt:
+          type: integer
+          minimum: 1
+    GooglePlayPubSubMessage:
+      type: object
+      additionalProperties: false
+      required: [data, messageId]
+      properties:
+        attributes:
+          type: object
+          additionalProperties:
+            type: string
+        data:
+          type: string
+          format: byte
+          description: Base64-encoded Google Play DeveloperNotification JSON.
+        messageId:
+          type: string
+          minLength: 1
+        orderingKey:
+          type: string
+        publishTime:
+          type: string
+          format: date-time
     OperationStatus:
       type: object
       additionalProperties: false
