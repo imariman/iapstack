@@ -81,6 +81,8 @@ type purchaseData struct {
 	PurchaseTime        int64  `json:"purchaseTime"`
 	ExpirationDate      int64  `json:"expirationDate"`
 	GraceExpirationTime int64  `json:"graceExpirationTime"`
+	CancellationTime    int64  `json:"cancellationTime"`
+	CancelTime          int64  `json:"cancelTime"`
 	RenewStatus         int    `json:"renewStatus"`
 	RetryFlag           int    `json:"retryFlag"`
 	SubIsValid          bool   `json:"subIsvalid"`
@@ -533,6 +535,8 @@ func observationSnapshotIdentity(
 		strconv.FormatInt(purchase.PurchaseTime, 10),
 		strconv.FormatInt(purchase.ExpirationDate, 10),
 		strconv.FormatInt(purchase.GraceExpirationTime, 10),
+		strconv.FormatInt(purchase.CancellationTime, 10),
+		strconv.FormatInt(purchase.CancelTime, 10),
 		strconv.Itoa(purchase.RenewStatus),
 		strconv.Itoa(purchase.RetryFlag),
 		strconv.FormatBool(purchase.SubIsValid),
@@ -594,6 +598,9 @@ func normalizeState(
 	purchase purchaseData,
 	now time.Time,
 ) (core.LifecycleState, core.AccessStatus, core.AccessReason) {
+	if productKind == core.ProductKindSubscription && purchase.CancelTime > 0 {
+		return core.LifecycleRevoked, core.AccessDenied, core.AccessReasonRevoked
+	}
 	if purchase.PurchaseState == 2 {
 		return core.LifecycleRefunded, core.AccessDenied, core.AccessReasonRefunded
 	}
@@ -611,7 +618,7 @@ func normalizeState(
 		if !purchase.SubIsValid || purchase.ExpirationDate <= 0 || !expiresAt.After(now) {
 			return core.LifecycleExpired, core.AccessDenied, core.AccessReasonExpired
 		}
-		if purchase.RenewStatus == 0 {
+		if purchase.RenewStatus == 0 || purchase.CancellationTime > 0 {
 			return core.LifecycleCanceled, core.AccessAllowed, core.AccessReasonCanceledAtPeriodEnd
 		}
 	}
