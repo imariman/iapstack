@@ -31,6 +31,12 @@ const (
 	fixturePurchaseToken = "purchase-token-0123456789"
 	// fixtureAccountID identifies the obfuscated application customer used by adapter tests.
 	fixtureAccountID = "account_7d9c7b1a3e7046c9"
+	// fixtureRTDNSubscription identifies the Pub/Sub subscription bound to notification fixtures.
+	fixtureRTDNSubscription = "projects/example-project/subscriptions/iapstack-google-play"
+	// fixtureRTDNAudience identifies the configured OIDC audience for Pub/Sub push fixtures.
+	fixtureRTDNAudience = "https://iapstack.example/v1/providers/google-play/projects/project-1/applications/application-1/notifications"
+	// fixtureRTDNServiceAccount identifies the authenticated Pub/Sub push principal.
+	fixtureRTDNServiceAccount = "iapstack-push@example-project.iam.gserviceaccount.com"
 )
 
 // fakeCredentialSource returns one protected Google Play credential fixture.
@@ -236,6 +242,10 @@ func newAdapterFixture(t *testing.T, environment core.Environment) adapterFixtur
 	payload, err := json.Marshal(credentialPayload{
 		ClientEmail: "iapstack@example-project.iam.gserviceaccount.com", PrivateKeyID: "0123456789abcdef",
 		PrivateKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded})),
+		RTDN: &rtdnConfiguration{
+			Subscription: fixtureRTDNSubscription, Audience: fixtureRTDNAudience,
+			PushServiceAccountEmail: fixtureRTDNServiceAccount,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Marshal() credential error = %v", err)

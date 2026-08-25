@@ -75,18 +75,20 @@ const (
 
 // Adapter verifies Google Play purchase tokens using application-scoped service-account credentials.
 type Adapter struct {
-	credentials  stores.CredentialSource
-	client       *http.Client
-	clock        func() time.Time
-	tokenURL     string
-	publisherURL string
+	credentials        stores.CredentialSource
+	client             *http.Client
+	notificationTokens notificationTokenValidator
+	clock              func() time.Time
+	tokenURL           string
+	publisherURL       string
 }
 
 // credentialPayload is the versioned private Google Play service-account configuration.
 type credentialPayload struct {
-	ClientEmail  string `json:"client_email"`
-	PrivateKeyID string `json:"private_key_id"`
-	PrivateKey   string `json:"private_key"`
+	ClientEmail  string             `json:"client_email"`
+	PrivateKeyID string             `json:"private_key_id"`
+	PrivateKey   string             `json:"private_key"`
+	RTDN         *rtdnConfiguration `json:"rtdn,omitempty"`
 }
 
 // configuration contains parsed service-account signing material.
@@ -94,6 +96,7 @@ type configuration struct {
 	clientEmail  string
 	privateKeyID string
 	privateKey   *rsa.PrivateKey
+	rtdn         *rtdnConfiguration
 }
 
 // clientEvidence contains the purchase token returned by Google Play Billing.
@@ -187,14 +190,18 @@ func New(credentials stores.CredentialSource, timeout time.Duration) (*Adapter, 
 	if timeout <= 0 {
 		return nil, errors.New("Google Play provider timeout must be positive")
 	}
-	return &Adapter{
-		credentials: credentials,
-		client: &http.Client{
-			Timeout: timeout,
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
+	client := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
 		},
+	}
+	notificationTokens, err := newGoogleNotificationTokenValidator(client)
+	if err != nil {
+		return nil, fmt.Errorf("construct Google notification token validator: %w", err)
+	}
+	return &Adapter{
+		credentials: credentials, client: client, notificationTokens: notificationTokens,
 		clock: time.Now, tokenURL: defaultTokenURL, publisherURL: defaultPublisherURL,
 	}, nil
 }
@@ -308,7 +315,14 @@ func (adapter *Adapter) configuration(ctx context.Context, application core.Appl
 	if err != nil {
 		return configuration{}, stores.NewFailure(adapter.Provider(), "credentials", stores.FailurePermanent, 0, err)
 	}
-	return configuration{clientEmail: payload.ClientEmail, privateKeyID: payload.PrivateKeyID, privateKey: privateKey}, nil
+	if payload.RTDN != nil {
+		copy := *payload.RTDN
+		payload.RTDN = &copy
+	}
+	return configuration{
+		clientEmail: payload.ClientEmail, privateKeyID: payload.PrivateKeyID,
+		privateKey: privateKey, rtdn: payload.RTDN,
+	}, nil
 }
 
 // query exchanges a service-account assertion and reads one authoritative purchase resource.
