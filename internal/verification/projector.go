@@ -23,6 +23,12 @@ type ProjectionCandidate struct {
 	ObservedAt          time.Time
 }
 
+// projectionSource identifies one independent application-product access source.
+type projectionSource struct {
+	ApplicationID core.ApplicationID
+	ProductID     core.ProductID
+}
+
 // DefaultProjector implements conservative multi-product entitlement selection.
 type DefaultProjector struct{}
 
@@ -53,22 +59,52 @@ func (projector *DefaultProjector) Project(
 		currentByEntitlement[entitlement.Projection.EntitlementID] = entitlement
 	}
 
-	selected := make(map[core.EntitlementID]ProjectionCandidate, len(candidates))
+	byEntitlement := make(
+		map[core.EntitlementID]map[projectionSource]ProjectionCandidate,
+		len(candidates),
+	)
 	for index, candidate := range candidates {
 		if err := candidate.Validate(); err != nil {
 			return nil, fmt.Errorf("projection candidate %d: %w", index, err)
 		}
 		entitlementID := candidate.Projection.EntitlementID
-		if existing, exists := selected[entitlementID]; !exists || candidatePreferred(candidate, existing) {
-			selected[entitlementID] = candidate
+		sources := byEntitlement[entitlementID]
+		if sources == nil {
+			sources = make(map[projectionSource]ProjectionCandidate)
+			byEntitlement[entitlementID] = sources
 		}
+		source := sourceFromCandidate(candidate)
+		if existing, exists := sources[source]; !exists || newerSourceCandidate(candidate, existing) {
+			sources[source] = candidate
+		}
+	}
+	selected := make(map[core.EntitlementID]ProjectionCandidate, len(byEntitlement))
+	for entitlementID, sources := range byEntitlement {
+		var chosen ProjectionCandidate
+		chosenSet := false
+		for _, candidate := range sources {
+			if !chosenSet || candidatePreferred(candidate, chosen) {
+				chosen = candidate
+				chosenSet = true
+			}
+		}
+		if current, exists := currentByEntitlement[entitlementID]; exists {
+			if currentCandidate, updated := sources[sourceFromCurrent(current)]; updated &&
+				accessStrength(currentCandidate.Projection.Access) == accessStrength(chosen.Projection.Access) {
+				chosen = currentCandidate
+			}
+		}
+		selected[entitlementID] = chosen
 	}
 
 	projectionIDs := make([]core.EntitlementID, 0, len(selected))
 	for entitlementID, candidate := range selected {
 		currentEntitlement, exists := currentByEntitlement[entitlementID]
-		if exists && preserveIndependentSource(currentEntitlement, candidate) {
-			continue
+		if exists {
+			_, currentSourceUpdated := byEntitlement[entitlementID][sourceFromCurrent(currentEntitlement)]
+			if !currentSourceUpdated && preserveIndependentSource(currentEntitlement, candidate) {
+				continue
+			}
 		}
 		projectionIDs = append(projectionIDs, entitlementID)
 	}
@@ -89,6 +125,30 @@ func (candidate ProjectionCandidate) Validate() error {
 		return errors.New("projection candidate observation time is required")
 	}
 	return errors.Join(candidate.Projection.Validate(), candidate.SourceApplicationID.Validate())
+}
+
+// sourceFromCandidate returns the independent access source of one proposed projection.
+func sourceFromCandidate(candidate ProjectionCandidate) projectionSource {
+	return projectionSource{
+		ApplicationID: candidate.SourceApplicationID,
+		ProductID:     candidate.Projection.SourceProductID,
+	}
+}
+
+// sourceFromCurrent returns the independent access source of one durable projection.
+func sourceFromCurrent(current persistence.CustomerEntitlement) projectionSource {
+	return projectionSource{
+		ApplicationID: current.SourceApplicationID,
+		ProductID:     current.Projection.SourceProductID,
+	}
+}
+
+// newerSourceCandidate keeps the latest lifecycle state for one application-product source.
+func newerSourceCandidate(candidate, existing ProjectionCandidate) bool {
+	if !candidate.ObservedAt.Equal(existing.ObservedAt) {
+		return candidate.ObservedAt.After(existing.ObservedAt)
+	}
+	return candidate.Projection.SourceObservationID < existing.Projection.SourceObservationID
 }
 
 // candidatePreferred deterministically ranks competing new sources for one entitlement.
