@@ -58,9 +58,10 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 
 The server currently has production-shaped Huawei verification plus initial Apple
 App Store and Google Play server slices. Google Play includes authenticated RTDN
-ingestion and authoritative worker reconciliation. Apple notifications and renewal-status
-queries, acknowledgement/consumption commands, both Flutter companions, and real
-provider sandbox release gates are still required before either new provider is stable.
+ingestion, authoritative worker reconciliation, and post-commit purchase acknowledgement.
+Apple notifications and renewal-status queries, Google Play consumable fulfillment,
+both Flutter companions, and real provider sandbox release gates are still required
+before either new provider is stable.
 
 ## Development
 

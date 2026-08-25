@@ -180,9 +180,15 @@ protected evidence/reference boundaries. Subscription states including active,
 pending, canceled, expired, paused, grace period, and account hold are normalized.
 
 The initial Google Play server slice supports one current subscription line item or
-one non-consumable line item per purchase token. Multi-line subscription add-ons,
-acknowledgement/consumption commands, the Flutter Billing companion, and the Google
-Play sandbox gate remain release work.
+one non-consumable line item per purchase token. A completed purchase whose
+`acknowledgementState` is pending produces a bounded provider action. IAPStack calls
+the matching Android Publisher product or subscription acknowledgement endpoint only
+after the evidence, observation, entitlement projection, and outbox event commit.
+Pending purchases and already acknowledged purchases never create this action. A
+retryable acknowledgement failure is returned after the durable result so the API
+submission, RTDN job, or scheduled reconciliation can safely retry and re-query the
+current acknowledgement state. Multi-line subscription add-ons, consumable fulfillment,
+the Flutter Billing companion, and the Google Play sandbox gate remain release work.
 
 ## Notifications and reconciliation
 
@@ -199,7 +205,7 @@ envelope: `message.data` contains the base64-encoded Google Play
 identity and scope. `Authorization` is the Google-signed Pub/Sub OIDC bearer, not an
 IAPStack application key.
 
-Before acknowledgement, IAPStack verifies the Google token signature, expiry and
+Before returning a successful Pub/Sub push response, IAPStack verifies the Google token signature, expiry and
 configured audience using Google's supported ID-token verifier, then requires the
 configured push service-account email, exact Pub/Sub subscription, Android package,
 RTDN version, and one mutually exclusive notification variant. Subscription,
@@ -208,6 +214,9 @@ The worker fingerprints the purchase token in its original protected query scope
 resolves the previously verified customer and product, and calls Android Publisher
 for current state instead of trusting the RTDN lifecycle type. Unknown purchase tokens
 remain retryable so a client verification racing the notification can arrive first.
+When that authoritative state requires purchase acknowledgement, the worker commits
+the normalized state first and then calls Google using the same protected purchase
+token. HTTP `409`, `429`, and `5xx` acknowledgement failures remain retryable.
 
 Google Play Console test notifications and pending-refund-review notifications are
 retained as authenticated audit records and complete without an entitlement change.
