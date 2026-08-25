@@ -21,6 +21,7 @@ import (
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/stores"
+	"github.com/imariman/iapstack/internal/stores/apple"
 	"github.com/imariman/iapstack/internal/stores/googleplay"
 	"github.com/imariman/iapstack/internal/stores/huawei"
 	"github.com/imariman/iapstack/internal/verification"
@@ -46,6 +47,7 @@ type API struct {
 	webhooks       *webhooks.Service
 	verification   *verification.Service
 	huawei         *huawei.Adapter
+	apple          *apple.Adapter
 	googlePlay     *googleplay.Adapter
 	protection     protection.Service
 	bodyLimit      int64
@@ -63,6 +65,7 @@ type Dependencies struct {
 	Webhooks       *webhooks.Service
 	Verification   *verification.Service
 	Huawei         *huawei.Adapter
+	Apple          *apple.Adapter
 	GooglePlay     *googleplay.Adapter
 	Protection     protection.Service
 	BodyLimit      int64
@@ -183,7 +186,7 @@ type v1Route struct {
 func New(dependencies Dependencies) (*API, error) {
 	if dependencies.Store == nil || dependencies.Operations == nil || dependencies.Admin == nil || dependencies.Authentication == nil ||
 		dependencies.Credentials == nil || dependencies.Webhooks == nil || dependencies.Verification == nil ||
-		dependencies.Huawei == nil || dependencies.GooglePlay == nil ||
+		dependencies.Huawei == nil || dependencies.Apple == nil || dependencies.GooglePlay == nil ||
 		dependencies.Protection == nil || dependencies.BodyLimit <= 0 {
 		return nil, errors.New("HTTP API dependencies are incomplete")
 	}
@@ -191,7 +194,7 @@ func New(dependencies Dependencies) (*API, error) {
 		store: dependencies.Store, operations: dependencies.Operations, admin: dependencies.Admin,
 		authentication: dependencies.Authentication, credentials: dependencies.Credentials,
 		webhooks: dependencies.Webhooks, verification: dependencies.Verification,
-		huawei: dependencies.Huawei, googlePlay: dependencies.GooglePlay,
+		huawei: dependencies.Huawei, apple: dependencies.Apple, googlePlay: dependencies.GooglePlay,
 		protection: dependencies.Protection,
 		bodyLimit:  dependencies.BodyLimit, clock: time.Now,
 	}
@@ -224,6 +227,7 @@ func (api *API) v1Routes() []v1Route {
 		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/purchases:restore", OperationID: "restorePurchases", Handler: api.restorePurchases},
 		{Method: http.MethodGet, Path: "/v1/applications/{application_id}/customers/{external_customer_id}/entitlements", OperationID: "getCustomerEntitlements", Handler: api.customerEntitlements},
 		{Method: http.MethodPost, Path: "/v1/providers/huawei/applications/{application_id}/notifications", OperationID: "acceptHuaweiNotification", Handler: api.huaweiNotification},
+		{Method: http.MethodPost, Path: "/v1/providers/apple/projects/{project_id}/applications/{application_id}/notifications", OperationID: "acceptAppleNotification", Handler: api.appleNotification},
 		{Method: http.MethodPost, Path: "/v1/providers/google-play/projects/{project_id}/applications/{application_id}/notifications", OperationID: "acceptGooglePlayNotification", Handler: api.googlePlayNotification},
 	}
 }
@@ -643,6 +647,59 @@ func (api *API) googlePlayNotification(writer http.ResponseWriter, request *http
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "accepted"})
 }
 
+// appleNotification verifies a signed V2 payload before durable protected inbox insertion.
+func (api *API) appleNotification(writer http.ResponseWriter, request *http.Request) {
+	payload, ok := api.readBody(writer, request)
+	if !ok {
+		return
+	}
+	defer zero(payload)
+	applicationID := core.ApplicationID(request.PathValue("application_id"))
+	projectID := core.ProjectID(request.PathValue("project_id"))
+	var application core.Application
+	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
+		var loadErr error
+		application, loadErr = repository.Application(request.Context(), projectID, applicationID)
+		return loadErr
+	})
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	notification, err := api.apple.ValidateNotification(request.Context(), application, payload)
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	validatedPayload, err := json.Marshal(notification)
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	defer zero(validatedPayload)
+	protected, err := api.protect(request.Context(), application, inboxProtectionPurpose, validatedPayload)
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	now := api.clock().UTC()
+	id := deterministicID("inbox", protected.Fingerprint)
+	err = api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
+		_, saveErr := repository.SaveInboxMessage(request.Context(), persistence.InboxMessage{
+			ID: id, ProjectID: application.ProjectID, ApplicationID: application.ID,
+			Provider: application.Store.Provider, Kind: "app_store_server_notification_v2",
+			ContentType: apple.NotificationContentType,
+			Payload:     protected, ReceivedAt: now, AvailableAt: now,
+		})
+		return saveErr
+	})
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "accepted"})
+}
+
 // verify converts one API item into the provider-neutral verification command.
 func (api *API) verify(
 	ctx context.Context,
@@ -808,7 +865,7 @@ func (api *API) writeError(writer http.ResponseWriter, request *http.Request, er
 	status, code, message := http.StatusInternalServerError, "internal_error", "the request could not be completed"
 	if errors.Is(err, googleplay.ErrNotificationUnauthorized) {
 		status, code, message = http.StatusUnauthorized, "unauthorized", "notification authentication failed"
-	} else if errors.Is(err, googleplay.ErrNotificationInvalid) {
+	} else if errors.Is(err, googleplay.ErrNotificationInvalid) || errors.Is(err, apple.ErrNotificationInvalid) {
 		status, code, message = http.StatusBadRequest, "invalid_notification", "notification payload is invalid"
 	} else if errors.Is(err, persistence.ErrNotFound) {
 		status, code, message = http.StatusNotFound, "not_found", "the requested resource was not found"

@@ -49,6 +49,31 @@ func TestGooglePlayNotificationUsesPathProjectScope(t *testing.T) {
 	}
 }
 
+// TestAppleNotificationUsesPathProjectScope verifies App Store Connect-compatible scope without headers.
+func TestAppleNotificationUsesPathProjectScope(t *testing.T) {
+	t.Parallel()
+
+	store := &notificationScopeStore{}
+	api := &API{operations: store, bodyLimit: 1024}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/providers/apple/projects/project-1/applications/application-1/notifications",
+		strings.NewReader(`{"signedPayload":"header.payload.signature"}`),
+	)
+	request.SetPathValue("project_id", "project-1")
+	request.SetPathValue("application_id", "application-1")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-IAPStack-Project-ID", "wrong-header-project")
+	recorder := httptest.NewRecorder()
+	api.appleNotification(recorder, request)
+	if store.projectID != "project-1" || store.applicationID != "application-1" {
+		t.Fatalf("application lookup scope = (%q, %q)", store.projectID, store.applicationID)
+	}
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("notification status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+}
+
 // Operate executes one scope-capturing application lookup callback.
 func (store *notificationScopeStore) Operate(ctx context.Context, operation persistence.OperationsFunc) error {
 	return operation(&notificationScopeTransaction{store: store})

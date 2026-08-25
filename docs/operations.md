@@ -104,6 +104,27 @@ Credential and signing-secret fields are cleared after submission and never retu
 by the admin read API. Store every newly displayed application bearer immediately in
 your deployment secret manager; the dashboard cannot recover it after the dialog closes.
 
+## Apple App Store notification setup
+
+Configure the App Store Server Notifications V2 production and sandbox URLs with the
+application's exact IAPStack scope:
+
+```text
+https://iapstack.example/v1/providers/apple/projects/<project_id>/applications/<application_id>/notifications
+```
+
+The endpoint must be publicly reachable over HTTPS. It authenticates Apple's
+`signedPayload` and does not accept an application bearer. The application's protected
+Apple credential must include the matching bundle ID, production App Apple ID, App
+Store Server API private key, and trusted Apple roots. Use App Store Connect's test
+notification and confirm one completed `app_store_server_notification_v2` inbox row.
+
+A `400` response indicates an invalid signature, certificate chain, V2 envelope, or
+application scope. A `404` indicates that the URL scope does not resolve to an Apple
+application. A `502` indicates invalid protected Apple credential configuration, and
+`503` means durable storage is temporarily unavailable. Apple retries unsuccessful
+deliveries; IAPStack acknowledges only after protected inbox persistence.
+
 ## Google Play RTDN push setup
 
 Configure one authenticated Pub/Sub push subscription per Google Play application.

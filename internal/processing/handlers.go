@@ -17,6 +17,7 @@ import (
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/stores"
+	"github.com/imariman/iapstack/internal/stores/apple"
 	"github.com/imariman/iapstack/internal/stores/googleplay"
 	"github.com/imariman/iapstack/internal/stores/huawei"
 	"github.com/imariman/iapstack/internal/verification"
@@ -66,11 +67,42 @@ func (service *Service) HandleInbox(ctx context.Context, message persistence.Que
 	switch message.Provider {
 	case core.ProviderHuaweiAppGallery:
 		return service.handleHuaweiInbox(ctx, message, payload)
+	case core.ProviderAppleAppStore:
+		return service.handleAppleInbox(ctx, message, payload)
 	case core.ProviderGooglePlay:
 		return service.handleGooglePlayInbox(ctx, message, payload)
 	default:
 		return errors.New("unsupported inbox provider")
 	}
+}
+
+// handleAppleInbox re-queries authoritative App Store state from one verified V2 signal.
+func (service *Service) handleAppleInbox(
+	ctx context.Context,
+	message persistence.QueueMessage,
+	payload []byte,
+) error {
+	var notification apple.NotificationEnvelope
+	if err := decodeStrict(payload, &notification); err != nil {
+		return fmt.Errorf("decode App Store notification: %w", err)
+	}
+	evidence, process, err := notification.VerificationEvidence()
+	if err != nil || !process {
+		return err
+	}
+	verificationPayload := jobs.VerificationPayload{
+		ExternalCustomerID: notification.ExternalCustomerID,
+		ClaimedProducts:    []core.ProviderProductID{notification.ProviderProductID},
+		Evidence:           evidence,
+	}
+	result, err := service.verify(ctx, message.ProjectID, message.ApplicationID, verificationPayload)
+	if err != nil {
+		return err
+	}
+	if !requiresReconciliation(verificationPayload.Evidence) {
+		return nil
+	}
+	return service.schedule(ctx, message.ProjectID, message.ApplicationID, result.Customer.ID, verificationPayload)
 }
 
 // handleHuaweiInbox decodes one signed Huawei envelope and refreshes its authoritative purchase state.

@@ -16,6 +16,7 @@ tags:
   - name: Purchases
   - name: Entitlements
   - name: Huawei notifications
+  - name: Apple notifications
   - name: Google Play notifications
 paths:
   /v1/admin/api-keys:
@@ -588,6 +589,46 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/ProviderError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/providers/apple/projects/{project_id}/applications/{application_id}/notifications:
+    post:
+      tags: [Apple notifications]
+      operationId: acceptAppleNotification
+      summary: Validate and durably accept one App Store Server Notifications V2 payload
+      description: >-
+        Verifies the Apple ES256 certificate chain and signed outer payload,
+        independently verifies signed transaction and renewal data when present,
+        validates application scope, and persists a normalized protected inbox
+        message before returning success.
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ApplicationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppleNotificationV2'
+      responses:
+        '200':
+          description: Notification authenticated and persisted before acknowledgement
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptedStatus'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '413':
@@ -1204,6 +1245,16 @@ components:
             $ref: '#/components/schemas/Identifier'
         purchase:
           $ref: '#/components/schemas/HuaweiEvidence'
+    AppleNotificationV2:
+      type: object
+      additionalProperties: false
+      required: [signedPayload]
+      properties:
+        signedPayload:
+          type: string
+          minLength: 3
+          pattern: '^[^.]+\.[^.]+\.[^.]+$'
+          description: Apple-signed App Store Server Notifications V2 compact JWS.
     GooglePlayPubSubPushEnvelope:
       type: object
       additionalProperties: false

@@ -56,14 +56,16 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 - [Provider-neutral Flutter SDK](sdk/flutter/iapstack/README.md)
 - [Huawei Flutter SDK and sandbox example](sdk/flutter/iapstack_huawei/README.md)
 - [Google Play Flutter SDK and internal-testing example](sdk/flutter/iapstack_google_play/README.md)
+- [Apple StoreKit 2 Flutter SDK and iOS testing example](sdk/flutter/iapstack_apple/README.md)
 
-The server currently has production-shaped Huawei verification plus initial Apple
-App Store and Google Play server slices. Google Play includes authenticated RTDN
+The server currently has production-shaped Huawei verification plus Apple App Store
+and Google Play server slices. Apple includes StoreKit 2 signed-transaction verification,
+Notifications V2 ingestion, authoritative renewal-status reconciliation, and a Flutter
+companion with an iOS StoreKit testing harness. Google Play includes authenticated RTDN
 ingestion, authoritative worker reconciliation, post-commit purchase acknowledgement,
-and a Flutter Billing companion with an Android internal-testing harness. Apple
-notifications and renewal-status queries, the Apple Flutter companion, Google Play
-consumable fulfillment, and real provider sandbox release gates are still required
-before either new provider is stable.
+and a Flutter Billing companion with an Android internal-testing harness. Google Play
+consumable fulfillment and real provider sandbox release gates are still required
+before the new providers are stable.
 
 ## Development
 
