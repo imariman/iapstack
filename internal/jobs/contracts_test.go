@@ -19,6 +19,7 @@ func TestVerificationInputsRoutesProviderContracts(t *testing.T) {
 		contentType string
 	}{
 		{name: "Apple", provider: core.ProviderAppleAppStore, bindingKind: "app_account_token", contentType: stores.AppleEvidenceContentType},
+		{name: "Google Play", provider: core.ProviderGooglePlay, bindingKind: "obfuscated_external_account_id", contentType: stores.GooglePlayEvidenceContentType},
 		{name: "Huawei", provider: core.ProviderHuaweiAppGallery, bindingKind: "developer_payload", contentType: stores.HuaweiEvidenceContentType},
 	}
 	for _, test := range tests {

@@ -47,6 +47,8 @@ func (payload VerificationPayload) VerificationInputs(
 	switch provider {
 	case core.ProviderAppleAppStore:
 		bindingKind = "app_account_token"
+	case core.ProviderGooglePlay:
+		bindingKind = "obfuscated_external_account_id"
 	case core.ProviderHuaweiAppGallery:
 		bindingKind = "developer_payload"
 	default:
@@ -62,8 +64,8 @@ func (payload VerificationPayload) VerificationInputs(
 	}
 	bindings := []core.StoreReference{authoritativeBinding}
 	for _, binding := range payload.CustomerBindings {
-		if provider == core.ProviderAppleAppStore && binding.Kind != bindingKind {
-			return stores.Evidence{}, nil, fmt.Errorf("unsupported Apple customer binding %q", binding.Kind)
+		if (provider == core.ProviderAppleAppStore || provider == core.ProviderGooglePlay) && binding.Kind != bindingKind {
+			return stores.Evidence{}, nil, fmt.Errorf("unsupported %s customer binding %q", provider, binding.Kind)
 		}
 		if binding.Kind == bindingKind {
 			if binding.Value != payload.ExternalCustomerID {
