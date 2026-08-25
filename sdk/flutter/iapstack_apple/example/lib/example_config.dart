@@ -1,0 +1,67 @@
+import 'package:iapstack_apple/iapstack_apple.dart';
+
+/// Non-persistent runtime configuration for the StoreKit 2 harness.
+final class ExampleConfig {
+  /// Creates immutable example configuration.
+  const ExampleConfig({
+    required this.baseUrl,
+    required this.applicationId,
+    required this.applicationKey,
+    required this.externalCustomerId,
+    required this.subscriptionProductId,
+    required this.nonConsumableProductId,
+  });
+
+  /// Loads values supplied through Flutter `--dart-define` flags.
+  factory ExampleConfig.fromEnvironment() => const ExampleConfig(
+    baseUrl: String.fromEnvironment('IAPSTACK_BASE_URL'),
+    applicationId: String.fromEnvironment('IAPSTACK_APPLICATION_ID'),
+    applicationKey: String.fromEnvironment('IAPSTACK_APPLICATION_KEY'),
+    externalCustomerId: String.fromEnvironment('IAPSTACK_EXTERNAL_CUSTOMER_ID'),
+    subscriptionProductId: String.fromEnvironment(
+      'IAPSTACK_APPLE_SUBSCRIPTION_ID',
+      defaultValue: 'premium_monthly',
+    ),
+    nonConsumableProductId: String.fromEnvironment(
+      'IAPSTACK_APPLE_NON_CONSUMABLE_ID',
+      defaultValue: 'premium_lifetime',
+    ),
+  );
+
+  /// IAPStack API origin.
+  final String baseUrl;
+
+  /// IAPStack application scope.
+  final String applicationId;
+
+  /// Runtime-only application bearer that is never rendered or persisted.
+  final String applicationKey;
+
+  /// Canonical UUID used as StoreKit `appAccountToken` and IAPStack customer ID.
+  final String externalCustomerId;
+
+  /// App Store auto-renewable subscription identifier.
+  final String subscriptionProductId;
+
+  /// App Store non-consumable identifier.
+  final String nonConsumableProductId;
+
+  /// Explicit catalog used by the high-level Apple companion.
+  Map<String, AppleProductKind> get productKinds => <String, AppleProductKind>{
+    if (subscriptionProductId.trim().isNotEmpty)
+      subscriptionProductId: AppleProductKind.subscription,
+    if (nonConsumableProductId.trim().isNotEmpty)
+      nonConsumableProductId: AppleProductKind.nonConsumable,
+  };
+
+  /// Whether every required value is present.
+  bool get isComplete => missingValues.isEmpty;
+
+  /// Safe names of missing values, never their contents.
+  List<String> get missingValues => <String>[
+    if (baseUrl.trim().isEmpty) 'IAPSTACK_BASE_URL',
+    if (applicationId.trim().isEmpty) 'IAPSTACK_APPLICATION_ID',
+    if (applicationKey.trim().isEmpty) 'IAPSTACK_APPLICATION_KEY',
+    if (externalCustomerId.trim().isEmpty) 'IAPSTACK_EXTERNAL_CUSTOMER_ID',
+  ];
+}
