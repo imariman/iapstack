@@ -2,7 +2,7 @@
 
 `v1.yaml` is the canonical machine-readable contract for the self-hosted IAPStack HTTP API.
 It covers the administrator control plane, Apple, Google Play, and Huawei purchase and entitlement operations,
-and Huawei lifecycle notification ingestion.
+plus Huawei lifecycle notifications and authenticated Google Play Pub/Sub RTDN ingestion.
 
 ## Change policy
 

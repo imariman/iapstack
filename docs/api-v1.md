@@ -84,7 +84,12 @@ version 1, and media type `application/vnd.iapstack.google-play-credentials+json
 {
   "client_email": "iapstack@example-project.iam.gserviceaccount.com",
   "private_key_id": "0123456789abcdef",
-  "private_key": "-----BEGIN PRIVATE KEY-----..."
+  "private_key": "-----BEGIN PRIVATE KEY-----...",
+  "rtdn": {
+    "subscription": "projects/example-project/subscriptions/iapstack-google-play",
+    "push_service_account_email": "iapstack-push@example-project.iam.gserviceaccount.com",
+    "audience": "https://iapstack.example/v1/providers/google-play/projects/project-1/applications/application-1/notifications"
+  }
 }
 ```
 
@@ -92,7 +97,9 @@ Grant the service account access to the application in Play Console and set the
 application's `provider_application_id` to its Android package name. IAPStack creates
 a five-minute RS256 service-account assertion, exchanges it at Google's fixed OAuth
 endpoint for the `androidpublisher` scope, and never accepts credential-controlled
-OAuth or Publisher API URLs.
+OAuth or Publisher API URLs. The `rtdn` object is optional for direct verification
+but required before the application's Google Play notification endpoint can accept
+Pub/Sub pushes.
 
 ## Administrative read model
 
@@ -174,14 +181,39 @@ pending, canceled, expired, paused, grace period, and account hold are normalize
 
 The initial Google Play server slice supports one current subscription line item or
 one non-consumable line item per purchase token. Multi-line subscription add-ons,
-acknowledgement/consumption commands, Real-time Developer Notifications, the Flutter
-Billing companion, and the Google Play sandbox gate remain release work.
+acknowledgement/consumption commands, the Flutter Billing companion, and the Google
+Play sandbox gate remain release work.
 
 ## Notifications and reconciliation
 
 Huawei notification ingestion is `POST /v1/providers/huawei/applications/{application_id}/notifications` with the project identity in `X-IAPStack-Project-ID`. Its JSON envelope contains `external_customer_id`, `claimed_products`, and the signed `purchase` evidence above.
 
 The notification signature and application/product scope are checked before protected inbox persistence and acknowledgement. The worker then performs the authoritative Huawei query. Successful verification schedules a new uniquely fingerprinted lifecycle check every 24 hours.
+
+Google Play RTDN ingestion is
+`POST /v1/providers/google-play/projects/{project_id}/applications/{application_id}/notifications`.
+Both scope identifiers are embedded in the push URL because Pub/Sub does not attach
+application-defined request headers. The request body is the wrapped Pub/Sub push
+envelope: `message.data` contains the base64-encoded Google Play
+`DeveloperNotification`, while `message.messageId` and `subscription` retain delivery
+identity and scope. `Authorization` is the Google-signed Pub/Sub OIDC bearer, not an
+IAPStack application key.
+
+Before acknowledgement, IAPStack verifies the Google token signature, expiry and
+configured audience using Google's supported ID-token verifier, then requires the
+configured push service-account email, exact Pub/Sub subscription, Android package,
+RTDN version, and one mutually exclusive notification variant. Subscription,
+one-time-product, and voided-purchase signals are normalized into the protected inbox.
+The worker fingerprints the purchase token in its original protected query scope,
+resolves the previously verified customer and product, and calls Android Publisher
+for current state instead of trusting the RTDN lifecycle type. Unknown purchase tokens
+remain retryable so a client verification racing the notification can arrive first.
+
+Google Play Console test notifications and pending-refund-review notifications are
+retained as authenticated audit records and complete without an entitlement change.
+The pending chargeback review workflow itself is outside the current slice. Duplicate
+Pub/Sub deliveries normalize to the same protected inbox identity and downstream
+projection/outbox writes remain idempotent.
 
 ## Webhook verification
 
