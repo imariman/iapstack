@@ -126,10 +126,18 @@ The runnable Android harness under `sdk/flutter/iapstack_huawei/example` takes
 all IAPStack values through `--dart-define`; AppGallery Connect configuration
 and signing files are deliberately gitignored. Follow its README for device
 setup and never commit `agconnect-services.json`, keystores, or application
-keys.
+keys. It calls Huawei's sandbox activation API before enabling purchase or
+restore and displays the request ID used to correlate secret-free release
+evidence with server logs.
 
 ## Huawei sandbox release gate
 
 Before a v0.1 release, run fixture and sandbox scenarios for lifetime purchase, initial subscription, renewal, cancellation-at-period-end, expiration, grace period, refund/revocation, duplicate purchase submission, duplicate notification, and a missed notification recovered by scheduled reconciliation. Record request IDs and verify that duplicates do not increase entitlement versions or create new logical webhook events.
 
 The automated production-shaped fixture subset runs with `./deploy/e2e/run.sh`. It covers signed lifetime verification, duplicate purchase and notification submission, worker restart recovery, authoritative refund projection, and HMAC webhook delivery. Provider-managed subscription lifecycle scenarios still require the Huawei sandbox before a release is promoted from candidate to stable.
+
+The complete real-device procedure and authoritative provider references are in
+[`docs/releases/v0.1.0.md`](releases/v0.1.0.md). Release evidence uses the closed,
+secret-free JSON contract shown in
+[`v0.1.0-sandbox-evidence.example.json`](releases/v0.1.0-sandbox-evidence.example.json)
+and must pass `go run ./cmd/iapstack-release <evidence.json>`.

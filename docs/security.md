@@ -141,6 +141,8 @@ The following conditions are release-blocking:
 
 ### Manual Huawei sandbox gate
 
+- [ ] The test account and candidate APK both pass Huawei's device-side sandbox
+  activation check before any purchase UI opens.
 - [ ] Lifetime purchase and duplicate restore remain idempotent.
 - [ ] Subscription renewal, cancellation, expiration, grace, refund, and revocation
   produce the expected entitlement state.
@@ -150,6 +152,10 @@ The following conditions are release-blocking:
   reconciliation.
 - [ ] Application webhook verification succeeds using the exact production receiver
   implementation and rejects tampered, stale, and duplicate events.
+- [ ] The secret-free evidence file passes `go run ./cmd/iapstack-release` and names
+  the exact candidate commit and successful CI run.
 
 Any unchecked release-blocking invariant or code gate prevents a v0.1 stable release.
 Operational checklist exceptions require a written deployment-specific risk acceptance.
+Execute and record this section using the
+[`v0.1.0 Huawei sandbox runbook`](releases/v0.1.0.md).

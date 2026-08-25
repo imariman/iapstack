@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "release": "v0.1.0",
+  "commit": "0000000000000000000000000000000000000000",
+  "executed_at": "2026-08-25T20:00:00Z",
+  "operator": "REPLACE_WITH_OPERATOR",
+  "automated": {
+    "ci_run_url": "https://github.com/imariman/iapstack/actions/runs/REPLACE_WITH_RUN_ID",
+    "go_checks_passed": false,
+    "flutter_checks_passed": false,
+    "container_passed": false,
+    "compose_passed": false
+  },
+  "sandbox": {
+    "sandbox_user_active": false,
+    "sandbox_apk_active": false,
+    "application_id": "REPLACE_WITH_NON_SECRET_APPLICATION_ID",
+    "app_version": "REPLACE_WITH_APP_VERSION",
+    "device_model": "REPLACE_WITH_DEVICE_MODEL",
+    "hms_core_version": "REPLACE_WITH_HMS_CORE_VERSION"
+  },
+  "scenarios": [
+    {
+      "name": "lifetime_purchase",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-lifetime-purchase-1"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "lifetime_duplicate_restore",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-lifetime-restore-1", "REPLACE-lifetime-restore-2"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "subscription_initial",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-subscription-initial-1"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "subscription_renewal",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-subscription-renewal-1"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "subscription_cancellation",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-subscription-cancellation-1"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "subscription_expiration",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-subscription-expiration-1"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "subscription_grace",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-subscription-grace-1"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "subscription_refund",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-subscription-refund-1"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "subscription_revocation",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-subscription-revocation-1"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "invalid_signature",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-invalid-signature-1"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "wrong_application_binding",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-wrong-application-1"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "wrong_product_binding",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-wrong-product-1"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "wrong_customer_binding",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-wrong-customer-1"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "duplicate_notification",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-duplicate-notification-1", "REPLACE-duplicate-notification-2"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    },
+    {
+      "name": "missed_notification_reconciliation",
+      "passed": false,
+      "observed_at": "2026-08-25T20:00:00Z",
+      "request_ids": ["REPLACE-reconciliation-1"],
+      "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+    }
+  ],
+  "webhook": {
+    "signed_delivery_passed": false,
+    "tamper_rejected": false,
+    "stale_rejected": false,
+    "duplicate_deduplicated": false
+  },
+  "no_secrets_attested": false
+}
