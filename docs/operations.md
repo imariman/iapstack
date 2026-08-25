@@ -12,7 +12,48 @@ export IAPSTACK_PROTECTION_FINGERPRINT_KEY="$(openssl rand -base64 32)"
 export IAPSTACK_BOOTSTRAP_ADMIN_KEY="$(openssl rand -base64 48)"
 ```
 
-The fingerprint key must remain stable across encryption-key rotation. The bootstrap admin key is an installation credential: use it to create stored admin/application keys through `POST /v1/admin/api-keys`, then rotate it in the deployment secret store.
+The fingerprint key must remain stable across encryption-key rotation. The bootstrap
+admin key is an installation credential and must contain at least 32 bytes: use it to
+create stored admin/application keys through `POST /v1/admin/api-keys`, then remove it
+from the API and worker environment and recreate those containers. Store every durable
+bearer outside the database because IAPStack returns it only once.
+
+## Production security baseline
+
+- Terminate TLS at a trusted reverse proxy or load balancer. Never expose the API,
+  dashboard, worker probes, PostgreSQL, or Prometheus endpoints directly to the public
+  Internet.
+- Apply per-source and per-bearer request limits at the ingress. IAPStack bounds request
+  bodies, headers, connection duration, provider calls, webhook calls, and worker
+  concurrency, but v0.1 does not include a distributed rate limiter.
+- Restrict PostgreSQL and process egress with network policy. Use authenticated,
+  certificate-verified PostgreSQL TLS whenever traffic leaves one trusted host.
+- Keep protection roots, provider credentials, webhook signing secrets, administrator
+  bearers, and application bearers in a dedicated secret manager. Encrypt backups and
+  test restore access controls as well as data integrity.
+- Keep `IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS=false` for Internet webhooks. If a
+  trusted internal application endpoint requires it, set the value to `true` for API
+  and worker together and enforce the exact destination with an egress firewall or
+  service-mesh policy.
+- Configure webhook receivers to verify `IAPStack-Signature` over
+  `<unix_timestamp>.<raw_body>`, reject stale timestamps, and deduplicate the stable
+  `IAPStack-Event-ID` before applying an event.
+
+For emergency stored-key revocation, extract the public key ID between `iap_` and the
+period in the bearer and run the following transaction using a restricted database
+operator. Authentication reads `revoked_at` on every request, so no process restart is
+required:
+
+```sql
+BEGIN;
+UPDATE api_keys
+SET revoked_at = now()
+WHERE id = '<public-key-id>' AND revoked_at IS NULL;
+COMMIT;
+```
+
+The complete security assumptions, residual risks, and release gate are documented in
+[the v0.1 threat model](security.md).
 
 ## Start and inspect
 

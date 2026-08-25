@@ -51,6 +51,7 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 - [HTTP API v1 and Huawei sandbox gate](docs/api-v1.md)
 - [Machine-readable OpenAPI v1 contract](contracts/openapi/v1.yaml)
 - [Operations and dashboard guide](docs/operations.md)
+- [v0.1 threat model and security release checklist](docs/security.md)
 - [Provider-neutral Flutter SDK](sdk/flutter/iapstack/README.md)
 - [Huawei Flutter SDK and sandbox example](sdk/flutter/iapstack_huawei/README.md)
 
@@ -73,7 +74,7 @@ Configuration is supplied through environment variables:
 | `IAPSTACK_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline |
 | `IAPSTACK_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `IAPSTACK_DATABASE_URL` | none | PostgreSQL connection string required by database-backed modes |
-| `IAPSTACK_BOOTSTRAP_ADMIN_KEY` | none | Installation-only administrator bearer used to create stored API keys |
+| `IAPSTACK_BOOTSTRAP_ADMIN_KEY` | none | Installation-only administrator bearer; when set it must contain at least 32 bytes |
 | `IAPSTACK_PROTECTION_ACTIVE_KEY_ID` | none | Encryption key ID used for new protected values |
 | `IAPSTACK_PROTECTION_KEYS` | none | JSON object mapping key IDs to base64-encoded 32-byte encryption root keys |
 | `IAPSTACK_PROTECTION_FINGERPRINT_KEY` | none | Base64-encoded 32-byte stable fingerprint root key |
@@ -82,6 +83,7 @@ Configuration is supplied through environment variables:
 | `IAPSTACK_WORKER_CONCURRENCY` | `4` | Maximum concurrent River jobs per queue and worker process |
 | `IAPSTACK_WORKER_MAX_ATTEMPTS` | `12` | Attempts before River discards a retryable job |
 | `IAPSTACK_QUEUE_RETENTION` | `720h` | Retention period for terminal River job metadata |
+| `IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS` | `false` | Explicitly permit webhook delivery to private, loopback, link-local, CGNAT, or benchmark addresses |
 
 Modes that handle provider evidence initialize the protection keyring before serving
 work and fail fast when any protection variable is missing or malformed. Generate every
@@ -91,6 +93,12 @@ key rotations; changing it alters idempotency fingerprints and requires an expli
 data migration. To rotate encryption, add the new key to `IAPSTACK_PROTECTION_KEYS`,
 select it with `IAPSTACK_PROTECTION_ACTIVE_KEY_ID`, and retain old keys until all values
 written with them have been re-encrypted or expired.
+
+Webhook delivery resolves and validates every A/AAAA destination at connection time,
+does not follow redirects, and permits public network addresses only by default. Set
+`IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS=true` only when an application webhook must
+run on a trusted internal network, and pair the opt-in with an egress firewall or an
+infrastructure allowlist.
 
 Start a local PostgreSQL instance and apply every pending migration with:
 
