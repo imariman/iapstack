@@ -27,7 +27,7 @@ func TestHandlerServesSecureEmbeddedAssets(t *testing.T) {
 		body        string
 	}{
 		{path: "/dashboard/", status: http.StatusOK, contentType: "text/html; charset=utf-8", body: "IAPStack Operations"},
-		{path: "/dashboard/app.css", status: http.StatusOK, contentType: "text/css; charset=utf-8", body: "--signal"},
+		{path: "/dashboard/app.css", status: http.StatusOK, contentType: "text/css; charset=utf-8", body: "--accent"},
 		{path: "/dashboard/app.js", status: http.StatusOK, contentType: "text/javascript; charset=utf-8", body: "sessionStorage"},
 	}
 	for _, test := range tests {
@@ -98,6 +98,39 @@ func TestDashboardUsesEnglishInterface(t *testing.T) {
 			if strings.Contains(value, forbidden) {
 				t.Fatalf("dashboard interface contains Turkish term %q", forbidden)
 			}
+		}
+	}
+}
+
+// TestDashboardProfessionalUIControls verifies the dashboard keeps its dark, accessible interaction baseline.
+func TestDashboardProfessionalUIControls(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	styles, err := fs.ReadFile(assets, "app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	for _, required := range []string{`content="dark"`, `<svg aria-hidden="true"`, `aria-label="Close dialog"`} {
+		if !strings.Contains(string(document), required) {
+			t.Fatalf("dashboard document does not contain UI control %q", required)
+		}
+	}
+	for _, required := range []string{"min-height: 44px", "prefers-reduced-motion", "outline: 3px solid var(--focus)"} {
+		if !strings.Contains(string(styles), required) {
+			t.Fatalf("dashboard styles do not contain accessibility rule %q", required)
+		}
+	}
+	for _, required := range []string{`setAttribute("aria-busy", "true")`, "setFormBusy"} {
+		if !strings.Contains(string(script), required) {
+			t.Fatalf("dashboard script does not contain loading feedback %q", required)
 		}
 	}
 }

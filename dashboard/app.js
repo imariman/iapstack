@@ -110,9 +110,26 @@ function setFormMessage(element, message, tone = "error") {
   element.classList.toggle("working", tone === "working");
 }
 
+function setGlobalMessage(message, tone = "error") {
+  elements.globalMessage.textContent = message;
+  elements.globalMessage.classList.toggle("success", tone === "success");
+  elements.globalMessage.classList.toggle("info", tone === "info");
+}
+
+function setFormBusy(form, busy) {
+  const submit = form.querySelector("button[type='submit']");
+  if (busy) {
+    form.setAttribute("aria-busy", "true");
+  } else {
+    form.removeAttribute("aria-busy");
+  }
+  if (submit) submit.disabled = busy;
+}
+
 async function connect(adminKey) {
   state.adminKey = adminKey.trim();
   elements.authMessage.textContent = "";
+  setFormBusy(elements.authForm, true);
   try {
     await loadProjects();
     sessionWrite(state.adminKey);
@@ -122,6 +139,8 @@ async function connect(adminKey) {
     sessionWrite("");
     elements.authMessage.textContent = errorMessage(error);
     showAuthenticated(false);
+  } finally {
+    setFormBusy(elements.authForm, false);
   }
 }
 
@@ -141,24 +160,27 @@ async function loadProjects(preferredProject = state.selectedProject) {
   }
 }
 
-async function loadOverview(projectID) {
-  elements.globalMessage.textContent = "";
+async function loadOverview(projectID, focusWorkspace = false) {
+  setGlobalMessage("");
   elements.refresh.disabled = true;
+  elements.refresh.setAttribute("aria-busy", "true");
   try {
     state.overview = await apiRequest(`/v1/admin/projects/${encodeURIComponent(projectID)}/overview`);
     state.selectedProject = projectID;
     renderProjectNavigation();
     renderOverview();
     elements.updatedAt.textContent = `Updated ${formatTime(new Date().toISOString())}`;
+    if (focusWorkspace) elements.appShell.querySelector("#workspace").focus({ preventScroll: true });
   } catch (error) {
     if (error.status === 401) {
       logout();
       elements.authMessage.textContent = errorMessage(error);
       return;
     }
-    elements.globalMessage.textContent = errorMessage(error);
+    setGlobalMessage(errorMessage(error));
   } finally {
     elements.refresh.disabled = false;
+    elements.refresh.removeAttribute("aria-busy");
   }
 }
 
@@ -173,7 +195,7 @@ function renderProjectNavigation() {
       node("strong", "", project.id),
       node("small", "", `${countLabel(project.application_count, "app")} · ${countLabel(project.customer_count, "customer")}`),
     );
-    button.addEventListener("click", () => loadOverview(project.id));
+    button.addEventListener("click", () => loadOverview(project.id, true));
     elements.projectNav.append(button);
   }
   if (!state.projects.length) {
@@ -184,7 +206,7 @@ function renderProjectNavigation() {
 function renderEmptyWorkspace() {
   state.overview = null;
   elements.projectTitle.textContent = "Create your first project";
-  elements.globalMessage.textContent = "Use the + button in the sidebar to create a Huawei catalog setup.";
+  setGlobalMessage("Use the + button in the sidebar to create a Huawei catalog setup.", "info");
   setText("metric-apps", "0");
   setText("metric-customers", "0");
   setText("metric-products", "0");
@@ -258,6 +280,7 @@ function renderApplications(applications) {
     const actions = node("div", "application-actions");
     const manage = node("button", "secondary-button", "Manage connections");
     manage.type = "button";
+    manage.setAttribute("aria-label", `Manage connections for ${application.id}`);
     manage.addEventListener("click", () => openApplicationManager(application));
     actions.append(manage);
     card.append(heading, config, actions);
@@ -281,6 +304,7 @@ function openApplicationManager(application) {
   elements.applicationKeyMessage.textContent = "";
   renderCommissioningStatus();
   elements.applicationDialog.showModal();
+  elements.credentialForm.querySelector("input[name='client_id']").focus();
 }
 
 function renderCommissioningStatus() {
@@ -630,6 +654,7 @@ elements.logout.addEventListener("click", logout);
 document.querySelector("#open-setup").addEventListener("click", () => {
   elements.setupMessage.textContent = "";
   elements.setupDialog.showModal();
+  elements.setupForm.querySelector("input[name='project_id']").focus();
 });
 
 document.querySelector("#close-setup").addEventListener("click", () => elements.setupDialog.close());
@@ -638,18 +663,17 @@ document.querySelector("#cancel-setup").addEventListener("click", () => elements
 elements.setupForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   elements.setupMessage.textContent = "Creating catalog…";
-  const submit = elements.setupForm.querySelector("button[type='submit']");
-  submit.disabled = true;
+  setFormBusy(elements.setupForm, true);
   try {
     const projectID = await createCatalog(elements.setupForm);
     elements.setupForm.reset();
     elements.setupDialog.close();
     await loadProjects(projectID);
-    elements.globalMessage.textContent = "Catalog setup created. Complete the provider credential and notification connection.";
+    setGlobalMessage("Catalog setup created. Complete the provider credential and notification connection.", "success");
   } catch (error) {
     elements.setupMessage.textContent = errorMessage(error);
   } finally {
-    submit.disabled = false;
+    setFormBusy(elements.setupForm, false);
   }
 });
 
@@ -666,8 +690,7 @@ elements.applicationDialog.addEventListener("close", () => {
 
 elements.credentialForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const submit = elements.credentialForm.querySelector("button[type='submit']");
-  submit.disabled = true;
+  setFormBusy(elements.credentialForm, true);
   setFormMessage(elements.credentialMessage, "Saving the protected Huawei connection…", "working");
   try {
     await saveHuaweiCredential(elements.credentialForm);
@@ -677,14 +700,13 @@ elements.credentialForm.addEventListener("submit", async (event) => {
   } catch (error) {
     setFormMessage(elements.credentialMessage, errorMessage(error));
   } finally {
-    submit.disabled = false;
+    setFormBusy(elements.credentialForm, false);
   }
 });
 
 elements.webhookForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const submit = elements.webhookForm.querySelector("button[type='submit']");
-  submit.disabled = true;
+  setFormBusy(elements.webhookForm, true);
   setFormMessage(elements.webhookMessage, "Saving the protected notification connection…", "working");
   try {
     await saveWebhook(elements.webhookForm);
@@ -694,14 +716,13 @@ elements.webhookForm.addEventListener("submit", async (event) => {
   } catch (error) {
     setFormMessage(elements.webhookMessage, errorMessage(error));
   } finally {
-    submit.disabled = false;
+    setFormBusy(elements.webhookForm, false);
   }
 });
 
 elements.applicationKeyForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const submit = elements.applicationKeyForm.querySelector("button[type='submit']");
-  submit.disabled = true;
+  setFormBusy(elements.applicationKeyForm, true);
   setFormMessage(elements.applicationKeyMessage, "Creating application key…", "working");
   try {
     const response = await createApplicationKey();
@@ -709,18 +730,19 @@ elements.applicationKeyForm.addEventListener("submit", async (event) => {
   } catch (error) {
     setFormMessage(elements.applicationKeyMessage, errorMessage(error));
   } finally {
-    submit.disabled = false;
+    setFormBusy(elements.applicationKeyForm, false);
   }
 });
 
 document.querySelector("#open-customer").addEventListener("click", () => {
   if (!state.selectedProject) {
-    elements.globalMessage.textContent = "Create a project first.";
+    setGlobalMessage("Create a project first.", "info");
     return;
   }
   elements.customerForm.reset();
   elements.customerMessage.textContent = "";
   elements.customerDialog.showModal();
+  elements.customerForm.querySelector("input[name='customer_id']").focus();
 });
 
 document.querySelector("#close-customer").addEventListener("click", () => elements.customerDialog.close());
@@ -733,18 +755,17 @@ elements.customerDialog.addEventListener("close", () => {
 
 elements.customerForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const submit = elements.customerForm.querySelector("button[type='submit']");
-  submit.disabled = true;
+  setFormBusy(elements.customerForm, true);
   setFormMessage(elements.customerMessage, "Adding customer…", "working");
   try {
     await createCustomer(elements.customerForm);
     elements.customerDialog.close();
     await loadProjects(state.selectedProject);
-    elements.globalMessage.textContent = "Customer added.";
+    setGlobalMessage("Customer added.", "success");
   } catch (error) {
     setFormMessage(elements.customerMessage, errorMessage(error));
   } finally {
-    submit.disabled = false;
+    setFormBusy(elements.customerForm, false);
   }
 });
 
