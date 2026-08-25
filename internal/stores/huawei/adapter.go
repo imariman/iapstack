@@ -32,7 +32,7 @@ const (
 	// CredentialSchemaVersion identifies the initial server API credential shape.
 	CredentialSchemaVersion = 1
 	// EvidenceContentType identifies the Huawei client purchase evidence representation.
-	EvidenceContentType = "application/vnd.iapstack.huawei-purchase+json"
+	EvidenceContentType = stores.HuaweiEvidenceContentType
 	// maximumProviderResponse bounds Huawei token and purchase response bodies.
 	maximumProviderResponse int64 = 2 << 20
 	// defaultTokenURL is Huawei's documented OAuth token service.
