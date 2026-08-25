@@ -624,7 +624,7 @@ components:
       required: true
       schema:
         type: string
-        enum: [huawei_server_api]
+        enum: [apple_app_store_server_api, huawei_server_api]
     ProjectScopeHeader:
       name: X-IAPStack-Project-ID
       in: header
@@ -764,7 +764,7 @@ components:
       properties:
         provider:
           type: string
-          enum: [huawei_appgallery]
+          enum: [apple_app_store, huawei_appgallery]
         environment:
           type: string
           enum: [production, sandbox, test]
@@ -823,7 +823,9 @@ components:
       properties:
         content_type:
           type: string
-          enum: [application/vnd.iapstack.huawei-credentials+json]
+          enum:
+            - application/vnd.iapstack.apple-credentials+json
+            - application/vnd.iapstack.huawei-credentials+json
         schema_version:
           type: integer
           enum: [1]
@@ -832,7 +834,41 @@ components:
           format: int64
           minimum: 0
         payload:
-          $ref: '#/components/schemas/HuaweiCredentialPayload'
+          oneOf:
+            - $ref: '#/components/schemas/AppleCredentialPayload'
+            - $ref: '#/components/schemas/HuaweiCredentialPayload'
+    AppleCredentialPayload:
+      type: object
+      additionalProperties: false
+      required: [issuer_id, key_id, bundle_id, private_key, root_certificates]
+      properties:
+        issuer_id:
+          type: string
+          minLength: 1
+        key_id:
+          type: string
+          minLength: 1
+        bundle_id:
+          type: string
+          minLength: 1
+          description: Must equal the application's provider_application_id.
+        app_apple_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Required for production applications and reserved for notification scope validation.
+        private_key:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: PKCS#8 PEM In-App Purchase key downloaded from App Store Connect.
+        root_certificates:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            minLength: 1
+          description: Apple root certificates in PEM format used to verify transaction JWS chains.
     HuaweiCredentialPayload:
       type: object
       additionalProperties: false
@@ -868,7 +904,7 @@ components:
           $ref: '#/components/schemas/Identifier'
         kind:
           type: string
-          enum: [huawei_server_api]
+          enum: [apple_app_store_server_api, huawei_server_api]
         content_type:
           type: string
         schema_version:
@@ -938,6 +974,18 @@ components:
         product_kind:
           type: string
           enum: [subscription, non_consumable]
+    AppleEvidence:
+      type: object
+      additionalProperties: false
+      required: [signed_transaction, product_kind]
+      properties:
+        signed_transaction:
+          type: string
+          minLength: 1
+          description: Compact JWSTransaction returned by StoreKit 2.
+        product_kind:
+          type: string
+          enum: [subscription, non_consumable]
     PurchaseSubmission:
       type: object
       additionalProperties: false
@@ -957,7 +1005,9 @@ components:
           items:
             $ref: '#/components/schemas/CustomerBinding'
         evidence:
-          $ref: '#/components/schemas/HuaweiEvidence'
+          oneOf:
+            - $ref: '#/components/schemas/AppleEvidence'
+            - $ref: '#/components/schemas/HuaweiEvidence'
     RestoreRequest:
       type: object
       additionalProperties: false

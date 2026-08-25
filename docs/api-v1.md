@@ -36,8 +36,8 @@ remove the bootstrap secret from the runtime after durable administrator provisi
 ## Bootstrap sequence
 
 1. Use `IAPSTACK_BOOTSTRAP_ADMIN_KEY` to create a stored admin key with `POST /v1/admin/api-keys` and `{"role":"admin"}`.
-2. Create the project, Huawei application, entitlement, product, provider-product mapping, and customer using the idempotent `/v1/admin/projects/...` PUT endpoints.
-3. Store a `huawei_server_api` credential and HTTPS webhook configuration.
+2. Create the project, provider application, entitlement, product, provider-product mapping, and customer using the idempotent `/v1/admin/projects/...` PUT endpoints.
+3. Store the provider's versioned credential package and an HTTPS webhook configuration.
 4. Create an application key with `{"role":"application","project_id":"...","application_id":"..."}`.
 
 The Huawei credential uses schema version 1 and media type `application/vnd.iapstack.huawei-credentials+json`:
@@ -54,6 +54,28 @@ The Huawei credential uses schema version 1 and media type `application/vnd.iaps
 ```
 
 Huawei service roots vary by account site and API generation, so the applicable URLs are explicit protected application configuration. Confirm them against the current Huawei console and official documentation.
+
+The initial Apple credential uses kind `apple_app_store_server_api`, schema version 1,
+and media type `application/vnd.iapstack.apple-credentials+json`:
+
+```json
+{
+  "issuer_id": "99b16628-15e4-4668-972b-eeff55eeff55",
+  "key_id": "ABCDEFGHIJ",
+  "bundle_id": "com.example.application",
+  "app_apple_id": 123456789,
+  "private_key": "-----BEGIN PRIVATE KEY-----...",
+  "root_certificates": ["-----BEGIN CERTIFICATE-----..."]
+}
+```
+
+Set the Apple application's `provider_application_id` to its bundle ID. The private
+key must be the PKCS#8 P-256 In-App Purchase key from App Store Connect. Production
+credentials require `app_apple_id`; sandbox credentials may omit it. Download the
+trusted roots from [Apple PKI](https://www.apple.com/certificateauthority/) and keep
+the private key in the protected credential payload, never in a mobile client or
+source control. IAPStack uses Apple's current production and sandbox
+`api.storekit.apple.com` domains rather than accepting credential-controlled API URLs.
 
 ## Administrative read model
 
@@ -79,7 +101,7 @@ credential fields, and protected values are never included in the read model.
 - `POST /v1/applications/{application_id}/purchases:restore`
 - `GET /v1/applications/{application_id}/customers/{external_customer_id}/entitlements`
 
-A purchase item contains an external customer ID, claimed products, optional customer bindings, and a Huawei evidence object. The evidence media contract is `application/vnd.iapstack.huawei-purchase+json`:
+A purchase item contains an external customer ID, claimed products, optional customer bindings, and one provider evidence object. Huawei uses `application/vnd.iapstack.huawei-purchase+json`:
 
 ```json
 {
@@ -92,6 +114,30 @@ A purchase item contains an external customer ID, claimed products, optional cus
 IAPStack verifies the device signature, queries Huawei for current authoritative state, verifies the server response signature, checks application/product/token consistency, and commits evidence, projection, and outbox changes atomically.
 
 For v0.1 customer binding, the Huawei `developerPayload` must equal the authenticated request's `external_customer_id`. The API always supplies this as an expected signed binding; a valid purchase cannot be reassigned to a different application customer.
+
+Apple uses `application/vnd.iapstack.apple-transaction+json`:
+
+```json
+{
+  "signed_transaction": "eyJhbGciOiJFUzI1NiIsIng1YyI6Wy4uLl19...",
+  "product_kind": "subscription"
+}
+```
+
+The `signed_transaction` is the compact `JWSTransaction` returned by StoreKit 2.
+For Apple applications, `external_customer_id` must be the same UUID supplied to
+StoreKit as `appAccountToken`. IAPStack verifies the ES256 signature, the three-entry
+`x5c` chain against configured Apple roots, the WWDR intermediate, bundle ID,
+environment, product, transaction identity, and customer binding before calling
+[Get Transaction Info](https://developer.apple.com/documentation/appstoreserverapi/get-transaction-info).
+The authoritative response is verified again before persistence. The API client JWT
+uses ES256, the required App Store Connect claims, and a five-minute lifetime.
+
+The initial Apple server slice supports auto-renewable subscription and non-consumable
+transaction verification, restore submissions, expiry, refund/revocation, ownership,
+and idempotent projections. App Store Server Notifications, renewal-info/status
+queries, billing retry, and grace-period reconciliation remain release work; do not
+treat this slice alone as the Apple stable-release gate.
 
 ## Notifications and reconciliation
 
