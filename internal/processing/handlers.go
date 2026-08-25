@@ -16,7 +16,6 @@ import (
 	"github.com/imariman/iapstack/internal/jobs"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
-	"github.com/imariman/iapstack/internal/stores"
 	"github.com/imariman/iapstack/internal/stores/huawei"
 	"github.com/imariman/iapstack/internal/verification"
 )
@@ -107,32 +106,18 @@ func (service *Service) verify(
 	applicationID core.ApplicationID,
 	payload jobs.VerificationPayload,
 ) (verification.Result, error) {
-	evidence, err := stores.NewEvidence(huawei.EvidenceContentType, payload.Evidence)
+	var application core.Application
+	err := service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var loadErr error
+		application, loadErr = repository.Application(ctx, projectID, applicationID)
+		return loadErr
+	})
 	if err != nil {
 		return verification.Result{}, err
 	}
-	bindings := make([]core.StoreReference, 0, len(payload.CustomerBindings)+1)
-	authoritativeBinding, err := core.NewStoreReference(
-		core.ReferenceCustomerBinding,
-		"developer_payload",
-		payload.ExternalCustomerID,
-	)
+	evidence, bindings, err := payload.VerificationInputs(application.Store.Provider)
 	if err != nil {
 		return verification.Result{}, err
-	}
-	bindings = append(bindings, authoritativeBinding)
-	for _, binding := range payload.CustomerBindings {
-		if binding.Kind == "developer_payload" {
-			if binding.Value != payload.ExternalCustomerID {
-				return verification.Result{}, errors.New("developer payload customer binding mismatch")
-			}
-			continue
-		}
-		reference, err := core.NewStoreReference(core.ReferenceCustomerBinding, binding.Kind, binding.Value)
-		if err != nil {
-			return verification.Result{}, err
-		}
-		bindings = append(bindings, reference)
 	}
 	return service.verification.Verify(ctx, verification.Command{
 		ProjectID: projectID, ApplicationID: applicationID,

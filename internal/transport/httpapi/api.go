@@ -585,32 +585,13 @@ func (api *API) verify(
 	principal auth.Principal,
 	input verificationRequest,
 ) (verification.Result, error) {
-	evidence, err := stores.NewEvidence(huawei.EvidenceContentType, input.Evidence)
+	application, err := api.application(ctx, string(principal.ProjectID), string(principal.ApplicationID))
 	if err != nil {
 		return verification.Result{}, err
 	}
-	bindings := make([]core.StoreReference, 0, len(input.CustomerBindings)+1)
-	authoritativeBinding, err := core.NewStoreReference(
-		core.ReferenceCustomerBinding,
-		"developer_payload",
-		input.ExternalCustomerID,
-	)
+	evidence, bindings, err := input.VerificationInputs(application.Store.Provider)
 	if err != nil {
 		return verification.Result{}, err
-	}
-	bindings = append(bindings, authoritativeBinding)
-	for _, binding := range input.CustomerBindings {
-		if binding.Kind == "developer_payload" {
-			if binding.Value != input.ExternalCustomerID {
-				return verification.Result{}, errors.New("developer payload customer binding mismatch")
-			}
-			continue
-		}
-		reference, err := core.NewStoreReference(core.ReferenceCustomerBinding, binding.Kind, binding.Value)
-		if err != nil {
-			return verification.Result{}, err
-		}
-		bindings = append(bindings, reference)
 	}
 	result, err := api.verification.Verify(ctx, verification.Command{
 		ProjectID: principal.ProjectID, ApplicationID: principal.ApplicationID,
