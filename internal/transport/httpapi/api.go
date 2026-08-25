@@ -151,6 +151,14 @@ type verificationResponse struct {
 	Entitlements []entitlementResponse `json:"entitlements"`
 }
 
+// v1Route binds one public operation identity to its method, path, and handler.
+type v1Route struct {
+	Method      string
+	Path        string
+	OperationID string
+	Handler     http.HandlerFunc
+}
+
 // New validates dependencies and registers the complete v1 route surface.
 func New(dependencies Dependencies) (*API, error) {
 	if dependencies.Store == nil || dependencies.Operations == nil || dependencies.Admin == nil || dependencies.Authentication == nil ||
@@ -166,24 +174,33 @@ func New(dependencies Dependencies) (*API, error) {
 		bodyLimit: dependencies.BodyLimit, clock: time.Now,
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/admin/api-keys", api.createAPIKey)
-	mux.HandleFunc("GET /v1/admin/projects", api.adminProjects)
-	mux.HandleFunc("GET /v1/admin/projects/{project_id}/overview", api.adminProjectOverview)
-	mux.HandleFunc("PUT /v1/admin/projects/{project_id}", api.putProject)
-	mux.HandleFunc("PUT /v1/admin/projects/{project_id}/applications/{application_id}", api.putApplication)
-	mux.HandleFunc("PUT /v1/admin/projects/{project_id}/customers/{customer_id}", api.putCustomer)
-	mux.HandleFunc("PUT /v1/admin/projects/{project_id}/entitlements/{entitlement_id}", api.putEntitlement)
-	mux.HandleFunc("PUT /v1/admin/projects/{project_id}/products/{product_id}", api.putProduct)
-	mux.HandleFunc("PUT /v1/admin/projects/{project_id}/applications/{application_id}/store-products/{provider_product_id}", api.putStoreProduct)
-	mux.HandleFunc("PUT /v1/admin/projects/{project_id}/applications/{application_id}/credentials/{kind}", api.putCredential)
-	mux.HandleFunc("PUT /v1/admin/projects/{project_id}/applications/{application_id}/webhook", api.putWebhook)
-	mux.HandleFunc("POST /v1/applications/{application_id}/purchases:verify", api.verifyPurchase)
-	mux.HandleFunc("POST /v1/applications/{application_id}/purchases:restore", api.restorePurchases)
-	mux.HandleFunc("GET /v1/applications/{application_id}/customers/{external_customer_id}/entitlements", api.customerEntitlements)
-	mux.HandleFunc("POST /v1/providers/huawei/applications/{application_id}/notifications", api.huaweiNotification)
+	for _, route := range api.v1Routes() {
+		mux.HandleFunc(route.Method+" "+route.Path, route.Handler)
+	}
 	mux.HandleFunc("/v1/", api.notFound)
 	api.handler = mux
 	return api, nil
+}
+
+// v1Routes returns the complete machine-checked public operation registry.
+func (api *API) v1Routes() []v1Route {
+	return []v1Route{
+		{Method: http.MethodPost, Path: "/v1/admin/api-keys", OperationID: "createApiKey", Handler: api.createAPIKey},
+		{Method: http.MethodGet, Path: "/v1/admin/projects", OperationID: "listAdminProjects", Handler: api.adminProjects},
+		{Method: http.MethodGet, Path: "/v1/admin/projects/{project_id}/overview", OperationID: "getAdminProjectOverview", Handler: api.adminProjectOverview},
+		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}", OperationID: "putAdminProject", Handler: api.putProject},
+		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}", OperationID: "putAdminApplication", Handler: api.putApplication},
+		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/customers/{customer_id}", OperationID: "putAdminCustomer", Handler: api.putCustomer},
+		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/entitlements/{entitlement_id}", OperationID: "putAdminEntitlement", Handler: api.putEntitlement},
+		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/products/{product_id}", OperationID: "putAdminProduct", Handler: api.putProduct},
+		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}/store-products/{provider_product_id}", OperationID: "putAdminStoreProduct", Handler: api.putStoreProduct},
+		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}/credentials/{kind}", OperationID: "putAdminCredential", Handler: api.putCredential},
+		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}/webhook", OperationID: "putAdminWebhook", Handler: api.putWebhook},
+		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/purchases:verify", OperationID: "verifyPurchase", Handler: api.verifyPurchase},
+		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/purchases:restore", OperationID: "restorePurchases", Handler: api.restorePurchases},
+		{Method: http.MethodGet, Path: "/v1/applications/{application_id}/customers/{external_customer_id}/entitlements", OperationID: "getCustomerEntitlements", Handler: api.customerEntitlements},
+		{Method: http.MethodPost, Path: "/v1/providers/huawei/applications/{application_id}/notifications", OperationID: "acceptHuaweiNotification", Handler: api.huaweiNotification},
+	}
 }
 
 // ServeHTTP dispatches one versioned API request.

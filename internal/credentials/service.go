@@ -21,14 +21,14 @@ const (
 
 // Metadata describes one durable credential revision without protected or plaintext payload bytes.
 type Metadata struct {
-	ProjectID     core.ProjectID
-	ApplicationID core.ApplicationID
-	Kind          stores.CredentialKind
-	ContentType   string
-	SchemaVersion int
-	Revision      int64
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ProjectID     core.ProjectID        `json:"project_id"`
+	ApplicationID core.ApplicationID    `json:"application_id"`
+	Kind          stores.CredentialKind `json:"kind"`
+	ContentType   string                `json:"content_type"`
+	SchemaVersion int                   `json:"schema_version"`
+	Revision      int64                 `json:"revision"`
+	CreatedAt     time.Time             `json:"created_at"`
+	UpdatedAt     time.Time             `json:"updated_at"`
 }
 
 // Service protects credential writes and resolves authenticated plaintext for provider adapters.
