@@ -522,6 +522,28 @@ func TestTransactionalPurchasePersistence(t *testing.T) {
 	assertTableCount(t, database, "customer_entitlements", 1)
 	assertTableCount(t, database, "outbox_events", 1)
 
+	var purchaseContext persistence.PurchaseReferenceContext
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var lookupErr error
+		reference := writes.observation.References[0]
+		purchaseContext, lookupErr = repository.PurchaseContextByReference(
+			database.ctx,
+			persistence.ProviderReferenceLookup{
+				ProjectID: core.ProjectID(fixture.projectID), ApplicationID: core.ApplicationID(fixture.applicationID),
+				Role: reference.Role, Kind: reference.Kind, Fingerprint: reference.Value.Fingerprint,
+			},
+		)
+		return lookupErr
+	}); err != nil {
+		t.Fatalf("PurchaseContextByReference() error = %v", err)
+	}
+	if purchaseContext.Customer.ID != core.CustomerID(fixture.customerID) ||
+		purchaseContext.Customer.ExternalID != "customer-external" ||
+		purchaseContext.ProviderProductID != core.ProviderProductID(fixture.providerProductID) ||
+		purchaseContext.ProductKind != core.ProductKindNonConsumable {
+		t.Fatalf("PurchaseContextByReference() = %#v", purchaseContext)
+	}
+
 	conflictingWrites := writes
 	if err := database.conn.QueryRow(
 		database.ctx,

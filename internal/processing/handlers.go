@@ -16,6 +16,8 @@ import (
 	"github.com/imariman/iapstack/internal/jobs"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
+	"github.com/imariman/iapstack/internal/stores"
+	"github.com/imariman/iapstack/internal/stores/googleplay"
 	"github.com/imariman/iapstack/internal/stores/huawei"
 	"github.com/imariman/iapstack/internal/verification"
 )
@@ -25,6 +27,8 @@ const (
 	inboxProtectionPurpose = "inbox_notification"
 	// reconciliationProtectionPurpose authenticates protected periodic verification payloads.
 	reconciliationProtectionPurpose = "reconciliation_request"
+	// providerReferencePurpose scopes deterministic lookup fingerprints exactly like verification persistence.
+	providerReferencePurpose = "provider_reference"
 	// reconciliationInterval schedules daily authoritative lifecycle refreshes.
 	reconciliationInterval = 24 * time.Hour
 )
@@ -49,9 +53,9 @@ func New(
 	return &Service{store: store, protection: protectionService, verification: verificationService, clock: time.Now}, nil
 }
 
-// HandleInbox opens one validated Huawei notification and runs authoritative verification.
+// HandleInbox opens one validated provider notification and runs authoritative verification when required.
 func (service *Service) HandleInbox(ctx context.Context, message persistence.QueueMessage) error {
-	if message.Queue != persistence.QueueInbox || message.Provider != core.ProviderHuaweiAppGallery {
+	if message.Queue != persistence.QueueInbox {
 		return errors.New("unsupported inbox message")
 	}
 	payload, err := service.open(ctx, message, inboxProtectionPurpose)
@@ -59,6 +63,22 @@ func (service *Service) HandleInbox(ctx context.Context, message persistence.Que
 		return err
 	}
 	defer zero(payload)
+	switch message.Provider {
+	case core.ProviderHuaweiAppGallery:
+		return service.handleHuaweiInbox(ctx, message, payload)
+	case core.ProviderGooglePlay:
+		return service.handleGooglePlayInbox(ctx, message, payload)
+	default:
+		return errors.New("unsupported inbox provider")
+	}
+}
+
+// handleHuaweiInbox decodes one signed Huawei envelope and refreshes its authoritative purchase state.
+func (service *Service) handleHuaweiInbox(
+	ctx context.Context,
+	message persistence.QueueMessage,
+	payload []byte,
+) error {
 	var notification huawei.NotificationEnvelope
 	if err := decodeStrict(payload, &notification); err != nil {
 		return fmt.Errorf("decode Huawei notification: %w", err)
@@ -78,7 +98,85 @@ func (service *Service) HandleInbox(ctx context.Context, message persistence.Que
 	return service.schedule(ctx, message.ProjectID, message.ApplicationID, result.Customer.ID, verificationPayload)
 }
 
-// HandleReconciliation opens one scheduled request, re-queries Huawei, and schedules its next generation.
+// handleGooglePlayInbox resolves one RTDN token to its verified customer and refreshes Android Publisher state.
+func (service *Service) handleGooglePlayInbox(
+	ctx context.Context,
+	message persistence.QueueMessage,
+	payload []byte,
+) error {
+	var notification googleplay.NotificationEnvelope
+	if err := decodeStrict(payload, &notification); err != nil {
+		return fmt.Errorf("decode Google Play notification: %w", err)
+	}
+	verificationPayload, process, err := service.googlePlayVerificationPayload(ctx, message, notification)
+	if err != nil || !process {
+		return err
+	}
+	result, err := service.verify(ctx, message.ProjectID, message.ApplicationID, verificationPayload)
+	if err != nil {
+		return err
+	}
+	if !requiresReconciliation(verificationPayload.Evidence) {
+		return nil
+	}
+	return service.schedule(ctx, message.ProjectID, message.ApplicationID, result.Customer.ID, verificationPayload)
+}
+
+// googlePlayVerificationPayload binds an RTDN purchase token to previously verified customer and catalog scope.
+func (service *Service) googlePlayVerificationPayload(
+	ctx context.Context,
+	message persistence.QueueMessage,
+	notification googleplay.NotificationEnvelope,
+) (jobs.VerificationPayload, bool, error) {
+	evidence, process, err := notification.VerificationEvidence()
+	if err != nil || !process {
+		return jobs.VerificationPayload{}, process, err
+	}
+	token := []byte(notification.PurchaseToken)
+	defer zero(token)
+	request, err := protection.NewRequest(protection.Scope{
+		ProjectID: message.ProjectID, ApplicationID: message.ApplicationID,
+		Purpose: providerReferencePurpose + ":" + string(core.ReferenceQuery) + ":purchase_token",
+	}, token)
+	if err != nil {
+		return jobs.VerificationPayload{}, false, err
+	}
+	protected, err := service.protection.Protect(ctx, request)
+	if err != nil {
+		return jobs.VerificationPayload{}, false, fmt.Errorf("protect Google Play notification lookup: %w", err)
+	}
+	defer zero(protected.Ciphertext)
+	var purchase persistence.PurchaseReferenceContext
+	err = service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var lookupErr error
+		purchase, lookupErr = repository.PurchaseContextByReference(ctx, persistence.ProviderReferenceLookup{
+			ProjectID: message.ProjectID, ApplicationID: message.ApplicationID,
+			Role: core.ReferenceQuery, Kind: "purchase_token", Fingerprint: protected.Fingerprint,
+		})
+		return lookupErr
+	})
+	if err != nil {
+		if errors.Is(err, persistence.ErrNotFound) || errors.Is(err, persistence.ErrUnavailable) {
+			return jobs.VerificationPayload{}, false, stores.NewFailure(
+				core.ProviderGooglePlay, "notification_lookup", stores.FailureTemporary, 0, err,
+			)
+		}
+		return jobs.VerificationPayload{}, false, err
+	}
+	if purchase.ProductKind != notification.ProductKind ||
+		(notification.ProviderProductID != "" && notification.ProviderProductID != purchase.ProviderProductID) {
+		return jobs.VerificationPayload{}, false, stores.NewFailure(
+			core.ProviderGooglePlay, "notification_lookup", stores.FailureInvalidEvidence, 0, nil,
+		)
+	}
+	return jobs.VerificationPayload{
+		ExternalCustomerID: purchase.Customer.ExternalID,
+		ClaimedProducts:    []core.ProviderProductID{purchase.ProviderProductID},
+		Evidence:           evidence,
+	}, true, nil
+}
+
+// HandleReconciliation opens one scheduled request, re-queries its provider, and schedules its next generation.
 func (service *Service) HandleReconciliation(ctx context.Context, message persistence.QueueMessage) error {
 	if message.Queue != persistence.QueueReconciliation {
 		return errors.New("unsupported reconciliation message")
