@@ -71,6 +71,10 @@ func TestMigrationLifecycle(t *testing.T) {
 		"application_credentials",
 		"api_keys",
 		"reconciliation_jobs_customer_idx",
+		"outbox_events_failed_retention_idx",
+	}
+	if got, want := len(relations), int(postgres.LatestVersion); got != want {
+		t.Fatalf("migration relation count = %d, want %d", got, want)
 	}
 
 	for version := int32(1); version <= postgres.LatestVersion; version++ {
