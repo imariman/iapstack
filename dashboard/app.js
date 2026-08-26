@@ -3,6 +3,8 @@
 const sessionKey = "iapstack.dashboard.admin";
 const huaweiCredentialContentType = "application/vnd.iapstack.huawei-credentials+json";
 const appleCredentialContentType = "application/vnd.iapstack.apple-credentials+json";
+const googleCredentialContentType = "application/vnd.iapstack.google-play-credentials+json";
+const maximumCredentialFileBytes = 1024 * 1024;
 const state = {
   adminKey: "",
   projects: [],
@@ -39,6 +41,7 @@ const elements = {
   credentialMessage: document.querySelector("#credential-message"),
   huaweiCredentialFields: document.querySelector("#huawei-credential-fields"),
   appleCredentialFields: document.querySelector("#apple-credential-fields"),
+  googleCredentialFields: document.querySelector("#google-credential-fields"),
   credentialTitle: document.querySelector("#credential-title"),
   credentialDescription: document.querySelector("#credential-description"),
   credentialStepName: document.querySelector("#credential-step-name"),
@@ -322,6 +325,7 @@ function configRow(label, value, ready) {
 function openApplicationManager(application) {
   state.managedApplication = application;
   elements.credentialForm.reset();
+  resetCredentialFileMessages();
   elements.webhookForm.reset();
   elements.credentialMessage.textContent = "";
   elements.webhookMessage.textContent = "";
@@ -329,25 +333,33 @@ function openApplicationManager(application) {
   configureCredentialForm(application);
   renderCommissioningStatus();
   elements.applicationDialog.showModal();
-  const activeFields = application.provider === "apple_app_store"
-    ? elements.appleCredentialFields
-    : elements.huaweiCredentialFields;
+  const activeFields = {
+    apple_app_store: elements.appleCredentialFields,
+    google_play: elements.googleCredentialFields,
+    huawei_appgallery: elements.huaweiCredentialFields,
+  }[application.provider];
   activeFields.querySelector("input, textarea").focus();
 }
 
 function configureCredentialForm(application) {
   const apple = application.provider === "apple_app_store";
+  const google = application.provider === "google_play";
+  const huawei = application.provider === "huawei_appgallery";
   setCredentialFieldsEnabled(elements.appleCredentialFields, apple);
-  setCredentialFieldsEnabled(elements.huaweiCredentialFields, !apple);
+  setCredentialFieldsEnabled(elements.googleCredentialFields, google);
+  setCredentialFieldsEnabled(elements.huaweiCredentialFields, huawei);
   elements.appleCredentialFields.hidden = !apple;
-  elements.huaweiCredentialFields.hidden = apple;
+  elements.googleCredentialFields.hidden = !google;
+  elements.huaweiCredentialFields.hidden = !huawei;
   const provider = providerLabel(application.provider);
-  elements.credentialStepName.textContent = apple ? "Apple" : "Huawei";
+  elements.credentialStepName.textContent = apple ? "Apple" : google ? "Google" : "Huawei";
   elements.credentialTitle.textContent = `${provider} server connection`;
   elements.credentialDescription.textContent = apple
     ? "Used to verify StoreKit transactions and query App Store Server API state. Saved keys and certificates are never shown again."
-    : "Used for server-side calls to Huawei token, order, and subscription services. Saved values are never shown again.";
-  elements.credentialSubmit.textContent = `Save ${apple ? "Apple" : "Huawei"} connection`;
+    : google
+      ? "Used to verify purchases with Android Publisher and optionally authenticate RTDN pushes. Saved service-account values are never shown again."
+      : "Used for server-side calls to Huawei token, order, and subscription services. Saved values are never shown again.";
+  elements.credentialSubmit.textContent = `Save ${apple ? "Apple" : google ? "Google" : "Huawei"} connection`;
   if (apple) {
     const bundleID = elements.appleCredentialFields.querySelector("input[name='bundle_id']");
     const appAppleID = elements.appleCredentialFields.querySelector("input[name='app_apple_id']");
@@ -377,6 +389,7 @@ function renderCommissioningStatus() {
 
 function closeApplicationManager() {
   elements.credentialForm.reset();
+  resetCredentialFileMessages();
   elements.webhookForm.reset();
   elements.credentialMessage.textContent = "";
   elements.webhookMessage.textContent = "";
@@ -451,14 +464,148 @@ async function saveAppleCredential(form) {
   });
 }
 
+async function saveGoogleCredential(form) {
+  const data = Object.fromEntries(new FormData(form));
+  const rtdnValues = [
+    data.google_rtdn_subscription.trim(),
+    data.google_rtdn_push_email.trim(),
+    data.google_rtdn_audience.trim(),
+  ];
+  const configuredRTDNValues = rtdnValues.filter(Boolean).length;
+  if (configuredRTDNValues > 0 && configuredRTDNValues < rtdnValues.length) {
+    throw new Error("Complete all three RTDN fields or leave all of them empty.");
+  }
+  const payload = {
+    client_email: data.google_client_email,
+    private_key_id: data.google_private_key_id,
+    private_key: data.google_private_key,
+  };
+  if (configuredRTDNValues === rtdnValues.length) {
+    payload.rtdn = {
+      subscription: rtdnValues[0],
+      push_service_account_email: rtdnValues[1],
+      audience: rtdnValues[2],
+    };
+  }
+  await apiRequest(applicationAdminPath("/credentials/google_play_android_publisher"), {
+    method: "PUT",
+    body: JSON.stringify({
+      content_type: googleCredentialContentType,
+      schema_version: 1,
+      expected_revision: state.managedApplication.credential_revision,
+      payload,
+    }),
+  });
+}
+
 async function saveProviderCredential(form) {
   if (state.managedApplication.provider === "apple_app_store") {
     return saveAppleCredential(form);
+  }
+  if (state.managedApplication.provider === "google_play") {
+    return saveGoogleCredential(form);
   }
   if (state.managedApplication.provider === "huawei_appgallery") {
     return saveHuaweiCredential(form);
   }
   throw new Error("This provider cannot be configured from the dashboard yet.");
+}
+
+function setFileStatus(id, message, tone = "") {
+  const status = document.querySelector(`#${id}`);
+  status.textContent = message;
+  status.classList.toggle("success", tone === "success");
+  status.classList.toggle("error", tone === "error");
+}
+
+function resetCredentialFileMessages() {
+  setFileStatus("apple-private-key-file-status", "Select locally or paste the PEM value below.");
+  setFileStatus("apple-root-files-status", "Select one or more files or paste PEM certificates below.");
+  setFileStatus("google-service-account-file-status", "The selected file is parsed locally and is not stored as an uploaded file.");
+}
+
+function requireBoundedCredentialFile(file) {
+  if (!file) throw new Error("Select a credential file first.");
+  if (file.size <= 0 || file.size > maximumCredentialFileBytes) {
+    throw new Error("Credential files must be between 1 byte and 1 MiB.");
+  }
+}
+
+async function readCredentialText(file) {
+  requireBoundedCredentialFile(file);
+  return file.text();
+}
+
+function requirePrivateKeyPEM(value) {
+  const key = value.trim();
+  if (!key.includes("-----BEGIN PRIVATE KEY-----") || !key.includes("-----END PRIVATE KEY-----")) {
+    throw new Error("The selected file is not a PKCS#8 PEM private key.");
+  }
+  return key;
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  }
+  return window.btoa(binary);
+}
+
+async function readAppleRootCertificate(file) {
+  requireBoundedCredentialFile(file);
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const text = new TextDecoder().decode(bytes);
+  const certificates = text.match(
+    /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g,
+  );
+  if (certificates?.length) {
+    return certificates.map((certificate) => certificate.trim()).join("\n");
+  }
+  const encoded = bytesToBase64(bytes);
+  const lines = encoded.match(/.{1,64}/g) || [];
+  return `-----BEGIN CERTIFICATE-----\n${lines.join("\n")}\n-----END CERTIFICATE-----`;
+}
+
+async function loadApplePrivateKeyFile(file) {
+  const key = requirePrivateKeyPEM(await readCredentialText(file));
+  elements.appleCredentialFields.querySelector("textarea[name='private_key']").value = key;
+  setFileStatus("apple-private-key-file-status", "Private key loaded locally. It will be sent only when you save the Apple connection.", "success");
+}
+
+async function loadAppleRootFiles(files) {
+  const selected = Array.from(files || []);
+  if (!selected.length) throw new Error("Select at least one Apple root certificate.");
+  const totalBytes = selected.reduce((total, file) => total + file.size, 0);
+  if (totalBytes > maximumCredentialFileBytes) {
+    throw new Error("The combined Apple root files must not exceed 1 MiB.");
+  }
+  const certificates = await Promise.all(selected.map(readAppleRootCertificate));
+  elements.appleCredentialFields.querySelector("textarea[name='root_certificates']").value = certificates.join("\n");
+  setFileStatus("apple-root-files-status", `${selected.length} Apple root certificate file${selected.length === 1 ? "" : "s"} loaded locally.`, "success");
+}
+
+async function loadGoogleServiceAccountFile(file) {
+  const text = await readCredentialText(file);
+  let credential;
+  try {
+    credential = JSON.parse(text);
+  } catch (_) {
+    throw new Error("The selected service-account file is not valid JSON.");
+  }
+  if (credential.type && credential.type !== "service_account") {
+    throw new Error("The selected JSON is not a Google service-account credential.");
+  }
+  const clientEmail = String(credential.client_email || "").trim();
+  const privateKeyID = String(credential.private_key_id || "").trim();
+  const privateKey = requirePrivateKeyPEM(String(credential.private_key || ""));
+  if (!clientEmail || !privateKeyID) {
+    throw new Error("The service-account JSON is missing client_email or private_key_id.");
+  }
+  elements.googleCredentialFields.querySelector("input[name='google_client_email']").value = clientEmail;
+  elements.googleCredentialFields.querySelector("input[name='google_private_key_id']").value = privateKeyID;
+  elements.googleCredentialFields.querySelector("textarea[name='google_private_key']").value = privateKey;
+  setFileStatus("google-service-account-file-status", "Service-account fields loaded locally. They will be sent only when you save the Google connection.", "success");
 }
 
 async function saveWebhook(form) {
@@ -874,11 +1021,32 @@ async function createCatalog(form) {
 }
 
 function syncSetupProvider() {
-  const apple = elements.setupProvider.value === "apple_app_store";
-  elements.providerApplicationLabel.textContent = apple ? "Apple bundle ID" : "Huawei App ID";
-  elements.providerApplicationID.placeholder = apple ? "com.example.application" : "123456789";
-  elements.providerProductLabel.textContent = apple ? "App Store product ID" : "Huawei product ID";
-  elements.providerProductID.placeholder = apple ? "premium_monthly" : "premium_yearly_huawei";
+  const provider = elements.setupProvider.value;
+  const copy = {
+    apple_app_store: {
+      applicationLabel: "Apple bundle ID",
+      applicationPlaceholder: "com.example.application",
+      productLabel: "App Store product ID",
+      productPlaceholder: "premium_monthly",
+    },
+    google_play: {
+      applicationLabel: "Android package name",
+      applicationPlaceholder: "com.example.application",
+      productLabel: "Google Play product ID",
+      productPlaceholder: "premium_monthly",
+    },
+    huawei_appgallery: {
+      applicationLabel: "Huawei App ID",
+      applicationPlaceholder: "123456789",
+      productLabel: "Huawei product ID",
+      productPlaceholder: "premium_yearly_huawei",
+    },
+  }[provider];
+  elements.providerApplicationLabel.textContent = copy.applicationLabel;
+  elements.providerApplicationID.placeholder = copy.applicationPlaceholder;
+  elements.providerProductLabel.textContent = copy.productLabel;
+  elements.providerProductID.placeholder = copy.productPlaceholder;
+  const apple = provider === "apple_app_store";
   const testEnvironment = elements.setupForm.querySelector("select[name='environment'] option[value='test']");
   testEnvironment.disabled = apple;
   testEnvironment.hidden = apple;
@@ -942,11 +1110,47 @@ document.querySelector("#close-application").addEventListener("click", closeAppl
 
 elements.applicationDialog.addEventListener("close", () => {
   elements.credentialForm.reset();
+  resetCredentialFileMessages();
   elements.webhookForm.reset();
   elements.credentialMessage.textContent = "";
   elements.webhookMessage.textContent = "";
   elements.applicationKeyMessage.textContent = "";
   state.managedApplication = null;
+});
+
+document.querySelector("#apple-private-key-file").addEventListener("change", async (event) => {
+  const target = elements.appleCredentialFields.querySelector("textarea[name='private_key']");
+  target.value = "";
+  try {
+    await loadApplePrivateKeyFile(event.currentTarget.files?.[0]);
+  } catch (error) {
+    setFileStatus("apple-private-key-file-status", error.message, "error");
+  }
+});
+
+document.querySelector("#apple-root-files").addEventListener("change", async (event) => {
+  const target = elements.appleCredentialFields.querySelector("textarea[name='root_certificates']");
+  target.value = "";
+  try {
+    await loadAppleRootFiles(event.currentTarget.files);
+  } catch (error) {
+    setFileStatus("apple-root-files-status", error.message, "error");
+  }
+});
+
+document.querySelector("#google-service-account-file").addEventListener("change", async (event) => {
+  for (const selector of [
+    "input[name='google_client_email']",
+    "input[name='google_private_key_id']",
+    "textarea[name='google_private_key']",
+  ]) {
+    elements.googleCredentialFields.querySelector(selector).value = "";
+  }
+  try {
+    await loadGoogleServiceAccountFile(event.currentTarget.files?.[0]);
+  } catch (error) {
+    setFileStatus("google-service-account-file-status", error.message, "error");
+  }
 });
 
 elements.credentialForm.addEventListener("submit", async (event) => {
@@ -957,6 +1161,7 @@ elements.credentialForm.addEventListener("submit", async (event) => {
   try {
     await saveProviderCredential(elements.credentialForm);
     elements.credentialForm.reset();
+    resetCredentialFileMessages();
     await refreshManagedApplication();
     configureCredentialForm(state.managedApplication);
     setFormMessage(elements.credentialMessage, `${provider} connection saved.`, "success");

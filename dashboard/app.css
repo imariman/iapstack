@@ -275,6 +275,27 @@ textarea {
   resize: vertical;
 }
 
+input[type="file"] {
+  color: var(--muted-strong);
+  font-family: var(--font-body);
+  font-size: 13px;
+  letter-spacing: 0;
+  padding: 6px;
+  text-transform: none;
+}
+
+input[type="file"]::file-selector-button {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: calc(var(--radius-control) - 2px);
+  color: var(--foreground);
+  cursor: pointer;
+  font-weight: 700;
+  margin-right: 10px;
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
 .primary-button,
 .secondary-button,
 .danger-button,
@@ -1464,6 +1485,26 @@ td strong {
 
 .full-row {
   grid-column: 1 / -1;
+}
+
+.credential-note,
+.file-status {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.credential-note code {
+  color: var(--muted-strong);
+}
+
+.file-status.success {
+  color: var(--accent);
+}
+
+.file-status.error {
+  color: var(--danger);
 }
 
 .dialog-actions {

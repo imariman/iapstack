@@ -179,7 +179,7 @@
         <div class="form-grid">
           <label>Project ID<input name="project_id" required placeholder="my-project"></label>
           <label>Application ID<input name="application_id" required placeholder="mobile-app"></label>
-          <label>Store provider<select name="provider" id="setup-provider"><option value="apple_app_store">Apple App Store</option><option value="huawei_appgallery">Huawei AppGallery</option></select></label>
+          <label>Store provider<select name="provider" id="setup-provider"><option value="apple_app_store">Apple App Store</option><option value="google_play">Google Play</option><option value="huawei_appgallery">Huawei AppGallery</option></select></label>
           <label><span id="provider-application-label">Apple bundle ID</span><input name="provider_application_id" id="provider-application-id" required placeholder="com.example.application"></label>
           <label>Environment<select name="environment"><option value="sandbox">Sandbox</option><option value="production">Production</option><option value="test">Test</option></select></label>
           <label>Entitlement ID<input name="entitlement_id" required placeholder="premium-access"></label>
@@ -216,6 +216,7 @@
             <p id="credential-description">Saved provider credentials are protected and never shown again.</p>
             <form id="credential-form" class="management-form">
               <div class="form-grid" id="huawei-credential-fields" hidden>
+                <p class="credential-note full-row"><code>agconnect-services.json</code> is mobile build configuration. Keep it in the Android app and do not upload it to IAPStack.</p>
                 <label>Client ID<input name="client_id" autocomplete="off" required></label>
                 <label>Client secret<input name="client_secret" type="password" autocomplete="new-password" required></label>
                 <label class="full-row">Public key<textarea name="public_key" rows="5" autocomplete="off" required placeholder="-----BEGIN PUBLIC KEY-----"></textarea></label>
@@ -228,8 +229,24 @@
                 <label>Key ID<input name="key_id" autocomplete="off" required placeholder="ABCDEFGHIJ"></label>
                 <label>Bundle ID<input name="bundle_id" autocomplete="off" required readonly></label>
                 <label>App Apple ID<input name="app_apple_id" inputmode="numeric" pattern="[0-9]+" placeholder="Required in production"></label>
+                <label class="full-row">In-App Purchase key file (.p8)<input id="apple-private-key-file" type="file" accept=".p8,.pem,text/plain,application/x-pem-file"></label>
+                <p class="file-status full-row" id="apple-private-key-file-status" role="status">Select locally or paste the PEM value below.</p>
                 <label class="full-row">In-App Purchase private key<textarea name="private_key" rows="6" autocomplete="new-password" required placeholder="-----BEGIN PRIVATE KEY-----"></textarea></label>
+                <label class="full-row">Trusted Apple root files (.cer/.crt/.pem)<input id="apple-root-files" type="file" multiple accept=".cer,.crt,.pem,text/plain,application/pkix-cert,application/x-x509-ca-cert"></label>
+                <p class="file-status full-row" id="apple-root-files-status" role="status">Select one or more files or paste PEM certificates below.</p>
                 <label class="full-row">Trusted Apple root certificates<textarea name="root_certificates" rows="8" autocomplete="off" required placeholder="Paste one or more PEM certificates"></textarea></label>
+              </div>
+              <div class="form-grid" id="google-credential-fields" hidden>
+                <p class="credential-note full-row">Use an Android Publisher service-account key. Firebase <code>google-services.json</code> is mobile configuration and is not accepted here.</p>
+                <label class="full-row">Service-account JSON<input id="google-service-account-file" type="file" accept=".json,application/json"></label>
+                <p class="file-status full-row" id="google-service-account-file-status" role="status">The selected file is parsed locally and is not stored as an uploaded file.</p>
+                <label>Client email<input name="google_client_email" type="email" autocomplete="off" required></label>
+                <label>Private key ID<input name="google_private_key_id" autocomplete="off" required></label>
+                <label class="full-row">Service-account private key<textarea name="google_private_key" rows="6" autocomplete="new-password" required placeholder="-----BEGIN PRIVATE KEY-----"></textarea></label>
+                <p class="credential-note full-row">RTDN fields are optional for purchase verification. Complete all three to accept authenticated Pub/Sub notifications.</p>
+                <label class="full-row">Pub/Sub subscription<input name="google_rtdn_subscription" autocomplete="off" placeholder="projects/example-project/subscriptions/iapstack-google-play"></label>
+                <label class="full-row">Push service-account email<input name="google_rtdn_push_email" type="email" autocomplete="off" placeholder="iapstack-push@example-project.iam.gserviceaccount.com"></label>
+                <label class="full-row">OIDC audience<input name="google_rtdn_audience" autocomplete="off" placeholder="https://iap.example.com/v1/providers/google-play/…/notifications"></label>
               </div>
               <p class="form-message" id="credential-message" role="status"></p>
               <div class="section-actions"><button type="submit" class="primary-button" id="credential-submit">Save provider connection</button></div>

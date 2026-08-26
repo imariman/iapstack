@@ -70,8 +70,38 @@ func TestDashboardSecretLifecycleAvoidsPersistentStorage(t *testing.T) {
 			t.Fatalf("dashboard script does not contain secret lifecycle control %q", required)
 		}
 	}
-	if count := strings.Count(string(document), `autocomplete="new-password"`); count != 3 {
-		t.Fatalf("dashboard secret fields with new-password autocomplete = %d, want 3", count)
+	if count := strings.Count(string(document), `autocomplete="new-password"`); count != 4 {
+		t.Fatalf("dashboard secret fields with new-password autocomplete = %d, want 4", count)
+	}
+}
+
+// TestDashboardSupportsGooglePlayAndLocalCredentialFiles keeps provider files bounded and ephemeral.
+func TestDashboardSupportsGooglePlayAndLocalCredentialFiles(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	for _, required := range []string{
+		`value="google_play"`, `id="apple-private-key-file"`, `id="apple-root-files"`,
+		`id="google-service-account-file"`, `name="google_rtdn_subscription"`,
+	} {
+		if !strings.Contains(string(document), required) {
+			t.Fatalf("dashboard provider file form does not contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		"google_play_android_publisher", "googleCredentialContentType", "saveGoogleCredential",
+		"maximumCredentialFileBytes", "loadGoogleServiceAccountFile", "readAppleRootCertificate",
+	} {
+		if !strings.Contains(string(script), required) {
+			t.Fatalf("dashboard provider file workflow does not contain %q", required)
+		}
 	}
 }
 
