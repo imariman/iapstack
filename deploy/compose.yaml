@@ -21,7 +21,7 @@ services:
       context: ..
     command: ["migrate"]
     environment:
-      IAPSTACK_DATABASE_URL: postgres://${IAPSTACK_POSTGRES_USER:-iapstack}:${IAPSTACK_POSTGRES_PASSWORD}@postgres:5432/${IAPSTACK_POSTGRES_DB:-iapstack}?sslmode=disable
+      IAPSTACK_DATABASE_URL: host=postgres port=5432 user=${IAPSTACK_POSTGRES_USER:-iapstack} password=${IAPSTACK_POSTGRES_PASSWORD} dbname=${IAPSTACK_POSTGRES_DB:-iapstack} sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
@@ -35,7 +35,7 @@ services:
       context: ..
     command: ["api"]
     environment:
-      IAPSTACK_DATABASE_URL: postgres://${IAPSTACK_POSTGRES_USER:-iapstack}:${IAPSTACK_POSTGRES_PASSWORD}@postgres:5432/${IAPSTACK_POSTGRES_DB:-iapstack}?sslmode=disable
+      IAPSTACK_DATABASE_URL: host=postgres port=5432 user=${IAPSTACK_POSTGRES_USER:-iapstack} password=${IAPSTACK_POSTGRES_PASSWORD} dbname=${IAPSTACK_POSTGRES_DB:-iapstack} sslmode=disable
       IAPSTACK_PROTECTION_ACTIVE_KEY_ID: ${IAPSTACK_PROTECTION_ACTIVE_KEY_ID:?set IAPSTACK_PROTECTION_ACTIVE_KEY_ID}
       IAPSTACK_PROTECTION_KEYS: ${IAPSTACK_PROTECTION_KEYS:?set IAPSTACK_PROTECTION_KEYS}
       IAPSTACK_PROTECTION_FINGERPRINT_KEY: ${IAPSTACK_PROTECTION_FINGERPRINT_KEY:?set IAPSTACK_PROTECTION_FINGERPRINT_KEY}
@@ -63,7 +63,7 @@ services:
       context: ..
     command: ["worker"]
     environment:
-      IAPSTACK_DATABASE_URL: postgres://${IAPSTACK_POSTGRES_USER:-iapstack}:${IAPSTACK_POSTGRES_PASSWORD}@postgres:5432/${IAPSTACK_POSTGRES_DB:-iapstack}?sslmode=disable
+      IAPSTACK_DATABASE_URL: host=postgres port=5432 user=${IAPSTACK_POSTGRES_USER:-iapstack} password=${IAPSTACK_POSTGRES_PASSWORD} dbname=${IAPSTACK_POSTGRES_DB:-iapstack} sslmode=disable
       IAPSTACK_PROTECTION_ACTIVE_KEY_ID: ${IAPSTACK_PROTECTION_ACTIVE_KEY_ID:?set IAPSTACK_PROTECTION_ACTIVE_KEY_ID}
       IAPSTACK_PROTECTION_KEYS: ${IAPSTACK_PROTECTION_KEYS:?set IAPSTACK_PROTECTION_KEYS}
       IAPSTACK_PROTECTION_FINGERPRINT_KEY: ${IAPSTACK_PROTECTION_FINGERPRINT_KEY:?set IAPSTACK_PROTECTION_FINGERPRINT_KEY}

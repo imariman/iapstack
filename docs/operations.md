@@ -12,6 +12,11 @@ export IAPSTACK_PROTECTION_FINGERPRINT_KEY="$(openssl rand -base64 32)"
 export IAPSTACK_BOOTSTRAP_ADMIN_KEY="$(openssl rand -base64 48)"
 ```
 
+The Compose stack passes the generated PostgreSQL password through a libpq-style
+connection string so Base64 URL-reserved characters remain literal password data.
+If you assemble `IAPSTACK_DATABASE_URL` yourself, percent-encode credentials used in
+a URL-form connection string or use the libpq key/value form.
+
 The fingerprint key must remain stable across encryption-key rotation. The bootstrap
 admin key is an installation credential and must contain at least 32 bytes: use it to
 create stored admin/application keys through `POST /v1/admin/api-keys`, then remove it
