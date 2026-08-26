@@ -135,6 +135,76 @@ func (repository *transaction) FailQueue(ctx context.Context, failure persistenc
 	return repository.changeQueueOutcome(ctx, query, failure.FailedAt, failure.ErrorCode, failure.ID)
 }
 
+// PurgeTerminalQueueRecords removes expired queue records after their River jobs become terminal or disappear.
+func (repository *transaction) PurgeTerminalQueueRecords(
+	ctx context.Context,
+	before time.Time,
+	batchSize int,
+) (int64, error) {
+	if before.IsZero() {
+		return 0, errors.New("terminal queue retention cutoff is required")
+	}
+	if batchSize <= 0 {
+		return 0, errors.New("terminal queue retention batch size must be positive")
+	}
+	var deleted int64
+	err := repository.tx.QueryRow(ctx, `
+		WITH expired_inbox AS (
+			SELECT record.id FROM inbox_messages AS record
+			WHERE (record.processed_at < $1 OR record.failed_at < $1)
+				AND NOT EXISTS (
+					SELECT 1 FROM river_job AS job
+					WHERE job.id = record.river_job_id
+						AND job.state NOT IN ('cancelled', 'completed', 'discarded')
+				)
+			ORDER BY COALESCE(record.processed_at, record.failed_at), record.id
+			LIMIT $2
+			FOR UPDATE OF record SKIP LOCKED
+		), deleted_inbox AS (
+			DELETE FROM inbox_messages AS record USING expired_inbox AS expired
+			WHERE record.id = expired.id
+			RETURNING 1
+		), expired_reconciliation AS (
+			SELECT record.id FROM reconciliation_jobs AS record
+			WHERE (record.processed_at < $1 OR record.failed_at < $1)
+				AND NOT EXISTS (
+					SELECT 1 FROM river_job AS job
+					WHERE job.id = record.river_job_id
+						AND job.state NOT IN ('cancelled', 'completed', 'discarded')
+				)
+			ORDER BY COALESCE(record.processed_at, record.failed_at), record.id
+			LIMIT $2
+			FOR UPDATE OF record SKIP LOCKED
+		), deleted_reconciliation AS (
+			DELETE FROM reconciliation_jobs AS record USING expired_reconciliation AS expired
+			WHERE record.id = expired.id
+			RETURNING 1
+		), expired_outbox AS (
+			SELECT record.id FROM outbox_events AS record
+			WHERE (record.delivered_at < $1 OR record.failed_at < $1)
+				AND NOT EXISTS (
+					SELECT 1 FROM river_job AS job
+					WHERE job.id = record.river_job_id
+						AND job.state NOT IN ('cancelled', 'completed', 'discarded')
+				)
+			ORDER BY COALESCE(record.delivered_at, record.failed_at), record.id
+			LIMIT $2
+			FOR UPDATE OF record SKIP LOCKED
+		), deleted_outbox AS (
+			DELETE FROM outbox_events AS record USING expired_outbox AS expired
+			WHERE record.id = expired.id
+			RETURNING 1
+		)
+		SELECT (SELECT count(*) FROM deleted_inbox)
+			+ (SELECT count(*) FROM deleted_reconciliation)
+			+ (SELECT count(*) FROM deleted_outbox)
+	`, before.UTC(), batchSize).Scan(&deleted)
+	if err != nil {
+		return 0, classifyError("purge terminal queue records", err)
+	}
+	return deleted, nil
+}
+
 // ensureRiverJob creates exactly one River job for a durable record inside the caller transaction.
 func (repository *transaction) ensureRiverJob(
 	ctx context.Context,

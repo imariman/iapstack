@@ -166,6 +166,8 @@ type QueueRepository interface {
 	CompleteQueue(context.Context, QueueCompletion) error
 	// FailQueue records one terminal processing or delivery failure idempotently.
 	FailQueue(context.Context, QueueFailure) error
+	// PurgeTerminalQueueRecords removes a bounded batch of expired audit records whose River jobs cannot run again.
+	PurgeTerminalQueueRecords(context.Context, time.Time, int) (int64, error)
 }
 
 // CatalogProduct joins one provider product mapping to its internal product and entitlements.

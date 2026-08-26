@@ -22,6 +22,10 @@ import (
 const (
 	// queueMetricsInterval controls the inexpensive aggregate River depth query.
 	queueMetricsInterval = time.Minute
+	// queueCleanupInterval bounds how long expired terminal audit rows remain after retention.
+	queueCleanupInterval = time.Minute
+	// queueCleanupBatchSize bounds row locks and transaction work per queue and cleanup pass.
+	queueCleanupBatchSize = 1_000
 )
 
 // Handler processes one durable message without changing queue state directly.
@@ -55,9 +59,12 @@ type Config struct {
 type Runner struct {
 	client          *river.Client[pgx.Tx]
 	pool            *pgxpool.Pool
+	store           persistence.OperationsStore
 	metrics         *metrics.Registry
 	logger          *slog.Logger
 	shutdownTimeout time.Duration
+	queueRetention  time.Duration
+	clock           func() time.Time
 }
 
 // executor loads durable payloads, invokes handlers, and records terminal audit outcomes.
@@ -154,7 +161,8 @@ func New(
 		return nil, fmt.Errorf("construct River worker client: %w", err)
 	}
 	return &Runner{
-		client: client, pool: pool, metrics: registry, logger: logger, shutdownTimeout: config.ShutdownTimeout,
+		client: client, pool: pool, store: store, metrics: registry, logger: logger,
+		shutdownTimeout: config.ShutdownTimeout, queueRetention: config.QueueRetention, clock: time.Now,
 	}, nil
 }
 
@@ -166,16 +174,20 @@ func (runner *Runner) Run(ctx context.Context) error {
 	if err := runner.client.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("start River worker: %w", err)
 	}
-	metricsContext, metricsCancel := context.WithCancel(context.Background())
-	var metricsWorkers sync.WaitGroup
-	metricsWorkers.Add(1)
+	maintenanceContext, maintenanceCancel := context.WithCancel(context.Background())
+	var maintenanceWorkers sync.WaitGroup
+	maintenanceWorkers.Add(2)
 	go func() {
-		defer metricsWorkers.Done()
-		runner.sampleQueueDepth(metricsContext)
+		defer maintenanceWorkers.Done()
+		runner.sampleQueueDepth(maintenanceContext)
+	}()
+	go func() {
+		defer maintenanceWorkers.Done()
+		runner.cleanTerminalQueues(maintenanceContext)
 	}()
 	defer func() {
-		metricsCancel()
-		metricsWorkers.Wait()
+		maintenanceCancel()
+		maintenanceWorkers.Wait()
 	}()
 	<-ctx.Done()
 	shutdownContext, cancel := context.WithTimeout(context.Background(), runner.shutdownTimeout)
@@ -187,6 +199,40 @@ func (runner *Runner) Run(ctx context.Context) error {
 	defer hardStopCancel()
 	if err := runner.client.StopAndCancel(hardStopContext); err != nil {
 		return fmt.Errorf("stop River worker: %w", err)
+	}
+	return nil
+}
+
+// cleanTerminalQueues periodically removes expired audit rows that cannot be executed again.
+func (runner *Runner) cleanTerminalQueues(ctx context.Context) {
+	ticker := time.NewTicker(queueCleanupInterval)
+	defer ticker.Stop()
+	for {
+		if err := runner.purgeTerminalQueueRecords(ctx); err != nil && ctx.Err() == nil {
+			runner.logger.Error("purge terminal queue records", "error_code", "queue_cleanup_failed")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// purgeTerminalQueueRecords applies the configured retention cutoff in one atomic operation.
+func (runner *Runner) purgeTerminalQueueRecords(ctx context.Context) error {
+	cutoff := runner.clock().UTC().Add(-runner.queueRetention)
+	var deleted int64
+	err := runner.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var purgeErr error
+		deleted, purgeErr = repository.PurgeTerminalQueueRecords(ctx, cutoff, queueCleanupBatchSize)
+		return purgeErr
+	})
+	if err != nil {
+		return fmt.Errorf("purge terminal queue records: %w", err)
+	}
+	if deleted > 0 {
+		runner.logger.Info("purged terminal queue records", "record_count", deleted)
 	}
 	return nil
 }

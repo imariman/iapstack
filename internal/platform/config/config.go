@@ -26,7 +26,7 @@ const (
 	defaultWorkerConcurrency = 4
 	// defaultWorkerMaxAttempts moves repeatedly failing records to their terminal state.
 	defaultWorkerMaxAttempts = 12
-	// defaultQueueRetention preserves terminal queue records for debugging and replay protection.
+	// defaultQueueRetention controls terminal River metadata and durable audit record lifetime.
 	defaultQueueRetention = 30 * 24 * time.Hour
 	// defaultHTTPBodyLimit bounds JSON and provider notification request bodies.
 	defaultHTTPBodyLimit int64 = 1 << 20

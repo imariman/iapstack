@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -20,9 +21,13 @@ type executorStore struct {
 // executorTransaction records terminal audit writes for one durable message.
 type executorTransaction struct {
 	persistence.OperationsTransaction
-	message     persistence.QueueMessage
-	completions []persistence.QueueCompletion
-	failures    []persistence.QueueFailure
+	message      persistence.QueueMessage
+	completions  []persistence.QueueCompletion
+	failures     []persistence.QueueFailure
+	purgeCutoff  time.Time
+	purgeLimit   int
+	purgeDeleted int64
+	purgeError   error
 }
 
 // codedTestError supplies an arbitrary code through the worker error contract.
@@ -60,6 +65,17 @@ func (transaction *executorTransaction) CompleteQueue(
 func (transaction *executorTransaction) FailQueue(_ context.Context, failure persistence.QueueFailure) error {
 	transaction.failures = append(transaction.failures, failure)
 	return nil
+}
+
+// PurgeTerminalQueueRecords records the retention cutoff and returns the configured result.
+func (transaction *executorTransaction) PurgeTerminalQueueRecords(
+	_ context.Context,
+	before time.Time,
+	limit int,
+) (int64, error) {
+	transaction.purgeCutoff = before
+	transaction.purgeLimit = limit
+	return transaction.purgeDeleted, transaction.purgeError
 }
 
 // TestRetryClassificationUsesProviderContract verifies transient and permanent durable outcomes.
@@ -126,6 +142,43 @@ func TestExecutorRecordsPermanentFailure(t *testing.T) {
 	}
 	if len(transaction.failures) != 1 || transaction.failures[0].ErrorCode != "provider_invalid_evidence" {
 		t.Fatalf("failures = %#v, want one safe permanent outcome", transaction.failures)
+	}
+}
+
+// TestRunnerPurgesTerminalRecordsAtRetentionCutoff verifies maintenance uses the configured UTC boundary.
+func TestRunnerPurgesTerminalRecordsAtRetentionCutoff(t *testing.T) {
+	now := time.Date(2026, time.August, 26, 14, 30, 0, 0, time.FixedZone("test", 3*60*60))
+	transaction := &executorTransaction{purgeDeleted: 3}
+	runner := &Runner{
+		store:          &executorStore{transaction: transaction},
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		queueRetention: 30 * 24 * time.Hour,
+		clock:          func() time.Time { return now },
+	}
+	if err := runner.purgeTerminalQueueRecords(context.Background()); err != nil {
+		t.Fatalf("purgeTerminalQueueRecords() error = %v", err)
+	}
+	want := now.UTC().Add(-30 * 24 * time.Hour)
+	if !transaction.purgeCutoff.Equal(want) {
+		t.Fatalf("purge cutoff = %v, want %v", transaction.purgeCutoff, want)
+	}
+	if transaction.purgeLimit != queueCleanupBatchSize {
+		t.Fatalf("purge limit = %d, want %d", transaction.purgeLimit, queueCleanupBatchSize)
+	}
+}
+
+// TestRunnerReportsTerminalRecordPurgeFailure verifies cleanup failures remain observable to the caller.
+func TestRunnerReportsTerminalRecordPurgeFailure(t *testing.T) {
+	expected := errors.New("database unavailable")
+	transaction := &executorTransaction{purgeError: expected}
+	runner := &Runner{
+		store:          &executorStore{transaction: transaction},
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		queueRetention: time.Hour,
+		clock:          time.Now,
+	}
+	if err := runner.purgeTerminalQueueRecords(context.Background()); !errors.Is(err, expected) {
+		t.Fatalf("purgeTerminalQueueRecords() error = %v, want wrapped failure", err)
 	}
 }
 

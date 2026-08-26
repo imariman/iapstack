@@ -216,6 +216,7 @@ Never remove an encryption key until all rows written with that key ID have been
 - River owns job claims, stale-job recovery, exponential retry scheduling, and terminal job cleanup.
 - Retryable failures become discarded after `IAPSTACK_WORKER_MAX_ATTEMPTS`; permanent failures are cancelled immediately.
 - Inbox, outbox, and reconciliation tables retain protected payloads and stable terminal audit outcomes while River job arguments contain identifiers only.
+- `IAPSTACK_QUEUE_RETENTION` applies to both River metadata and durable queue audit rows. Pending or otherwise runnable records are never removed by retention cleanup.
 - Durable records contain only safe error codes; correlate application logs with `message_id` and HTTP logs with `X-Request-ID`.
 
 ## Compose release gate

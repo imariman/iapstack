@@ -710,6 +710,55 @@ func TestOperationalQueueEnqueueAndCompletion(t *testing.T) {
 	}
 }
 
+// TestOperationalQueueRetentionPreservesRunnableJobs verifies cleanup cannot remove work River may still execute.
+func TestOperationalQueueRetentionPreservesRunnableJobs(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	event := newPurchaseWrites(t, fixture).outbox
+	if err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		_, saveErr := repository.SaveOutboxEvent(database.ctx, event)
+		return saveErr
+	}); err != nil {
+		t.Fatalf("SaveOutboxEvent() error = %v", err)
+	}
+
+	cutoff := event.AvailableAt.Add(48 * time.Hour)
+	completedAt := cutoff.Add(-time.Hour)
+	if _, err := database.conn.Exec(database.ctx,
+		`UPDATE outbox_events SET delivered_at = $1 WHERE id = $2`, completedAt, event.ID); err != nil {
+		t.Fatalf("mark outbox audit record terminal: %v", err)
+	}
+	var deleted int64
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var purgeErr error
+		deleted, purgeErr = repository.PurgeTerminalQueueRecords(database.ctx, cutoff, 100)
+		return purgeErr
+	}); err != nil {
+		t.Fatalf("PurgeTerminalQueueRecords() with runnable job error = %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("PurgeTerminalQueueRecords() deleted = %d, want 0 while River job is runnable", deleted)
+	}
+	assertTableCount(t, database, "outbox_events", 1)
+
+	if _, err := database.conn.Exec(database.ctx,
+		`DELETE FROM river_job WHERE id = (SELECT river_job_id FROM outbox_events WHERE id = $1)`, event.ID); err != nil {
+		t.Fatalf("simulate River terminal cleanup: %v", err)
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var purgeErr error
+		deleted, purgeErr = repository.PurgeTerminalQueueRecords(database.ctx, cutoff, 100)
+		return purgeErr
+	}); err != nil {
+		t.Fatalf("PurgeTerminalQueueRecords() after River cleanup error = %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("PurgeTerminalQueueRecords() deleted = %d, want 1 after River cleanup", deleted)
+	}
+	assertTableCount(t, database, "outbox_events", 0)
+}
+
 // TestOperationalQueueEnqueueRollsBackAtomically verifies River and audit records share one commit boundary.
 func TestOperationalQueueEnqueueRollsBackAtomically(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)
