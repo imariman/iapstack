@@ -155,7 +155,12 @@ jobs:
           dart format --output=none --set-exit-if-changed lib test
           flutter analyze
           flutter test
-          flutter build apk --debug
+          flutter build apk --debug --target-platform android-arm64
+
+      - name: Reclaim Huawei Android build space
+        if: always()
+        working-directory: sdk/flutter/iapstack_huawei/example
+        run: flutter clean
 
       - name: Check Google Play SDK
         working-directory: sdk/flutter/iapstack_google_play
@@ -172,7 +177,7 @@ jobs:
           dart format --output=none --set-exit-if-changed lib test
           flutter analyze
           flutter test
-          flutter build apk --debug
+          flutter build apk --debug --target-platform android-arm64
 
       - name: Check Apple SDK
         working-directory: sdk/flutter/iapstack_apple
