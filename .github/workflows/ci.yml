@@ -114,7 +114,7 @@ jobs:
   flutter-sdk:
     name: Flutter SDK checks
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
 
     steps:
       - name: Check out repository
@@ -133,6 +133,15 @@ jobs:
             ${{ runner.temp }}/flutter
             ~/.pub-cache
           key: flutter-${{ runner.os }}-${{ runner.arch }}-3.47.1
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
 
       - name: Set up Flutter
         env:
