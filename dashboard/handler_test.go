@@ -70,8 +70,36 @@ func TestDashboardSecretLifecycleAvoidsPersistentStorage(t *testing.T) {
 			t.Fatalf("dashboard script does not contain secret lifecycle control %q", required)
 		}
 	}
-	if count := strings.Count(string(document), `autocomplete="new-password"`); count != 2 {
-		t.Fatalf("dashboard secret fields with new-password autocomplete = %d, want 2", count)
+	if count := strings.Count(string(document), `autocomplete="new-password"`); count != 3 {
+		t.Fatalf("dashboard secret fields with new-password autocomplete = %d, want 3", count)
+	}
+}
+
+// TestDashboardSupportsAppleCatalogCommissioning keeps App Store setup available without weakening secret handling.
+func TestDashboardSupportsAppleCatalogCommissioning(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	for _, required := range []string{
+		`value="apple_app_store"`, `name="private_key"`, `name="root_certificates"`,
+	} {
+		if !strings.Contains(string(document), required) {
+			t.Fatalf("dashboard Apple form does not contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		"apple_app_store_server_api", "appleCredentialContentType", "saveAppleCredential",
+	} {
+		if !strings.Contains(string(script), required) {
+			t.Fatalf("dashboard Apple workflow does not contain %q", required)
+		}
 	}
 }
 

@@ -172,20 +172,21 @@
     <dialog id="setup-dialog" class="setup-dialog">
       <form id="setup-form" method="dialog">
         <div class="dialog-heading">
-          <div><p class="eyebrow">Quick start</p><h2>Huawei catalog setup</h2></div>
+          <div><p class="eyebrow">Quick start</p><h2>Store catalog setup</h2></div>
           <button class="icon-button" id="close-setup" value="cancel" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
         </div>
         <p class="dialog-copy">Create the project, application, entitlement, product, and store mapping in one guided flow. Then finish the secure connections from the application card.</p>
         <div class="form-grid">
           <label>Project ID<input name="project_id" required placeholder="my-project"></label>
           <label>Application ID<input name="application_id" required placeholder="mobile-app"></label>
-          <label>Huawei App ID<input name="provider_application_id" required placeholder="123456789"></label>
+          <label>Store provider<select name="provider" id="setup-provider"><option value="apple_app_store">Apple App Store</option><option value="huawei_appgallery">Huawei AppGallery</option></select></label>
+          <label><span id="provider-application-label">Apple bundle ID</span><input name="provider_application_id" id="provider-application-id" required placeholder="com.example.application"></label>
           <label>Environment<select name="environment"><option value="sandbox">Sandbox</option><option value="production">Production</option><option value="test">Test</option></select></label>
           <label>Entitlement ID<input name="entitlement_id" required placeholder="premium-access"></label>
           <label>Entitlement key<input name="entitlement_key" required placeholder="premium"></label>
           <label>Product ID<input name="product_id" required placeholder="premium-yearly"></label>
           <label>Product kind<select name="product_kind"><option value="subscription">Subscription</option><option value="non_consumable">Non-consumable</option></select></label>
-          <label class="full-row">Huawei product ID<input name="provider_product_id" required placeholder="premium_yearly_huawei"></label>
+          <label class="full-row"><span id="provider-product-label">App Store product ID</span><input name="provider_product_id" id="provider-product-id" required placeholder="premium_monthly"></label>
         </div>
         <p class="form-message" id="setup-message" role="alert"></p>
         <div class="dialog-actions">
@@ -204,17 +205,17 @@
 
         <ol class="commissioning-route" aria-label="Setup progress">
           <li class="complete"><span>1</span><strong>Identity</strong><small>Ready</small></li>
-          <li id="credential-step"><span>2</span><strong>Huawei</strong><small id="credential-step-status">Missing</small></li>
+          <li id="credential-step"><span>2</span><strong id="credential-step-name">Store</strong><small id="credential-step-status">Missing</small></li>
           <li id="webhook-step"><span>3</span><strong>Notifications</strong><small id="webhook-step-status">Missing</small></li>
           <li><span>4</span><strong>App key</strong><small>Optional</small></li>
         </ol>
 
         <div class="commissioning-sections">
           <section class="management-section" aria-labelledby="credential-title">
-            <div class="management-heading"><div><p class="eyebrow">Store authority</p><h3 id="credential-title">Huawei server connection</h3></div><span id="credential-revision" class="revision-badge">New</span></div>
-            <p>Used for server-side calls to Huawei token, order, and subscription services. Saved values are never shown again.</p>
+            <div class="management-heading"><div><p class="eyebrow">Store authority</p><h3 id="credential-title">Provider server connection</h3></div><span id="credential-revision" class="revision-badge">New</span></div>
+            <p id="credential-description">Saved provider credentials are protected and never shown again.</p>
             <form id="credential-form" class="management-form">
-              <div class="form-grid">
+              <div class="form-grid" id="huawei-credential-fields" hidden>
                 <label>Client ID<input name="client_id" autocomplete="off" required></label>
                 <label>Client secret<input name="client_secret" type="password" autocomplete="new-password" required></label>
                 <label class="full-row">Public key<textarea name="public_key" rows="5" autocomplete="off" required placeholder="-----BEGIN PUBLIC KEY-----"></textarea></label>
@@ -222,8 +223,16 @@
                 <label class="full-row">Order service URL<input name="order_url" type="url" required placeholder="https://…"></label>
                 <label class="full-row">Subscription service URL<input name="subscription_url" type="url" required placeholder="https://…"></label>
               </div>
+              <div class="form-grid" id="apple-credential-fields" hidden>
+                <label>Issuer ID<input name="issuer_id" autocomplete="off" required placeholder="99b16628-15e4-4668-972b-eeff55eeff55"></label>
+                <label>Key ID<input name="key_id" autocomplete="off" required placeholder="ABCDEFGHIJ"></label>
+                <label>Bundle ID<input name="bundle_id" autocomplete="off" required readonly></label>
+                <label>App Apple ID<input name="app_apple_id" inputmode="numeric" pattern="[0-9]+" placeholder="Required in production"></label>
+                <label class="full-row">In-App Purchase private key<textarea name="private_key" rows="6" autocomplete="new-password" required placeholder="-----BEGIN PRIVATE KEY-----"></textarea></label>
+                <label class="full-row">Trusted Apple root certificates<textarea name="root_certificates" rows="8" autocomplete="off" required placeholder="Paste one or more PEM certificates"></textarea></label>
+              </div>
               <p class="form-message" id="credential-message" role="status"></p>
-              <div class="section-actions"><button type="submit" class="primary-button">Save Huawei connection</button></div>
+              <div class="section-actions"><button type="submit" class="primary-button" id="credential-submit">Save provider connection</button></div>
             </form>
           </section>
 

@@ -104,10 +104,13 @@ webhook delivery metadata. It never renders protected provider payloads or secre
 The access-key workspace lists active and revoked administrator/application key
 metadata, identifies the current stored key, creates one-time administrator bearers,
 and requires explicit confirmation before revocation.
-The quick-start dialog creates a Huawei project, application, entitlement, product,
-and provider-product mapping. Open an application card to create or rotate its Huawei
-server credential, configure signed webhook delivery, and create a one-time application
-bearer for the Flutter SDK. Customers can also be created from the project overview.
+The quick-start dialog creates an Apple App Store or Huawei AppGallery project,
+application, entitlement, product, and provider-product mapping. Open an application
+card to create or rotate its provider-specific protected server credential, configure
+signed webhook delivery, and create a one-time application bearer for the Flutter SDK.
+Apple setup accepts the App Store Connect issuer/key identity, matching bundle and App
+Apple IDs, PKCS#8 In-App Purchase private key, and one or more PEM-encoded trusted Apple
+roots. Customers can also be created from the project overview.
 Credential and signing-secret fields are cleared after submission and never returned
 by the admin read API. Store every newly displayed application bearer immediately in
 your deployment secret manager; the dashboard cannot recover it after the dialog closes.

@@ -2,6 +2,7 @@
 
 const sessionKey = "iapstack.dashboard.admin";
 const huaweiCredentialContentType = "application/vnd.iapstack.huawei-credentials+json";
+const appleCredentialContentType = "application/vnd.iapstack.apple-credentials+json";
 const state = {
   adminKey: "",
   projects: [],
@@ -28,9 +29,20 @@ const elements = {
   setupDialog: document.querySelector("#setup-dialog"),
   setupForm: document.querySelector("#setup-form"),
   setupMessage: document.querySelector("#setup-message"),
+  setupProvider: document.querySelector("#setup-provider"),
+  providerApplicationLabel: document.querySelector("#provider-application-label"),
+  providerApplicationID: document.querySelector("#provider-application-id"),
+  providerProductLabel: document.querySelector("#provider-product-label"),
+  providerProductID: document.querySelector("#provider-product-id"),
   applicationDialog: document.querySelector("#application-dialog"),
   credentialForm: document.querySelector("#credential-form"),
   credentialMessage: document.querySelector("#credential-message"),
+  huaweiCredentialFields: document.querySelector("#huawei-credential-fields"),
+  appleCredentialFields: document.querySelector("#apple-credential-fields"),
+  credentialTitle: document.querySelector("#credential-title"),
+  credentialDescription: document.querySelector("#credential-description"),
+  credentialStepName: document.querySelector("#credential-step-name"),
+  credentialSubmit: document.querySelector("#credential-submit"),
   webhookForm: document.querySelector("#webhook-form"),
   webhookMessage: document.querySelector("#webhook-message"),
   applicationKeyForm: document.querySelector("#application-key-form"),
@@ -218,7 +230,7 @@ function renderProjectNavigation() {
 function renderEmptyWorkspace() {
   state.overview = null;
   elements.projectTitle.textContent = "Create your first project";
-  setGlobalMessage("Use the + button in the sidebar to create a Huawei catalog setup.", "info");
+  setGlobalMessage("Use the + button in the sidebar to create your first store catalog.", "info");
   setText("metric-apps", "0");
   setText("metric-customers", "0");
   setText("metric-products", "0");
@@ -314,9 +326,40 @@ function openApplicationManager(application) {
   elements.credentialMessage.textContent = "";
   elements.webhookMessage.textContent = "";
   elements.applicationKeyMessage.textContent = "";
+  configureCredentialForm(application);
   renderCommissioningStatus();
   elements.applicationDialog.showModal();
-  elements.credentialForm.querySelector("input[name='client_id']").focus();
+  const activeFields = application.provider === "apple_app_store"
+    ? elements.appleCredentialFields
+    : elements.huaweiCredentialFields;
+  activeFields.querySelector("input, textarea").focus();
+}
+
+function configureCredentialForm(application) {
+  const apple = application.provider === "apple_app_store";
+  setCredentialFieldsEnabled(elements.appleCredentialFields, apple);
+  setCredentialFieldsEnabled(elements.huaweiCredentialFields, !apple);
+  elements.appleCredentialFields.hidden = !apple;
+  elements.huaweiCredentialFields.hidden = apple;
+  const provider = providerLabel(application.provider);
+  elements.credentialStepName.textContent = apple ? "Apple" : "Huawei";
+  elements.credentialTitle.textContent = `${provider} server connection`;
+  elements.credentialDescription.textContent = apple
+    ? "Used to verify StoreKit transactions and query App Store Server API state. Saved keys and certificates are never shown again."
+    : "Used for server-side calls to Huawei token, order, and subscription services. Saved values are never shown again.";
+  elements.credentialSubmit.textContent = `Save ${apple ? "Apple" : "Huawei"} connection`;
+  if (apple) {
+    const bundleID = elements.appleCredentialFields.querySelector("input[name='bundle_id']");
+    const appAppleID = elements.appleCredentialFields.querySelector("input[name='app_apple_id']");
+    bundleID.value = application.provider_application_id;
+    appAppleID.required = application.environment === "production";
+  }
+}
+
+function setCredentialFieldsEnabled(container, enabled) {
+  for (const field of container.querySelectorAll("input, textarea, select")) {
+    field.disabled = !enabled;
+  }
 }
 
 function renderCommissioningStatus() {
@@ -373,6 +416,49 @@ async function saveHuaweiCredential(form) {
       },
     }),
   });
+}
+
+async function saveAppleCredential(form) {
+  const data = Object.fromEntries(new FormData(form));
+  const roots = data.root_certificates.match(
+    /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g,
+  )?.map((certificate) => certificate.trim()) || [];
+  if (!roots.length) {
+    throw new Error("Add at least one PEM-encoded trusted Apple root certificate.");
+  }
+  const payload = {
+    issuer_id: data.issuer_id,
+    key_id: data.key_id,
+    bundle_id: data.bundle_id,
+    private_key: data.private_key,
+    root_certificates: roots,
+  };
+  if (data.app_apple_id) {
+    const appAppleID = Number(data.app_apple_id);
+    if (!Number.isSafeInteger(appAppleID) || appAppleID <= 0) {
+      throw new Error("App Apple ID must be a positive integer.");
+    }
+    payload.app_apple_id = appAppleID;
+  }
+  await apiRequest(applicationAdminPath("/credentials/apple_app_store_server_api"), {
+    method: "PUT",
+    body: JSON.stringify({
+      content_type: appleCredentialContentType,
+      schema_version: 1,
+      expected_revision: state.managedApplication.credential_revision,
+      payload,
+    }),
+  });
+}
+
+async function saveProviderCredential(form) {
+  if (state.managedApplication.provider === "apple_app_store") {
+    return saveAppleCredential(form);
+  }
+  if (state.managedApplication.provider === "huawei_appgallery") {
+    return saveHuaweiCredential(form);
+  }
+  throw new Error("This provider cannot be configured from the dashboard yet.");
 }
 
 async function saveWebhook(form) {
@@ -683,7 +769,11 @@ function statusClass(value) {
 }
 
 function providerLabel(provider) {
-  return provider === "huawei_appgallery" ? "Huawei AppGallery" : provider.replaceAll("_", " ");
+  return {
+    apple_app_store: "Apple App Store",
+    google_play: "Google Play",
+    huawei_appgallery: "Huawei AppGallery",
+  }[provider] || provider.replaceAll("_", " ");
 }
 
 function productKindLabel(kind) {
@@ -764,7 +854,7 @@ async function createCatalog(form) {
   const mutations = [
     [`/v1/admin/projects/${project}`, {}],
     [`/v1/admin/projects/${project}/applications/${application}`, {
-      provider: "huawei_appgallery",
+      provider: data.provider,
       environment: data.environment,
       provider_application_id: data.provider_application_id,
     }],
@@ -781,6 +871,20 @@ async function createCatalog(form) {
     await apiRequest(path, { method: "PUT", body: JSON.stringify(body) });
   }
   return data.project_id;
+}
+
+function syncSetupProvider() {
+  const apple = elements.setupProvider.value === "apple_app_store";
+  elements.providerApplicationLabel.textContent = apple ? "Apple bundle ID" : "Huawei App ID";
+  elements.providerApplicationID.placeholder = apple ? "com.example.application" : "123456789";
+  elements.providerProductLabel.textContent = apple ? "App Store product ID" : "Huawei product ID";
+  elements.providerProductID.placeholder = apple ? "premium_monthly" : "premium_yearly_huawei";
+  const testEnvironment = elements.setupForm.querySelector("select[name='environment'] option[value='test']");
+  testEnvironment.disabled = apple;
+  testEnvironment.hidden = apple;
+  if (apple && testEnvironment.selected) {
+    elements.setupForm.querySelector("select[name='environment']").value = "sandbox";
+  }
 }
 
 elements.authForm.addEventListener("submit", (event) => {
@@ -807,12 +911,14 @@ elements.logout.addEventListener("click", logout);
 
 document.querySelector("#open-setup").addEventListener("click", () => {
   elements.setupMessage.textContent = "";
+  syncSetupProvider();
   elements.setupDialog.showModal();
   elements.setupForm.querySelector("input[name='project_id']").focus();
 });
 
 document.querySelector("#close-setup").addEventListener("click", () => elements.setupDialog.close());
 document.querySelector("#cancel-setup").addEventListener("click", () => elements.setupDialog.close());
+elements.setupProvider.addEventListener("change", syncSetupProvider);
 
 elements.setupForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -821,6 +927,7 @@ elements.setupForm.addEventListener("submit", async (event) => {
   try {
     const projectID = await createCatalog(elements.setupForm);
     elements.setupForm.reset();
+    syncSetupProvider();
     elements.setupDialog.close();
     await loadProjects(projectID);
     setGlobalMessage("Catalog setup created. Complete the provider credential and notification connection.", "success");
@@ -845,12 +952,14 @@ elements.applicationDialog.addEventListener("close", () => {
 elements.credentialForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   setFormBusy(elements.credentialForm, true);
-  setFormMessage(elements.credentialMessage, "Saving the protected Huawei connection…", "working");
+  const provider = providerLabel(state.managedApplication.provider);
+  setFormMessage(elements.credentialMessage, `Saving the protected ${provider} connection…`, "working");
   try {
-    await saveHuaweiCredential(elements.credentialForm);
+    await saveProviderCredential(elements.credentialForm);
     elements.credentialForm.reset();
     await refreshManagedApplication();
-    setFormMessage(elements.credentialMessage, "Huawei connection saved.", "success");
+    configureCredentialForm(state.managedApplication);
+    setFormMessage(elements.credentialMessage, `${provider} connection saved.`, "success");
   } catch (error) {
     setFormMessage(elements.credentialMessage, errorMessage(error));
   } finally {
@@ -942,6 +1051,7 @@ elements.keyDialog.addEventListener("close", () => {
 });
 
 const savedKey = sessionRead();
+syncSetupProvider();
 if (savedKey) {
   connect(savedKey);
 } else {
