@@ -209,6 +209,36 @@ void main() {
           throwsA(isA<IapStackTimeoutException>()));
     });
 
+    test('retries and redacts transport exceptions outside package:http',
+        () async {
+      var attempts = 0;
+      final client = IapStackClient(
+        _config(
+          retryPolicy: const IapStackRetryPolicy(
+            maxAttempts: 2,
+            baseDelay: Duration.zero,
+            maxDelay: Duration.zero,
+          ),
+        ),
+        httpClient: MockClient((request) async {
+          attempts++;
+          throw Exception('private TLS diagnostics');
+        }),
+      );
+
+      await expectLater(
+        client.verifyPurchase(_purchase()),
+        throwsA(
+          isA<IapStackTransportException>().having(
+            (error) => error.toString(),
+            'safe string',
+            isNot(contains('private TLS diagnostics')),
+          ),
+        ),
+      );
+      expect(attempts, 2);
+    });
+
     test('aborts the underlying HTTP request when an attempt times out',
         () async {
       final transport = _AbortTrackingClient();

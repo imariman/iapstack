@@ -146,7 +146,9 @@ final class IapStackClient {
         }
         throw IapStackTimeoutException('IAPStack request timed out',
             cause: error);
-      } on http.ClientException catch (error) {
+      } on IapStackException {
+        rethrow;
+      } on Exception catch (error) {
         if (attempt < _config.retryPolicy.maxAttempts) {
           await _delay(attempt);
           continue;
