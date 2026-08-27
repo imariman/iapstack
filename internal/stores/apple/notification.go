@@ -115,16 +115,15 @@ func (adapter *Adapter) ValidateNotification(
 	kind, err := productKind(transaction.Type)
 	if err != nil {
 		if decoded.Data.SignedRenewalInfo != "" {
-			var ignored renewalPayload
-			if verifyAppleJWS(decoded.Data.SignedRenewalInfo, configuration.roots, &ignored) != nil {
+			if _, verifyErr := verifyRenewalJWS(decoded.Data.SignedRenewalInfo, configuration.roots); verifyErr != nil {
 				return NotificationEnvelope{}, ErrNotificationInvalid
 			}
 		}
 		return envelope, nil
 	}
 	if decoded.Data.SignedRenewalInfo != "" {
-		var renewal renewalPayload
-		if err := verifyAppleJWS(decoded.Data.SignedRenewalInfo, configuration.roots, &renewal); err != nil ||
+		renewal, verifyErr := verifyRenewalJWS(decoded.Data.SignedRenewalInfo, configuration.roots)
+		if verifyErr != nil ||
 			validateRenewalScope(application, transaction, renewal) != nil {
 			return NotificationEnvelope{}, ErrNotificationInvalid
 		}

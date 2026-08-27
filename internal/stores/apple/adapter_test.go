@@ -50,6 +50,39 @@ type signingFixture struct {
 	apiKeyPEM string
 }
 
+// TestAppleJWSCanonicalizesUUIDBindings verifies Apple UUID text casing cannot break customer scope checks.
+func TestAppleJWSCanonicalizesUUIDBindings(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 27, 1, 0, 0, 0, time.UTC)
+	fixture := newSigningFixture(t, now)
+	roots, err := parseTrustedRoots([]string{fixture.rootPEM})
+	if err != nil {
+		t.Fatalf("parseTrustedRoots() error = %v", err)
+	}
+	transaction := transactionPayload{
+		TransactionID: "2000000023456790", SignedDate: now.UnixMilli(),
+		AppAccountToken: strings.ToUpper(fixtureAccountToken),
+	}
+	decodedTransaction, err := verifyTransactionJWS(signTransactionFixture(t, fixture, transaction), roots)
+	if err != nil {
+		t.Fatalf("verifyTransactionJWS() error = %v", err)
+	}
+	if decodedTransaction.AppAccountToken != fixtureAccountToken {
+		t.Fatalf("transaction app account token = %q", decodedTransaction.AppAccountToken)
+	}
+	renewal := renewalPayload{
+		SignedDate: now.UnixMilli(), AppAccountToken: strings.ToUpper(fixtureAccountToken),
+	}
+	decodedRenewal, err := verifyRenewalJWS(signApplePayloadFixture(t, fixture, renewal), roots)
+	if err != nil {
+		t.Fatalf("verifyRenewalJWS() error = %v", err)
+	}
+	if decodedRenewal.AppAccountToken != fixtureAccountToken {
+		t.Fatalf("renewal app account token = %q", decodedRenewal.AppAccountToken)
+	}
+}
+
 // TestAdapterVerifiesAuthoritativeLifetimeTransaction verifies signed client and server JWS scope end to end.
 func TestAdapterVerifiesAuthoritativeLifetimeTransaction(t *testing.T) {
 	t.Parallel()

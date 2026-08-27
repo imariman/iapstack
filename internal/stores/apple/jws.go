@@ -39,6 +39,17 @@ func verifyTransactionJWS(signed string, roots trustedRoots) (transactionPayload
 	if err := verifyAppleJWS(signed, roots, &payload); err != nil {
 		return transactionPayload{}, err
 	}
+	payload.AppAccountToken = strings.ToLower(payload.AppAccountToken)
+	return payload, nil
+}
+
+// verifyRenewalJWS authenticates renewal claims and canonicalizes their UUID customer binding.
+func verifyRenewalJWS(signed string, roots trustedRoots) (renewalPayload, error) {
+	var payload renewalPayload
+	if err := verifyAppleJWS(signed, roots, &payload); err != nil {
+		return renewalPayload{}, err
+	}
+	payload.AppAccountToken = strings.ToLower(payload.AppAccountToken)
 	return payload, nil
 }
 

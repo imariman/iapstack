@@ -166,7 +166,7 @@ final class AppleIapStack {
         userCancelled: purchase.status == ApplePurchaseStatus.cancelled,
       );
     }
-    if (purchase.appAccountToken != externalCustomerId) {
+    if (purchase.appAccountToken?.toLowerCase() != externalCustomerId) {
       throw const AppleIapStackException(
         code: 'customer_binding_mismatch',
         message:

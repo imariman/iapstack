@@ -209,6 +209,28 @@ void main() {
         );
       },
     );
+
+    test('accepts StoreKit UUID bindings regardless of hex casing', () async {
+      var backendCalled = false;
+      final apple = AppleIapStack(
+        client: _backend((request) async {
+          backendCalled = true;
+          return http.Response(jsonEncode(_verificationJson), 200);
+        }),
+        productKinds: const <String, AppleProductKind>{
+          'premium_monthly': AppleProductKind.subscription,
+        },
+        platform: _FakePlatform(),
+      );
+
+      final result = await apple.verifyPurchase(
+        externalCustomerId: _customerId,
+        purchase: _purchase(appAccountToken: _customerId.toUpperCase()),
+      );
+
+      expect(backendCalled, isTrue);
+      expect(result.entitlements.single.grantsAccess, isTrue);
+    });
   });
 }
 

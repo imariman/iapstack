@@ -124,8 +124,8 @@ func (adapter *Adapter) querySubscriptionStatus(
 	if err != nil {
 		return transactionPayload{}, renewalPayload{}, 0, stores.Evidence{}, invalid("subscription_status", err)
 	}
-	var renewal renewalPayload
-	if err := verifyAppleJWS(item.SignedRenewalInfo, configuration.roots, &renewal); err != nil {
+	renewal, err := verifyRenewalJWS(item.SignedRenewalInfo, configuration.roots)
+	if err != nil {
 		return transactionPayload{}, renewalPayload{}, 0, stores.Evidence{}, invalid("subscription_status", err)
 	}
 	artifact, err := stores.NewEvidence("application/json", body)

@@ -123,7 +123,7 @@ final class ApplePluginPlatform implements AppleIapPlatform {
       transactionId: transactionId,
       productId: details.productID,
       signedTransaction: details.verificationData.serverVerificationData,
-      appAccountToken: details.appAccountToken,
+      appAccountToken: details.appAccountToken?.toLowerCase(),
       status: _purchaseStatus(details.status),
       pendingCompletion: details.pendingCompletePurchase,
       errorCode: details.error?.code,
@@ -176,7 +176,7 @@ ApplePurchase _restoredPurchase(SK2Transaction transaction) => ApplePurchase(
   transactionId: transaction.id,
   productId: transaction.productId,
   signedTransaction: transaction.receiptData ?? '',
-  appAccountToken: transaction.appAccountToken,
+  appAccountToken: transaction.appAccountToken?.toLowerCase(),
   status: ApplePurchaseStatus.restored,
   pendingCompletion: false,
 );
