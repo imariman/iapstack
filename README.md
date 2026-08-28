@@ -85,13 +85,14 @@ Configuration is supplied through environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `IAPSTACK_HTTP_ADDRESS` | `:8080` | API listen address in `host:port` form |
+| `IAPSTACK_HTTP_ADDRESS` | `:$PORT` or `:8080` | API listen address in `host:port` form; takes precedence over a platform-provided `PORT` |
 | `IAPSTACK_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline |
 | `IAPSTACK_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `IAPSTACK_DATABASE_URL` | none | PostgreSQL connection string required by database-backed modes |
 | `IAPSTACK_BOOTSTRAP_ADMIN_KEY` | none | Installation-only administrator bearer; when set it must contain at least 32 bytes |
 | `IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS` | `4` | Fail-fast concurrency bound for memory-hard API-key creation and verification; maximum `32` |
 | `IAPSTACK_PROTECTION_ACTIVE_KEY_ID` | none | Encryption key ID used for new protected values |
+| `IAPSTACK_PROTECTION_KEY` | none | Base64-encoded 32-byte encryption root key for an initial single-key deployment |
 | `IAPSTACK_PROTECTION_KEYS` | none | JSON object mapping key IDs to base64-encoded 32-byte encryption root keys |
 | `IAPSTACK_PROTECTION_FINGERPRINT_KEY` | none | Base64-encoded 32-byte stable fingerprint root key |
 | `IAPSTACK_WORKER_ID` | automatic | Optional River client identity; leave empty unless the deployment guarantees uniqueness |
@@ -105,11 +106,14 @@ Configuration is supplied through environment variables:
 Modes that handle provider evidence initialize the protection keyring before serving
 work and fail fast when any protection variable is missing or malformed. Generate every
 root key with a cryptographically secure secret generator such as
-`openssl rand -base64 32`. Keep the fingerprint key stable across ordinary encryption
-key rotations; changing it alters idempotency fingerprints and requires an explicit
-data migration. To rotate encryption, add the new key to `IAPSTACK_PROTECTION_KEYS`,
-select it with `IAPSTACK_PROTECTION_ACTIVE_KEY_ID`, and retain old keys until all values
-written with them have been re-encrypted or expired.
+`openssl rand -base64 32`. Configure exactly one of `IAPSTACK_PROTECTION_KEY` or
+`IAPSTACK_PROTECTION_KEYS`. The single-key form makes initial deployment compatible
+with managed-platform secret generators; switch to the JSON keyring before encryption
+key rotation. Keep the fingerprint key stable across ordinary encryption key rotations;
+changing it alters idempotency fingerprints and requires an explicit data migration.
+To rotate encryption, add the new key to `IAPSTACK_PROTECTION_KEYS`, select it with
+`IAPSTACK_PROTECTION_ACTIVE_KEY_ID`, and retain old keys until all values written with
+them have been re-encrypted or expired.
 
 Webhook delivery and configurable Huawei provider calls resolve and validate every
 A/AAAA destination at connection time, do not follow redirects, and permit public

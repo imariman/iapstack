@@ -16,6 +16,8 @@ const (
 	activeKeyIDEnvironmentName = "IAPSTACK_PROTECTION_ACTIVE_KEY_ID"
 	// encryptionKeysEnvironmentName is the public environment contract for encryption keys.
 	encryptionKeysEnvironmentName = "IAPSTACK_PROTECTION_KEYS"
+	// encryptionKeyEnvironmentName is the public environment contract for one encryption key.
+	encryptionKeyEnvironmentName = "IAPSTACK_PROTECTION_KEY"
 	// fingerprintKeyEnvironmentName is the public environment contract for the fingerprint key.
 	fingerprintKeyEnvironmentName = "IAPSTACK_PROTECTION_FINGERPRINT_KEY"
 	// environmentSecretMarker identifies malformed secret text that errors must redact.
@@ -49,6 +51,28 @@ func TestLoadConfigFromEnvironment(t *testing.T) {
 	}
 	if string(plaintext) != secretPlaintext {
 		t.Fatalf("Open() plaintext = %q", plaintext)
+	}
+}
+
+// TestLoadConfigFromEnvironmentSingleKey verifies the managed-platform convenience form.
+func TestLoadConfigFromEnvironmentSingleKey(t *testing.T) {
+	t.Parallel()
+
+	material := testKeyMaterial()
+	environment := map[string]string{
+		activeKeyIDEnvironmentName:    activeEncryptionKeyID,
+		encryptionKeyEnvironmentName:  base64.StdEncoding.EncodeToString(material.active),
+		fingerprintKeyEnvironmentName: base64.StdEncoding.EncodeToString(material.fingerprint),
+	}
+	config, err := platformprotection.LoadConfigFromEnvironment(environmentGetter(environment))
+	if err != nil {
+		t.Fatalf("LoadConfigFromEnvironment() error = %v", err)
+	}
+	if config.ActiveKeyID() != activeEncryptionKeyID {
+		t.Fatalf("ActiveKeyID() = %q, want %q", config.ActiveKeyID(), activeEncryptionKeyID)
+	}
+	if keyIDs := config.KeyIDs(); len(keyIDs) != 1 || keyIDs[0] != activeEncryptionKeyID {
+		t.Fatalf("KeyIDs() = %v, want [%s]", keyIDs, activeEncryptionKeyID)
 	}
 }
 
@@ -86,6 +110,33 @@ func TestLoadConfigFromEnvironmentRejectsInvalidSecrets(t *testing.T) {
 				"",
 			)),
 			forbidden: secretEnvironmentValues(valid),
+		},
+		{
+			name: "both encryption forms",
+			getenv: environmentGetter(withEnvironmentValue(
+				valid,
+				encryptionKeyEnvironmentName,
+				validKey,
+			)),
+			forbidden: append(secretEnvironmentValues(valid), validKey),
+		},
+		{
+			name: "invalid single encryption base64",
+			getenv: environmentGetter(map[string]string{
+				activeKeyIDEnvironmentName:    activeEncryptionKeyID,
+				encryptionKeyEnvironmentName:  environmentSecretMarker,
+				fingerprintKeyEnvironmentName: valid[fingerprintKeyEnvironmentName],
+			}),
+			forbidden: []string{environmentSecretMarker},
+		},
+		{
+			name: "short single encryption key",
+			getenv: environmentGetter(map[string]string{
+				activeKeyIDEnvironmentName:    activeEncryptionKeyID,
+				encryptionKeyEnvironmentName:  shortKey,
+				fingerprintKeyEnvironmentName: valid[fingerprintKeyEnvironmentName],
+			}),
+			forbidden: []string{shortKey},
 		},
 		{
 			name: "missing fingerprint key",

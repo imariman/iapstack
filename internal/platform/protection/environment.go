@@ -14,6 +14,8 @@ const (
 	activeKeyIDEnvironment = "IAPSTACK_PROTECTION_ACTIVE_KEY_ID"
 	// encryptionKeysEnvironment names the JSON object containing base64 encryption root keys.
 	encryptionKeysEnvironment = "IAPSTACK_PROTECTION_KEYS"
+	// encryptionKeyEnvironment names the single base64 encryption root key used for initial deployments.
+	encryptionKeyEnvironment = "IAPSTACK_PROTECTION_KEY"
 	// fingerprintKeyEnvironment names the stable base64 fingerprint root key.
 	fingerprintKeyEnvironment = "IAPSTACK_PROTECTION_FINGERPRINT_KEY"
 )
@@ -29,15 +31,29 @@ func LoadConfigFromEnvironment(getenv func(string) string) (Config, error) {
 		return Config{}, missingEnvironmentError(activeKeyIDEnvironment)
 	}
 	encodedKeys := strings.TrimSpace(getenv(encryptionKeysEnvironment))
-	if encodedKeys == "" {
-		return Config{}, missingEnvironmentError(encryptionKeysEnvironment)
+	encodedKey := strings.TrimSpace(getenv(encryptionKeyEnvironment))
+	if encodedKeys == "" && encodedKey == "" {
+		return Config{}, fmt.Errorf(
+			"%w: %s or %s is required",
+			ErrInvalidConfiguration,
+			encryptionKeysEnvironment,
+			encryptionKeyEnvironment,
+		)
+	}
+	if encodedKeys != "" && encodedKey != "" {
+		return Config{}, fmt.Errorf(
+			"%w: configure only one of %s or %s",
+			ErrInvalidConfiguration,
+			encryptionKeysEnvironment,
+			encryptionKeyEnvironment,
+		)
 	}
 	encodedFingerprintKey := strings.TrimSpace(getenv(fingerprintKeyEnvironment))
 	if encodedFingerprintKey == "" {
 		return Config{}, missingEnvironmentError(fingerprintKeyEnvironment)
 	}
 
-	encryptionKeys, err := decodeEncryptionKeys(encodedKeys)
+	encryptionKeys, err := decodeEnvironmentEncryptionKeys(activeKeyID, encodedKeys, encodedKey)
 	if err != nil {
 		return Config{}, err
 	}
@@ -48,6 +64,20 @@ func LoadConfigFromEnvironment(getenv func(string) string) (Config, error) {
 	}
 	defer zeroBytes(fingerprintKey)
 	return NewConfig(activeKeyID, encryptionKeys, fingerprintKey)
+}
+
+// decodeEnvironmentEncryptionKeys loads either the rotation-capable keyring or
+// the single-key convenience form used by managed-platform secret generators.
+func decodeEnvironmentEncryptionKeys(activeKeyID, encodedKeys, encodedKey string) (map[string][]byte, error) {
+	if encodedKeys != "" {
+		return decodeEncryptionKeys(encodedKeys)
+	}
+
+	key, err := decodeRootKey(encryptionKeyEnvironment, encodedKey)
+	if err != nil {
+		return nil, err
+	}
+	return map[string][]byte{activeKeyID: key}, nil
 }
 
 // OpenFromEnvironment loads validated secrets and constructs an immutable protection keyring.

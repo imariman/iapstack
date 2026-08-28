@@ -66,8 +66,9 @@ type Config struct {
 // Load reads and validates process configuration from environment values.
 func Load(getenv func(string) string) (Config, error) {
 	var err error
+	httpAddress, httpAddressEnvironment := resolveHTTPAddress(getenv)
 	cfg := Config{
-		HTTPAddress:                  valueOrDefault(getenv("IAPSTACK_HTTP_ADDRESS"), defaultHTTPAddress),
+		HTTPAddress:                  httpAddress,
 		WorkerHTTPAddress:            valueOrDefault(getenv("IAPSTACK_WORKER_HTTP_ADDRESS"), defaultWorkerHTTPAddress),
 		ShutdownTimeout:              defaultShutdownTimeout,
 		ReadinessTimeout:             defaultReadinessTimeout,
@@ -172,7 +173,7 @@ func Load(getenv func(string) string) (Config, error) {
 		cfg.LogLevel = level
 	}
 
-	if err := validateHTTPAddress(cfg.HTTPAddress); err != nil {
+	if err := validateAddress(httpAddressEnvironment, cfg.HTTPAddress); err != nil {
 		return Config{}, err
 	}
 	if err := validateAddress("IAPSTACK_WORKER_HTTP_ADDRESS", cfg.WorkerHTTPAddress); err != nil {
@@ -180,6 +181,18 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// resolveHTTPAddress prefers the native IAPStack setting and otherwise honors the
+// conventional port injected by managed application platforms.
+func resolveHTTPAddress(getenv func(string) string) (string, string) {
+	if address := strings.TrimSpace(getenv("IAPSTACK_HTTP_ADDRESS")); address != "" {
+		return address, "IAPSTACK_HTTP_ADDRESS"
+	}
+	if port := strings.TrimSpace(getenv("PORT")); port != "" {
+		return ":" + port, "PORT"
+	}
+	return defaultHTTPAddress, "IAPSTACK_HTTP_ADDRESS"
 }
 
 // strictBoolean accepts explicit true or false configuration without permissive aliases.
@@ -234,11 +247,6 @@ func parseLogLevel(value string) (slog.Level, error) {
 	default:
 		return 0, fmt.Errorf("IAPSTACK_LOG_LEVEL must be one of debug, info, warn, or error")
 	}
-}
-
-// validateHTTPAddress checks host-port syntax and the usable TCP port range.
-func validateHTTPAddress(address string) error {
-	return validateAddress("IAPSTACK_HTTP_ADDRESS", address)
 }
 
 // validateAddress checks one named host-port setting and usable TCP port range.

@@ -11,6 +11,8 @@ import (
 const (
 	// httpAddressEnvironment names the HTTP listen-address setting used by tests.
 	httpAddressEnvironment = "IAPSTACK_HTTP_ADDRESS"
+	// portEnvironment names the conventional managed-platform listen port.
+	portEnvironment = "PORT"
 	// shutdownTimeoutEnvironment names the graceful-shutdown setting used by tests.
 	shutdownTimeoutEnvironment = "IAPSTACK_SHUTDOWN_TIMEOUT"
 	// workerHTTPAddressEnvironment names the worker probe-address setting used by tests.
@@ -77,6 +79,35 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadUsesPlatformPort verifies managed platforms can inject their native port.
+func TestLoadUsesPlatformPort(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load(env(map[string]string{portEnvironment: "10000"}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.HTTPAddress != ":10000" {
+		t.Errorf("HTTPAddress = %q, want :10000", cfg.HTTPAddress)
+	}
+}
+
+// TestLoadHTTPAddressOverridesPlatformPort verifies the product-specific setting wins.
+func TestLoadHTTPAddressOverridesPlatformPort(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load(env(map[string]string{
+		httpAddressEnvironment: overriddenHTTPAddress,
+		portEnvironment:        "10000",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.HTTPAddress != overriddenHTTPAddress {
+		t.Errorf("HTTPAddress = %q, want %q", cfg.HTTPAddress, overriddenHTTPAddress)
+	}
+}
+
 // TestLoadOverrides verifies supported environment configuration overrides.
 func TestLoadOverrides(t *testing.T) {
 	t.Parallel()
@@ -127,6 +158,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	}{
 		{name: "address shape", values: map[string]string{httpAddressEnvironment: "8080"}},
 		{name: "address port", values: map[string]string{httpAddressEnvironment: ":0"}},
+		{name: "platform port syntax", values: map[string]string{portEnvironment: "http"}},
+		{name: "platform port range", values: map[string]string{portEnvironment: "65536"}},
 		{name: "worker address", values: map[string]string{workerHTTPAddressEnvironment: "8081"}},
 		{name: "shutdown syntax", values: map[string]string{shutdownTimeoutEnvironment: "later"}},
 		{name: "shutdown sign", values: map[string]string{shutdownTimeoutEnvironment: "-1s"}},
