@@ -1,12 +1,12 @@
-name: Stable release
+name: Release
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Stable semantic version to publish
+        description: Stable or numbered release-candidate version to publish
         required: true
-        default: v0.1.0
+        default: v0.1.0-rc.1
         type: string
 
 permissions:
@@ -17,7 +17,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: stable-release
+  group: release
   cancel-in-progress: false
 
 env:
@@ -26,7 +26,7 @@ env:
 
 jobs:
   release:
-    name: Validate and publish stable release
+    name: Validate and publish release
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: stable-release
@@ -52,15 +52,15 @@ jobs:
           set -euo pipefail
 
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Stable releases must be dispatched from main."
+            echo "Releases must be dispatched from main."
             exit 1
           fi
-          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Version must be a stable semantic tag such as v0.1.0."
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]; then
+            echo "Version must be stable or a numbered candidate such as v0.1.0 or v0.1.0-rc.1."
             exit 1
           fi
 
-          evidence_path="docs/releases/${VERSION}-sandbox-evidence.json"
+          evidence_path="docs/releases/${VERSION}-release-evidence.json"
           test -s "$evidence_path"
           go run ./cmd/iapstack-release "$evidence_path"
 
@@ -124,9 +124,8 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{ inputs.version }}
-            type=semver,pattern={{version}},value=${{ inputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
-            type=raw,value=latest
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }},enable=${{ !contains(inputs.version, '-rc.') }}
+            type=raw,value=latest,enable=${{ !contains(inputs.version, '-rc.') }}
           labels: |
             org.opencontainers.image.title=IAPStack
             org.opencontainers.image.description=Self-hosted in-app purchase verification and entitlement infrastructure
@@ -153,7 +152,7 @@ jobs:
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
 
-      - name: Prepare stable release notes
+      - name: Prepare release notes
         env:
           VERSION: ${{ inputs.version }}
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
@@ -168,7 +167,7 @@ jobs:
           # shellcheck disable=SC2016
           {
             printf '# IAPStack %s\n\n' "$VERSION"
-            printf 'This stable release passed the automated and real-device Huawei v0.1 release gates.\n\n'
+            printf 'This release passed the automated and real-provider Apple App Store, Google Play, and Huawei AppGallery v0.1 gates.\n\n'
             printf '## Immutable inputs\n\n'
             printf -- '- Tested candidate: `%s`\n' "$candidate"
             printf -- '- Candidate CI: %s\n' "$candidate_ci_url"
@@ -184,16 +183,23 @@ jobs:
 
           echo "RELEASE_NOTES=$notes_path" >> "$GITHUB_ENV"
 
-      - name: Create stable GitHub release
+      - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
+          release_flags=(
+            --target "$GITHUB_SHA"
+            --title "IAPStack $VERSION"
+            --notes-file "$RELEASE_NOTES"
+          )
+          if [[ "$VERSION" == *-rc.* ]]; then
+            release_flags+=(--prerelease)
+          else
+            release_flags+=(--latest)
+          fi
           gh release create "$VERSION" \
-            "$EVIDENCE_PATH#Huawei sandbox release evidence" \
-            --target "$GITHUB_SHA" \
-            --title "IAPStack $VERSION" \
-            --notes-file "$RELEASE_NOTES" \
-            --latest
+            "$EVIDENCE_PATH#Three-provider release evidence" \
+            "${release_flags[@]}"

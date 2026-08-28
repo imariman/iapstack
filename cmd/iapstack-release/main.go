@@ -1,4 +1,4 @@
-// Package main validates the evidence required before publishing a stable IAPStack release.
+// Package main validates the evidence required before publishing an IAPStack release.
 package main
 
 import (
@@ -16,10 +16,10 @@ func main() {
 	}
 }
 
-// run validates one strict sandbox evidence file supplied by the release operator.
+// run validates one strict multi-provider evidence file supplied by the release operator.
 func run(arguments []string) error {
 	if len(arguments) != 2 {
-		return fmt.Errorf("usage: iapstack-release <sandbox-evidence.json>")
+		return fmt.Errorf("usage: iapstack-release <release-evidence.json>")
 	}
 	file, err := os.Open(arguments[1])
 	if err != nil {
@@ -30,7 +30,7 @@ func run(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "stable release evidence passed for %s at commit %s\n",
+	_, _ = fmt.Fprintf(os.Stdout, "release evidence passed for %s at commit %s\n",
 		evidence.Release, evidence.Commit)
 	return nil
 }

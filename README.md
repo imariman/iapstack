@@ -52,20 +52,21 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 - [Machine-readable OpenAPI v1 contract](contracts/openapi/v1.yaml)
 - [Operations and dashboard guide](docs/operations.md)
 - [v0.1 threat model and security release checklist](docs/security.md)
-- [v0.1.0 Huawei sandbox release gate](docs/releases/v0.1.0.md)
+- [v0.1.0-rc.1 three-provider release gate](docs/releases/v0.1.0-rc.1.md)
 - [Provider-neutral Flutter SDK](sdk/flutter/iapstack/README.md)
 - [Huawei Flutter SDK and sandbox example](sdk/flutter/iapstack_huawei/README.md)
 - [Google Play Flutter SDK and internal-testing example](sdk/flutter/iapstack_google_play/README.md)
 - [Apple StoreKit 2 Flutter SDK and iOS testing example](sdk/flutter/iapstack_apple/README.md)
 
-The server currently has production-shaped Huawei verification plus Apple App Store
-and Google Play server slices. Apple includes StoreKit 2 signed-transaction verification,
+The server has production-shaped Huawei, Apple App Store, and Google Play server
+slices. Apple includes StoreKit 2 signed-transaction verification,
 Notifications V2 ingestion, authoritative renewal-status reconciliation, and a Flutter
 companion with an iOS StoreKit testing harness. Google Play includes authenticated RTDN
 ingestion, authoritative worker reconciliation, post-commit purchase acknowledgement,
-and a Flutter Billing companion with an Android internal-testing harness. Google Play
-consumable fulfillment and real provider sandbox release gates are still required
-before the new providers are stable.
+and a Flutter Billing companion with an Android internal-testing harness. Apple,
+Google Play, and Huawei must all pass their real-provider lifecycle gates before any
+v0.1 release candidate or stable release is published. Google Play consumable
+fulfillment remains outside v0.1.
 
 ## Development
 
@@ -164,21 +165,23 @@ Run the clean Compose release gate locally with:
 ./deploy/e2e/run.sh
 ```
 
-It exercises PostgreSQL migration, API bootstrap, signed Huawei verification, River worker restart recovery, duplicate notification handling, entitlement projection, and signed webhook delivery.
+It exercises PostgreSQL migration, API bootstrap, signed Huawei verification, River worker restart recovery, duplicate notification handling, entitlement projection, and signed webhook delivery. The provider-specific unit and integration suites cover the Apple and Google server paths; real-store gates remain mandatory for all three providers.
 
-The automated fixture does not replace Huawei-managed lifecycle testing. Before a
-stable v0.1.0 tag, complete the real-device [Huawei sandbox release gate](docs/releases/v0.1.0.md)
-and validate its secret-free evidence with:
+The automated fixture does not replace provider-managed lifecycle testing. Before a
+`v0.1.0-rc.1` tag, complete the real-device Apple App Store, Google Play, and Huawei
+gates in the [three-provider release runbook](docs/releases/v0.1.0-rc.1.md) and
+validate their aggregate secret-free evidence with:
 
 ```sh
-go run ./cmd/iapstack-release docs/releases/v0.1.0-sandbox-evidence.json
+go run ./cmd/iapstack-release docs/releases/v0.1.0-rc.1-release-evidence.json
 ```
 
 After an evidence-only pull request is merged and its main CI succeeds, dispatch the
-`Stable release` workflow from `main`. It revalidates the evidence, candidate ancestry,
+`Release` workflow from `main`. It revalidates the evidence, candidate ancestry,
 candidate and release-commit CI runs, and evidence-only diff before creating the Git
 tag and GitHub release. The workflow publishes signed-provenance, SBOM-bearing
-`linux/amd64` and `linux/arm64` images to `ghcr.io/imariman/iapstack`; stable tags must
+`linux/amd64` and `linux/arm64` images to `ghcr.io/imariman/iapstack`; release
+candidates are GitHub prereleases and never update stable container aliases. Tags must
 not be created manually.
 
 Purchase verification is coordinated by the provider-neutral `internal/verification`
@@ -243,8 +246,8 @@ credential/evidence and notification contracts, and webhook verification rules a
 - [x] Build the initial dashboard
 - [x] Support lifecycle reconciliation and signed outbound webhooks
 - [x] Publish a machine-readable v1 API contract with client compatibility checks
-- [ ] Complete the Huawei sandbox release gate and publish stable v0.1
-- [ ] Complete Apple App Store and Google Play lifecycle support and SDK release gates
+- [ ] Complete Apple App Store, Google Play, and Huawei lifecycle release gates and publish `v0.1.0-rc.1`
+- [ ] Resolve candidate feedback and publish stable `v0.1.0`
 - [ ] Add Amazon Appstore and additional store adapters
 - [ ] Support customer migration and alias consolidation
 

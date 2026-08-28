@@ -1,0 +1,525 @@
+{
+  "schema_version": 2,
+  "release": "v0.1.0-rc.1",
+  "commit": "0000000000000000000000000000000000000000",
+  "automated": {
+    "ci_run_url": "https://github.com/imariman/iapstack/actions/runs/REPLACE_WITH_RUN_ID",
+    "go_checks_passed": false,
+    "flutter_checks_passed": false,
+    "container_passed": false,
+    "compose_passed": false
+  },
+  "providers": [
+    {
+      "provider": "apple_app_store",
+      "executed_at": "2026-08-28T20:00:00Z",
+      "operator": "REPLACE_WITH_OPERATOR",
+      "environment": {
+        "tester_account_ready": false,
+        "provider_configuration_ready": false,
+        "application_id": "REPLACE_WITH_NON_SECRET_APPLICATION_ID",
+        "app_version": "REPLACE_WITH_APP_VERSION",
+        "device_model": "REPLACE_WITH_DEVICE_MODEL",
+        "os_version": "REPLACE_WITH_OS_VERSION",
+        "store_runtime_version": "REPLACE_WITH_STOREKIT_AND_APP_STORE_SANDBOX_RUNTIME"
+      },
+      "scenarios": [
+        {
+          "name": "non_consumable_purchase",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-non_consumable_purchase-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "non_consumable_duplicate_restore",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-non_consumable_duplicate_restore-1",
+            "REPLACE-apple_app_store-non_consumable_duplicate_restore-2"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_initial",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-subscription_initial-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_renewal",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-subscription_renewal-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_cancellation",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-subscription_cancellation-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_expiration",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-subscription_expiration-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_billing_retry",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-subscription_billing_retry-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_grace",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-subscription_grace-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_refund",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-subscription_refund-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_revocation",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-subscription_revocation-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "invalid_signature",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-invalid_signature-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "wrong_application_binding",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-wrong_application_binding-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "wrong_product_binding",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-wrong_product_binding-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "wrong_customer_binding",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-wrong_customer_binding-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "duplicate_notification",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-duplicate_notification-1",
+            "REPLACE-apple_app_store-duplicate_notification-2"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "missed_notification_reconciliation",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-apple_app_store-missed_notification_reconciliation-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        }
+      ]
+    },
+    {
+      "provider": "google_play",
+      "executed_at": "2026-08-28T20:00:00Z",
+      "operator": "REPLACE_WITH_OPERATOR",
+      "environment": {
+        "tester_account_ready": false,
+        "provider_configuration_ready": false,
+        "application_id": "REPLACE_WITH_NON_SECRET_APPLICATION_ID",
+        "app_version": "REPLACE_WITH_APP_VERSION",
+        "device_model": "REPLACE_WITH_DEVICE_MODEL",
+        "os_version": "REPLACE_WITH_OS_VERSION",
+        "store_runtime_version": "REPLACE_WITH_PLAY_STORE_AND_BILLING_RUNTIME"
+      },
+      "scenarios": [
+        {
+          "name": "non_consumable_purchase",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-non_consumable_purchase-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "non_consumable_duplicate_restore",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-non_consumable_duplicate_restore-1",
+            "REPLACE-google_play-non_consumable_duplicate_restore-2"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_initial",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-subscription_initial-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_renewal",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-subscription_renewal-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_cancellation",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-subscription_cancellation-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_expiration",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-subscription_expiration-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_grace",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-subscription_grace-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_account_hold",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-subscription_account_hold-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_pause",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-subscription_pause-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_refund",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-subscription_refund-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_revocation",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-subscription_revocation-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "pending_purchase",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-pending_purchase-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "post_commit_acknowledgement",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-post_commit_acknowledgement-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "invalid_purchase_token",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-invalid_purchase_token-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "wrong_application_binding",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-wrong_application_binding-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "wrong_product_binding",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-wrong_product_binding-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "wrong_customer_binding",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-wrong_customer_binding-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "duplicate_notification",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-duplicate_notification-1",
+            "REPLACE-google_play-duplicate_notification-2"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "missed_notification_reconciliation",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-google_play-missed_notification_reconciliation-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        }
+      ]
+    },
+    {
+      "provider": "huawei_appgallery",
+      "executed_at": "2026-08-28T20:00:00Z",
+      "operator": "REPLACE_WITH_OPERATOR",
+      "environment": {
+        "tester_account_ready": false,
+        "provider_configuration_ready": false,
+        "application_id": "REPLACE_WITH_NON_SECRET_APPLICATION_ID",
+        "app_version": "REPLACE_WITH_APP_VERSION",
+        "device_model": "REPLACE_WITH_DEVICE_MODEL",
+        "os_version": "REPLACE_WITH_OS_VERSION",
+        "store_runtime_version": "REPLACE_WITH_HMS_CORE_VERSION"
+      },
+      "scenarios": [
+        {
+          "name": "lifetime_purchase",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-lifetime_purchase-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "lifetime_duplicate_restore",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-lifetime_duplicate_restore-1",
+            "REPLACE-huawei_appgallery-lifetime_duplicate_restore-2"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_initial",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-subscription_initial-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_renewal",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-subscription_renewal-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_cancellation",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-subscription_cancellation-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_expiration",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-subscription_expiration-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_grace",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-subscription_grace-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_refund",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-subscription_refund-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "subscription_revocation",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-subscription_revocation-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "invalid_signature",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-invalid_signature-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "wrong_application_binding",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-wrong_application_binding-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "wrong_product_binding",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-wrong_product_binding-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "wrong_customer_binding",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-wrong_customer_binding-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "duplicate_notification",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-duplicate_notification-1",
+            "REPLACE-huawei_appgallery-duplicate_notification-2"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        },
+        {
+          "name": "missed_notification_reconciliation",
+          "passed": false,
+          "observed_at": "2026-08-28T20:00:00Z",
+          "request_ids": [
+            "REPLACE-huawei_appgallery-missed_notification_reconciliation-1"
+          ],
+          "assertion": "REPLACE_WITH_OBSERVED_RESULT"
+        }
+      ]
+    }
+  ],
+  "webhook": {
+    "signed_delivery_passed": false,
+    "tamper_rejected": false,
+    "stale_rejected": false,
+    "duplicate_deduplicated": false
+  },
+  "no_secrets_attested": false
+}

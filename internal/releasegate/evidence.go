@@ -1,4 +1,4 @@
-// Package releasegate validates secret-free evidence required for a stable release.
+// Package releasegate validates secret-free evidence required for a release.
 package releasegate
 
 import (
@@ -14,24 +14,30 @@ import (
 )
 
 const (
-	// CurrentSchemaVersion is the only sandbox evidence contract accepted by this release line.
-	CurrentSchemaVersion = 1
+	// CurrentSchemaVersion is the only release evidence contract accepted by this release line.
+	CurrentSchemaVersion = 2
 	// maximumEvidenceText bounds human-authored evidence fields.
 	maximumEvidenceText = 500
 	// maximumRequestIDLength matches the public HTTP request identity boundary.
 	maximumRequestIDLength = 128
+	// ProviderAppleAppStore identifies Apple's real-provider release gate.
+	ProviderAppleAppStore Provider = "apple_app_store"
+	// ProviderGooglePlay identifies Google Play's real-provider release gate.
+	ProviderGooglePlay Provider = "google_play"
+	// ProviderHuaweiAppGallery identifies Huawei AppGallery's real-provider release gate.
+	ProviderHuaweiAppGallery Provider = "huawei_appgallery"
 )
 
-// Evidence is one secret-free stable-release approval record.
+// Provider identifies one store whose real-provider gate blocks the release.
+type Provider string
+
+// Evidence is one secret-free release approval record shared by every provider.
 type Evidence struct {
 	SchemaVersion     int                `json:"schema_version"`
 	Release           string             `json:"release"`
 	Commit            string             `json:"commit"`
-	ExecutedAt        time.Time          `json:"executed_at"`
-	Operator          string             `json:"operator"`
 	Automated         AutomatedEvidence  `json:"automated"`
-	Sandbox           SandboxEvidence    `json:"sandbox"`
-	Scenarios         []ScenarioEvidence `json:"scenarios"`
+	Providers         []ProviderEvidence `json:"providers"`
 	Webhook           WebhookEvidence    `json:"webhook"`
 	NoSecretsAttested bool               `json:"no_secrets_attested"`
 }
@@ -45,14 +51,24 @@ type AutomatedEvidence struct {
 	ComposePassed       bool   `json:"compose_passed"`
 }
 
-// SandboxEvidence records non-secret Huawei device and application eligibility.
-type SandboxEvidence struct {
-	SandboxUserActive bool   `json:"sandbox_user_active"`
-	SandboxAPKActive  bool   `json:"sandbox_apk_active"`
-	ApplicationID     string `json:"application_id"`
-	AppVersion        string `json:"app_version"`
-	DeviceModel       string `json:"device_model"`
-	HMSCoreVersion    string `json:"hms_core_version"`
+// ProviderEvidence records one store's manual test execution.
+type ProviderEvidence struct {
+	Provider    Provider            `json:"provider"`
+	ExecutedAt  time.Time           `json:"executed_at"`
+	Operator    string              `json:"operator"`
+	Environment EnvironmentEvidence `json:"environment"`
+	Scenarios   []ScenarioEvidence  `json:"scenarios"`
+}
+
+// EnvironmentEvidence records non-secret provider test readiness and runtime identity.
+type EnvironmentEvidence struct {
+	TesterAccountReady         bool   `json:"tester_account_ready"`
+	ProviderConfigurationReady bool   `json:"provider_configuration_ready"`
+	ApplicationID              string `json:"application_id"`
+	AppVersion                 string `json:"app_version"`
+	DeviceModel                string `json:"device_model"`
+	OSVersion                  string `json:"os_version"`
+	StoreRuntimeVersion        string `json:"store_runtime_version"`
 }
 
 // ScenarioEvidence records one manual provider lifecycle assertion without raw purchase data.
@@ -72,35 +88,75 @@ type WebhookEvidence struct {
 	DuplicateDeduplicated bool `json:"duplicate_deduplicated"`
 }
 
-// scenarioRequirement defines the minimum correlation evidence for one release scenario.
 type scenarioRequirement struct {
 	minimumRequestIDs int
 }
 
 var (
-	// stableVersionPattern accepts stable semantic release tags and rejects candidate suffixes.
-	stableVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
-	// requiredScenarios is the closed Huawei v0.1 manual lifecycle gate.
-	requiredScenarios = map[string]scenarioRequirement{
-		"lifetime_purchase":                  {minimumRequestIDs: 1},
-		"lifetime_duplicate_restore":         {minimumRequestIDs: 2},
-		"subscription_initial":               {minimumRequestIDs: 1},
-		"subscription_renewal":               {minimumRequestIDs: 1},
-		"subscription_cancellation":          {minimumRequestIDs: 1},
-		"subscription_expiration":            {minimumRequestIDs: 1},
-		"subscription_grace":                 {minimumRequestIDs: 1},
-		"subscription_refund":                {minimumRequestIDs: 1},
-		"subscription_revocation":            {minimumRequestIDs: 1},
-		"invalid_signature":                  {minimumRequestIDs: 1},
-		"wrong_application_binding":          {minimumRequestIDs: 1},
-		"wrong_product_binding":              {minimumRequestIDs: 1},
-		"wrong_customer_binding":             {minimumRequestIDs: 1},
-		"duplicate_notification":             {minimumRequestIDs: 2},
-		"missed_notification_reconciliation": {minimumRequestIDs: 1},
+	// releaseVersionPattern accepts stable versions and numbered release candidates only.
+	releaseVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[1-9][0-9]*)?$`)
+	// providerRequirements is the closed v0.1 real-provider lifecycle gate.
+	providerRequirements = map[Provider]map[string]scenarioRequirement{
+		ProviderHuaweiAppGallery: {
+			"lifetime_purchase":                  {minimumRequestIDs: 1},
+			"lifetime_duplicate_restore":         {minimumRequestIDs: 2},
+			"subscription_initial":               {minimumRequestIDs: 1},
+			"subscription_renewal":               {minimumRequestIDs: 1},
+			"subscription_cancellation":          {minimumRequestIDs: 1},
+			"subscription_expiration":            {minimumRequestIDs: 1},
+			"subscription_grace":                 {minimumRequestIDs: 1},
+			"subscription_refund":                {minimumRequestIDs: 1},
+			"subscription_revocation":            {minimumRequestIDs: 1},
+			"invalid_signature":                  {minimumRequestIDs: 1},
+			"wrong_application_binding":          {minimumRequestIDs: 1},
+			"wrong_product_binding":              {minimumRequestIDs: 1},
+			"wrong_customer_binding":             {minimumRequestIDs: 1},
+			"duplicate_notification":             {minimumRequestIDs: 2},
+			"missed_notification_reconciliation": {minimumRequestIDs: 1},
+		},
+		ProviderAppleAppStore: {
+			"non_consumable_purchase":            {minimumRequestIDs: 1},
+			"non_consumable_duplicate_restore":   {minimumRequestIDs: 2},
+			"subscription_initial":               {minimumRequestIDs: 1},
+			"subscription_renewal":               {minimumRequestIDs: 1},
+			"subscription_cancellation":          {minimumRequestIDs: 1},
+			"subscription_expiration":            {minimumRequestIDs: 1},
+			"subscription_billing_retry":         {minimumRequestIDs: 1},
+			"subscription_grace":                 {minimumRequestIDs: 1},
+			"subscription_refund":                {minimumRequestIDs: 1},
+			"subscription_revocation":            {minimumRequestIDs: 1},
+			"invalid_signature":                  {minimumRequestIDs: 1},
+			"wrong_application_binding":          {minimumRequestIDs: 1},
+			"wrong_product_binding":              {minimumRequestIDs: 1},
+			"wrong_customer_binding":             {minimumRequestIDs: 1},
+			"duplicate_notification":             {minimumRequestIDs: 2},
+			"missed_notification_reconciliation": {minimumRequestIDs: 1},
+		},
+		ProviderGooglePlay: {
+			"non_consumable_purchase":            {minimumRequestIDs: 1},
+			"non_consumable_duplicate_restore":   {minimumRequestIDs: 2},
+			"subscription_initial":               {minimumRequestIDs: 1},
+			"subscription_renewal":               {minimumRequestIDs: 1},
+			"subscription_cancellation":          {minimumRequestIDs: 1},
+			"subscription_expiration":            {minimumRequestIDs: 1},
+			"subscription_grace":                 {minimumRequestIDs: 1},
+			"subscription_account_hold":          {minimumRequestIDs: 1},
+			"subscription_pause":                 {minimumRequestIDs: 1},
+			"subscription_refund":                {minimumRequestIDs: 1},
+			"subscription_revocation":            {minimumRequestIDs: 1},
+			"pending_purchase":                   {minimumRequestIDs: 1},
+			"post_commit_acknowledgement":        {minimumRequestIDs: 1},
+			"invalid_purchase_token":             {minimumRequestIDs: 1},
+			"wrong_application_binding":          {minimumRequestIDs: 1},
+			"wrong_product_binding":              {minimumRequestIDs: 1},
+			"wrong_customer_binding":             {minimumRequestIDs: 1},
+			"duplicate_notification":             {minimumRequestIDs: 2},
+			"missed_notification_reconciliation": {minimumRequestIDs: 1},
+		},
 	}
 )
 
-// Decode reads one strict JSON evidence document and validates every stable-release invariant.
+// Decode reads one strict JSON evidence document and validates every release invariant.
 func Decode(reader io.Reader) (Evidence, error) {
 	if reader == nil {
 		return Evidence{}, errors.New("release evidence reader is required")
@@ -121,33 +177,21 @@ func Decode(reader io.Reader) (Evidence, error) {
 	return evidence, nil
 }
 
-// Validate checks immutable CI linkage, sandbox eligibility, scenarios, and webhook controls.
+// Validate checks immutable CI linkage, all provider gates, and webhook controls.
 func (evidence Evidence) Validate() error {
 	if evidence.SchemaVersion != CurrentSchemaVersion {
 		return fmt.Errorf("release evidence schema_version must be %d", CurrentSchemaVersion)
 	}
-	if !stableVersionPattern.MatchString(evidence.Release) {
-		return errors.New("release must be a stable semantic tag such as v0.1.0")
+	if !releaseVersionPattern.MatchString(evidence.Release) {
+		return errors.New("release must be a stable semantic tag or numbered candidate such as v0.1.0 or v0.1.0-rc.1")
 	}
 	if err := validateCommit(evidence.Commit); err != nil {
-		return err
-	}
-	if evidence.ExecutedAt.IsZero() {
-		return errors.New("release evidence executed_at is required")
-	}
-	if !isUTC(evidence.ExecutedAt) {
-		return errors.New("release evidence executed_at must use UTC")
-	}
-	if err := validateText("operator", evidence.Operator); err != nil {
 		return err
 	}
 	if err := evidence.Automated.validate(); err != nil {
 		return err
 	}
-	if err := evidence.Sandbox.validate(); err != nil {
-		return err
-	}
-	if err := validateScenarios(evidence.Scenarios, evidence.ExecutedAt); err != nil {
+	if err := validateProviders(evidence.Providers); err != nil {
 		return err
 	}
 	if err := evidence.Webhook.validate(); err != nil {
@@ -172,18 +216,61 @@ func (evidence AutomatedEvidence) validate() error {
 	return nil
 }
 
-// validate requires Huawei to confirm both tester-account and APK sandbox eligibility.
-func (evidence SandboxEvidence) validate() error {
-	if !evidence.SandboxUserActive || !evidence.SandboxAPKActive {
-		return errors.New("Huawei sandbox user and APK must both be active")
+// validateProviders requires every supported provider exactly once and unique request IDs globally.
+func validateProviders(providers []ProviderEvidence) error {
+	if len(providers) != len(providerRequirements) {
+		return fmt.Errorf("release evidence must contain exactly %d provider gates", len(providerRequirements))
+	}
+	seenProviders := make(map[Provider]struct{}, len(providers))
+	requestIDs := make(map[string]string)
+	for _, provider := range providers {
+		requirements, supported := providerRequirements[provider.Provider]
+		if !supported {
+			return fmt.Errorf("unsupported release provider %q", provider.Provider)
+		}
+		if _, duplicate := seenProviders[provider.Provider]; duplicate {
+			return fmt.Errorf("duplicate release provider %q", provider.Provider)
+		}
+		seenProviders[provider.Provider] = struct{}{}
+		if err := provider.validate(requirements, requestIDs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validate checks one provider's operator, environment, execution time, and lifecycle matrix.
+func (evidence ProviderEvidence) validate(requirements map[string]scenarioRequirement, requestIDs map[string]string) error {
+	providerName := string(evidence.Provider)
+	if evidence.ExecutedAt.IsZero() {
+		return fmt.Errorf("%s executed_at is required", providerName)
+	}
+	if !isUTC(evidence.ExecutedAt) {
+		return fmt.Errorf("%s executed_at must use UTC", providerName)
+	}
+	if err := validateText(providerName+" operator", evidence.Operator); err != nil {
+		return err
+	}
+	if err := evidence.Environment.validate(evidence.Provider); err != nil {
+		return err
+	}
+	return validateScenarios(evidence.Provider, evidence.Scenarios, requirements, evidence.ExecutedAt, requestIDs)
+}
+
+// validate requires the provider-specific runbook readiness checks and non-secret runtime identity.
+func (evidence EnvironmentEvidence) validate(provider Provider) error {
+	providerName := string(provider)
+	if !evidence.TesterAccountReady || !evidence.ProviderConfigurationReady {
+		return fmt.Errorf("%s tester account and provider configuration must both be ready", providerName)
 	}
 	for name, value := range map[string]string{
-		"sandbox application_id":   evidence.ApplicationID,
-		"sandbox app_version":      evidence.AppVersion,
-		"sandbox device_model":     evidence.DeviceModel,
-		"sandbox hms_core_version": evidence.HMSCoreVersion,
+		"application_id":        evidence.ApplicationID,
+		"app_version":           evidence.AppVersion,
+		"device_model":          evidence.DeviceModel,
+		"os_version":            evidence.OSVersion,
+		"store_runtime_version": evidence.StoreRuntimeVersion,
 	} {
-		if err := validateText(name, value); err != nil {
+		if err := validateText(providerName+" "+name, value); err != nil {
 			return err
 		}
 	}
@@ -199,50 +286,57 @@ func (evidence WebhookEvidence) validate() error {
 	return nil
 }
 
-// validateScenarios requires each closed Huawei lifecycle scenario exactly once.
-func validateScenarios(scenarios []ScenarioEvidence, executedAt time.Time) error {
-	if len(scenarios) != len(requiredScenarios) {
-		return fmt.Errorf("release evidence must contain exactly %d Huawei scenarios", len(requiredScenarios))
+// validateScenarios requires the provider's closed lifecycle matrix exactly once.
+func validateScenarios(
+	provider Provider,
+	scenarios []ScenarioEvidence,
+	requirements map[string]scenarioRequirement,
+	executedAt time.Time,
+	requestIDs map[string]string,
+) error {
+	providerName := string(provider)
+	if len(scenarios) != len(requirements) {
+		return fmt.Errorf("%s evidence must contain exactly %d scenarios", providerName, len(requirements))
 	}
 	seen := make(map[string]struct{}, len(scenarios))
-	requestIDs := make(map[string]string)
 	for _, scenario := range scenarios {
-		requirement, required := requiredScenarios[scenario.Name]
+		requirement, required := requirements[scenario.Name]
 		if !required {
-			return fmt.Errorf("unsupported Huawei release scenario %q", scenario.Name)
+			return fmt.Errorf("unsupported %s release scenario %q", providerName, scenario.Name)
 		}
 		if _, duplicate := seen[scenario.Name]; duplicate {
-			return fmt.Errorf("duplicate Huawei release scenario %q", scenario.Name)
+			return fmt.Errorf("duplicate %s release scenario %q", providerName, scenario.Name)
 		}
 		seen[scenario.Name] = struct{}{}
 		if !scenario.Passed {
-			return fmt.Errorf("Huawei release scenario %q is not marked passed", scenario.Name)
+			return fmt.Errorf("%s release scenario %q is not marked passed", providerName, scenario.Name)
 		}
 		if scenario.ObservedAt.IsZero() {
-			return fmt.Errorf("Huawei release scenario %q observed_at is required", scenario.Name)
+			return fmt.Errorf("%s release scenario %q observed_at is required", providerName, scenario.Name)
 		}
 		if !isUTC(scenario.ObservedAt) {
-			return fmt.Errorf("Huawei release scenario %q observed_at must use UTC", scenario.Name)
+			return fmt.Errorf("%s release scenario %q observed_at must use UTC", providerName, scenario.Name)
 		}
 		if scenario.ObservedAt.After(executedAt) {
-			return fmt.Errorf("Huawei release scenario %q occurs after evidence execution", scenario.Name)
+			return fmt.Errorf("%s release scenario %q occurs after evidence execution", providerName, scenario.Name)
 		}
 		if len(scenario.RequestIDs) < requirement.minimumRequestIDs {
-			return fmt.Errorf("Huawei release scenario %q requires at least %d request IDs",
-				scenario.Name, requirement.minimumRequestIDs)
+			return fmt.Errorf("%s release scenario %q requires at least %d request IDs",
+				providerName, scenario.Name, requirement.minimumRequestIDs)
 		}
 		for _, requestID := range scenario.RequestIDs {
 			if err := validateRequestID(requestID); err != nil {
-				return fmt.Errorf("Huawei release scenario %q: %w", scenario.Name, err)
+				return fmt.Errorf("%s release scenario %q: %w", providerName, scenario.Name, err)
 			}
+			identity := providerName + "/" + scenario.Name
 			if priorScenario, duplicate := requestIDs[requestID]; duplicate {
-				return fmt.Errorf("Huawei release scenario %q reuses request ID %q from scenario %q",
-					scenario.Name, requestID, priorScenario)
+				return fmt.Errorf("%s release scenario %q reuses request ID %q from %s",
+					providerName, scenario.Name, requestID, priorScenario)
 			}
-			requestIDs[requestID] = scenario.Name
+			requestIDs[requestID] = identity
 		}
 		if err := validateText("scenario assertion", scenario.Assertion); err != nil {
-			return fmt.Errorf("Huawei release scenario %q: %w", scenario.Name, err)
+			return fmt.Errorf("%s release scenario %q: %w", providerName, scenario.Name, err)
 		}
 	}
 	return nil

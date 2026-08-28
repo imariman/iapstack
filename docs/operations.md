@@ -256,16 +256,18 @@ Ports default to `18080` for API, `18081` for worker metrics, `18082` for fixtur
 
 On failure the harness prints Compose status and logs before cleanup. The fixture uses generated test-only RSA and TLS keys; it never contacts Huawei or an application-owned endpoint.
 
-## Stable release publication
+## Release publication
 
-Stable releases are created only through `.github/workflows/release.yml`. Run the
-workflow manually from `main` after the version-specific sandbox evidence pull request
-has merged and main CI has succeeded. Supply a stable semantic version such as
-`v0.1.0`; do not create the Git tag first.
+Release candidates and stable releases are created only through
+`.github/workflows/release.yml`. Run the workflow manually from `main` after the
+version-specific evidence pull request has merged and main CI has succeeded. Supply a
+numbered candidate such as `v0.1.0-rc.1` or a stable version such as `v0.1.0`; do not
+create the Git tag first.
 
 Before any registry or release write, the workflow requires:
 
-1. A valid `docs/releases/<version>-sandbox-evidence.json` record.
+1. A valid schema-v2 `docs/releases/<version>-release-evidence.json` record containing
+   the Apple App Store, Google Play, and Huawei AppGallery gates.
 2. Evidence whose release matches the requested version.
 3. A tested candidate commit that is an ancestor of the release commit.
 4. Exactly one changed path between the candidate and release commit: the evidence
@@ -274,12 +276,14 @@ Before any registry or release write, the workflow requires:
 6. A successful push CI run for the evidence merge commit.
 7. No existing Git tag or GitHub release for the requested version.
 
-The protected `stable-release` GitHub environment should require an operator review.
-After validation, the workflow publishes `linux/amd64` and `linux/arm64` images to
-GitHub Container Registry with version, minor, and `latest` tags. The image carries
+The protected `stable-release` GitHub environment should require an operator review
+for every publication. After validation, the workflow publishes `linux/amd64` and
+`linux/arm64` images to GitHub Container Registry. Release candidates receive only
+their exact version tag and are GitHub prereleases; stable versions additionally
+update the minor and `latest` tags. The image carries
 BuildKit provenance and SBOM attestations, and the workflow adds a signed GitHub build
-provenance attestation. It then creates the stable GitHub release and attaches the
-secret-free evidence file.
+provenance attestation. It then creates the GitHub release and attaches the secret-free
+aggregate evidence file.
 
 Deploy by immutable digest from the release notes instead of a mutable tag. Verify the
 published provenance before deployment:

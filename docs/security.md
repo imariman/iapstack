@@ -1,7 +1,7 @@
 # IAPStack v0.1 Threat Model and Security Release Checklist
 
-This document defines the security boundary for the self-hosted Huawei lifetime and
-subscription vertical slice plus the initial Apple and Google Play server slices. It
+This document defines the security boundary for the self-hosted Apple App Store,
+Google Play, and Huawei AppGallery lifetime and subscription vertical slices. It
 applies to the `api`, `worker`, and `migrate` modes, PostgreSQL 17, the embedded
 operations dashboard, the Flutter SDKs, provider integrations, and outbound
 application webhooks.
@@ -22,14 +22,14 @@ IAPStack must:
 
 Availability against a volumetric denial-of-service attack, a malicious host
 administrator, a compromised process with access to all runtime secrets, and a
-compromised Huawei signing key are outside the application boundary. Operators must
+compromised provider signing or API authority are outside the application boundary. Operators must
 provide host hardening, TLS termination, ingress limits, network policy, monitoring,
 secret management, and backup security.
 
 ## Assets and trust boundaries
 
-The highest-value assets are protection root keys, bearer API keys, Huawei client
-secrets and public-key configuration, signed purchase evidence, external customer
+The highest-value assets are protection root keys, bearer API keys, Apple, Google, and
+Huawei credentials and trust configuration, signed purchase evidence, external customer
 identifiers, entitlement projections, webhook signing secrets, PostgreSQL contents,
 and encrypted backups.
 
@@ -45,7 +45,7 @@ TLS ingress -> API/dashboard -> PostgreSQL
                  |                      |
                  | OAuth/order/subscription queries
                  v                      v
-            Huawei APIs          Application webhook
+            Store APIs           Application webhook
 ```
 
 Each arrow is a trust boundary. TLS is expected between external parties and the
@@ -129,7 +129,7 @@ The following conditions are release-blocking:
 - [ ] API, dashboard, metrics, worker probes, and PostgreSQL have the intended network
   exposure and firewall rules.
 - [ ] Ingress rate limits and maximum connection counts are configured.
-- [ ] Protection roots, PostgreSQL credentials, Huawei client secrets, webhook secrets,
+- [ ] Protection roots, PostgreSQL credentials, provider credentials, webhook secrets,
   and bearers come from a secret manager rather than committed environment files.
 - [ ] The bootstrap admin key is at least 32 random bytes and is removed after durable
   administrator/application keys are stored.
@@ -143,25 +143,27 @@ The following conditions are release-blocking:
 - [ ] Alerts exist for readiness failure, provider failures, queue backlog/discards,
   webhook terminal failures, elevated unauthorized responses, and unexpected restarts.
 
-### Manual Huawei sandbox gate
+### Manual real-provider gates
 
-- [ ] The test account and candidate APK both pass Huawei's device-side sandbox
-  activation check before any purchase UI opens.
-- [ ] Lifetime purchase and duplicate restore remain idempotent.
-- [ ] Subscription renewal, cancellation, expiration, grace, refund, and revocation
-  produce the expected entitlement state.
-- [ ] Invalid signature and wrong application/product/customer bindings produce no
-  entitlement or outbox write.
-- [ ] Duplicate and missed-notification recovery converges through authoritative
-  reconciliation.
+- [ ] Apple App Store, Google Play, and Huawei AppGallery test accounts, applications,
+  products, credentials, installed builds, and notification endpoints pass the
+  provider-specific readiness checks.
+- [ ] Non-consumable purchase and duplicate restore remain idempotent on all three stores.
+- [ ] Each provider's required subscription renewal, cancellation, expiration, billing
+  recovery, refund, and revocation scenarios produce the expected entitlement state.
+- [ ] Invalid evidence and wrong application/product/customer bindings produce no
+  entitlement, provider acknowledgement, or outbox write.
+- [ ] Duplicate and missed-notification recovery converges through an authoritative
+  provider query on all three stores.
 - [ ] Application webhook verification succeeds using the exact production receiver
   implementation and rejects tampered, stale, and duplicate events.
-- [ ] The secret-free evidence file passes `go run ./cmd/iapstack-release` and names
-  the exact candidate commit and successful CI run.
-- [ ] The evidence-only merge passes main CI and the protected `Stable release`
+- [ ] The schema-v2 secret-free aggregate evidence passes `go run ./cmd/iapstack-release`,
+  contains all three provider gates, and names the exact candidate commit and CI run.
+- [ ] The evidence-only merge passes main CI and the protected `Release`
   workflow publishes the tag, image digest, SBOM, provenance, and evidence asset.
 
-Any unchecked release-blocking invariant or code gate prevents a v0.1 stable release.
+Any unchecked release-blocking invariant or code gate prevents a v0.1 release candidate
+or stable release.
 Operational checklist exceptions require a written deployment-specific risk acceptance.
 Execute and record this section using the
-[`v0.1.0 Huawei sandbox runbook`](releases/v0.1.0.md).
+[`v0.1.0-rc.1 three-provider release runbook`](releases/v0.1.0-rc.1.md).

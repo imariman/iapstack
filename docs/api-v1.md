@@ -321,14 +321,23 @@ scheme with a StoreKit Configuration file for local product, listener, cancellat
 restore, and unfinished-transaction testing. Use App Store sandbox products and
 matching server credentials for full certificate-chain and backend lifecycle tests.
 
-## Huawei sandbox release gate
+## Three-provider release gate
 
-Before a v0.1 release, run fixture and sandbox scenarios for lifetime purchase, initial subscription, renewal, cancellation-at-period-end, expiration, grace period, refund/revocation, duplicate purchase submission, duplicate notification, and a missed notification recovered by scheduled reconciliation. Record request IDs and verify that duplicates do not increase entitlement versions or create new logical webhook events.
+Before a v0.1 release candidate or stable release, run real-provider scenarios for
+Apple App Store, Google Play, and Huawei AppGallery. Each gate covers non-consumable
+purchase and restore, provider-specific subscription states, refund/revocation,
+negative application/product/customer bindings, duplicate notification, and a missed
+notification recovered by authoritative reconciliation. Record only request IDs and
+verify that duplicates do not increase entitlement versions or logical webhook events.
 
-The automated production-shaped fixture subset runs with `./deploy/e2e/run.sh`. It covers signed lifetime verification, duplicate purchase and notification submission, worker restart recovery, authoritative refund projection, and HMAC webhook delivery. Provider-managed subscription lifecycle scenarios still require the Huawei sandbox before a release is promoted from candidate to stable.
+The automated production-shaped fixture subset runs with `./deploy/e2e/run.sh`. It
+covers signed Huawei lifetime verification, duplicate purchase and notification
+submission, worker restart recovery, authoritative refund projection, and HMAC webhook
+delivery. Provider-specific unit and integration suites exercise Apple and Google
+server behavior, but all three real-store lifecycle gates remain mandatory.
 
-The complete real-device procedure and authoritative provider references are in
-[`docs/releases/v0.1.0.md`](releases/v0.1.0.md). Release evidence uses the closed,
-secret-free JSON contract shown in
-[`v0.1.0-sandbox-evidence.example.json`](releases/v0.1.0-sandbox-evidence.example.json)
-and must pass `go run ./cmd/iapstack-release <evidence.json>`.
+The complete procedure and provider-specific runbooks start at
+[`docs/releases/v0.1.0-rc.1.md`](releases/v0.1.0-rc.1.md). Release evidence uses the
+closed, secret-free aggregate JSON contract shown in
+[`v0.1.0-rc.1-release-evidence.example.json`](releases/v0.1.0-rc.1-release-evidence.example.json)
+and must pass `go run ./cmd/iapstack-release <release-evidence.json>`.
