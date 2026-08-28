@@ -1,0 +1,63 @@
+services:
+  - type: web
+    name: iapstack-api
+    runtime: docker
+    plan: 0.5c-512mb
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: api
+    preDeployCommand: /usr/local/bin/iapstack migrate
+    healthCheckPath: /readyz
+    autoDeployTrigger: "off"
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: IAPSTACK_DATABASE_URL
+        fromDatabase:
+          name: iapstack-postgres
+          property: connectionString
+      - key: IAPSTACK_BOOTSTRAP_ADMIN_KEY
+        generateValue: true
+      - fromGroup: iapstack-runtime
+
+  - type: worker
+    name: iapstack-worker
+    runtime: docker
+    plan: 0.5c-512mb
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: worker
+    autoDeployTrigger: "off"
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: IAPSTACK_DATABASE_URL
+        fromDatabase:
+          name: iapstack-postgres
+          property: connectionString
+      - fromGroup: iapstack-runtime
+
+databases:
+  - name: iapstack-postgres
+    plan: 0.1c-256mb
+    region: frankfurt
+    postgresMajorVersion: "17"
+    databaseName: iapstack
+    user: iapstack
+    ipAllowList: []
+
+envVarGroups:
+  - name: iapstack-runtime
+    envVars:
+      - key: IAPSTACK_PROTECTION_ACTIVE_KEY_ID
+        value: primary
+      - key: IAPSTACK_PROTECTION_KEY
+        generateValue: true
+      - key: IAPSTACK_PROTECTION_FINGERPRINT_KEY
+        generateValue: true
+      - key: IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS
+        value: "false"
+      - key: IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS
+        value: "false"
+      - key: IAPSTACK_LOG_LEVEL
+        value: info
