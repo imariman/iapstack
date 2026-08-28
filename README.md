@@ -40,6 +40,11 @@ guide](deploy/digitalocean/README.md). Its official Deploy Button cannot express
 required worker and migration job, so the full topology uses one `doctl apps create`
 command instead.
 
+Fly.io process groups are configured in [`fly.toml`](fly.toml); the [Fly.io deployment
+guide](deploy/fly/README.md) covers app creation, private Managed Postgres attachment,
+secrets, migrations, and cleanup. Fly.io has only a short free trial and its managed
+database makes it a comparatively expensive sandbox choice.
+
 IAPStack is a self-hosted control plane for validating in-app purchases and turning store transactions into durable application entitlements. It is designed for teams that want one backend-owned model across mobile stores without handing their purchase data or access rules to a hosted subscription platform.
 
 ## What IAPStack aims to provide
