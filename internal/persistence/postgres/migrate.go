@@ -30,11 +30,11 @@ type Migrator struct {
 
 var (
 	// ErrDatabaseURLRequired indicates that a database-dependent mode has no connection URL.
-	ErrDatabaseURLRequired = errors.New("IAPSTACK_DATABASE_URL is required")
+	ErrDatabaseURLRequired = errors.New("database URL (IAPSTACK_DATABASE_URL) is required")
 	// ErrInvalidDatabaseURL indicates that PostgreSQL connection configuration cannot be parsed.
-	ErrInvalidDatabaseURL = errors.New("IAPSTACK_DATABASE_URL is not a valid PostgreSQL connection string")
+	ErrInvalidDatabaseURL = errors.New("database URL (IAPSTACK_DATABASE_URL) is not a valid PostgreSQL connection string")
 	// ErrSchemaVersionMismatch indicates that runtime code and the migrated schema are incompatible.
-	ErrSchemaVersionMismatch = errors.New("PostgreSQL schema version does not match this IAPStack build")
+	ErrSchemaVersionMismatch = errors.New("postgresql schema version does not match this IAPStack build")
 )
 
 // embeddedMigrations contains every SQL migration shipped with the IAPStack binary.
@@ -70,7 +70,7 @@ func OpenMigrator(ctx context.Context, databaseURL string) (*Migrator, error) {
 // NewMigrator loads the embedded migration set for an existing PostgreSQL connection.
 func NewMigrator(ctx context.Context, connection *pgx.Conn) (*Migrator, error) {
 	if connection == nil {
-		return nil, errors.New("PostgreSQL connection is required")
+		return nil, errors.New("postgresql connection is required")
 	}
 
 	migrationFiles, err := fs.Sub(embeddedMigrations, migrationsDirectory)

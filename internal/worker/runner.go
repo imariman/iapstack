@@ -169,12 +169,13 @@ func New(
 // Run starts River, stops accepting work on cancellation, and bounds graceful shutdown.
 func (runner *Runner) Run(ctx context.Context) error {
 	if runner == nil || runner.client == nil {
-		return errors.New("River worker runner is not initialized")
+		return errors.New("river worker runner is not initialized")
 	}
 	if err := runner.client.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("start River worker: %w", err)
 	}
-	maintenanceContext, maintenanceCancel := context.WithCancel(context.Background())
+	lifecycleContext := context.WithoutCancel(ctx)
+	maintenanceContext, maintenanceCancel := context.WithCancel(lifecycleContext)
 	var maintenanceWorkers sync.WaitGroup
 	maintenanceWorkers.Add(2)
 	go func() {
@@ -190,15 +191,19 @@ func (runner *Runner) Run(ctx context.Context) error {
 		maintenanceWorkers.Wait()
 	}()
 	<-ctx.Done()
-	shutdownContext, cancel := context.WithTimeout(context.Background(), runner.shutdownTimeout)
+	shutdownContext, cancel := context.WithTimeout(lifecycleContext, runner.shutdownTimeout)
 	defer cancel()
-	if err := runner.client.Stop(shutdownContext); err == nil {
+	gracefulStopError := runner.client.Stop(shutdownContext)
+	if gracefulStopError == nil {
 		return nil
 	}
-	hardStopContext, hardStopCancel := context.WithTimeout(context.Background(), runner.shutdownTimeout)
+	hardStopContext, hardStopCancel := context.WithTimeout(lifecycleContext, runner.shutdownTimeout)
 	defer hardStopCancel()
 	if err := runner.client.StopAndCancel(hardStopContext); err != nil {
-		return fmt.Errorf("stop River worker: %w", err)
+		return errors.Join(
+			fmt.Errorf("stop River worker gracefully: %w", gracefulStopError),
+			fmt.Errorf("cancel River worker: %w", err),
+		)
 	}
 	return nil
 }

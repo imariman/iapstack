@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"net/http"
@@ -41,6 +42,7 @@ var (
 func newWebhookClient(timeout time.Duration, allowPrivateNetworks bool) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	transport.DialContext = (&restrictedDialer{
 		allowPrivateNetworks: allowPrivateNetworks,
 		resolver:             net.DefaultResolver,

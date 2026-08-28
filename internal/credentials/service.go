@@ -17,7 +17,7 @@ import (
 
 const (
 	// credentialProtectionPurposePrefix separates provider credential packages from other protected data.
-	credentialProtectionPurposePrefix = "store_credential/"
+	credentialProtectionPurposePrefix = "store_credential/" // #nosec G101 -- This is a cryptographic domain separator, not credential material.
 )
 
 // Metadata describes one durable credential revision without protected or plaintext payload bytes.
@@ -69,17 +69,13 @@ func (service *Service) Put(
 	}
 
 	plaintext := credential.Bytes()
-	request, err := protection.NewRequest(credentialScope(
+	defer zeroBytes(plaintext)
+	protected, err := protection.Protect(ctx, service.protectionService, credentialScope(
 		application,
 		credential.Kind,
 		credential.ContentType,
 		credential.SchemaVersion,
 	), plaintext)
-	zeroBytes(plaintext)
-	if err != nil {
-		return Metadata{}, err
-	}
-	protected, err := service.protectionService.Protect(ctx, request)
 	if err != nil {
 		return Metadata{}, fmt.Errorf("protect application credential: %w", err)
 	}

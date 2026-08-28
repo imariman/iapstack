@@ -16,7 +16,7 @@ import (
 
 var (
 	// ErrRiverSchemaVersionMismatch indicates that River has unapplied migrations for this build.
-	ErrRiverSchemaVersionMismatch = errors.New("River schema version does not match this IAPStack build")
+	ErrRiverSchemaVersionMismatch = errors.New("river schema version does not match this IAPStack build")
 )
 
 // MigrateRiver applies every River migration bundled with the pinned dependency.
@@ -66,7 +66,7 @@ func validateRiverSchema(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("validate River schema: %w", err)
 	}
 	if !result.OK {
-		return fmt.Errorf("River migration state is incomplete: %w", ErrRiverSchemaVersionMismatch)
+		return fmt.Errorf("river migration state is incomplete: %w", ErrRiverSchemaVersionMismatch)
 	}
 	return nil
 }

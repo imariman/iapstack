@@ -166,16 +166,15 @@ func (service *Service) googlePlayVerificationPayload(
 	}
 	token := []byte(notification.PurchaseToken)
 	defer zero(token)
-	request, err := protection.NewRequest(protection.Scope{
+	protected, err := protection.Protect(ctx, service.protection, protection.Scope{
 		ProjectID: message.ProjectID, ApplicationID: message.ApplicationID,
 		Purpose: providerReferencePurpose + ":" + string(core.ReferenceQuery) + ":purchase_token",
 	}, token)
 	if err != nil {
-		return jobs.VerificationPayload{}, false, err
-	}
-	protected, err := service.protection.Protect(ctx, request)
-	if err != nil {
-		return jobs.VerificationPayload{}, false, fmt.Errorf("protect Google Play notification lookup: %w", err)
+		return jobs.VerificationPayload{}, false, fmt.Errorf(
+			"protect Google Play notification lookup: %w",
+			err,
+		)
 	}
 	defer zero(protected.Ciphertext)
 	var purchase persistence.PurchaseReferenceContext
@@ -278,13 +277,10 @@ func (service *Service) schedule(
 	if err != nil {
 		return err
 	}
-	request, err := protection.NewRequest(protection.Scope{
+	defer zero(payload)
+	protected, err := protection.Protect(ctx, service.protection, protection.Scope{
 		ProjectID: projectID, ApplicationID: applicationID, Purpose: reconciliationProtectionPurpose,
 	}, payload)
-	if err != nil {
-		return err
-	}
-	protected, err := service.protection.Protect(ctx, request)
 	if err != nil {
 		return fmt.Errorf("protect reconciliation request: %w", err)
 	}

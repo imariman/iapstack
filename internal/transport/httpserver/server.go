@@ -148,7 +148,7 @@ func (server *Server) Run(ctx context.Context) error {
 		server.logger.Info("shutting down api")
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), server.shutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), server.shutdownTimeout)
 	defer cancel()
 
 	if err := server.server.Shutdown(shutdownCtx); err != nil {

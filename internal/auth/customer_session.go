@@ -99,13 +99,10 @@ func (service *CustomerSessions) Mint(
 	if err != nil {
 		return CustomerSession{}, err
 	}
-	request, err := protection.NewRequest(protection.Scope{
+	defer zero(payload)
+	protected, err := protection.Protect(ctx, service.protection, protection.Scope{
 		ProjectID: issuer.ProjectID, ApplicationID: issuer.ApplicationID, Purpose: customerSessionPurpose,
 	}, payload)
-	if err != nil {
-		return CustomerSession{}, err
-	}
-	protected, err := service.protection.Protect(ctx, request)
 	if err != nil {
 		return CustomerSession{}, err
 	}

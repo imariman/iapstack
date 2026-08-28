@@ -213,7 +213,7 @@ func (repository *transaction) ensureRiverJob(
 	availableAt time.Time,
 ) error {
 	if repository.river == nil {
-		return errors.New("River insert client is not initialized")
+		return errors.New("river insert client is not initialized")
 	}
 	table, err := queueTable(queue)
 	if err != nil {

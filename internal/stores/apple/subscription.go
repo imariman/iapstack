@@ -82,7 +82,7 @@ func (adapter *Adapter) querySubscriptionStatus(
 ) (transactionPayload, renewalPayload, int, stores.Evidence, error) {
 	if strings.TrimSpace(originalTransactionID) == "" {
 		return transactionPayload{}, renewalPayload{}, 0, stores.Evidence{},
-			invalid("subscription_status", errors.New("Apple original transaction ID is required"))
+			invalid("subscription_status", errors.New("apple original transaction ID is required"))
 	}
 	token, err := adapter.authorizationToken(configuration)
 	if err != nil {
@@ -111,7 +111,7 @@ func (adapter *Adapter) querySubscriptionStatus(
 	var response statusResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		return transactionPayload{}, renewalPayload{}, 0, stores.Evidence{},
-			invalid("subscription_status", errors.New("Apple subscription status response is invalid"))
+			invalid("subscription_status", errors.New("apple subscription status response is invalid"))
 	}
 	if err := validateStatusResponseScope(application, configuration, response); err != nil {
 		return transactionPayload{}, renewalPayload{}, 0, stores.Evidence{}, invalid("subscription_status", err)
@@ -164,10 +164,10 @@ func validateStatusResponseScope(
 ) error {
 	environment, err := appleEnvironment(application.Store.Environment)
 	if err != nil || response.Environment != environment || response.BundleID != configuration.bundleID {
-		return errors.New("Apple subscription status application scope mismatch")
+		return errors.New("apple subscription status application scope mismatch")
 	}
 	if application.Store.Environment == core.EnvironmentProduction && response.AppAppleID != configuration.appAppleID {
-		return errors.New("Apple subscription status App Apple ID mismatch")
+		return errors.New("apple subscription status App Apple ID mismatch")
 	}
 	return nil
 }
@@ -187,7 +187,7 @@ func selectSubscriptionStatus(response statusResponse, originalTransactionID str
 	}
 	if matches != 1 || selected.SignedTransactionInfo == "" || selected.SignedRenewalInfo == "" ||
 		selected.Status < subscriptionStatusActive || selected.Status > subscriptionStatusRevoked {
-		return lastTransactionsItem{}, errors.New("Apple subscription status row is missing or ambiguous")
+		return lastTransactionsItem{}, errors.New("apple subscription status row is missing or ambiguous")
 	}
 	return selected, nil
 }
@@ -203,10 +203,10 @@ func validateRenewalScope(
 		renewal.OriginalTransactionID != transaction.OriginalTransactionID ||
 		renewal.ProductID != transaction.ProductID ||
 		renewal.AppAccountToken != transaction.AppAccountToken {
-		return errors.New("Apple renewal scope mismatch")
+		return errors.New("apple renewal scope mismatch")
 	}
 	if renewal.AutoRenewStatus != autoRenewDisabled && renewal.AutoRenewStatus != autoRenewEnabled {
-		return errors.New("Apple renewal status is unsupported")
+		return errors.New("apple renewal status is unsupported")
 	}
 	return nil
 }

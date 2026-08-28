@@ -1,6 +1,7 @@
 package protection_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"strings"
@@ -15,6 +16,20 @@ const (
 	// contractPlaintext identifies sensitive request bytes used by defensive-copy tests.
 	contractPlaintext = "sensitive-token"
 )
+
+// recordingProtector retains the request header so tests can inspect helper cleanup.
+type recordingProtector struct {
+	request protection.Request
+}
+
+// Protect records one request and returns deterministic protected metadata.
+func (protector *recordingProtector) Protect(
+	_ context.Context,
+	request protection.Request,
+) (protection.Value, error) {
+	protector.request = request
+	return protectedValue([]byte(contractPlaintext)), nil
+}
 
 // TestValueValidation verifies that protected values require complete envelope metadata.
 func TestValueValidation(t *testing.T) {
@@ -63,6 +78,25 @@ func TestRequestDefensiveCopiesAndRedaction(t *testing.T) {
 	}
 	if formatted := fmt.Sprintf("%#v", request); strings.Contains(formatted, contractPlaintext) {
 		t.Fatalf("detailed formatting exposed plaintext: %s", formatted)
+	}
+}
+
+// TestProtectDestroysRequestCopy verifies the convenience boundary clears its private plaintext.
+func TestProtectDestroysRequestCopy(t *testing.T) {
+	t.Parallel()
+
+	plaintext := []byte(contractPlaintext)
+	protector := &recordingProtector{}
+	if _, err := protection.Protect(context.Background(), protector, contractScope(), plaintext); err != nil {
+		t.Fatalf("Protect() error = %v", err)
+	}
+	if string(plaintext) != contractPlaintext {
+		t.Fatal("Protect() mutated caller-owned plaintext")
+	}
+	for _, value := range protector.request.Bytes() {
+		if value != 0 {
+			t.Fatal("Protect() retained request-owned plaintext after returning")
+		}
 	}
 }
 

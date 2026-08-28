@@ -82,7 +82,7 @@ func OpenStore(ctx context.Context, databaseURL string) (*Store, error) {
 // NewStore validates an existing PostgreSQL pool and verifies connectivity.
 func NewStore(ctx context.Context, pool *pgxpool.Pool) (*Store, error) {
 	if pool == nil {
-		return nil, errors.New("PostgreSQL pool is required")
+		return nil, errors.New("postgresql pool is required")
 	}
 	store := &Store{pool: pool}
 	if err := store.Ping(ctx); err != nil {
@@ -99,7 +99,7 @@ func NewStore(ctx context.Context, pool *pgxpool.Pool) (*Store, error) {
 // Ping verifies PostgreSQL connectivity and exact runtime schema compatibility.
 func (store *Store) Ping(ctx context.Context) error {
 	if store == nil || store.pool == nil {
-		return errors.New("PostgreSQL store is not initialized")
+		return errors.New("postgresql store is not initialized")
 	}
 	if err := store.pool.Ping(ctx); err != nil {
 		return fmt.Errorf("ping PostgreSQL: %w", err)
@@ -109,7 +109,7 @@ func (store *Store) Ping(ctx context.Context) error {
 		return fmt.Errorf("read PostgreSQL schema version: %w", err)
 	}
 	if version != LatestVersion {
-		return fmt.Errorf("PostgreSQL schema version is %d, require %d: %w", version, LatestVersion, ErrSchemaVersionMismatch)
+		return fmt.Errorf("postgresql schema version is %d, require %d: %w", version, LatestVersion, ErrSchemaVersionMismatch)
 	}
 	return validateRiverSchema(ctx, store.pool)
 }
@@ -141,7 +141,7 @@ func (store *Store) transact(
 	operation func(*transaction) error,
 ) (err error) {
 	if store == nil || store.pool == nil {
-		return errors.New("PostgreSQL store is not initialized")
+		return errors.New("postgresql store is not initialized")
 	}
 	for attempt := 1; attempt <= maximumTransactionAttempts; attempt++ {
 		err = store.transactOnce(ctx, isolation, operation)
@@ -179,7 +179,12 @@ func (store *Store) transactOnce(
 		return classifyError("begin PostgreSQL transaction", err)
 	}
 	defer func() {
-		rollbackError := postgresTransaction.Rollback(ctx)
+		rollbackContext, cancelRollback := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			runtimeLockTimeout,
+		)
+		defer cancelRollback()
+		rollbackError := postgresTransaction.Rollback(rollbackContext)
 		if rollbackError != nil && !errors.Is(rollbackError, pgx.ErrTxClosed) {
 			err = errors.Join(err, fmt.Errorf("roll back PostgreSQL transaction: %w", rollbackError))
 		}

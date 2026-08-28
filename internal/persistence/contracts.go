@@ -33,7 +33,7 @@ const (
 type Store interface {
 	// Ping verifies that the durable store is reachable.
 	Ping(context.Context) error
-	// Transact executes one callback in an atomic unit of work.
+	// Transact executes one callback in an atomic unit of work and may retry it after concurrency failures.
 	Transact(context.Context, TransactionFunc) error
 	// Close releases resources owned by the durable store.
 	Close()
@@ -50,7 +50,7 @@ type Transaction interface {
 
 // OperationsStore executes control-plane and durable queue work in atomic units.
 type OperationsStore interface {
-	// Operate executes one operations callback in an atomic unit of work.
+	// Operate executes one operations callback in an atomic unit of work and may retry it after concurrency failures.
 	Operate(context.Context, OperationsFunc) error
 }
 
@@ -63,7 +63,7 @@ type OperationsTransaction interface {
 	QueueRepository
 }
 
-// OperationsFunc performs operational durable work that must commit or roll back together.
+// OperationsFunc performs retry-safe durable work that must commit or roll back together without external side effects.
 type OperationsFunc func(OperationsTransaction) error
 
 // CredentialRepository stores and resolves protected application credential packages.
@@ -74,7 +74,7 @@ type CredentialRepository interface {
 	PutCredential(context.Context, CredentialWrite) (CredentialRecord, error)
 }
 
-// TransactionFunc performs durable operations that must commit or roll back together.
+// TransactionFunc performs retry-safe durable work that must commit or roll back together without external side effects.
 type TransactionFunc func(Transaction) error
 
 // CatalogRepository resolves application, customer, product, and entitlement configuration.

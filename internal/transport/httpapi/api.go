@@ -805,6 +805,7 @@ func (api *API) scheduleReconciliation(
 	if err != nil {
 		return err
 	}
+	defer zero(payload)
 	application, err := api.application(ctx, string(principal.ProjectID), string(principal.ApplicationID))
 	if err != nil {
 		return err
@@ -930,13 +931,9 @@ func (api *API) protect(
 	purpose string,
 	payload []byte,
 ) (protection.Value, error) {
-	request, err := protection.NewRequest(protection.Scope{
+	return protection.Protect(ctx, api.protection, protection.Scope{
 		ProjectID: application.ProjectID, ApplicationID: application.ID, Purpose: purpose,
 	}, payload)
-	if err != nil {
-		return protection.Value{}, err
-	}
-	return api.protection.Protect(ctx, request)
 }
 
 // decode reads and strictly decodes one bounded JSON request body.
@@ -945,6 +942,7 @@ func (api *API) decode(writer http.ResponseWriter, request *http.Request, destin
 	if !ok {
 		return false
 	}
+	defer zero(payload)
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {

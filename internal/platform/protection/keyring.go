@@ -147,7 +147,7 @@ func (keyring *Keyring) Protect(ctx context.Context, request protectionport.Requ
 
 	plaintext := request.Bytes()
 	authenticatedData := envelopeAuthenticatedData(request.Scope, keyring.activeKeyID)
-	sealed := keyring.encryptionKeys[keyring.activeKeyID].Seal(nil, nil, plaintext, authenticatedData)
+	sealed := keyring.encryptionKeys[keyring.activeKeyID].Seal(nil, nil, plaintext, authenticatedData) // #nosec G407 -- NewGCMWithRandomNonce requires nil and generates a fresh nonce internally.
 	ciphertext := make([]byte, 1, 1+len(sealed))
 	ciphertext[0] = envelopeVersion
 	ciphertext = append(ciphertext, sealed...)

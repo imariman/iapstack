@@ -21,7 +21,7 @@ func run(arguments []string) error {
 	if len(arguments) != 2 {
 		return fmt.Errorf("usage: iapstack-release <release-evidence.json>")
 	}
-	file, err := os.Open(arguments[1])
+	file, err := os.Open(arguments[1]) // #nosec G703 -- This local operator CLI intentionally accepts an arbitrary evidence file path.
 	if err != nil {
 		return fmt.Errorf("open sandbox evidence: %w", err)
 	}

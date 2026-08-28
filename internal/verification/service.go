@@ -369,15 +369,12 @@ func (service *Service) protect(
 	purpose string,
 	plaintext []byte,
 ) (protection.Value, error) {
-	request, err := protection.NewRequest(protection.Scope{
+	defer zeroBytes(plaintext)
+	protected, err := protection.Protect(ctx, service.protector, protection.Scope{
 		ProjectID:     projectID,
 		ApplicationID: applicationID,
 		Purpose:       purpose,
 	}, plaintext)
-	if err != nil {
-		return protection.Value{}, err
-	}
-	protected, err := service.protector.Protect(ctx, request)
 	if err != nil {
 		return protection.Value{}, fmt.Errorf("protect %s: %w", purpose, err)
 	}
@@ -385,6 +382,13 @@ func (service *Service) protect(
 		return protection.Value{}, fmt.Errorf("validate protected %s: %w", purpose, err)
 	}
 	return protected, nil
+}
+
+// zeroBytes overwrites one temporary plaintext copy after protection.
+func zeroBytes(value []byte) {
+	for index := range value {
+		value[index] = 0
+	}
 }
 
 // persist validates current scope and atomically stores one complete verification result.

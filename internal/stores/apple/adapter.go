@@ -8,6 +8,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -29,7 +30,7 @@ import (
 
 const (
 	// CredentialKind identifies the v1 App Store Server API credential package.
-	CredentialKind stores.CredentialKind = "apple_app_store_server_api"
+	CredentialKind stores.CredentialKind = "apple_app_store_server_api" // #nosec G101 -- This is a public credential type discriminator, not credential material.
 	// CredentialContentType identifies the Apple credential JSON representation.
 	CredentialContentType = "application/vnd.iapstack.apple-credentials+json"
 	// CredentialSchemaVersion identifies the initial App Store Server API credential shape.
@@ -119,15 +120,18 @@ type transactionPayload struct {
 // New constructs a bounded Apple App Store server adapter.
 func New(credentials stores.CredentialSource, timeout time.Duration) (*Adapter, error) {
 	if credentials == nil {
-		return nil, errors.New("Apple credential source is required")
+		return nil, errors.New("apple credential source is required")
 	}
 	if timeout <= 0 {
-		return nil, errors.New("Apple provider timeout must be positive")
+		return nil, errors.New("apple provider timeout must be positive")
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	return &Adapter{
 		credentials: credentials,
 		client: &http.Client{
-			Timeout: timeout,
+			Transport: transport,
+			Timeout:   timeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
@@ -178,7 +182,7 @@ func (adapter *Adapter) Verify(
 		}
 		if transaction.OriginalTransactionID != submitted.OriginalTransactionID ||
 			transaction.AppAccountToken != submitted.AppAccountToken {
-			return stores.VerificationResult{}, invalid("verify", errors.New("Apple subscription lineage does not match submitted evidence"))
+			return stores.VerificationResult{}, invalid("verify", errors.New("apple subscription lineage does not match submitted evidence"))
 		}
 		if err := validateRenewalScope(request.Application, transaction, renewal); err != nil {
 			return stores.VerificationResult{}, invalid("verify", err)
@@ -213,7 +217,7 @@ func (adapter *Adapter) Reconcile(
 		return stores.VerificationResult{}, invalid("reconcile", err)
 	}
 	if len(request.ExpectedProducts) != 1 {
-		return stores.VerificationResult{}, invalid("reconcile", errors.New("Apple reconciliation requires one expected product"))
+		return stores.VerificationResult{}, invalid("reconcile", errors.New("apple reconciliation requires one expected product"))
 	}
 	transactionID := ""
 	for _, reference := range request.QueryReferences {
@@ -223,7 +227,7 @@ func (adapter *Adapter) Reconcile(
 		}
 	}
 	if transactionID == "" {
-		return stores.VerificationResult{}, invalid("reconcile", errors.New("Apple reconciliation requires a transaction ID"))
+		return stores.VerificationResult{}, invalid("reconcile", errors.New("apple reconciliation requires a transaction ID"))
 	}
 	configuration, err := adapter.configuration(ctx, request.Application)
 	if err != nil {
@@ -321,7 +325,7 @@ func (adapter *Adapter) query(
 	transactionID string,
 ) (string, stores.Evidence, error) {
 	if strings.TrimSpace(transactionID) == "" {
-		return "", stores.Evidence{}, invalid("query", errors.New("Apple transaction ID is required"))
+		return "", stores.Evidence{}, invalid("query", errors.New("apple transaction ID is required"))
 	}
 	token, err := adapter.authorizationToken(configuration)
 	if err != nil {
@@ -359,7 +363,7 @@ func (adapter *Adapter) query(
 	}
 	var response transactionInfoResponse
 	if err := json.Unmarshal(body, &response); err != nil || response.SignedTransactionInfo == "" {
-		return "", stores.Evidence{}, invalid("query", errors.New("Apple response omitted signed transaction info"))
+		return "", stores.Evidence{}, invalid("query", errors.New("apple response omitted signed transaction info"))
 	}
 	artifact, err := stores.NewEvidence("application/json", body)
 	if err != nil {
@@ -432,9 +436,8 @@ func (adapter *Adapter) result(
 	}
 	renewal := core.Renewal{Mode: core.RenewalNone, Status: core.RenewalNotApplicable}
 	if kind == core.ProductKindSubscription {
-		renewal = core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalStatusUnknown}
 		if subscription == nil {
-			return stores.VerificationResult{}, invalid("normalize", errors.New("Apple subscription status is required"))
+			return stores.VerificationResult{}, invalid("normalize", errors.New("apple subscription status is required"))
 		}
 		state, access, reason, endsAt, renewal = normalizeSubscriptionStatus(
 			transaction, *subscription, observedAt,
@@ -510,7 +513,7 @@ func parseEvidence(evidence stores.Evidence) (clientEvidence, error) {
 		return clientEvidence{}, err
 	}
 	if envelope.SignedTransaction == "" {
-		return clientEvidence{}, errors.New("Apple signed transaction is required")
+		return clientEvidence{}, errors.New("apple signed transaction is required")
 	}
 	if envelope.ProductKind != core.ProductKindSubscription && envelope.ProductKind != core.ProductKindNonConsumable {
 		return clientEvidence{}, errors.New("unsupported Apple product kind")
@@ -527,24 +530,24 @@ func validateTransactionScope(
 ) error {
 	if transaction.TransactionID == "" || transaction.OriginalTransactionID == "" || transaction.ProductID == "" ||
 		transaction.BundleID != bundleID || transaction.BundleID != string(request.Application.Store.ID) {
-		return errors.New("Apple transaction application or purchase identity mismatch")
+		return errors.New("apple transaction application or purchase identity mismatch")
 	}
 	expectedEnvironment, err := appleEnvironment(request.Application.Store.Environment)
 	if err != nil || transaction.Environment != expectedEnvironment {
-		return errors.New("Apple transaction environment mismatch")
+		return errors.New("apple transaction environment mismatch")
 	}
 	actualKind, err := productKind(transaction.Type)
 	if err != nil || actualKind != expectedKind {
-		return errors.New("Apple transaction product kind mismatch")
+		return errors.New("apple transaction product kind mismatch")
 	}
 	if len(request.ClaimedProducts) > 0 && (len(request.ClaimedProducts) != 1 || string(request.ClaimedProducts[0]) != transaction.ProductID) {
-		return errors.New("Apple transaction product does not match claim")
+		return errors.New("apple transaction product does not match claim")
 	}
 	if transaction.AppAccountToken == "" {
-		return errors.New("Apple app account token is required")
+		return errors.New("apple app account token is required")
 	}
 	if !validAppAccountToken(transaction.AppAccountToken) {
-		return errors.New("Apple app account token must be a UUID")
+		return errors.New("apple app account token must be a UUID")
 	}
 	matchedBinding := false
 	for _, binding := range request.ExpectedCustomerBindings {
@@ -554,7 +557,7 @@ func validateTransactionScope(
 		}
 	}
 	if !matchedBinding {
-		return errors.New("Apple app account token customer binding mismatch")
+		return errors.New("apple app account token customer binding mismatch")
 	}
 	return nil
 }
@@ -675,15 +678,15 @@ func validAppAccountToken(value string) bool {
 func parsePrivateKey(encoded string) (*ecdsa.PrivateKey, error) {
 	block, remainder := pem.Decode([]byte(encoded))
 	if block == nil || block.Type != "PRIVATE KEY" || strings.TrimSpace(string(remainder)) != "" {
-		return nil, errors.New("Apple private key must be one PKCS#8 PEM block")
+		return nil, errors.New("apple private key must be one PKCS#8 PEM block")
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return nil, errors.New("Apple private key is invalid PKCS#8")
+		return nil, errors.New("apple private key is invalid PKCS#8")
 	}
 	privateKey, ok := parsed.(*ecdsa.PrivateKey)
 	if !ok || privateKey.Curve != elliptic.P256() {
-		return nil, errors.New("Apple private key must use P-256 ECDSA")
+		return nil, errors.New("apple private key must use P-256 ECDSA")
 	}
 	return privateKey, nil
 }

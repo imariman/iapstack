@@ -28,7 +28,7 @@ const (
 	// entitlementKey is the public access key asserted by the release gate.
 	entitlementKey = "premium"
 	// credentialKind is the Huawei credential kind accepted by the production adapter.
-	credentialKind = "huawei_server_api"
+	credentialKind = "huawei_server_api" // #nosec G101 -- This is a public credential type discriminator used by the release fixture.
 	// credentialContentType is the versioned Huawei credential media type.
 	credentialContentType = "application/vnd.iapstack.huawei-credentials+json"
 	// defaultAPIBaseURL is the host origin published by the E2E Compose stack.

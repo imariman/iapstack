@@ -7,6 +7,22 @@ import (
 	"time"
 )
 
+// observingWriter records output and updates the source registry during the first write.
+type observingWriter struct {
+	output   bytes.Buffer
+	registry *Registry
+	observed bool
+}
+
+// Write proves metric output does not hold a lock while calling an external writer.
+func (writer *observingWriter) Write(payload []byte) (int, error) {
+	if !writer.observed {
+		writer.observed = true
+		writer.registry.ObserveWebhook("during_write")
+	}
+	return writer.output.Write(payload)
+}
+
 // TestRegistryWritesBoundedPrometheusMetrics verifies counters, gauges, and duration summaries.
 func TestRegistryWritesBoundedPrometheusMetrics(t *testing.T) {
 	registry := New()
@@ -29,5 +45,23 @@ func TestRegistryWritesBoundedPrometheusMetrics(t *testing.T) {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("metrics output omitted %q\n%s", expected, output.String())
 		}
+	}
+}
+
+// TestRegistryReleasesLockBeforeWriting verifies a writer can safely record a concurrent metric.
+func TestRegistryReleasesLockBeforeWriting(t *testing.T) {
+	registry := New()
+	registry.ObserveWebhook("before_write")
+	writer := &observingWriter{registry: registry}
+	if err := registry.WritePrometheus(writer); err != nil {
+		t.Fatalf("WritePrometheus() error = %v", err)
+	}
+
+	var output bytes.Buffer
+	if err := registry.WritePrometheus(&output); err != nil {
+		t.Fatalf("second WritePrometheus() error = %v", err)
+	}
+	if !strings.Contains(output.String(), `iapstack_webhook_attempts_total{outcome="during_write"} 1`) {
+		t.Fatalf("metrics output omitted writer-time observation\n%s", output.String())
 	}
 }

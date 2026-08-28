@@ -4,6 +4,7 @@ package metrics
 import (
 	"fmt"
 	"io"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +32,17 @@ type Registry struct {
 type durationMetric struct {
 	count uint64
 	sum   float64
+}
+
+// registrySnapshot owns immutable map copies that can be written without holding the registry lock.
+type registrySnapshot struct {
+	httpRequests    map[string]uint64
+	httpDurations   map[string]durationMetric
+	providerCalls   map[string]uint64
+	verification    map[string]uint64
+	queueDepth      map[string]int64
+	queueAttempts   map[string]uint64
+	webhookAttempts map[string]uint64
 }
 
 // New constructs an empty operational metrics registry.
@@ -92,28 +104,27 @@ func (registry *Registry) ObserveWebhook(outcome string) {
 
 // WritePrometheus writes one internally consistent text snapshot.
 func (registry *Registry) WritePrometheus(writer io.Writer) error {
-	registry.mu.RLock()
-	defer registry.mu.RUnlock()
+	snapshot := registry.snapshot()
 
-	if err := writeCounter(writer, "iapstack_http_requests_total", []string{"method", "route", "status"}, registry.httpRequests); err != nil {
+	if err := writeCounter(writer, "iapstack_http_requests_total", []string{"method", "route", "status"}, snapshot.httpRequests); err != nil {
 		return err
 	}
-	if err := writeDurations(writer, registry.httpDurations); err != nil {
+	if err := writeDurations(writer, snapshot.httpDurations); err != nil {
 		return err
 	}
-	if err := writeCounter(writer, "iapstack_provider_calls_total", []string{"provider", "operation", "outcome"}, registry.providerCalls); err != nil {
+	if err := writeCounter(writer, "iapstack_provider_calls_total", []string{"provider", "operation", "outcome"}, snapshot.providerCalls); err != nil {
 		return err
 	}
-	if err := writeCounter(writer, "iapstack_verifications_total", []string{"provider", "outcome"}, registry.verification); err != nil {
+	if err := writeCounter(writer, "iapstack_verifications_total", []string{"provider", "outcome"}, snapshot.verification); err != nil {
 		return err
 	}
-	if err := writeGauge(writer, "iapstack_queue_depth", []string{"queue", "state"}, registry.queueDepth); err != nil {
+	if err := writeGauge(writer, "iapstack_queue_depth", []string{"queue", "state"}, snapshot.queueDepth); err != nil {
 		return err
 	}
-	if err := writeCounter(writer, "iapstack_queue_attempts_total", []string{"queue", "outcome"}, registry.queueAttempts); err != nil {
+	if err := writeCounter(writer, "iapstack_queue_attempts_total", []string{"queue", "outcome"}, snapshot.queueAttempts); err != nil {
 		return err
 	}
-	return writeCounter(writer, "iapstack_webhook_attempts_total", []string{"outcome"}, registry.webhookAttempts)
+	return writeCounter(writer, "iapstack_webhook_attempts_total", []string{"outcome"}, snapshot.webhookAttempts)
 }
 
 // increment adds one to a counter map while holding the registry lock.
@@ -121,6 +132,21 @@ func (registry *Registry) increment(values map[string]uint64, key string) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	values[key]++
+}
+
+// snapshot copies every bounded metric map while holding the read lock briefly.
+func (registry *Registry) snapshot() registrySnapshot {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	return registrySnapshot{
+		httpRequests:    maps.Clone(registry.httpRequests),
+		httpDurations:   maps.Clone(registry.httpDurations),
+		providerCalls:   maps.Clone(registry.providerCalls),
+		verification:    maps.Clone(registry.verification),
+		queueDepth:      maps.Clone(registry.queueDepth),
+		queueAttempts:   maps.Clone(registry.queueAttempts),
+		webhookAttempts: maps.Clone(registry.webhookAttempts),
+	}
 }
 
 // labels encodes already-bounded label values without exposing arbitrary user input.

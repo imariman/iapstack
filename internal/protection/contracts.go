@@ -14,7 +14,7 @@ import (
 
 // Protector encrypts sensitive bytes and produces a stable scoped fingerprint.
 type Protector interface {
-	// Protect encrypts one validated plaintext request.
+	// Protect encrypts one validated plaintext request without retaining it after the call.
 	Protect(context.Context, Request) (Value, error)
 }
 
@@ -81,6 +81,19 @@ func NewOpenRequest(scope Scope, value Value) (OpenRequest, error) {
 	return request, nil
 }
 
+// Protect creates, uses, and destroys one short-lived defensive plaintext copy.
+func Protect(ctx context.Context, protector Protector, scope Scope, plaintext []byte) (Value, error) {
+	if protector == nil {
+		return Value{}, errors.New("data protector is required")
+	}
+	request, err := NewRequest(scope, plaintext)
+	if err != nil {
+		return Value{}, err
+	}
+	defer request.Destroy()
+	return protector.Protect(ctx, request)
+}
+
 // Validate checks every scope field used for authentication and fingerprinting.
 func (scope Scope) Validate() error {
 	return errors.Join(
@@ -142,6 +155,17 @@ func (request Request) Validate() error {
 // Bytes returns a defensive plaintext copy for an explicit protection implementation.
 func (request Request) Bytes() []byte {
 	return append([]byte(nil), request.plaintext...)
+}
+
+// Destroy overwrites and releases the request-owned plaintext copy.
+func (request *Request) Destroy() {
+	if request == nil {
+		return
+	}
+	for index := range request.plaintext {
+		request.plaintext[index] = 0
+	}
+	request.plaintext = nil
 }
 
 // String returns a redacted request representation without plaintext or a reversible digest.

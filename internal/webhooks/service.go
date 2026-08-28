@@ -85,11 +85,10 @@ func (service *Service) Configure(
 	if err := validateWebhookDestination(url, service.allowPrivateNetworks); err != nil {
 		return persistence.WebhookEndpointRecord{}, validation.Wrap(err)
 	}
-	request, err := protection.NewRequest(webhookScope(application), secret)
-	if err != nil {
-		return persistence.WebhookEndpointRecord{}, validation.Wrap(err)
+	if len(secret) == 0 {
+		return persistence.WebhookEndpointRecord{}, validation.Wrap(errors.New("webhook signing secret is required"))
 	}
-	protected, err := service.protection.Protect(ctx, request)
+	protected, err := protection.Protect(ctx, service.protection, webhookScope(application), secret)
 	if err != nil {
 		return persistence.WebhookEndpointRecord{}, fmt.Errorf("protect webhook secret: %w", err)
 	}

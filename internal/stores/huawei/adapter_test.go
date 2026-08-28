@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -22,6 +23,22 @@ import (
 // fakeCredentialSource returns one opaque Huawei credential fixture.
 type fakeCredentialSource struct {
 	credential stores.Credential
+}
+
+// rewriteTransport redirects one public test hostname to a local TLS fixture.
+type rewriteTransport struct {
+	destination *url.URL
+	next        http.RoundTripper
+}
+
+// RoundTrip rewrites only the connection origin while preserving the provider request path.
+func (transport rewriteTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	clone := request.Clone(request.Context())
+	cloneURL := *request.URL
+	cloneURL.Scheme = transport.destination.Scheme
+	cloneURL.Host = transport.destination.Host
+	clone.URL = &cloneURL
+	return transport.next.RoundTrip(clone)
 }
 
 // TestAdapterVerifiesAuthoritativeLifetimePurchase exercises OAuth, server query, RSA, and normalization.
@@ -59,7 +76,8 @@ func TestAdapterVerifiesAuthoritativeLifetimePurchase(t *testing.T) {
 
 	credentialJSON, _ := json.Marshal(credentialPayload{
 		ClientID: "client", ClientSecret: "secret", PublicKey: publicKeyFixture(t, &privateKey.PublicKey),
-		TokenURL: server.URL + "/token", OrderURL: server.URL + "/order", SubscriptionURL: server.URL + "/subscription",
+		TokenURL: "https://provider.example/token", OrderURL: "https://provider.example/order",
+		SubscriptionURL: "https://provider.example/subscription",
 	})
 	credential, err := stores.NewCredential(CredentialKind, CredentialContentType, CredentialSchemaVersion, credentialJSON)
 	if err != nil {
@@ -70,6 +88,11 @@ func TestAdapterVerifiesAuthoritativeLifetimePurchase(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	adapter.client = server.Client()
+	serverURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("Parse() server URL error = %v", err)
+	}
+	adapter.client.Transport = rewriteTransport{destination: serverURL, next: adapter.client.Transport}
 
 	evidenceJSON, _ := json.Marshal(clientEvidence{
 		PurchaseData: string(purchaseJSON), Signature: signature, ProductKind: core.ProductKindNonConsumable,

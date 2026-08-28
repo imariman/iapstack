@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -36,7 +37,7 @@ const (
 	// EvidenceContentType identifies the Google Play purchase-token evidence representation.
 	EvidenceContentType = stores.GooglePlayEvidenceContentType
 	// defaultTokenURL is Google's documented OAuth 2.0 service-account token endpoint.
-	defaultTokenURL = "https://oauth2.googleapis.com/token"
+	defaultTokenURL = "https://oauth2.googleapis.com/token" // #nosec G101 -- This is Google's public OAuth endpoint, not credential material.
 	// defaultPublisherURL is Google's documented Android Publisher API root.
 	defaultPublisherURL = "https://androidpublisher.googleapis.com"
 	// androidPublisherScope authorizes Google Play Developer API purchase reads.
@@ -192,13 +193,16 @@ type queryResult struct {
 // New constructs a bounded Google Play Android Publisher adapter.
 func New(credentials stores.CredentialSource, timeout time.Duration) (*Adapter, error) {
 	if credentials == nil {
-		return nil, errors.New("Google Play credential source is required")
+		return nil, errors.New("google play credential source is required")
 	}
 	if timeout <= 0 {
-		return nil, errors.New("Google Play provider timeout must be positive")
+		return nil, errors.New("google play provider timeout must be positive")
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	client := &http.Client{
-		Timeout: timeout,
+		Transport: transport,
+		Timeout:   timeout,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -259,7 +263,7 @@ func (adapter *Adapter) Reconcile(
 		return stores.VerificationResult{}, invalid("reconcile", err)
 	}
 	if len(request.ExpectedProducts) != 1 {
-		return stores.VerificationResult{}, invalid("reconcile", errors.New("Google Play reconciliation requires one expected product"))
+		return stores.VerificationResult{}, invalid("reconcile", errors.New("google play reconciliation requires one expected product"))
 	}
 	purchaseToken := ""
 	for _, reference := range request.QueryReferences {
@@ -269,7 +273,7 @@ func (adapter *Adapter) Reconcile(
 		}
 	}
 	if purchaseToken == "" {
-		return stores.VerificationResult{}, invalid("reconcile", errors.New("Google Play reconciliation requires a purchase token"))
+		return stores.VerificationResult{}, invalid("reconcile", errors.New("google play reconciliation requires a purchase token"))
 	}
 	configuration, err := adapter.configuration(ctx, request.Application)
 	if err != nil {
@@ -307,7 +311,7 @@ func (adapter *Adapter) PostCommit(ctx context.Context, request stores.PostCommi
 		return invalid("acknowledge", err)
 	}
 	if request.Application.Store.Provider != adapter.Provider() {
-		return invalid("acknowledge", errors.New("Google Play post-commit application scope is invalid"))
+		return invalid("acknowledge", errors.New("google play post-commit application scope is invalid"))
 	}
 	configuration, err := adapter.configuration(ctx, request.Application)
 	if err != nil {
@@ -398,7 +402,7 @@ func (adapter *Adapter) query(
 	if kind == core.ProductKindSubscription {
 		var purchase subscriptionPurchase
 		if err := json.Unmarshal(body, &purchase); err != nil {
-			return queryResult{}, invalid("query", errors.New("Google Play subscription response is invalid"))
+			return queryResult{}, invalid("query", errors.New("google play subscription response is invalid"))
 		}
 		observations, err := adapter.subscriptionObservations(application, purchaseToken, purchase)
 		if err != nil {
@@ -412,7 +416,7 @@ func (adapter *Adapter) query(
 	}
 	var purchase productPurchase
 	if err := json.Unmarshal(body, &purchase); err != nil {
-		return queryResult{}, invalid("query", errors.New("Google Play product response is invalid"))
+		return queryResult{}, invalid("query", errors.New("google play product response is invalid"))
 	}
 	observations, err := adapter.productObservations(application, purchaseToken, purchase)
 	if err != nil {
@@ -445,12 +449,12 @@ func (adapter *Adapter) acknowledge(
 			continue
 		}
 		if purchaseToken != "" {
-			return invalid("acknowledge", errors.New("Google Play acknowledgement has multiple purchase tokens"))
+			return invalid("acknowledge", errors.New("google play acknowledgement has multiple purchase tokens"))
 		}
 		purchaseToken = reference.Value()
 	}
 	if purchaseToken == "" {
-		return invalid("acknowledge", errors.New("Google Play acknowledgement requires a purchase token"))
+		return invalid("acknowledge", errors.New("google play acknowledgement requires a purchase token"))
 	}
 	packageName := url.PathEscape(string(application.Store.ID))
 	productID := url.PathEscape(string(action.ProductID))
@@ -554,14 +558,14 @@ func (adapter *Adapter) productObservations(
 	purchase productPurchase,
 ) ([]core.PurchaseObservation, error) {
 	if len(purchase.ProductLineItems) != 1 {
-		return nil, invalid("normalize", errors.New("Google Play non-consumable purchase requires one line item"))
+		return nil, invalid("normalize", errors.New("google play non-consumable purchase requires one line item"))
 	}
 	if err := validateEnvironment(application.Store.Environment, purchase.TestPurchaseContext != nil); err != nil {
 		return nil, invalid("normalize", err)
 	}
 	lineItem := purchase.ProductLineItems[0]
 	if lineItem.ProductID == "" || purchase.ObfuscatedExternalAccountID == "" {
-		return nil, invalid("normalize", errors.New("Google Play product identity or customer binding is missing"))
+		return nil, invalid("normalize", errors.New("google play product identity or customer binding is missing"))
 	}
 	state, access, reason := normalizeProductState(purchase.PurchaseStateContext.PurchaseState)
 	quantity := lineItem.ProductOfferDetails.Quantity
@@ -605,7 +609,7 @@ func (adapter *Adapter) subscriptionObservations(
 	purchase subscriptionPurchase,
 ) ([]core.PurchaseObservation, error) {
 	if len(purchase.LineItems) != 1 {
-		return nil, invalid("normalize", errors.New("Google Play subscription requires one line item"))
+		return nil, invalid("normalize", errors.New("google play subscription requires one line item"))
 	}
 	if err := validateEnvironment(application.Store.Environment, purchase.TestPurchase != nil); err != nil {
 		return nil, invalid("normalize", err)
@@ -613,7 +617,7 @@ func (adapter *Adapter) subscriptionObservations(
 	lineItem := purchase.LineItems[0]
 	accountID := purchase.ExternalAccountIdentifiers.ObfuscatedExternalAccountID
 	if lineItem.ProductID == "" || accountID == "" {
-		return nil, invalid("normalize", errors.New("Google Play subscription identity or customer binding is missing"))
+		return nil, invalid("normalize", errors.New("google play subscription identity or customer binding is missing"))
 	}
 	state, access, reason := normalizeSubscriptionState(purchase.SubscriptionState)
 	renewal, err := subscriptionRenewal(lineItem)
@@ -705,7 +709,7 @@ func acknowledgementActions(
 	}
 	queryReferences := observation.ReferencesFor(core.ReferenceQuery)
 	if len(queryReferences) == 0 {
-		return nil, errors.New("Google Play acknowledgement requires a query reference")
+		return nil, errors.New("google play acknowledgement requires a query reference")
 	}
 	return []stores.PostCommitAction{{
 		Kind:            acknowledgeActionKind,
@@ -756,7 +760,7 @@ func normalizeSubscriptionState(value string) (core.LifecycleState, core.AccessS
 // subscriptionRenewal derives shared renewal semantics from the current Google plan type.
 func subscriptionRenewal(lineItem subscriptionLineItem) (core.Renewal, error) {
 	if lineItem.AutoRenewingPlan != nil && lineItem.PrepaidPlan != nil {
-		return core.Renewal{}, errors.New("Google Play subscription has multiple plan types")
+		return core.Renewal{}, errors.New("google play subscription has multiple plan types")
 	}
 	if lineItem.AutoRenewingPlan != nil {
 		status := core.RenewalDisabled
@@ -776,11 +780,11 @@ func validateEnvironment(environment core.Environment, testPurchase bool) error 
 	switch environment {
 	case core.EnvironmentProduction:
 		if testPurchase {
-			return errors.New("Google Play test purchase cannot use a production application")
+			return errors.New("google play test purchase cannot use a production application")
 		}
 	case core.EnvironmentSandbox, core.EnvironmentTest:
 		if !testPurchase {
-			return errors.New("Google Play live purchase cannot use a test application")
+			return errors.New("google play live purchase cannot use a test application")
 		}
 	default:
 		return fmt.Errorf("unsupported Google Play environment %q", environment)
@@ -840,7 +844,7 @@ func parseEvidence(evidence stores.Evidence) (clientEvidence, error) {
 		return clientEvidence{}, err
 	}
 	if strings.TrimSpace(result.PurchaseToken) == "" {
-		return clientEvidence{}, errors.New("Google Play purchase token is required")
+		return clientEvidence{}, errors.New("google play purchase token is required")
 	}
 	if result.ProductKind != core.ProductKindSubscription && result.ProductKind != core.ProductKindNonConsumable {
 		return clientEvidence{}, errors.New("unsupported Google Play product kind")
@@ -852,18 +856,18 @@ func parseEvidence(evidence stores.Evidence) (clientEvidence, error) {
 func parsePrivateKey(encoded string) (*rsa.PrivateKey, error) {
 	block, remainder := pem.Decode([]byte(encoded))
 	if block == nil || block.Type != "PRIVATE KEY" || strings.TrimSpace(string(remainder)) != "" {
-		return nil, errors.New("Google Play private key must be one PKCS#8 PEM block")
+		return nil, errors.New("google play private key must be one PKCS#8 PEM block")
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return nil, errors.New("Google Play private key is invalid PKCS#8")
+		return nil, errors.New("google play private key is invalid PKCS#8")
 	}
 	privateKey, ok := parsed.(*rsa.PrivateKey)
 	if !ok || privateKey.N.BitLen() < 2048 {
-		return nil, errors.New("Google Play private key must be an RSA key of at least 2048 bits")
+		return nil, errors.New("google play private key must be an RSA key of at least 2048 bits")
 	}
 	if err := privateKey.Validate(); err != nil {
-		return nil, errors.New("Google Play private key is invalid")
+		return nil, errors.New("google play private key is invalid")
 	}
 	return privateKey, nil
 }

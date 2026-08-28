@@ -26,7 +26,7 @@ import (
 
 const (
 	// CredentialKind identifies the v1 Huawei server API credential package.
-	CredentialKind stores.CredentialKind = "huawei_server_api"
+	CredentialKind stores.CredentialKind = "huawei_server_api" // #nosec G101 -- This is a public credential type discriminator, not credential material.
 	// CredentialContentType identifies the Huawei credential JSON representation.
 	CredentialContentType = "application/vnd.iapstack.huawei-credentials+json"
 	// CredentialSchemaVersion identifies the initial server API credential shape.
@@ -36,7 +36,7 @@ const (
 	// maximumProviderResponse bounds Huawei token and purchase response bodies.
 	maximumProviderResponse int64 = 2 << 20
 	// defaultTokenURL is Huawei's documented OAuth token service.
-	defaultTokenURL = "https://oauth-login.cloud.huawei.com/oauth2/v3/token"
+	defaultTokenURL = "https://oauth-login.cloud.huawei.com/oauth2/v3/token" // #nosec G101 -- This is Huawei's public OAuth endpoint, not credential material.
 )
 
 // Adapter verifies Huawei evidence using application-scoped credentials and authoritative server APIs.
@@ -117,20 +117,15 @@ type signedData struct {
 // New constructs a bounded Huawei AppGallery server adapter.
 func New(credentials stores.CredentialSource, timeout time.Duration) (*Adapter, error) {
 	if credentials == nil {
-		return nil, errors.New("Huawei credential source is required")
+		return nil, errors.New("huawei credential source is required")
 	}
 	if timeout <= 0 {
-		return nil, errors.New("Huawei provider timeout must be positive")
+		return nil, errors.New("huawei provider timeout must be positive")
 	}
 	return &Adapter{
 		credentials: credentials,
-		client: &http.Client{
-			Timeout: timeout,
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
-		clock: time.Now,
+		client:      newProviderClient(timeout),
+		clock:       time.Now,
 	}, nil
 }
 
@@ -194,7 +189,7 @@ func (adapter *Adapter) Reconcile(
 		}
 	}
 	if token == "" || len(request.ExpectedProducts) != 1 {
-		return stores.VerificationResult{}, invalid("reconcile", errors.New("Huawei reconciliation requires one product and purchase token"))
+		return stores.VerificationResult{}, invalid("reconcile", errors.New("huawei reconciliation requires one product and purchase token"))
 	}
 	configuration, publicKey, err := adapter.configuration(ctx, request.Application)
 	if err != nil {
@@ -376,7 +371,7 @@ func (adapter *Adapter) query(
 		data, signature = result.SubscriptionPurchaseData, result.SubscriptionPurchaseSignature
 	}
 	if data == "" || signature == "" {
-		return signedData{}, stores.Evidence{}, invalid("query", errors.New("Huawei response omitted signed purchase data"))
+		return signedData{}, stores.Evidence{}, invalid("query", errors.New("huawei response omitted signed purchase data"))
 	}
 	artifact, err := stores.NewEvidence("application/json", responseBody)
 	if err != nil {
@@ -629,11 +624,11 @@ func normalizeState(
 func verifySignature(publicKey *rsa.PublicKey, data, encodedSignature string) error {
 	signature, err := base64.StdEncoding.DecodeString(encodedSignature)
 	if err != nil {
-		return errors.New("Huawei signature is not valid base64")
+		return errors.New("huawei signature is not valid base64")
 	}
 	digest := sha256.Sum256([]byte(data))
 	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, digest[:], signature); err != nil {
-		return errors.New("Huawei signature verification failed")
+		return errors.New("huawei signature verification failed")
 	}
 	return nil
 }
@@ -646,7 +641,7 @@ func parsePublicKey(encoded string) (*rsa.PublicKey, error) {
 	} else {
 		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
 		if err != nil {
-			return nil, errors.New("Huawei public key is neither PEM nor base64 DER")
+			return nil, errors.New("huawei public key is neither PEM nor base64 DER")
 		}
 		data = decoded
 	}
@@ -658,7 +653,7 @@ func parsePublicKey(encoded string) (*rsa.PublicKey, error) {
 	if key, err := x509.ParsePKCS1PublicKey(data); err == nil {
 		return key, nil
 	}
-	return nil, errors.New("Huawei public key is not RSA")
+	return nil, errors.New("huawei public key is not RSA")
 }
 
 // decodeStrict decodes one JSON value and rejects unknown or trailing fields.
@@ -671,15 +666,6 @@ func decodeStrict(payload []byte, destination any) error {
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return errors.New("unexpected trailing JSON")
-	}
-	return nil
-}
-
-// validateHTTPS requires absolute HTTPS provider endpoints without embedded credentials.
-func validateHTTPS(value string) error {
-	parsed, err := url.ParseRequestURI(value)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
-		return errors.New("Huawei endpoint must be an absolute HTTPS URL")
 	}
 	return nil
 }

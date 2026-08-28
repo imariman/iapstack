@@ -45,7 +45,7 @@ const (
 	// maximumNotificationTokenClockSkew permits bounded signer and receiver clock drift.
 	maximumNotificationTokenClockSkew = 5 * time.Minute
 	// googleTokenIssuer identifies Google's canonical OIDC issuer URL.
-	googleTokenIssuer = "https://accounts.google.com"
+	googleTokenIssuer = "https://accounts.google.com" // #nosec G101 -- This is Google's public OIDC issuer, not credential material.
 	// googleTokenIssuerAlias identifies Google's documented issuer alias.
 	googleTokenIssuerAlias = "accounts.google.com"
 )
@@ -161,7 +161,7 @@ type unixMilliseconds struct {
 
 var (
 	// ErrNotificationUnauthorized indicates that Pub/Sub push authentication did not match application configuration.
-	ErrNotificationUnauthorized = errors.New("Google Play notification authentication failed")
+	ErrNotificationUnauthorized = errors.New("google play notification authentication failed")
 	// ErrNotificationInvalid indicates that a Pub/Sub or RTDN envelope was malformed or outside application scope.
 	ErrNotificationInvalid = errors.New("invalid Google Play notification")
 )
@@ -188,7 +188,7 @@ func (validator googleNotificationTokenValidator) Validate(
 	if (payload.Issuer != googleTokenIssuer && payload.Issuer != googleTokenIssuerAlias) ||
 		payload.Subject == "" || payload.IssuedAt <= 0 ||
 		payload.IssuedAt > time.Now().Add(maximumNotificationTokenClockSkew).Unix() {
-		return notificationTokenClaims{}, errors.New("Google notification token claims are invalid")
+		return notificationTokenClaims{}, errors.New("google notification token claims are invalid")
 	}
 	email, _ := payload.Claims["email"].(string)
 	emailVerified, _ := payload.Claims["email_verified"].(bool)

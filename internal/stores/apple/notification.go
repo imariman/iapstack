@@ -160,10 +160,10 @@ func (notification NotificationEnvelope) VerificationEvidence() (json.RawMessage
 func (notification NotificationEnvelope) Validate() error {
 	if !validAppAccountToken(notification.NotificationUUID) ||
 		!validNotificationIdentifier(notification.NotificationType) || notification.SignedAt.IsZero() {
-		return errors.New("App Store notification identity is invalid")
+		return errors.New("app store notification identity is invalid")
 	}
 	if notification.Subtype != "" && !validNotificationIdentifier(notification.Subtype) {
-		return errors.New("App Store notification subtype is invalid")
+		return errors.New("app store notification subtype is invalid")
 	}
 	if notification.SignedTransaction == "" {
 		if notification.ExternalCustomerID != "" || notification.ProviderProductID != "" || notification.ProductKind != "" {
@@ -173,7 +173,7 @@ func (notification NotificationEnvelope) Validate() error {
 	}
 	if !validAppAccountToken(notification.ExternalCustomerID) || notification.ProviderProductID == "" ||
 		(notification.ProductKind != core.ProductKindSubscription && notification.ProductKind != core.ProductKindNonConsumable) {
-		return errors.New("App Store notification verification data is invalid")
+		return errors.New("app store notification verification data is invalid")
 	}
 	return notification.ProviderProductID.Validate()
 }
