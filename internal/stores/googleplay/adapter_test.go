@@ -242,6 +242,73 @@ func TestAdapterNormalizesSandboxGraceSubscription(t *testing.T) {
 	}
 }
 
+// TestAdapterReconcilesAuthoritativeAccountHold verifies missed RTDN delivery converges through Android Publisher.
+func TestAdapterReconcilesAuthoritativeAccountHold(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentSandbox)
+	purchase := subscriptionPurchase{
+		Kind: "androidpublisher#subscriptionPurchaseV2",
+		LineItems: []subscriptionLineItem{{
+			ProductID: fixtureProductID, ExpiryTime: fixture.now.Add(time.Hour),
+			LatestSuccessfulOrderID: "GPA.4234-5678-9012-34567",
+			AutoRenewingPlan:        &autoRenewingPlan{AutoRenewEnabled: true},
+		}},
+		StartTime: fixture.now.Add(-24 * time.Hour), SubscriptionState: subscriptionStateOnHold,
+		LatestOrderID: "GPA.4234-5678-9012-34567", TestPurchase: &struct{}{},
+		AcknowledgementState: acknowledgementStateAcknowledged,
+		ExternalAccountIdentifiers: externalAccountIdentifiers{
+			ObfuscatedExternalAccountID: fixtureAccountID,
+		},
+	}
+	fixture.adapter.client.Transport = providerTransport(t, fixture, purchase)
+	verification := verificationRequest(t, core.EnvironmentSandbox, core.ProductKindSubscription)
+	queryReference, err := core.NewStoreReference(
+		core.ReferenceQuery,
+		"purchase_token",
+		fixturePurchaseToken,
+	)
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	result, err := fixture.adapter.Reconcile(context.Background(), stores.ReconciliationRequest{
+		Application: verification.Application, CustomerID: verification.CustomerID,
+		ExpectedProducts:         []core.ProviderProductID{fixtureProductID},
+		ExpectedCustomerBindings: verification.ExpectedCustomerBindings,
+		QueryReferences:          []core.StoreReference{queryReference},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	observation := result.Observations[0]
+	if observation.State != core.LifecycleOnHold || observation.Access != core.AccessDenied ||
+		observation.AccessReason != core.AccessReasonBillingIssue || len(result.PostCommitActions) != 0 {
+		t.Fatalf("Reconcile() result = %#v", result)
+	}
+}
+
+// TestAdapterRejectsInvalidPurchaseToken verifies an unknown authoritative token cannot create provider output.
+func TestAdapterRejectsInvalidPurchaseToken(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentSandbox)
+	fixture.adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() == fixture.adapter.tokenURL {
+			return jsonResponse(t, http.StatusOK, tokenResponse{
+				AccessToken: "provider-access-token", TokenType: "Bearer", ExpiresIn: 3600,
+			}, nil), nil
+		}
+		return jsonResponse(t, http.StatusNotFound, map[string]any{"error": "not found"}, nil), nil
+	})
+	_, err := fixture.adapter.Verify(
+		context.Background(),
+		verificationRequest(t, core.EnvironmentSandbox, core.ProductKindSubscription),
+	)
+	if !isFailureKind(err, stores.FailureNotFound) {
+		t.Fatalf("Verify() error = %v, want provider not found", err)
+	}
+}
+
 // TestAdapterRejectsCustomerAndEnvironmentMismatch verifies cross-customer and live/test scope isolation.
 func TestAdapterRejectsCustomerAndEnvironmentMismatch(t *testing.T) {
 	t.Parallel()
@@ -327,6 +394,28 @@ func TestSubscriptionStateNormalization(t *testing.T) {
 		state, access, reason := normalizeSubscriptionState(test.providerState)
 		if state != test.state || access != test.access || reason != test.reason {
 			t.Errorf("normalizeSubscriptionState(%q) = (%q, %q, %q), want (%q, %q, %q)",
+				test.providerState, state, access, reason, test.state, test.access, test.reason)
+		}
+	}
+}
+
+// TestProductStateNormalization verifies pending and refunded non-consumables never grant access.
+func TestProductStateNormalization(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		providerState string
+		state         core.LifecycleState
+		access        core.AccessStatus
+		reason        core.AccessReason
+	}{
+		{providerState: productStatePurchased, state: core.LifecycleActive, access: core.AccessAllowed, reason: core.AccessReasonPurchaseValid},
+		{providerState: productStatePending, state: core.LifecyclePending, access: core.AccessUnresolved, reason: core.AccessReasonPendingPayment},
+		{providerState: productStateCancelled, state: core.LifecycleRefunded, access: core.AccessDenied, reason: core.AccessReasonRefunded},
+	} {
+		state, access, reason := normalizeProductState(test.providerState)
+		if state != test.state || access != test.access || reason != test.reason {
+			t.Errorf("normalizeProductState(%q) = (%q, %q, %q), want (%q, %q, %q)",
 				test.providerState, state, access, reason, test.state, test.access, test.reason)
 		}
 	}

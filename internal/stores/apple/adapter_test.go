@@ -176,6 +176,124 @@ func TestAdapterNormalizesExpiredSubscription(t *testing.T) {
 	}
 }
 
+// TestAdapterReconcilesAuthoritativeGracePeriod verifies missed notifications converge through the latest signed status.
+func TestAdapterReconcilesAuthoritativeGracePeriod(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 28, 18, 0, 0, 0, time.UTC)
+	fixture := newSigningFixture(t, now)
+	transaction := transactionPayload{
+		OriginalTransactionID: "2000000323456789", TransactionID: "2000000323456790",
+		BundleID: fixtureBundleID, ProductID: fixtureProductID, PurchaseDate: now.Add(-24 * time.Hour).UnixMilli(),
+		ExpiresDate: now.Add(-time.Minute).UnixMilli(), Quantity: 1, Type: appleSubscriptionType,
+		AppAccountToken: fixtureAccountToken, OwnershipType: applePurchasedOwnership,
+		SignedDate: now.UnixMilli(), Environment: "Sandbox",
+	}
+	graceEndsAt := now.Add(30 * time.Minute)
+	renewal := renewalPayload{
+		AppAccountToken: transaction.AppAccountToken, AutoRenewProductID: transaction.ProductID,
+		AutoRenewStatus: autoRenewEnabled, Environment: transaction.Environment,
+		GracePeriodExpiresDate: graceEndsAt.UnixMilli(), IsInBillingRetryPeriod: true,
+		OriginalTransactionID: transaction.OriginalTransactionID, ProductID: transaction.ProductID,
+		RenewalDate: now.Add(time.Hour).UnixMilli(), SignedDate: now.UnixMilli(),
+	}
+	adapter, err := New(
+		fakeCredentialSource{credential: credentialFixture(t, fixture, core.EnvironmentSandbox)},
+		time.Second,
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	adapter.clock = func() time.Time { return now }
+	adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		verifyAuthorizationFixture(
+			t,
+			strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer "),
+			&fixture.apiKey.PublicKey,
+			now,
+		)
+		switch request.URL.Path {
+		case "/inApps/v1/transactions/" + transaction.TransactionID:
+			return jsonResponse(t, http.StatusOK, transactionInfoResponse{
+				SignedTransactionInfo: signTransactionFixture(t, fixture, transaction),
+			}, nil), nil
+		case "/inApps/v1/subscriptions/" + transaction.OriginalTransactionID:
+			return jsonResponse(t, http.StatusOK, statusResponse{
+				Environment: transaction.Environment, BundleID: transaction.BundleID,
+				Data: []subscriptionGroupIdentifierItem{{
+					SubscriptionGroupIdentifier: "subscription-group-1",
+					LastTransactions: []lastTransactionsItem{{
+						OriginalTransactionID: transaction.OriginalTransactionID,
+						Status:                subscriptionStatusGracePeriod,
+						SignedTransactionInfo: signTransactionFixture(t, fixture, transaction),
+						SignedRenewalInfo:     signApplePayloadFixture(t, fixture, renewal),
+					}},
+				}},
+			}, nil), nil
+		default:
+			t.Fatalf("unexpected provider request path %q", request.URL.Path)
+			return nil, nil
+		}
+	})
+	binding, err := core.NewStoreReference(
+		core.ReferenceCustomerBinding,
+		"app_account_token",
+		fixtureAccountToken,
+	)
+	if err != nil {
+		t.Fatalf("NewStoreReference() binding error = %v", err)
+	}
+	queryReference, err := core.NewStoreReference(
+		core.ReferenceQuery,
+		"transaction_id",
+		transaction.TransactionID,
+	)
+	if err != nil {
+		t.Fatalf("NewStoreReference() query error = %v", err)
+	}
+	result, err := adapter.Reconcile(context.Background(), stores.ReconciliationRequest{
+		Application: appleApplication(core.EnvironmentSandbox), CustomerID: "customer-1",
+		ExpectedProducts:         []core.ProviderProductID{fixtureProductID},
+		ExpectedCustomerBindings: []core.StoreReference{binding},
+		QueryReferences:          []core.StoreReference{queryReference},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	observation := result.Observations[0]
+	if observation.State != core.LifecycleGracePeriod || observation.Access != core.AccessAllowed ||
+		observation.AccessReason != core.AccessReasonGracePeriod ||
+		observation.EffectivePeriod.EndsAt == nil || !observation.EffectivePeriod.EndsAt.Equal(graceEndsAt) {
+		t.Fatalf("Reconcile() observation = %#v", observation)
+	}
+}
+
+// TestNormalizeStateDistinguishesRefundAndFamilyRevocation verifies Apple revocation context remains explicit.
+func TestNormalizeStateDistinguishesRefundAndFamilyRevocation(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 28, 18, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name      string
+		ownership string
+		state     core.LifecycleState
+		reason    core.AccessReason
+	}{
+		{name: "purchased refund", ownership: applePurchasedOwnership, state: core.LifecycleRefunded, reason: core.AccessReasonRefunded},
+		{name: "family revocation", ownership: appleFamilySharedOwnership, state: core.LifecycleRevoked, reason: core.AccessReasonRevoked},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state, access, reason := normalizeState(core.ProductKindNonConsumable, transactionPayload{
+				OwnershipType: test.ownership, RevocationDate: now.UnixMilli(),
+			}, now)
+			if state != test.state || access != core.AccessDenied || reason != test.reason {
+				t.Fatalf("normalizeState() = (%q, %q, %q), want (%q, %q, %q)",
+					state, access, reason, test.state, core.AccessDenied, test.reason)
+			}
+		})
+	}
+}
+
 // TestNormalizeSubscriptionStatusCoversAppleLifecycle verifies access and renewal decisions for all five statuses.
 func TestNormalizeSubscriptionStatusCoversAppleLifecycle(t *testing.T) {
 	t.Parallel()
