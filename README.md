@@ -35,6 +35,11 @@ migration, and HTTPS shape on two always-on Basic dynos. Heroku has no permanent
 free runtime; read the [Heroku deployment guide](deploy/heroku/README.md) and confirm
 the live total before creating the app.
 
+DigitalOcean App Platform is available through the complete [App Spec deployment
+guide](deploy/digitalocean/README.md). Its official Deploy Button cannot express the
+required worker and migration job, so the full topology uses one `doctl apps create`
+command instead.
+
 IAPStack is a self-hosted control plane for validating in-app purchases and turning store transactions into durable application entitlements. It is designed for teams that want one backend-owned model across mobile stores without handing their purchase data or access rules to a hosted subscription platform.
 
 ## What IAPStack aims to provide
