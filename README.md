@@ -21,6 +21,9 @@
 
 ## Deploy
 
+Compare account requirements, free-tier limitations, and complete-stack costs in the
+[deployment target matrix](deploy/README.md) before creating provider resources.
+
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/imariman/iapstack)
 [![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://www.heroku.com/deploy?template=https://github.com/imariman/iapstack)
 
