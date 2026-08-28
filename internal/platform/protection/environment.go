@@ -2,6 +2,7 @@ package protection
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,7 +59,7 @@ func LoadConfigFromEnvironment(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	defer zeroRootKeys(encryptionKeys)
-	fingerprintKey, err := decodeRootKey(fingerprintKeyEnvironment, encodedFingerprintKey)
+	fingerprintKey, err := decodeEnvironmentRootKey(fingerprintKeyEnvironment, encodedFingerprintKey)
 	if err != nil {
 		return Config{}, err
 	}
@@ -73,11 +74,24 @@ func decodeEnvironmentEncryptionKeys(activeKeyID, encodedKeys, encodedKey string
 		return decodeEncryptionKeys(encodedKeys)
 	}
 
-	key, err := decodeRootKey(encryptionKeyEnvironment, encodedKey)
+	key, err := decodeEnvironmentRootKey(encryptionKeyEnvironment, encodedKey)
 	if err != nil {
 		return nil, err
 	}
 	return map[string][]byte{activeKeyID: key}, nil
+}
+
+// decodeEnvironmentRootKey accepts the two lossless encodings supported by
+// managed-platform secret generators: strict base64 and 64-character hex.
+func decodeEnvironmentRootKey(environmentName, encoded string) ([]byte, error) {
+	if len(encoded) == hex.EncodedLen(keySize) {
+		key, err := hex.DecodeString(encoded)
+		if err == nil {
+			return key, nil
+		}
+		zeroBytes(key)
+	}
+	return decodeRootKey(environmentName, encoded)
 }
 
 // OpenFromEnvironment loads validated secrets and constructs an immutable protection keyring.

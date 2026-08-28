@@ -68,11 +68,12 @@ key-unavailable error.
 Deployment secrets use these fail-fast environment contracts:
 
 - `IAPSTACK_PROTECTION_ACTIVE_KEY_ID`
-- `IAPSTACK_PROTECTION_KEY`, a strict base64-encoded 32-byte encryption root for
-  initial single-key deployments, or
+- `IAPSTACK_PROTECTION_KEY`, a strict base64-encoded or 64-character hexadecimal
+  32-byte encryption root for initial single-key deployments, or
 - `IAPSTACK_PROTECTION_KEYS`, a duplicate-free JSON object from key ID to strict
   base64-encoded 32-byte encryption root
-- `IAPSTACK_PROTECTION_FINGERPRINT_KEY`, a strict base64-encoded 32-byte root
+- `IAPSTACK_PROTECTION_FINGERPRINT_KEY`, a strict base64-encoded or 64-character
+  hexadecimal 32-byte root
 
 Exactly one encryption-key form is accepted. The single-key form is assigned to the
 active key ID and is intended for initial managed-platform deployment; the JSON form is

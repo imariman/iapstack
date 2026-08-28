@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
@@ -40,6 +41,30 @@ func TestLoadConfigFromEnvironment(t *testing.T) {
 		t.Fatalf("KeyIDs() count = %d, want 2", len(config.KeyIDs()))
 	}
 
+	keyring, err := platformprotection.OpenFromEnvironment(environmentGetter(environment))
+	if err != nil {
+		t.Fatalf("OpenFromEnvironment() error = %v", err)
+	}
+	value := protectText(t, keyring, protectionScope(), secretPlaintext)
+	plaintext, err := keyring.Open(context.Background(), newOpenRequest(t, protectionScope(), value))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if string(plaintext) != secretPlaintext {
+		t.Fatalf("Open() plaintext = %q", plaintext)
+	}
+}
+
+// TestLoadConfigFromEnvironmentHexKeys verifies 32-byte hex platform generators.
+func TestLoadConfigFromEnvironmentHexKeys(t *testing.T) {
+	t.Parallel()
+
+	material := testKeyMaterial()
+	environment := map[string]string{
+		activeKeyIDEnvironmentName:    activeEncryptionKeyID,
+		encryptionKeyEnvironmentName:  hex.EncodeToString(material.active),
+		fingerprintKeyEnvironmentName: hex.EncodeToString(material.fingerprint),
+	}
 	keyring, err := platformprotection.OpenFromEnvironment(environmentGetter(environment))
 	if err != nil {
 		t.Fatalf("OpenFromEnvironment() error = %v", err)
