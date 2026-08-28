@@ -22,12 +22,18 @@
 ## Deploy
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/imariman/iapstack)
+[![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://www.heroku.com/deploy?template=https://github.com/imariman/iapstack)
 
 The Render Blueprint provisions the API, worker, private PostgreSQL database, generated
 protection secrets, HTTPS ingress, and database migration command. It intentionally
 uses paid minimum-size resources because a complete IAPStack runtime needs a persistent
 background worker. Review the [Render deployment guide](deploy/render/README.md), the
 provider's live price estimate, and the early-development warning before approval.
+
+The Heroku manifest provides the same API, worker, managed PostgreSQL, release-phase
+migration, and HTTPS shape on two always-on Basic dynos. Heroku has no permanently
+free runtime; read the [Heroku deployment guide](deploy/heroku/README.md) and confirm
+the live total before creating the app.
 
 IAPStack is a self-hosted control plane for validating in-app purchases and turning store transactions into durable application entitlements. It is designed for teams that want one backend-owned model across mobile stores without handing their purchase data or access rules to a hosted subscription platform.
 

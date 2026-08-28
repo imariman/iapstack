@@ -1,0 +1,13 @@
+build:
+  docker:
+    web: Dockerfile
+    worker: Dockerfile
+
+release:
+  command:
+    - /usr/local/bin/iapstack migrate
+  image: web
+
+run:
+  web: /usr/local/bin/iapstack api
+  worker: /usr/local/bin/iapstack worker
