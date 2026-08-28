@@ -41,9 +41,10 @@ const (
 
 // Adapter verifies Huawei evidence using application-scoped credentials and authoritative server APIs.
 type Adapter struct {
-	credentials stores.CredentialSource
-	client      *http.Client
-	clock       func() time.Time
+	credentials          stores.CredentialSource
+	client               *http.Client
+	clock                func() time.Time
+	allowPrivateNetworks bool
 }
 
 // credentialPayload is the versioned private Huawei application configuration.
@@ -114,8 +115,12 @@ type signedData struct {
 	signature string
 }
 
-// New constructs a bounded Huawei AppGallery server adapter.
-func New(credentials stores.CredentialSource, timeout time.Duration) (*Adapter, error) {
+// New constructs a bounded Huawei AppGallery server adapter under the configured address policy.
+func New(
+	credentials stores.CredentialSource,
+	timeout time.Duration,
+	allowPrivateNetworks bool,
+) (*Adapter, error) {
 	if credentials == nil {
 		return nil, errors.New("huawei credential source is required")
 	}
@@ -123,9 +128,10 @@ func New(credentials stores.CredentialSource, timeout time.Duration) (*Adapter, 
 		return nil, errors.New("huawei provider timeout must be positive")
 	}
 	return &Adapter{
-		credentials: credentials,
-		client:      newProviderClient(timeout),
-		clock:       time.Now,
+		credentials:          credentials,
+		client:               newProviderClient(timeout, allowPrivateNetworks),
+		clock:                time.Now,
+		allowPrivateNetworks: allowPrivateNetworks,
 	}, nil
 }
 
@@ -293,7 +299,7 @@ func (adapter *Adapter) configuration(
 		return credentialPayload{}, nil, stores.NewFailure(adapter.Provider(), "credentials", stores.FailurePermanent, 0, nil)
 	}
 	for _, endpoint := range []string{configuration.TokenURL, configuration.OrderURL, configuration.SubscriptionURL} {
-		if err := validateHTTPS(endpoint); err != nil {
+		if err := validateHTTPS(endpoint, adapter.allowPrivateNetworks); err != nil {
 			return credentialPayload{}, nil, stores.NewFailure(adapter.Provider(), "credentials", stores.FailurePermanent, 0, err)
 		}
 	}

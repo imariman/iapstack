@@ -24,10 +24,11 @@ type providerConnectionDialer interface {
 	DialContext(context.Context, string, string) (net.Conn, error)
 }
 
-// publicProviderDialer rejects non-public resolutions before opening Huawei connections.
-type publicProviderDialer struct {
-	resolver providerAddressResolver
-	dialer   providerConnectionDialer
+// restrictedProviderDialer resolves and pins Huawei connections under the configured address policy.
+type restrictedProviderDialer struct {
+	allowPrivateNetworks bool
+	resolver             providerAddressResolver
+	dialer               providerConnectionDialer
 }
 
 var (
@@ -37,13 +38,14 @@ var (
 	providerBenchmarkAddressPrefix = netip.MustParsePrefix("198.18.0.0/15")
 )
 
-// newProviderClient constructs a proxy-free, redirect-free client restricted to public networks.
-func newProviderClient(timeout time.Duration) *http.Client {
+// newProviderClient constructs a proxy-free, redirect-free client with connection-time address enforcement.
+func newProviderClient(timeout time.Duration, allowPrivateNetworks bool) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
-	transport.DialContext = (&publicProviderDialer{
-		resolver: net.DefaultResolver,
-		dialer:   &net.Dialer{},
+	transport.DialContext = (&restrictedProviderDialer{
+		allowPrivateNetworks: allowPrivateNetworks,
+		resolver:             net.DefaultResolver,
+		dialer:               &net.Dialer{},
 	}).DialContext
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	return &http.Client{
@@ -55,8 +57,8 @@ func newProviderClient(timeout time.Duration) *http.Client {
 	}
 }
 
-// validateHTTPS requires an absolute public HTTPS provider endpoint without embedded credentials.
-func validateHTTPS(value string) error {
+// validateHTTPS requires an absolute HTTPS provider endpoint permitted by the configured address policy.
+func validateHTTPS(value string, allowPrivateNetworks bool) error {
 	parsed, err := url.ParseRequestURI(value)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
 		parsed.Fragment != "" || strings.Contains(value, "#") {
@@ -66,14 +68,15 @@ func validateHTTPS(value string) error {
 	if hostname == "" || strings.Contains(hostname, "%") {
 		return errors.New("huawei endpoint hostname is invalid")
 	}
-	if address, parseError := netip.ParseAddr(hostname); parseError == nil && !isPublicProviderAddress(address) {
+	if address, parseError := netip.ParseAddr(hostname); parseError == nil &&
+		!allowPrivateNetworks && !isPublicProviderAddress(address) {
 		return errors.New("huawei endpoint must use a public network address")
 	}
 	return nil
 }
 
-// DialContext resolves, validates, and pins one public Huawei endpoint connection.
-func (dialer *publicProviderDialer) DialContext(
+// DialContext resolves, validates, and pins one Huawei endpoint connection.
+func (dialer *restrictedProviderDialer) DialContext(
 	ctx context.Context,
 	network string,
 	address string,
@@ -86,9 +89,11 @@ func (dialer *publicProviderDialer) DialContext(
 	if err != nil || len(addresses) == 0 {
 		return nil, errors.New("huawei endpoint could not be resolved")
 	}
-	for _, resolved := range addresses {
-		if !isPublicProviderAddress(resolved) {
-			return nil, errors.New("huawei endpoint resolved to a non-public network address")
+	if !dialer.allowPrivateNetworks {
+		for _, resolved := range addresses {
+			if !isPublicProviderAddress(resolved) {
+				return nil, errors.New("huawei endpoint resolved to a non-public network address")
+			}
 		}
 	}
 	for _, resolved := range addresses {

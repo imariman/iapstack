@@ -43,6 +43,10 @@ the database because IAPStack returns it only once.
   trusted internal application endpoint requires it, set the value to `true` for API
   and worker together and enforce the exact destination with an egress firewall or
   service-mesh policy.
+- Keep `IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS=false` for Huawei's public services. If
+  an approved private provider fixture or gateway requires it, set the value to `true`
+  for API and worker together and enforce the exact destination with an egress firewall
+  or service-mesh policy.
 - Configure webhook receivers to verify `IAPStack-Signature` over
   `<unix_timestamp>.<raw_body>`, reject stale timestamps, and deduplicate the stable
   `IAPStack-Event-ID` before applying an event.

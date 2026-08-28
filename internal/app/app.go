@@ -75,7 +75,7 @@ func Run(
 	if err != nil {
 		return err
 	}
-	huaweiAdapter, err := huawei.New(credentialService, cfg.ProviderTimeout)
+	huaweiAdapter, err := huawei.New(credentialService, cfg.ProviderTimeout, cfg.HuaweiAllowPrivateNetworks)
 	if err != nil {
 		return err
 	}

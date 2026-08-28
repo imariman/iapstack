@@ -58,6 +58,7 @@ type Config struct {
 	HTTPBodyLimit                int64
 	AuthMaxConcurrentDerivations int
 	ProviderTimeout              time.Duration
+	HuaweiAllowPrivateNetworks   bool
 	WebhookTimeout               time.Duration
 	WebhookAllowPrivateNetworks  bool
 }
@@ -82,6 +83,7 @@ func Load(getenv func(string) string) (Config, error) {
 		HTTPBodyLimit:                defaultHTTPBodyLimit,
 		AuthMaxConcurrentDerivations: defaultAuthMaxConcurrentDerivations,
 		ProviderTimeout:              defaultProviderTimeout,
+		HuaweiAllowPrivateNetworks:   false,
 		WebhookTimeout:               defaultWebhookTimeout,
 		WebhookAllowPrivateNetworks:  false,
 	}
@@ -113,6 +115,11 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if raw := strings.TrimSpace(getenv("IAPSTACK_PROVIDER_TIMEOUT")); raw != "" {
 		if cfg.ProviderTimeout, err = positiveDuration("IAPSTACK_PROVIDER_TIMEOUT", raw); err != nil {
+			return Config{}, err
+		}
+	}
+	if raw := strings.TrimSpace(getenv("IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS")); raw != "" {
+		if cfg.HuaweiAllowPrivateNetworks, err = strictBoolean("IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS", raw); err != nil {
 			return Config{}, err
 		}
 	}

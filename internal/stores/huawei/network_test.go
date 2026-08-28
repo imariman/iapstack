@@ -41,20 +41,41 @@ func (dialer *providerDialerFixture) DialContext(
 func TestValidateHTTPSRejectsUnsafeDestinations(t *testing.T) {
 	t.Parallel()
 
-	for _, endpoint := range []string{
-		"http://provider.example/order",
-		"https://user:secret@provider.example/order",
-		"https://provider.example/order#fragment",
-		"https://127.0.0.1/order",
-		"https://169.254.169.254/latest/meta-data",
-		"https://[::1]/order",
-	} {
-		if err := validateHTTPS(endpoint); err == nil {
-			t.Errorf("validateHTTPS(%q) error = nil, want rejection", endpoint)
-		}
+	tests := []struct {
+		name     string
+		endpoint string
+	}{
+		{name: "plain HTTP", endpoint: "http://provider.example/order"},
+		{name: "embedded credentials", endpoint: "https://user:secret@provider.example/order"},
+		{name: "fragment", endpoint: "https://provider.example/order#fragment"},
+		{name: "IPv4 loopback", endpoint: "https://127.0.0.1/order"},
+		{name: "cloud metadata", endpoint: "https://169.254.169.254/latest/meta-data"},
+		{name: "IPv6 loopback", endpoint: "https://[::1]/order"},
 	}
-	if err := validateHTTPS("https://provider.example/order"); err != nil {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := validateHTTPS(tt.endpoint, false); err == nil {
+				t.Errorf("validateHTTPS(%q) error = nil, want rejection", tt.endpoint)
+			}
+		})
+	}
+	if err := validateHTTPS("https://provider.example/order", false); err != nil {
 		t.Fatalf("validateHTTPS() public hostname error = %v", err)
+	}
+}
+
+// TestValidateHTTPSPrivateNetworkOptIn verifies literal private endpoints require an explicit policy override.
+func TestValidateHTTPSPrivateNetworkOptIn(t *testing.T) {
+	t.Parallel()
+
+	const endpoint = "https://127.0.0.1/order"
+	if err := validateHTTPS(endpoint, false); err == nil {
+		t.Fatal("validateHTTPS() default error = nil, want private-address rejection")
+	}
+	if err := validateHTTPS(endpoint, true); err != nil {
+		t.Fatalf("validateHTTPS() opt-in error = %v", err)
 	}
 }
 
@@ -63,7 +84,7 @@ func TestProviderDialerRejectsMixedResolution(t *testing.T) {
 	t.Parallel()
 
 	connectionDialer := &providerDialerFixture{}
-	dialer := &publicProviderDialer{
+	dialer := &restrictedProviderDialer{
 		resolver: providerResolverFixture{addresses: []netip.Addr{
 			netip.MustParseAddr("8.8.8.8"),
 			netip.MustParseAddr("127.0.0.1"),
@@ -83,12 +104,28 @@ func TestProviderDialerPinsPublicResolution(t *testing.T) {
 	t.Parallel()
 
 	connectionDialer := &providerDialerFixture{}
-	dialer := &publicProviderDialer{
+	dialer := &restrictedProviderDialer{
 		resolver: providerResolverFixture{addresses: []netip.Addr{netip.MustParseAddr("8.8.8.8")}},
 		dialer:   connectionDialer,
 	}
 	_, _ = dialer.DialContext(context.Background(), "tcp", "provider.example:443")
 	if len(connectionDialer.addresses) != 1 || connectionDialer.addresses[0] != "8.8.8.8:443" {
 		t.Fatalf("DialContext() addresses = %v, want pinned public address", connectionDialer.addresses)
+	}
+}
+
+// TestProviderDialerPrivateNetworkOptIn verifies private resolution remains pinned when explicitly permitted.
+func TestProviderDialerPrivateNetworkOptIn(t *testing.T) {
+	t.Parallel()
+
+	connectionDialer := &providerDialerFixture{}
+	dialer := &restrictedProviderDialer{
+		allowPrivateNetworks: true,
+		resolver:             providerResolverFixture{addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}},
+		dialer:               connectionDialer,
+	}
+	_, _ = dialer.DialContext(context.Background(), "tcp", "fixture:8443")
+	if len(connectionDialer.addresses) != 1 || connectionDialer.addresses[0] != "127.0.0.1:8443" {
+		t.Fatalf("DialContext() addresses = %v, want pinned opted-in private address", connectionDialer.addresses)
 	}
 }

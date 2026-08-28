@@ -25,6 +25,7 @@ services:
   api:
     environment:
       SSL_CERT_FILE: /e2e/tls.crt
+      IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS: "true"
       IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS: "true"
     volumes:
       - ${IAPSTACK_E2E_CERT_DIR:?set IAPSTACK_E2E_CERT_DIR}/tls.crt:/e2e/tls.crt:ro
@@ -35,6 +36,7 @@ services:
   worker:
     environment:
       SSL_CERT_FILE: /e2e/tls.crt
+      IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS: "true"
       IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS: "true"
     ports:
       - "127.0.0.1:${IAPSTACK_E2E_WORKER_PORT:-18081}:8081"

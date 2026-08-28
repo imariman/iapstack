@@ -83,7 +83,7 @@ func TestAdapterVerifiesAuthoritativeLifetimePurchase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCredential() error = %v", err)
 	}
-	adapter, err := New(fakeCredentialSource{credential: credential}, time.Second)
+	adapter, err := New(fakeCredentialSource{credential: credential}, time.Second, false)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -267,7 +267,7 @@ func TestValidateNotificationCanonicalizesEquivalentPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCredential() error = %v", err)
 	}
-	adapter, err := New(fakeCredentialSource{credential: credential}, time.Second)
+	adapter, err := New(fakeCredentialSource{credential: credential}, time.Second, false)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

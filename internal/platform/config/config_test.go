@@ -21,6 +21,8 @@ const (
 	databaseURLEnvironment = "IAPSTACK_DATABASE_URL"
 	// webhookPrivateNetworksEnvironment names the explicit private webhook target opt-in.
 	webhookPrivateNetworksEnvironment = "IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS"
+	// huaweiPrivateNetworksEnvironment names the explicit private Huawei endpoint opt-in.
+	huaweiPrivateNetworksEnvironment = "IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS"
 	// authMaxDerivationsEnvironment names the memory-hard authentication concurrency setting.
 	authMaxDerivationsEnvironment = "IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS"
 
@@ -70,6 +72,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.WebhookAllowPrivateNetworks {
 		t.Error("WebhookAllowPrivateNetworks = true, want secure default false")
 	}
+	if cfg.HuaweiAllowPrivateNetworks {
+		t.Error("HuaweiAllowPrivateNetworks = true, want secure default false")
+	}
 }
 
 // TestLoadOverrides verifies supported environment configuration overrides.
@@ -82,6 +87,7 @@ func TestLoadOverrides(t *testing.T) {
 		logLevelEnvironment:               "debug",
 		databaseURLEnvironment:            " " + testDatabaseURL + " ",
 		webhookPrivateNetworksEnvironment: "true",
+		huaweiPrivateNetworksEnvironment:  "true",
 		authMaxDerivationsEnvironment:     "7",
 	}))
 	if err != nil {
@@ -102,6 +108,9 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if !cfg.WebhookAllowPrivateNetworks {
 		t.Error("WebhookAllowPrivateNetworks = false, want true override")
+	}
+	if !cfg.HuaweiAllowPrivateNetworks {
+		t.Error("HuaweiAllowPrivateNetworks = false, want true override")
 	}
 	if cfg.AuthMaxConcurrentDerivations != 7 {
 		t.Errorf("AuthMaxConcurrentDerivations = %d, want 7", cfg.AuthMaxConcurrentDerivations)
@@ -124,6 +133,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "log level", values: map[string]string{logLevelEnvironment: "verbose"}},
 		{name: "worker attempts", values: map[string]string{"IAPSTACK_WORKER_MAX_ATTEMPTS": "0"}},
 		{name: "private webhook setting", values: map[string]string{webhookPrivateNetworksEnvironment: "yes"}},
+		{name: "private huawei setting", values: map[string]string{huaweiPrivateNetworksEnvironment: "yes"}},
 		{name: "authentication derivations sign", values: map[string]string{authMaxDerivationsEnvironment: "0"}},
 		{name: "authentication derivations bound", values: map[string]string{authMaxDerivationsEnvironment: "33"}},
 	}

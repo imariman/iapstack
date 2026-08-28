@@ -99,6 +99,7 @@ Configuration is supplied through environment variables:
 | `IAPSTACK_WORKER_CONCURRENCY` | `4` | Maximum concurrent River jobs per queue and worker process |
 | `IAPSTACK_WORKER_MAX_ATTEMPTS` | `12` | Attempts before River discards a retryable job |
 | `IAPSTACK_QUEUE_RETENTION` | `720h` | Retention period for terminal River jobs and durable queue audit records |
+| `IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS` | `false` | Explicitly permit Huawei provider endpoints on private, loopback, link-local, CGNAT, or benchmark addresses |
 | `IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS` | `false` | Explicitly permit webhook delivery to private, loopback, link-local, CGNAT, or benchmark addresses |
 
 Modes that handle provider evidence initialize the protection keyring before serving
@@ -110,11 +111,12 @@ data migration. To rotate encryption, add the new key to `IAPSTACK_PROTECTION_KE
 select it with `IAPSTACK_PROTECTION_ACTIVE_KEY_ID`, and retain old keys until all values
 written with them have been re-encrypted or expired.
 
-Webhook delivery resolves and validates every A/AAAA destination at connection time,
-does not follow redirects, and permits public network addresses only by default. Set
-`IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS=true` only when an application webhook must
-run on a trusted internal network, and pair the opt-in with an egress firewall or an
-infrastructure allowlist.
+Webhook delivery and configurable Huawei provider calls resolve and validate every
+A/AAAA destination at connection time, do not follow redirects, and permit public
+network addresses only by default. Set `IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS=true`
+or `IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS=true` only when the corresponding endpoint
+must run on a trusted internal network, and pair either opt-in with an egress firewall
+or an infrastructure allowlist.
 
 Start a local PostgreSQL instance and apply every pending migration with:
 
