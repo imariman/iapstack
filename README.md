@@ -45,6 +45,11 @@ guide](deploy/fly/README.md) covers app creation, private Managed Postgres attac
 secrets, migrations, and cleanup. Fly.io has only a short free trial and its managed
 database makes it a comparatively expensive sandbox choice.
 
+Koyeb's [bootstrap deployment](deploy/koyeb/README.md) creates its managed database,
+secret-backed configuration, HTTPS API, and private worker through the official CLI.
+Its free web and database allowances can support only a short supervised check; a
+persistent worker is paid, and the complete always-on topology requires paid resources.
+
 IAPStack is a self-hosted control plane for validating in-app purchases and turning store transactions into durable application entitlements. It is designed for teams that want one backend-owned model across mobile stores without handing their purchase data or access rules to a hosted subscription platform.
 
 ## What IAPStack aims to provide
