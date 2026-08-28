@@ -50,6 +50,12 @@ secret-backed configuration, HTTPS API, and private worker through the official 
 Its free web and database allowances can support only a short supervised check; a
 persistent worker is paid, and the complete always-on topology requires paid resources.
 
+Coolify can deploy the complete stack from the repository-owned [Docker Compose
+definition](deploy/coolify/README.md), including generated secrets, PostgreSQL,
+migrations, HTTPS API routing, and a private worker. Self-hosted Coolify is free, but
+you provide an always-on Linux server; Coolify Cloud and the deployment server are
+separately billed.
+
 IAPStack is a self-hosted control plane for validating in-app purchases and turning store transactions into durable application entitlements. It is designed for teams that want one backend-owned model across mobile stores without handing their purchase data or access rules to a hosted subscription platform.
 
 ## What IAPStack aims to provide
