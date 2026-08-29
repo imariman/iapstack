@@ -24,6 +24,10 @@ envs:
     scope: RUN_TIME
     type: SECRET
     value: REPLACE_WITH_AT_LEAST_32_RANDOM_BYTES
+  - key: IAPSTACK_METRICS_BEARER_TOKEN
+    scope: RUN_TIME
+    type: SECRET
+    value: REPLACE_WITH_SEPARATE_AT_LEAST_32_RANDOM_BYTES
 
 services:
   - name: api

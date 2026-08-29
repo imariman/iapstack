@@ -1,0 +1,44 @@
+groups:
+  - name: iapstack-worker-capacity
+    interval: 1m
+    rules:
+      - alert: IAPStackInboxLagHigh
+        expr: max(iapstack_queue_oldest_runnable_age_seconds{deployment_environment_name="production",queue="inbox"}) > 120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: IAPStack inbox work has waited longer than two minutes.
+          action: Raise worker concurrency first; split the worker if lag and API resource pressure persist.
+      - alert: IAPStackOutboxLagHigh
+        expr: max(iapstack_queue_oldest_runnable_age_seconds{deployment_environment_name="production",queue="outbox"}) > 300
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: IAPStack webhook delivery work has waited longer than five minutes.
+          action: Check destination failures and retries before adding worker capacity.
+      - alert: IAPStackReconciliationLagHigh
+        expr: max(iapstack_queue_oldest_runnable_age_seconds{deployment_environment_name="production",queue="reconciliation"}) > 1800
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: IAPStack reconciliation work has waited longer than thirty minutes.
+          action: Raise worker concurrency; split the worker if the queue continues growing.
+      - alert: IAPStackTerminalQueueFailure
+        expr: sum(iapstack_queue_depth{deployment_environment_name="production",state=~"discarded|cancelled"}) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: IAPStack has terminally failed durable work.
+          action: Inspect safe queue error codes and correlated logs; capacity alone might not resolve this alert.
+      - alert: IAPStackAPIErrorRatioHigh
+        expr: sum(rate(iapstack_http_requests_total{deployment_environment_name="production",status=~"5.."}[5m])) / clamp_min(sum(rate(iapstack_http_requests_total{deployment_environment_name="production"}[5m])), 0.000001) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: IAPStack API five-hundred response ratio is above one percent.
+          action: Correlate API errors with queue lag and Render CPU or memory pressure before splitting the worker.

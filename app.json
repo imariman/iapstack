@@ -31,6 +31,10 @@
     "IAPSTACK_BOOTSTRAP_ADMIN_KEY": {
       "description": "Installation-only administrator bearer. Remove it after creating the first durable administrator key.",
       "generator": "secret"
+    },
+    "IAPSTACK_METRICS_BEARER_TOKEN": {
+      "description": "Dedicated bearer for the protected Prometheus metrics endpoint.",
+      "generator": "secret"
     }
   },
   "formation": {

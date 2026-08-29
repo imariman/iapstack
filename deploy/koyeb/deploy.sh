@@ -16,6 +16,7 @@ readonly DATABASE_URL_SECRET="${SECRET_PREFIX}-database-url"
 readonly PROTECTION_KEY_SECRET="${SECRET_PREFIX}-protection-key"
 readonly FINGERPRINT_KEY_SECRET="${SECRET_PREFIX}-fingerprint-key"
 readonly BOOTSTRAP_KEY_SECRET="${SECRET_PREFIX}-bootstrap-admin-key"
+readonly METRICS_KEY_SECRET="${SECRET_PREFIX}-metrics-bearer-token"
 
 for command_name in koyeb jq openssl go; do
   if ! command -v "${command_name}" >/dev/null 2>&1; then
@@ -68,9 +69,11 @@ upsert_secret() {
 protection_key="$(openssl rand -base64 32 | tr -d '\n')"
 fingerprint_key="$(openssl rand -base64 32 | tr -d '\n')"
 bootstrap_key="$(openssl rand -base64 32 | tr -d '\n')"
+metrics_key="$(openssl rand -base64 32 | tr -d '\n')"
 
 create_secret_once "${PROTECTION_KEY_SECRET}" "${protection_key}"
 create_secret_once "${FINGERPRINT_KEY_SECRET}" "${fingerprint_key}"
+create_secret_once "${METRICS_KEY_SECRET}" "${metrics_key}"
 
 bootstrap_key_created=false
 if ! secret_exists "${BOOTSTRAP_KEY_SECRET}"; then
@@ -129,6 +132,7 @@ common_service_flags=(
   --env "IAPSTACK_PROTECTION_ACTIVE_KEY_ID=primary"
   --env "IAPSTACK_PROTECTION_KEY={{secret.${PROTECTION_KEY_SECRET}}}"
   --env "IAPSTACK_PROTECTION_FINGERPRINT_KEY={{secret.${FINGERPRINT_KEY_SECRET}}}"
+  --env "IAPSTACK_METRICS_BEARER_TOKEN={{secret.${METRICS_KEY_SECRET}}}"
 )
 
 deploy_service() {

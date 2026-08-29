@@ -1,19 +1,20 @@
 services:
   - type: web
-    name: iapstack-sandbox
+    name: iapstack-api
     runtime: docker
-    plan: free
+    plan: starter
     region: frankfurt
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: server
+    dockerCommand: api
+    preDeployCommand: /usr/local/bin/iapstack migrate
     healthCheckPath: /readyz
     autoDeployTrigger: "off"
     maxShutdownDelaySeconds: 30
     envVars:
       - key: IAPSTACK_DATABASE_URL
         fromDatabase:
-          name: iapstack-sandbox-postgres
+          name: iapstack-postgres
           property: connectionString
       - key: IAPSTACK_BOOTSTRAP_ADMIN_KEY
         generateValue: true
@@ -23,11 +24,34 @@ services:
         sync: false
       - key: IAPSTACK_GRAFANA_OTLP_TOKEN
         sync: false
-      - fromGroup: iapstack-sandbox-runtime
+      - fromGroup: iapstack-runtime
+
+  - type: worker
+    name: iapstack-worker
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: worker
+    autoDeployTrigger: "off"
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: IAPSTACK_DATABASE_URL
+        fromDatabase:
+          name: iapstack-postgres
+          property: connectionString
+      - key: IAPSTACK_GRAFANA_OTLP_ENDPOINT
+        sync: false
+      - key: IAPSTACK_GRAFANA_OTLP_USERNAME
+        sync: false
+      - key: IAPSTACK_GRAFANA_OTLP_TOKEN
+        sync: false
+      - fromGroup: iapstack-runtime
 
 databases:
-  - name: iapstack-sandbox-postgres
-    plan: free
+  - name: iapstack-postgres
+    plan: basic-256mb
     region: frankfurt
     postgresMajorVersion: "17"
     databaseName: iapstack
@@ -35,12 +59,12 @@ databases:
     ipAllowList: []
 
 envVarGroups:
-  - name: iapstack-sandbox-runtime
+  - name: iapstack-runtime
     envVars:
       - key: IAPSTACK_AUTO_MIGRATE
-        value: "true"
+        value: "false"
       - key: IAPSTACK_ENVIRONMENT
-        value: sandbox
+        value: production
       - key: IAPSTACK_METRICS_BEARER_TOKEN
         generateValue: true
       - key: IAPSTACK_PROTECTION_ACTIVE_KEY_ID
@@ -49,8 +73,6 @@ envVarGroups:
         generateValue: true
       - key: IAPSTACK_PROTECTION_FINGERPRINT_KEY
         generateValue: true
-      - key: IAPSTACK_WORKER_CONCURRENCY
-        value: "1"
       - key: IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS
         value: "false"
       - key: IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS

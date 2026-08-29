@@ -49,6 +49,13 @@ export default defineRailway(() => {
           'secret(48, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")',
         isSealed: true,
       },
+      IAPSTACK_METRICS_BEARER_TOKEN: {
+        description:
+          "Generated metrics-only bearer shared by API and worker; do not reuse an admin key.",
+        generator:
+          'secret(48, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")',
+        isSealed: true,
+      },
       IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS: "false",
       IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS: "false",
       IAPSTACK_LOG_LEVEL: "info",
@@ -74,6 +81,8 @@ export default defineRailway(() => {
       IAPSTACK_PROTECTION_KEY: api.env.IAPSTACK_PROTECTION_KEY,
       IAPSTACK_PROTECTION_FINGERPRINT_KEY:
         api.env.IAPSTACK_PROTECTION_FINGERPRINT_KEY,
+      IAPSTACK_METRICS_BEARER_TOKEN:
+        api.env.IAPSTACK_METRICS_BEARER_TOKEN,
       IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS: "false",
       IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS: "false",
       IAPSTACK_LOG_LEVEL: "info",
