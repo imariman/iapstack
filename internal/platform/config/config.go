@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -34,10 +35,16 @@ const (
 	defaultAuthMaxConcurrentDerivations = 4
 	// maximumAuthConcurrentDerivations prevents unsafe memory allocation through configuration.
 	maximumAuthConcurrentDerivations = 32
+	// minimumMetricsBearerTokenLength prevents weak public metrics credentials.
+	minimumMetricsBearerTokenLength = 32
 	// defaultProviderTimeout bounds one outbound provider call.
 	defaultProviderTimeout = 15 * time.Second
 	// defaultWebhookTimeout bounds one outbound application webhook call.
 	defaultWebhookTimeout = 10 * time.Second
+	// defaultTelemetryExportInterval controls batched Grafana Cloud metric delivery.
+	defaultTelemetryExportInterval = time.Minute
+	// defaultTelemetryExportTimeout bounds one Grafana Cloud metric delivery attempt.
+	defaultTelemetryExportTimeout = 10 * time.Second
 )
 
 // Config contains validated process configuration shared by IAPStack modes.
@@ -48,7 +55,9 @@ type Config struct {
 	ReadinessTimeout             time.Duration
 	LogLevel                     slog.Level
 	DatabaseURL                  string
+	AutoMigrate                  bool
 	BootstrapAdminKey            string
+	MetricsBearerToken           string
 	WorkerID                     string
 	WorkerPollInterval           time.Duration
 	WorkerJobTimeout             time.Duration
@@ -61,6 +70,12 @@ type Config struct {
 	HuaweiAllowPrivateNetworks   bool
 	WebhookTimeout               time.Duration
 	WebhookAllowPrivateNetworks  bool
+	TelemetryEndpoint            string
+	TelemetryUsername            string
+	TelemetryToken               string
+	TelemetryEnvironment         string
+	TelemetryExportInterval      time.Duration
+	TelemetryExportTimeout       time.Duration
 }
 
 // Load reads and validates process configuration from environment values.
@@ -74,7 +89,9 @@ func Load(getenv func(string) string) (Config, error) {
 		ReadinessTimeout:             defaultReadinessTimeout,
 		LogLevel:                     slog.LevelInfo,
 		DatabaseURL:                  strings.TrimSpace(getenv("IAPSTACK_DATABASE_URL")),
+		AutoMigrate:                  false,
 		BootstrapAdminKey:            strings.TrimSpace(getenv("IAPSTACK_BOOTSTRAP_ADMIN_KEY")),
+		MetricsBearerToken:           strings.TrimSpace(getenv("IAPSTACK_METRICS_BEARER_TOKEN")),
 		WorkerID:                     strings.TrimSpace(getenv("IAPSTACK_WORKER_ID")),
 		WorkerPollInterval:           defaultWorkerPollInterval,
 		WorkerJobTimeout:             defaultWorkerJobTimeout,
@@ -87,10 +104,21 @@ func Load(getenv func(string) string) (Config, error) {
 		HuaweiAllowPrivateNetworks:   false,
 		WebhookTimeout:               defaultWebhookTimeout,
 		WebhookAllowPrivateNetworks:  false,
+		TelemetryEndpoint:            strings.TrimSpace(getenv("IAPSTACK_GRAFANA_OTLP_ENDPOINT")),
+		TelemetryUsername:            strings.TrimSpace(getenv("IAPSTACK_GRAFANA_OTLP_USERNAME")),
+		TelemetryToken:               strings.TrimSpace(getenv("IAPSTACK_GRAFANA_OTLP_TOKEN")),
+		TelemetryEnvironment:         valueOrDefault(getenv("IAPSTACK_ENVIRONMENT"), "development"),
+		TelemetryExportInterval:      defaultTelemetryExportInterval,
+		TelemetryExportTimeout:       defaultTelemetryExportTimeout,
 	}
 
 	if raw := strings.TrimSpace(getenv("IAPSTACK_SHUTDOWN_TIMEOUT")); raw != "" {
 		if cfg.ShutdownTimeout, err = positiveDuration("IAPSTACK_SHUTDOWN_TIMEOUT", raw); err != nil {
+			return Config{}, err
+		}
+	}
+	if raw := strings.TrimSpace(getenv("IAPSTACK_AUTO_MIGRATE")); raw != "" {
+		if cfg.AutoMigrate, err = strictBoolean("IAPSTACK_AUTO_MIGRATE", raw); err != nil {
 			return Config{}, err
 		}
 	}
@@ -129,6 +157,16 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if raw := strings.TrimSpace(getenv("IAPSTACK_GRAFANA_EXPORT_INTERVAL")); raw != "" {
+		if cfg.TelemetryExportInterval, err = positiveDuration("IAPSTACK_GRAFANA_EXPORT_INTERVAL", raw); err != nil {
+			return Config{}, err
+		}
+	}
+	if raw := strings.TrimSpace(getenv("IAPSTACK_GRAFANA_EXPORT_TIMEOUT")); raw != "" {
+		if cfg.TelemetryExportTimeout, err = positiveDuration("IAPSTACK_GRAFANA_EXPORT_TIMEOUT", raw); err != nil {
+			return Config{}, err
+		}
+	}
 	if raw := strings.TrimSpace(getenv("IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS")); raw != "" {
 		if cfg.WebhookAllowPrivateNetworks, err = strictBoolean("IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS", raw); err != nil {
 			return Config{}, err
@@ -164,6 +202,12 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 		cfg.AuthMaxConcurrentDerivations = derivations
 	}
+	if cfg.MetricsBearerToken != "" && len(cfg.MetricsBearerToken) < minimumMetricsBearerTokenLength {
+		return Config{}, fmt.Errorf("IAPSTACK_METRICS_BEARER_TOKEN must be at least %d characters", minimumMetricsBearerTokenLength)
+	}
+	if err := validateTelemetry(cfg); err != nil {
+		return Config{}, err
+	}
 
 	if raw := strings.TrimSpace(getenv("IAPSTACK_LOG_LEVEL")); raw != "" {
 		level, err := parseLogLevel(raw)
@@ -181,6 +225,48 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// validateTelemetry requires complete HTTPS Grafana credentials and one bounded environment label.
+func validateTelemetry(cfg Config) error {
+	configuredValues := 0
+	for _, value := range []string{cfg.TelemetryEndpoint, cfg.TelemetryUsername, cfg.TelemetryToken} {
+		if value != "" {
+			configuredValues++
+		}
+	}
+	if configuredValues != 0 && configuredValues != 3 {
+		return fmt.Errorf("IAPSTACK_GRAFANA_OTLP_ENDPOINT, IAPSTACK_GRAFANA_OTLP_USERNAME, and IAPSTACK_GRAFANA_OTLP_TOKEN must be configured together")
+	}
+	if cfg.TelemetryEndpoint != "" {
+		endpoint, err := url.Parse(cfg.TelemetryEndpoint)
+		if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			return fmt.Errorf("IAPSTACK_GRAFANA_OTLP_ENDPOINT must be an HTTPS URL without credentials, query, or fragment")
+		}
+		if len(cfg.TelemetryToken) < minimumMetricsBearerTokenLength {
+			return fmt.Errorf("IAPSTACK_GRAFANA_OTLP_TOKEN must be at least %d characters", minimumMetricsBearerTokenLength)
+		}
+	}
+	if !validTelemetryEnvironment(cfg.TelemetryEnvironment) {
+		return fmt.Errorf("IAPSTACK_ENVIRONMENT must contain 1-32 letters, numbers, dots, underscores, or hyphens")
+	}
+	return nil
+}
+
+// validTelemetryEnvironment bounds the only deployment-provided telemetry label.
+func validTelemetryEnvironment(value string) bool {
+	if len(value) == 0 || len(value) > 32 {
+		return false
+	}
+	for _, character := range value {
+		if (character < 'a' || character > 'z') &&
+			(character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') &&
+			character != '.' && character != '_' && character != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // resolveHTTPAddress prefers the native IAPStack setting and otherwise honors the

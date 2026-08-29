@@ -2,9 +2,13 @@ package metrics
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 	"time"
+
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 // observingWriter records output and updates the source registry during the first write.
@@ -12,6 +16,45 @@ type observingWriter struct {
 	output   bytes.Buffer
 	registry *Registry
 	observed bool
+}
+
+// TestRegistryMirrorsSnapshotsToOpenTelemetry verifies direct push uses the existing metric names.
+func TestRegistryMirrorsSnapshotsToOpenTelemetry(t *testing.T) {
+	t.Parallel()
+
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() {
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Errorf("Shutdown() error = %v", err)
+		}
+	})
+	registry := New()
+	if err := registry.AttachOpenTelemetry(provider.Meter("iapstack-test")); err != nil {
+		t.Fatalf("AttachOpenTelemetry() error = %v", err)
+	}
+	registry.SetQueueOldestAge("inbox", 2*time.Minute)
+	registry.ObserveQueueDuration("inbox", "completed", 250*time.Millisecond)
+
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	names := make(map[string]bool)
+	for _, scope := range collected.ScopeMetrics {
+		for _, value := range scope.Metrics {
+			names[value.Name] = true
+		}
+	}
+	for _, expected := range []string{
+		"iapstack_queue_oldest_runnable_age_seconds",
+		"iapstack_queue_job_duration_seconds_count",
+		"iapstack_queue_job_duration_seconds_sum",
+	} {
+		if !names[expected] {
+			t.Errorf("OTLP collection omitted %q: %#v", expected, names)
+		}
+	}
 }
 
 // Write proves metric output does not hold a lock while calling an external writer.
@@ -30,7 +73,9 @@ func TestRegistryWritesBoundedPrometheusMetrics(t *testing.T) {
 	registry.ObserveProvider("huawei_appgallery", "verify", "success")
 	registry.ObserveVerification("huawei_appgallery", "success")
 	registry.SetQueueDepth("outbox", "pending", 3)
+	registry.SetQueueOldestAge("outbox", 90*time.Second)
 	registry.ObserveQueueAttempt("outbox", "completed")
+	registry.ObserveQueueDuration("outbox", "completed", 125*time.Millisecond)
 	registry.ObserveWebhook("delivered")
 
 	var output bytes.Buffer
@@ -40,6 +85,8 @@ func TestRegistryWritesBoundedPrometheusMetrics(t *testing.T) {
 	for _, expected := range []string{
 		`iapstack_http_requests_total{method="GET",route="GET /readyz",status="200"} 1`,
 		`iapstack_queue_depth{queue="outbox",state="pending"} 3`,
+		`iapstack_queue_oldest_runnable_age_seconds{queue="outbox"} 90`,
+		`iapstack_queue_job_duration_seconds_count{queue="outbox",outcome="completed"} 1`,
 		`iapstack_webhook_attempts_total{outcome="delivered"} 1`,
 	} {
 		if !strings.Contains(output.String(), expected) {

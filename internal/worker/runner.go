@@ -262,6 +262,7 @@ func (runner *Runner) sampleQueueDepth(ctx context.Context) {
 func (runner *Runner) refreshQueueDepth(ctx context.Context) error {
 	states := []string{"available", "cancelled", "completed", "discarded", "pending", "retryable", "running", "scheduled"}
 	for _, queue := range durableQueues() {
+		runner.metrics.SetQueueOldestAge(string(queue), 0)
 		for _, state := range states {
 			runner.metrics.SetQueueDepth(string(queue), state, 0)
 		}
@@ -291,6 +292,34 @@ func (runner *Runner) refreshQueueDepth(ctx context.Context) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate River queue depth: %w", err)
 	}
+	rows.Close()
+	ageRows, err := runner.pool.Query(ctx, `
+		SELECT queue, EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MIN(scheduled_at)))::double precision
+		FROM river_job
+		WHERE queue = ANY($1)
+			AND state IN ('available', 'retryable', 'scheduled')
+			AND scheduled_at <= CURRENT_TIMESTAMP
+		GROUP BY queue
+	`, []string{jobs.QueueInbox, jobs.QueueOutbox, jobs.QueueReconciliation})
+	if err != nil {
+		return fmt.Errorf("query River queue age: %w", err)
+	}
+	defer ageRows.Close()
+	for ageRows.Next() {
+		var queue string
+		var ageSeconds float64
+		if err := ageRows.Scan(&queue, &ageSeconds); err != nil {
+			return fmt.Errorf("scan River queue age: %w", err)
+		}
+		persistenceQueue, ok := persistenceQueue(queue)
+		if !ok {
+			continue
+		}
+		runner.metrics.SetQueueOldestAge(string(persistenceQueue), time.Duration(ageSeconds*float64(time.Second)))
+	}
+	if err := ageRows.Err(); err != nil {
+		return fmt.Errorf("iterate River queue age: %w", err)
+	}
 	return nil
 }
 
@@ -317,6 +346,12 @@ func (execution *executor) execute(
 	attempt int,
 	maxAttempts int,
 ) error {
+	startedAt := time.Now()
+	outcome := "failed"
+	defer func() {
+		execution.metrics.ObserveQueueDuration(string(queue), outcome, time.Since(startedAt))
+	}()
+
 	var message persistence.QueueMessage
 	err := execution.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
 		var loadErr error
@@ -325,22 +360,30 @@ func (execution *executor) execute(
 	})
 	if err != nil {
 		if errors.Is(err, persistence.ErrNotFound) {
+			outcome = "cancelled"
 			return river.JobCancel(errors.New("queue_record_not_found"))
 		}
 		return errors.New("queue_record_load_failed")
 	}
 	if message.Completed || message.Failed {
+		outcome = "skipped"
 		return nil
 	}
 	handlerErr := execution.handlers[queue].Handle(ctx, message)
 	if handlerErr == nil {
-		return execution.complete(ctx, queue, id)
+		if err := execution.complete(ctx, queue, id); err != nil {
+			return err
+		}
+		outcome = "completed"
+		return nil
 	}
 	if errors.Is(handlerErr, context.Canceled) && ctx.Err() != nil {
+		outcome = "cancelled"
 		return context.Canceled
 	}
 	code := errorCode(handlerErr)
 	if isRetryable(handlerErr) && attempt < maxAttempts {
+		outcome = "retry"
 		execution.metrics.ObserveQueueAttempt(string(queue), "retry")
 		return errors.New(code)
 	}
