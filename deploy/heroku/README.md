@@ -23,7 +23,8 @@ phase before a new version becomes current.
    ```
 
    The Deploy form asks for the first value as `IAPSTACK_PROTECTION_KEY` and the
-   second as `IAPSTACK_PROTECTION_FINGERPRINT_KEY`. Do not commit either value.
+   second as `IAPSTACK_PROTECTION_FINGERPRINT_KEY`. It independently generates the
+   bootstrap and metrics-only bearers. Do not commit any value.
 3. Review the current price shown by Heroku. At the prices documented in August
    2026, two Basic dynos plus Essential-0 Postgres total USD 19 per month before
    taxes and add-ons.

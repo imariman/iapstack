@@ -77,7 +77,7 @@ executes the repository's migration command locally.
 
 ## Cleanup
 
-Delete the `api` and `worker` services, the database, the app, and the four secrets
+Delete the `api` and `worker` services, the database, the app, and the five secrets
 whose names start with the app name. Verify the Billing page afterward; deleting the
 app alone may not remove separately stored secrets.
 

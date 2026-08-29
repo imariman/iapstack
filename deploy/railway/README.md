@@ -7,7 +7,7 @@ the deprecated per-service `railway.toml` and `railway.json` format. The
 - one managed PostgreSQL database on Railway's private network;
 - one API service with a readiness check and pre-deploy migration;
 - one private background worker; and
-- generated sealed secrets that are referenced by both processes.
+- generated sealed protection and metrics secrets that are referenced by both processes.
 
 Railway offers a new-account trial for up to 30 days with a one-time credit. It then
 falls back to the Free plan's small monthly credit. IAPStack's continuously running

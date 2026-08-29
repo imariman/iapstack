@@ -1,52 +1,68 @@
 # Render deployment
 
-The root [`render.yaml`](../../render.yaml) is a Render Blueprint for the complete
-IAPStack runtime:
+IAPStack has three Render profiles that use the same image and PostgreSQL schema:
 
-- one public API service with Render-managed HTTPS;
-- one private background worker;
-- one private Render Postgres database; and
-- an API pre-deploy migration command.
+| Profile | Blueprint | Runtime shape | Intended use |
+| --- | --- | --- | --- |
+| Compact sandbox | [`render.yaml`](../../render.yaml) | One free `server` web service + free PostgreSQL | Disposable store sandbox testing |
+| Compact production | [`render.compact.yaml`](render.compact.yaml) | One paid `server` web service + paid PostgreSQL | Default live topology |
+| Split production | [`render.split.yaml`](render.split.yaml) | Paid API + paid worker + paid PostgreSQL | Independent capacity or fault isolation |
 
-The Blueprint uses paid minimum-size compute for all three durable components. Render
-does not offer a free background-worker plan, and the free PostgreSQL plan expires after
-30 days. The paid database default prevents a one-click deployment from silently
-becoming disposable. Review Render's current estimate before approving the Blueprint.
+The default compact sandbox runs API and worker lifecycles in one Go process with
+worker concurrency `1`. Render Free cannot run a pre-deploy command, so this exact
+single-instance profile enables startup migrations. Production profiles disable
+startup migrations and use Render's paid pre-deploy migration command.
 
-## Deploy
+## Grafana first
 
-1. Click **Deploy to Render** from the repository README and sign in or create a Render
+Create the free Grafana Cloud stack before the initial Render Blueprint flow. Follow
+the [administrator-only Grafana guide](../grafana/README.md) and collect the HTTPS OTLP
+endpoint, instance ID, and metrics-write-only access-policy token. Render prompts for
+these three values because the Blueprint marks them `sync: false`. The split profile
+prompts once per service; enter the same three values for both API and worker.
+
+IAPStack sends metrics outward while it is running. Grafana therefore does not scrape
+the Render URL every minute and cannot prevent the free service from sleeping. No
+Grafana, Prometheus, or Alloy service is deployed on Render.
+
+## Deploy the sandbox
+
+1. Click **Deploy to Render** from the repository README and sign in or create an
    account.
-2. Review the three resources and the monthly estimate, then approve the Blueprint.
-3. Wait until `iapstack-api` reports `Live` and `GET /readyz` returns HTTP 200. The
-   first worker start can briefly retry while the API pre-deploy migration completes.
-4. In the API service's Environment page, reveal and copy
-   `IAPSTACK_BOOTSTRAP_ADMIN_KEY`. Treat it as a secret.
-5. Open `https://<your-service>.onrender.com/dashboard/`, use the bootstrap key to
-   create a stored administrator key, save the returned bearer, and verify it works.
-6. Remove `IAPSTACK_BOOTSTRAP_ADMIN_KEY` from the API service and manually deploy the
-   API once. The installation bearer should not remain in normal runtime configuration.
+2. Enter `IAPSTACK_GRAFANA_OTLP_ENDPOINT`, `IAPSTACK_GRAFANA_OTLP_USERNAME`, and
+   `IAPSTACK_GRAFANA_OTLP_TOKEN` from the Grafana Cloud OpenTelemetry card.
+3. Confirm the Blueprint contains one free web service and one free PostgreSQL database,
+   then approve it.
+4. Wait until `iapstack-sandbox` reports `Live` and `GET /readyz` returns HTTP 200.
+5. Reveal and copy `IAPSTACK_BOOTSTRAP_ADMIN_KEY`, open
+   `https://<your-service>.onrender.com/dashboard/`, create a stored administrator key,
+   and verify it.
+6. Remove `IAPSTACK_BOOTSTRAP_ADMIN_KEY` and manually deploy once. Keep the generated
+   `IAPSTACK_METRICS_BEARER_TOKEN`; it protects `/metrics` independently of administrator
+   and application credentials.
+7. Import the repository Grafana dashboard and confirm the `sandbox` environment
+   reports queue metrics after approximately two minutes.
 
-Render generates independent Base64-encoded 256-bit encryption and fingerprint keys
-on first creation. Do not regenerate either secret during ordinary redeploys. Before
-rotating encryption, convert `IAPSTACK_PROTECTION_KEY` to the rotation-capable
-`IAPSTACK_PROTECTION_KEYS` JSON keyring described in the main operations guide.
+Free Render PostgreSQL expires after 30 days and is unsuitable for production data.
+The service can sleep after inactivity; durable work already accepted into PostgreSQL
+resumes when the process wakes. Automatic deploys remain disabled.
 
-Automatic deploys are disabled because a public one-click template must not redeploy
-every installation whenever the upstream repository changes. Upgrade deliberately by
-syncing the Blueprint and triggering the API and worker deploys after reviewing release
-notes and taking a database backup.
+## Move to production
 
-## Disposable sandbox variation
+Use `render.compact.yaml` first. It keeps one paid application service while retaining
+the ready-to-use `api` and `worker` modes. Move to `render.split.yaml` only when
+sustained queue-age, API-latency, CPU, memory, restart, or isolation evidence justifies
+the second service. Splitting uses the same database and image; no data migration is
+required beyond the normal release migration.
 
-For a short-lived test, fork the repository and change only the database `plan` in
-`render.yaml` from `0.1c-256mb` to `free`. Free Render Postgres expires after 30 days,
-is limited to one instance per workspace, and is unsuitable for production data. Keep
-the API and worker on paid plans: migrations require the API's paid pre-deploy command,
-and background workers have no free plan.
+Render generates independent Base64-encoded 256-bit protection, fingerprint, and
+metrics bearer secrets. Do not regenerate them during ordinary redeploys. Convert the
+single protection key to `IAPSTACK_PROTECTION_KEYS` before encryption-key rotation.
 
-## Network boundary
+## Access boundaries
 
-Only the API is public. The database has an empty public IP allowlist, and the worker
-has no public service endpoint. Render terminates TLS for the API's `onrender.com`
-hostname. Do not expose the worker probe port or database separately.
+Render exposes only the web service over managed HTTPS. PostgreSQL has an empty public
+IP allowlist, and the split worker has no public endpoint. `/metrics` is disabled when
+its dedicated bearer is missing and returns 401 for an invalid bearer. Grafana Cloud
+page access is separate: keep public/anonymous sharing disabled and grant only intended
+IAPStack operators the Grafana Admin role.

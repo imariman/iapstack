@@ -50,6 +50,9 @@ Coolify's proxy.
    openssl rand -base64 32
    ```
 
+   Coolify generates the independent `SERVICE_PASSWORD_64_METRICS` value used to
+   protect `/metrics`; do not replace it with the administrator bearer.
+
 6. Deploy and wait for `postgres`, `migrate`, `api`, and `worker`. The completed
    migration container is intentionally excluded from Coolify's overall health
    evaluation.

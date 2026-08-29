@@ -46,6 +46,7 @@ live estimate first. For this topology, Fly.io is not the economical sandbox opt
    fly secrets set --app <unique-iapstack-app> \
      IAPSTACK_PROTECTION_KEY="$(openssl rand -base64 32)" \
      IAPSTACK_PROTECTION_FINGERPRINT_KEY="$(openssl rand -base64 32)" \
+     IAPSTACK_METRICS_BEARER_TOKEN="$(openssl rand -base64 32)" \
      IAPSTACK_BOOTSTRAP_ADMIN_KEY="$(openssl rand -base64 32)"
    ```
 

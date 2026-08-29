@@ -44,7 +44,8 @@ Deploy-to-DO button. The full topology is still created with one `doctl` command
    doctl apps create --spec /path/to/iapstack.app.yaml
    ```
 
-6. Read the assigned URL with `doctl apps list`, then verify `<url>/readyz` and open
+6. Replace the metrics bearer placeholder with an independent 32+ character secret.
+   Read the assigned URL with `doctl apps list`, then verify `<url>/readyz` and open
    `<url>/dashboard/`.
 7. Use `IAPSTACK_BOOTSTRAP_ADMIN_KEY` to create the first durable administrator key,
    store it securely, and remove the bootstrap variable from the app spec in the
