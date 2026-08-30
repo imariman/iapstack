@@ -6,7 +6,7 @@ services:
     region: frankfurt
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: api
+    dockerCommand: /usr/local/bin/iapstack api
     preDeployCommand: /usr/local/bin/iapstack migrate
     healthCheckPath: /readyz
     autoDeployTrigger: "off"
@@ -33,7 +33,7 @@ services:
     region: frankfurt
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: worker
+    dockerCommand: /usr/local/bin/iapstack worker
     autoDeployTrigger: "off"
     maxShutdownDelaySeconds: 30
     envVars:
