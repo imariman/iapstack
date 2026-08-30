@@ -6,7 +6,7 @@ services:
     region: frankfurt
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: server
+    dockerCommand: /usr/local/bin/iapstack server
     healthCheckPath: /readyz
     autoDeployTrigger: "off"
     envVars:
