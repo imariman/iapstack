@@ -51,6 +51,7 @@ type gateClient struct {
 	workerBaseURL  string
 	fixtureBaseURL string
 	bootstrapAdmin string
+	metricsBearer  string
 	webhookSecret  string
 	client         *http.Client
 }
@@ -131,15 +132,17 @@ func run() error {
 // newGateClient loads host origins and the two test-only secrets without printing them.
 func newGateClient() (*gateClient, error) {
 	bootstrapAdmin := strings.TrimSpace(os.Getenv("IAPSTACK_BOOTSTRAP_ADMIN_KEY"))
+	metricsBearer := strings.TrimSpace(os.Getenv("IAPSTACK_METRICS_BEARER_TOKEN"))
 	webhookSecret := strings.TrimSpace(os.Getenv("IAPSTACK_E2E_WEBHOOK_SECRET"))
-	if bootstrapAdmin == "" || len(webhookSecret) < 16 {
-		return nil, errors.New("bootstrap admin and E2E webhook secrets are required")
+	if bootstrapAdmin == "" || len(metricsBearer) < 32 || len(webhookSecret) < 16 {
+		return nil, errors.New("bootstrap admin, metrics bearer, and E2E webhook secrets are required")
 	}
 	return &gateClient{
 		apiBaseURL:     valueOrDefault(os.Getenv("IAPSTACK_E2E_API_BASE_URL"), defaultAPIBaseURL),
 		workerBaseURL:  valueOrDefault(os.Getenv("IAPSTACK_E2E_WORKER_BASE_URL"), defaultWorkerBaseURL),
 		fixtureBaseURL: valueOrDefault(os.Getenv("IAPSTACK_E2E_FIXTURE_BASE_URL"), defaultFixtureBaseURL),
 		bootstrapAdmin: bootstrapAdmin,
+		metricsBearer:  metricsBearer,
 		webhookSecret:  webhookSecret,
 		client: &http.Client{
 			Timeout:       requestTimeout,
@@ -238,7 +241,7 @@ func (client *gateClient) bootstrap(ctx context.Context) error {
 		"allowed", "purchase_valid", 1); err != nil {
 		return err
 	}
-	metrics, err := client.request(ctx, http.MethodGet, client.apiBaseURL+"/metrics", "", nil, nil, http.StatusOK)
+	metrics, err := client.request(ctx, http.MethodGet, client.apiBaseURL+"/metrics", client.metricsBearer, nil, nil, http.StatusOK)
 	if err != nil {
 		return err
 	}
@@ -326,12 +329,14 @@ func (client *gateClient) assertRecovery(ctx context.Context) error {
 	if err := client.assertDeliveries(ctx, 2, 2); err != nil {
 		return fmt.Errorf("duplicate notification created another delivery: %w", err)
 	}
-	metrics, err := client.request(ctx, http.MethodGet, client.workerBaseURL+"/metrics", "", nil, nil, http.StatusOK)
+	metrics, err := client.request(ctx, http.MethodGet, client.workerBaseURL+"/metrics", client.metricsBearer, nil, nil, http.StatusOK)
 	if err != nil {
 		return err
 	}
 	for _, required := range [][]byte{
-		[]byte("iapstack_queue_depth"), []byte("iapstack_queue_attempts_total"), []byte("iapstack_webhook_attempts_total"),
+		[]byte("iapstack_queue_depth"), []byte("iapstack_queue_oldest_runnable_age_seconds"),
+		[]byte("iapstack_queue_attempts_total"), []byte("iapstack_queue_job_duration_seconds"),
+		[]byte("iapstack_webhook_attempts_total"),
 	} {
 		if !bytes.Contains(metrics, required) {
 			return fmt.Errorf("worker metrics omitted %s", required)

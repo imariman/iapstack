@@ -18,6 +18,7 @@ import (
 	"github.com/imariman/iapstack/internal/platform/logging"
 	"github.com/imariman/iapstack/internal/platform/metrics"
 	platformprotection "github.com/imariman/iapstack/internal/platform/protection"
+	"github.com/imariman/iapstack/internal/platform/telemetry"
 	"github.com/imariman/iapstack/internal/processing"
 	"github.com/imariman/iapstack/internal/stores"
 	"github.com/imariman/iapstack/internal/stores/apple"
@@ -35,7 +36,7 @@ type systemClock struct{}
 
 var (
 	// ErrUsage indicates that the process mode arguments are missing or invalid.
-	ErrUsage = errors.New("usage: iapstack <api|worker|migrate>")
+	ErrUsage = errors.New("usage: iapstack <server|api|worker|migrate>")
 )
 
 // Run starts the selected IAPStack process and blocks until it stops.
@@ -49,7 +50,7 @@ func Run(
 		return ErrUsage
 	}
 	mode := args[0]
-	if mode != "api" && mode != "worker" && mode != "migrate" {
+	if mode != "server" && mode != "api" && mode != "worker" && mode != "migrate" {
 		return fmt.Errorf("%w: unknown mode %q", ErrUsage, mode)
 	}
 	cfg, err := config.Load(getenv)
@@ -60,6 +61,14 @@ func Run(
 	logger.Info("starting iapstack", "mode", mode)
 	if mode == "migrate" {
 		return postgres.Migrate(ctx, cfg.DatabaseURL)
+	}
+	if cfg.AutoMigrate {
+		if mode != "server" {
+			return errors.New("IAPSTACK_AUTO_MIGRATE is supported only in server mode")
+		}
+		if err := postgres.Migrate(ctx, cfg.DatabaseURL); err != nil {
+			return fmt.Errorf("apply compact runtime migrations: %w", err)
+		}
 	}
 
 	store, err := postgres.OpenStore(ctx, cfg.DatabaseURL)
@@ -119,16 +128,47 @@ func Run(
 	if err != nil {
 		return err
 	}
+	telemetryProvider, err := telemetry.New(ctx, telemetry.Config{
+		Endpoint: cfg.TelemetryEndpoint, Username: cfg.TelemetryUsername, Token: cfg.TelemetryToken,
+		Environment: cfg.TelemetryEnvironment, Instance: mode,
+		ExportInterval: cfg.TelemetryExportInterval, ExportTimeout: cfg.TelemetryExportTimeout,
+	})
+	if err != nil {
+		return fmt.Errorf("configure runtime telemetry: %w", err)
+	}
+	if telemetryProvider.Enabled() {
+		if err := metricRegistry.AttachOpenTelemetry(telemetryProvider.Meter()); err != nil {
+			shutdownContext, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.ShutdownTimeout)
+			defer shutdownCancel()
+			return errors.Join(fmt.Errorf("attach runtime telemetry: %w", err), telemetryProvider.Shutdown(shutdownContext))
+		}
+		logger.Info("Grafana Cloud metrics export is enabled", "environment", cfg.TelemetryEnvironment)
+	}
 
+	var runErr error
 	switch mode {
+	case "server":
+		runErr = runComponents(ctx,
+			func(componentContext context.Context) error {
+				return runAPI(componentContext, cfg, store, keyring, credentialService, webhookService,
+					verificationService, huaweiAdapter, appleAdapter, googlePlayAdapter, metricRegistry, logger)
+			},
+			func(componentContext context.Context) error {
+				return runWorker(componentContext, cfg, store, keyring, webhookService,
+					verificationService, metricRegistry, logger)
+			},
+		)
 	case "api":
-		return runAPI(ctx, cfg, store, keyring, credentialService, webhookService,
+		runErr = runAPI(ctx, cfg, store, keyring, credentialService, webhookService,
 			verificationService, huaweiAdapter, appleAdapter, googlePlayAdapter, metricRegistry, logger)
 	case "worker":
-		return runWorker(ctx, cfg, store, keyring, webhookService, verificationService, metricRegistry, logger)
+		runErr = runWorker(ctx, cfg, store, keyring, webhookService, verificationService, metricRegistry, logger)
 	default:
 		panic("validated mode was not handled")
 	}
+	shutdownContext, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.ShutdownTimeout)
+	defer shutdownCancel()
+	return errors.Join(runErr, telemetryProvider.Shutdown(shutdownContext))
 }
 
 // Now returns current UTC time for provider-neutral verification receipt timestamps.
@@ -179,6 +219,7 @@ func runAPI(
 		Address: cfg.HTTPAddress, ShutdownTimeout: cfg.ShutdownTimeout,
 		ReadinessTimeout: cfg.ReadinessTimeout, Logger: logger,
 		ReadyChecker: store, Metrics: metricRegistry, Handler: dashboardHandler,
+		MetricsBearerToken: cfg.MetricsBearerToken,
 	})
 	return server.Run(ctx)
 }
@@ -220,22 +261,11 @@ func runWorker(
 		return err
 	}
 	logger.Info("worker is ready")
-	runContext, cancel := context.WithCancel(ctx)
-	defer cancel()
 	server := httpserver.NewWithOptions(httpserver.Options{
 		Address: cfg.WorkerHTTPAddress, ShutdownTimeout: cfg.ShutdownTimeout,
 		ReadinessTimeout: cfg.ReadinessTimeout, Logger: logger,
 		ReadyChecker: store, Metrics: metricRegistry,
+		MetricsBearerToken: cfg.MetricsBearerToken,
 	})
-	results := make(chan error, 2)
-	go func() {
-		results <- runner.Run(runContext)
-	}()
-	go func() {
-		results <- server.Run(runContext)
-	}()
-	first := <-results
-	cancel()
-	second := <-results
-	return errors.Join(first, second)
+	return runComponents(ctx, runner.Run, server.Run)
 }

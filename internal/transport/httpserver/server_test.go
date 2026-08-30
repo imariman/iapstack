@@ -6,9 +6,56 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
+
+const (
+	// testMetricsBearerToken is a sufficiently long isolated metrics credential.
+	testMetricsBearerToken = "metrics-test-bearer-token-32-characters"
+)
+
+// TestMetricsRequiresConfiguredBearer verifies metrics fail closed and accept only the dedicated token.
+func TestMetricsRequiresConfiguredBearer(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		configured    string
+		authorization string
+		wantStatus    int
+		wantMetrics   bool
+	}{
+		{name: "disabled", wantStatus: http.StatusNotFound},
+		{name: "missing bearer", configured: testMetricsBearerToken, wantStatus: http.StatusUnauthorized},
+		{name: "wrong scheme", configured: testMetricsBearerToken, authorization: "Basic " + testMetricsBearerToken, wantStatus: http.StatusUnauthorized},
+		{name: "wrong token", configured: testMetricsBearerToken, authorization: "Bearer another-metrics-test-token-32-bytes", wantStatus: http.StatusUnauthorized},
+		{name: "authorized", configured: testMetricsBearerToken, authorization: "Bearer " + testMetricsBearerToken, wantStatus: http.StatusOK, wantMetrics: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := newTestServerWithMetricsToken(tt.configured)
+			request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+			request.Header.Set("Authorization", tt.authorization)
+			recorder := httptest.NewRecorder()
+			server.server.Handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", recorder.Code, tt.wantStatus)
+			}
+			if tt.wantMetrics && !strings.Contains(recorder.Body.String(), "iapstack_http_requests_total") {
+				t.Fatalf("body = %q, want Prometheus metrics", recorder.Body.String())
+			}
+			if tt.wantStatus == http.StatusUnauthorized && recorder.Header().Get("WWW-Authenticate") == "" {
+				t.Fatal("WWW-Authenticate header is empty")
+			}
+		})
+	}
+}
 
 // TestHealthAndReadiness verifies probe status, body, and content type behavior.
 func TestHealthAndReadiness(t *testing.T) {
@@ -117,6 +164,15 @@ func TestServerAppliesConnectionAndBrowserHardening(t *testing.T) {
 
 // newTestServer constructs an isolated loopback server for lifecycle tests.
 func newTestServer() *Server {
+	return newTestServerWithMetricsToken("")
+}
+
+// newTestServerWithMetricsToken constructs an isolated server with optional metrics authentication.
+func newTestServerWithMetricsToken(metricsBearerToken string) *Server {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New("127.0.0.1:0", time.Second, logger)
+	return NewWithOptions(Options{
+		Address: "127.0.0.1:0", ShutdownTimeout: time.Second,
+		ReadinessTimeout: defaultReadinessTimeout, Logger: logger,
+		MetricsBearerToken: metricsBearerToken,
+	})
 }

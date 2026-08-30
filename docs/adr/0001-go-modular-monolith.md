@@ -13,7 +13,7 @@ The architecture must still allow API traffic and asynchronous work to scale ind
 
 The initial server will be one Go module organized as a modular monolith. Domain boundaries are enforced through Go packages and dependency direction rather than network calls.
 
-One build artifact will expose explicit API, worker, and migration modes. API and worker processes may be deployed and scaled separately while sharing the same versioned code and PostgreSQL database.
+One build artifact will expose a compact server mode plus explicit API, worker, and migration modes. The compact mode runs API and worker lifecycles in one process. API and worker processes may later be deployed and scaled separately while sharing the same versioned code and PostgreSQL database.
 
 The core domain will not import HTTP handlers, concrete store adapters, or PostgreSQL implementations.
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/imariman/iapstack/internal/app"
@@ -35,13 +36,19 @@ func TestRunRequiresKnownMode(t *testing.T) {
 	}
 }
 
-// TestRunWorkerRequiresDatabaseURL verifies that the implemented worker fails fast without persistence.
-func TestRunWorkerRequiresDatabaseURL(t *testing.T) {
+// TestRunRuntimeModesRequireDatabaseURL verifies implemented runtime modes fail fast without persistence.
+func TestRunRuntimeModesRequireDatabaseURL(t *testing.T) {
 	t.Parallel()
 
-	err := app.Run(context.Background(), []string{"worker"}, emptyEnv, &bytes.Buffer{})
-	if !errors.Is(err, postgres.ErrDatabaseURLRequired) {
-		t.Fatalf("Run() error = %v, want ErrDatabaseURLRequired", err)
+	for _, mode := range []string{"server", "api", "worker"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+
+			err := app.Run(context.Background(), []string{mode}, emptyEnv, &bytes.Buffer{})
+			if !errors.Is(err, postgres.ErrDatabaseURLRequired) {
+				t.Fatalf("Run() error = %v, want ErrDatabaseURLRequired", err)
+			}
+		})
 	}
 }
 
@@ -52,6 +59,28 @@ func TestRunMigrateRequiresDatabaseURL(t *testing.T) {
 	err := app.Run(context.Background(), []string{"migrate"}, emptyEnv, &bytes.Buffer{})
 	if !errors.Is(err, postgres.ErrDatabaseURLRequired) {
 		t.Fatalf("Run() error = %v, want ErrDatabaseURLRequired", err)
+	}
+}
+
+// TestRunRejectsAutoMigrateOutsideCompactServer verifies split processes keep release migrations separate.
+func TestRunRejectsAutoMigrateOutsideCompactServer(t *testing.T) {
+	t.Parallel()
+
+	getenv := func(name string) string {
+		if name == "IAPSTACK_AUTO_MIGRATE" {
+			return "true"
+		}
+		return ""
+	}
+	for _, mode := range []string{"api", "worker"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+
+			err := app.Run(context.Background(), []string{mode}, getenv, &bytes.Buffer{})
+			if err == nil || !strings.Contains(err.Error(), "supported only in server mode") {
+				t.Fatalf("Run() error = %v, want compact-mode validation", err)
+			}
+		})
 	}
 }
 

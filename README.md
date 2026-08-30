@@ -19,6 +19,47 @@
 > [!IMPORTANT]
 > IAPStack is in early development and is not ready for production use yet.
 
+## Deploy
+
+Compare account requirements, free-tier limitations, and complete-stack costs in the
+[deployment target matrix](deploy/README.md) before creating provider resources.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/imariman/iapstack)
+[![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://www.heroku.com/deploy?template=https://github.com/imariman/iapstack)
+
+The default Render Blueprint provisions one free web service running the API and worker
+together, one disposable free PostgreSQL database, generated protection and metrics
+secrets, direct Grafana Cloud OTLP export, HTTPS ingress, and single-instance startup
+migrations. Paid compact and independently scalable API/worker Blueprints are also
+included. Review the [Render deployment guide](deploy/render/README.md), the provider's
+live price estimate, and the early-development warning before approval.
+
+The Heroku manifest provides the same API, worker, managed PostgreSQL, release-phase
+migration, and HTTPS shape on two always-on Basic dynos. Heroku has no permanently
+free runtime; read the [Heroku deployment guide](deploy/heroku/README.md) and confirm
+the live total before creating the app.
+
+DigitalOcean App Platform is available through the complete [App Spec deployment
+guide](deploy/digitalocean/README.md). Its official Deploy Button cannot express the
+required worker and migration job, so the full topology uses one `doctl apps create`
+command instead.
+
+Fly.io process groups are configured in [`fly.toml`](fly.toml); the [Fly.io deployment
+guide](deploy/fly/README.md) covers app creation, private Managed Postgres attachment,
+secrets, migrations, and cleanup. Fly.io has only a short free trial and its managed
+database makes it a comparatively expensive sandbox choice.
+
+Koyeb's [bootstrap deployment](deploy/koyeb/README.md) creates its managed database,
+secret-backed configuration, HTTPS API, and private worker through the official CLI.
+Its free web and database allowances can support only a short supervised check; a
+persistent worker is paid, and the complete always-on topology requires paid resources.
+
+Coolify can deploy the complete stack from the repository-owned [Docker Compose
+definition](deploy/coolify/README.md), including generated secrets, PostgreSQL,
+migrations, HTTPS API routing, and a private worker. Self-hosted Coolify is free, but
+you provide an always-on Linux server; Coolify Cloud and the deployment server are
+separately billed.
+
 IAPStack is a self-hosted control plane for validating in-app purchases and turning store transactions into durable application entitlements. It is designed for teams that want one backend-owned model across mobile stores without handing their purchase data or access rules to a hosted subscription platform.
 
 ## What IAPStack aims to provide
@@ -70,10 +111,10 @@ fulfillment remains outside v0.1.
 
 ## Development
 
-IAPStack currently requires Go 1.25 or newer. Run the API locally with:
+IAPStack currently requires Go 1.25 or newer. Run the compact API and worker locally with:
 
 ```sh
-go run ./cmd/iapstack api
+go run ./cmd/iapstack server
 ```
 
 The API listens on `:8080` by default and exposes `GET /healthz` and `GET /readyz`.
@@ -85,15 +126,18 @@ Configuration is supplied through environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `IAPSTACK_HTTP_ADDRESS` | `:8080` | API listen address in `host:port` form |
+| `IAPSTACK_HTTP_ADDRESS` | `:$PORT` or `:8080` | API listen address in `host:port` form; takes precedence over a platform-provided `PORT` |
 | `IAPSTACK_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline |
 | `IAPSTACK_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `IAPSTACK_DATABASE_URL` | none | PostgreSQL connection string required by database-backed modes |
+| `IAPSTACK_AUTO_MIGRATE` | `false` | Apply migrations at compact `server` startup; use only for one-instance disposable environments that cannot run a pre-deploy command |
 | `IAPSTACK_BOOTSTRAP_ADMIN_KEY` | none | Installation-only administrator bearer; when set it must contain at least 32 bytes |
+| `IAPSTACK_METRICS_BEARER_TOKEN` | none | Dedicated 32+ character bearer for `/metrics`; the endpoint is disabled when absent |
 | `IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS` | `4` | Fail-fast concurrency bound for memory-hard API-key creation and verification; maximum `32` |
 | `IAPSTACK_PROTECTION_ACTIVE_KEY_ID` | none | Encryption key ID used for new protected values |
+| `IAPSTACK_PROTECTION_KEY` | none | Base64-encoded or 64-character hexadecimal 32-byte encryption root key for an initial single-key deployment |
 | `IAPSTACK_PROTECTION_KEYS` | none | JSON object mapping key IDs to base64-encoded 32-byte encryption root keys |
-| `IAPSTACK_PROTECTION_FINGERPRINT_KEY` | none | Base64-encoded 32-byte stable fingerprint root key |
+| `IAPSTACK_PROTECTION_FINGERPRINT_KEY` | none | Base64-encoded or 64-character hexadecimal 32-byte stable fingerprint root key |
 | `IAPSTACK_WORKER_ID` | automatic | Optional River client identity; leave empty unless the deployment guarantees uniqueness |
 | `IAPSTACK_WORKER_HTTP_ADDRESS` | `:8081` | Worker health, readiness, and metrics listen address |
 | `IAPSTACK_WORKER_CONCURRENCY` | `4` | Maximum concurrent River jobs per queue and worker process |
@@ -101,15 +145,24 @@ Configuration is supplied through environment variables:
 | `IAPSTACK_QUEUE_RETENTION` | `720h` | Retention period for terminal River jobs and durable queue audit records |
 | `IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS` | `false` | Explicitly permit Huawei provider endpoints on private, loopback, link-local, CGNAT, or benchmark addresses |
 | `IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS` | `false` | Explicitly permit webhook delivery to private, loopback, link-local, CGNAT, or benchmark addresses |
+| `IAPSTACK_ENVIRONMENT` | `development` | Bounded deployment label exported with metrics |
+| `IAPSTACK_GRAFANA_OTLP_ENDPOINT` | none | Grafana Cloud HTTPS OTLP base URL; all three Grafana settings are optional together |
+| `IAPSTACK_GRAFANA_OTLP_USERNAME` | none | Grafana Cloud OTLP instance ID used for Basic authentication |
+| `IAPSTACK_GRAFANA_OTLP_TOKEN` | none | 32+ character metrics-write-only Grafana Cloud access-policy token |
+| `IAPSTACK_GRAFANA_EXPORT_INTERVAL` | `1m` | Direct OTLP metric export interval |
+| `IAPSTACK_GRAFANA_EXPORT_TIMEOUT` | `10s` | Deadline for one direct OTLP export attempt |
 
 Modes that handle provider evidence initialize the protection keyring before serving
 work and fail fast when any protection variable is missing or malformed. Generate every
 root key with a cryptographically secure secret generator such as
-`openssl rand -base64 32`. Keep the fingerprint key stable across ordinary encryption
-key rotations; changing it alters idempotency fingerprints and requires an explicit
-data migration. To rotate encryption, add the new key to `IAPSTACK_PROTECTION_KEYS`,
-select it with `IAPSTACK_PROTECTION_ACTIVE_KEY_ID`, and retain old keys until all values
-written with them have been re-encrypted or expired.
+`openssl rand -base64 32`. Configure exactly one of `IAPSTACK_PROTECTION_KEY` or
+`IAPSTACK_PROTECTION_KEYS`. The single-key form makes initial deployment compatible
+with managed-platform secret generators; switch to the JSON keyring before encryption
+key rotation. Keep the fingerprint key stable across ordinary encryption key rotations;
+changing it alters idempotency fingerprints and requires an explicit data migration.
+To rotate encryption, add the new key to `IAPSTACK_PROTECTION_KEYS`, select it with
+`IAPSTACK_PROTECTION_ACTIVE_KEY_ID`, and retain old keys until all values written with
+them have been re-encrypted or expired.
 
 Webhook delivery and configurable Huawei provider calls resolve and validate every
 A/AAAA destination at connection time, do not follow redirects, and permit public
@@ -211,7 +264,8 @@ executable code last. Related constants stay together; unrelated constant groups
 separated by a blank line. Every constant, function, and method has an English
 explanatory comment.
 
-The `worker` process handles the protected Huawei and Google Play notification inbox,
+The compact `server` mode runs the API and worker in one process. The split `api` and
+`worker` modes remain available for independent scaling. The worker handles the protected Huawei and Google Play notification inbox,
 scheduled reconciliation, and signed application webhook outbox with bounded concurrency,
 River-managed stale-job recovery, and exponential retry scheduling.
 

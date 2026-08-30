@@ -1,0 +1,56 @@
+{
+  "name": "IAPStack",
+  "description": "Self-hosted in-app purchase verification and entitlement infrastructure.",
+  "keywords": [
+    "in-app-purchases",
+    "subscriptions",
+    "go",
+    "postgresql"
+  ],
+  "website": "https://github.com/imariman/iapstack",
+  "repository": "https://github.com/imariman/iapstack",
+  "success_url": "/readyz",
+  "stack": "container",
+  "env": {
+    "IAPSTACK_LOG_LEVEL": {
+      "description": "IAPStack log level.",
+      "value": "info"
+    },
+    "IAPSTACK_PROTECTION_ACTIVE_KEY_ID": {
+      "description": "Identifier for the active encryption key.",
+      "value": "primary"
+    },
+    "IAPSTACK_PROTECTION_KEY": {
+      "description": "Required 32-byte root key. Generate it locally with: openssl rand -base64 32",
+      "required": true
+    },
+    "IAPSTACK_PROTECTION_FINGERPRINT_KEY": {
+      "description": "Required stable 32-byte fingerprint key. Generate a separate value with: openssl rand -base64 32",
+      "required": true
+    },
+    "IAPSTACK_BOOTSTRAP_ADMIN_KEY": {
+      "description": "Installation-only administrator bearer. Remove it after creating the first durable administrator key.",
+      "generator": "secret"
+    },
+    "IAPSTACK_METRICS_BEARER_TOKEN": {
+      "description": "Dedicated bearer for the protected Prometheus metrics endpoint.",
+      "generator": "secret"
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    },
+    "worker": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "addons": [
+    {
+      "plan": "heroku-postgresql:essential-0",
+      "as": "DATABASE"
+    }
+  ]
+}

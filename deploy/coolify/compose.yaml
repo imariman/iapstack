@@ -1,0 +1,94 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: iapstack
+      POSTGRES_USER: iapstack
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_64_POSTGRES}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iapstack -d iapstack"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - iapstack-postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["migrate"]
+    environment:
+      IAPSTACK_DATABASE_URL: postgres://iapstack:${SERVICE_PASSWORD_64_POSTGRES}@postgres:5432/iapstack?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: "no"
+    exclude_from_hc: true
+
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["api"]
+    environment:
+      COOLIFY_PUBLIC_URL: ${SERVICE_URL_API_8080}
+      IAPSTACK_DATABASE_URL: postgres://iapstack:${SERVICE_PASSWORD_64_POSTGRES}@postgres:5432/iapstack?sslmode=disable
+      IAPSTACK_PROTECTION_ACTIVE_KEY_ID: primary
+      IAPSTACK_PROTECTION_KEY: ${SERVICE_HEX_64_PROTECTION}
+      IAPSTACK_PROTECTION_FINGERPRINT_KEY: ${SERVICE_HEX_64_FINGERPRINT}
+      IAPSTACK_BOOTSTRAP_ADMIN_KEY: ${IAPSTACK_BOOTSTRAP_ADMIN_KEY:-}
+      IAPSTACK_METRICS_BEARER_TOKEN: ${SERVICE_PASSWORD_64_METRICS}
+      IAPSTACK_HTTP_ADDRESS: ":8080"
+      IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS: "false"
+      IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS: "false"
+    expose:
+      - "8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["worker"]
+    environment:
+      IAPSTACK_DATABASE_URL: postgres://iapstack:${SERVICE_PASSWORD_64_POSTGRES}@postgres:5432/iapstack?sslmode=disable
+      IAPSTACK_PROTECTION_ACTIVE_KEY_ID: primary
+      IAPSTACK_PROTECTION_KEY: ${SERVICE_HEX_64_PROTECTION}
+      IAPSTACK_PROTECTION_FINGERPRINT_KEY: ${SERVICE_HEX_64_FINGERPRINT}
+      IAPSTACK_METRICS_BEARER_TOKEN: ${SERVICE_PASSWORD_64_METRICS}
+      IAPSTACK_WORKER_HTTP_ADDRESS: ":8081"
+      IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS: "false"
+      IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8081/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+
+volumes:
+  iapstack-postgres:

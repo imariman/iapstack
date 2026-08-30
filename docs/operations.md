@@ -10,6 +10,7 @@ export IAPSTACK_PROTECTION_ACTIVE_KEY_ID="key-2026-01"
 export IAPSTACK_PROTECTION_KEYS="{\"key-2026-01\":\"$(openssl rand -base64 32)\"}"
 export IAPSTACK_PROTECTION_FINGERPRINT_KEY="$(openssl rand -base64 32)"
 export IAPSTACK_BOOTSTRAP_ADMIN_KEY="$(openssl rand -base64 48)"
+export IAPSTACK_METRICS_BEARER_TOKEN="$(openssl rand -base64 48)"
 ```
 
 The Compose stack passes the generated PostgreSQL password through a libpq-style
@@ -26,9 +27,9 @@ the database because IAPStack returns it only once.
 
 ## Production security baseline
 
-- Terminate TLS at a trusted reverse proxy or load balancer. Never expose the API,
-  dashboard, worker probes, PostgreSQL, or Prometheus endpoints directly to the public
-  Internet.
+- Terminate TLS at a trusted reverse proxy or load balancer. Never expose PostgreSQL
+  or worker probes directly to the public Internet. Protect a public `/metrics`
+  endpoint with its dedicated bearer and do not reuse an administrator/application key.
 - Apply per-source and per-bearer request limits at the ingress. IAPStack bounds request
   bodies, headers, connection duration, provider calls, webhook calls, and worker
   concurrency. Memory-hard API-key derivations also fail fast at
@@ -89,7 +90,7 @@ The complete security assumptions, residual risks, and release gate are document
 docker compose -f deploy/compose.yaml up --build -d
 docker compose -f deploy/compose.yaml ps
 curl --fail http://127.0.0.1:8080/readyz
-curl --fail http://127.0.0.1:8080/metrics
+curl --fail -H "Authorization: Bearer $IAPSTACK_METRICS_BEARER_TOKEN" http://127.0.0.1:8080/metrics
 ```
 
 The migration container must complete successfully before API and worker processes start. `/healthz` is process liveness; `/readyz` also probes PostgreSQL.
@@ -230,6 +231,8 @@ Never remove an encryption key until all rows written with that key ID have been
 ## Queue incident response
 
 - `iapstack_queue_depth` shows River's available, scheduled, retryable, running, completed, cancelled, and discarded states.
+- `iapstack_queue_oldest_runnable_age_seconds` reports how long each queue's oldest runnable job has waited.
+- `iapstack_queue_job_duration_seconds` reports bounded worker attempt count and duration sums by queue and outcome.
 - River owns job claims, stale-job recovery, exponential retry scheduling, and terminal job cleanup.
 - Retryable failures become discarded after `IAPSTACK_WORKER_MAX_ATTEMPTS`; permanent failures are cancelled immediately.
 - Inbox, outbox, and reconciliation tables retain protected payloads and stable terminal audit outcomes while River job arguments contain identifiers only.

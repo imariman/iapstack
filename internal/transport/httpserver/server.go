@@ -3,6 +3,8 @@ package httpserver
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -41,13 +43,14 @@ type ReadyChecker interface {
 
 // Options configures the operational HTTP server and optional business API.
 type Options struct {
-	Address          string
-	ShutdownTimeout  time.Duration
-	ReadinessTimeout time.Duration
-	Logger           *slog.Logger
-	ReadyChecker     ReadyChecker
-	Metrics          *metrics.Registry
-	Handler          http.Handler
+	Address            string
+	ShutdownTimeout    time.Duration
+	ReadinessTimeout   time.Duration
+	Logger             *slog.Logger
+	ReadyChecker       ReadyChecker
+	Metrics            *metrics.Registry
+	MetricsBearerToken string
+	Handler            http.Handler
 }
 
 // Server owns the API listener, probes, middleware, and graceful lifecycle.
@@ -58,6 +61,8 @@ type Server struct {
 	readinessTimeout time.Duration
 	readyChecker     ReadyChecker
 	metrics          *metrics.Registry
+	metricsTokenHash [sha256.Size]byte
+	metricsEnabled   bool
 	ready            atomic.Bool
 }
 
@@ -95,6 +100,8 @@ func NewWithOptions(options Options) *Server {
 		readinessTimeout: options.ReadinessTimeout,
 		readyChecker:     options.ReadyChecker,
 		metrics:          options.Metrics,
+		metricsTokenHash: sha256.Sum256([]byte(options.MetricsBearerToken)),
+		metricsEnabled:   options.MetricsBearerToken != "",
 	}
 
 	mux := http.NewServeMux()
@@ -203,11 +210,32 @@ func (server *Server) readiness(writer http.ResponseWriter, request *http.Reques
 }
 
 // prometheus writes a bounded-cardinality operational metrics snapshot.
-func (server *Server) prometheus(writer http.ResponseWriter, _ *http.Request) {
+func (server *Server) prometheus(writer http.ResponseWriter, request *http.Request) {
+	if !server.metricsEnabled {
+		http.NotFound(writer, request)
+		return
+	}
+	if !server.authorizeMetrics(request.Header.Get("Authorization")) {
+		writer.Header().Set("Cache-Control", "no-store")
+		writer.Header().Set("WWW-Authenticate", `Bearer realm="iapstack-metrics"`)
+		writeStatus(writer, http.StatusUnauthorized, "unauthorized")
+		return
+	}
 	writer.Header().Set("Content-Type", metrics.ContentType())
+	writer.Header().Set("Cache-Control", "no-store")
 	if err := server.metrics.WritePrometheus(writer); err != nil {
 		server.logger.Error("write metrics", "error_code", "metrics_write_failed")
 	}
+}
+
+// authorizeMetrics verifies one exact bearer credential without timing-dependent comparison.
+func (server *Server) authorizeMetrics(authorization string) bool {
+	scheme, token, ok := strings.Cut(strings.TrimSpace(authorization), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" || strings.ContainsAny(token, " \t\r\n") {
+		return false
+	}
+	presentedHash := sha256.Sum256([]byte(token))
+	return subtle.ConstantTimeCompare(presentedHash[:], server.metricsTokenHash[:]) == 1
 }
 
 // observe adds request IDs, safe access logs, and HTTP metrics around every route.
