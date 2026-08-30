@@ -30,3 +30,31 @@ For App Store sandbox testing, replace the product identifiers with the values
 configured in App Store Connect by adding
 `IAPSTACK_APPLE_SUBSCRIPTION_ID` and
 `IAPSTACK_APPLE_NON_CONSUMABLE_ID` dart defines.
+
+## IAPStack hosted sandbox
+
+The repository sandbox is configured for:
+
+- API: `https://iapstack-sandbox.onrender.com`
+- application: `ios-sandbox`
+- bundle ID: `com.imariman.iapstack.example`
+- non-consumable: `premium_lifetime`
+- test customer: `663c43ca-1022-4750-b997-ccbb56957abc`
+
+The durable application bearer remains in macOS Keychain under the service
+`IAPStack Sandbox Application Key`. Connect and trust a physical iPhone, then
+run the helper from this directory:
+
+```sh
+bash tool/run_app_store_sandbox.sh
+```
+
+The helper reads the durable bearer from Keychain, exchanges it for a fresh
+15-minute customer session, and passes only that short-lived session to the
+Flutter process. It never prints or writes either bearer. You can pass a
+specific Flutter device ID as the first argument.
+
+Run the helper through Flutter rather than Xcode's default `Runner` launch
+action. The Xcode action intentionally keeps `Configuration.storekit` attached
+for local StoreKit testing; Flutter's device launch does not attach that local
+configuration and therefore reaches the real App Store sandbox.
