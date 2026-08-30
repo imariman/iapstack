@@ -9,7 +9,6 @@ services:
     dockerCommand: server
     healthCheckPath: /readyz
     autoDeployTrigger: "off"
-    maxShutdownDelaySeconds: 30
     envVars:
       - key: IAPSTACK_DATABASE_URL
         fromDatabase:
