@@ -28,11 +28,12 @@ Compare account requirements, free-tier limitations, and complete-stack costs in
 [![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://www.heroku.com/deploy?template=https://github.com/imariman/iapstack)
 
 The default Render Blueprint provisions one free web service running the API and worker
-together, one disposable free PostgreSQL database, generated protection and metrics
-secrets, direct Grafana Cloud OTLP export, HTTPS ingress, and single-instance startup
-migrations. Paid compact and independently scalable API/worker Blueprints are also
-included. Review the [Render deployment guide](deploy/render/README.md), the provider's
-live price estimate, and the early-development warning before approval.
+together, one free signed-webhook test receiver, one disposable free PostgreSQL
+database, generated protection and metrics secrets, direct Grafana Cloud OTLP export,
+HTTPS ingress, and single-instance startup migrations. Paid compact and independently
+scalable API/worker Blueprints are also included. Review the
+[Render deployment guide](deploy/render/README.md), the provider's live price estimate,
+and the early-development warning before approval.
 
 The Heroku manifest provides the same API, worker, managed PostgreSQL, release-phase
 migration, and HTTPS shape on two always-on Basic dynos. Heroku has no permanently

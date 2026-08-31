@@ -7,7 +7,7 @@ checked in August 2026; always review the provider's live estimate before approv
 
 | Target | Account and free allowance | Complete IAPStack test | Repository definition |
 | --- | --- | --- | --- |
-| Render | Free signup; free web and 30-day PostgreSQL support a disposable compact sandbox | Default Blueprint is free; production can use one paid compact service or split API/worker services | [`render.yaml`](../render.yaml) |
+| Render | Free signup; free web and 30-day PostgreSQL support a disposable compact sandbox | Default Blueprint uses free compact API/worker and signed-webhook receiver services; production can use one paid compact service or split API/worker services | [`render.yaml`](../render.yaml) |
 | Railway | New account trial: USD 5 for up to 30 days; then USD 1 monthly Free credit | Trial can cover a short test; an always-on stack will normally exceed the recurring credit | [Railway guide](railway/README.md) |
 | Heroku | Payment method required; no permanent free runtime | About USD 19/month for the committed two-dyno and PostgreSQL shape | [`app.json`](../app.json) |
 | DigitalOcean | Account signup is free; App Platform free tier is static-only | About USD 17/month for API, worker, and development PostgreSQL | [`.do/app.yaml`](../.do/app.yaml) |
