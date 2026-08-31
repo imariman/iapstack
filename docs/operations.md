@@ -98,10 +98,14 @@ The migration container must complete successfully before API and worker process
 ## Operations dashboard
 
 Open `http://127.0.0.1:8080/dashboard/` after the API becomes ready. Connect with a
-bootstrap or stored administrator bearer. The dashboard stores the bearer only in
-the current browser tab's `sessionStorage`; closing the tab clears it, and signing
-out clears it immediately. Do not use the dashboard from an untrusted browser or
-expose the API over plaintext outside local development.
+bootstrap or stored administrator bearer. The server exchanges it once for an
+encrypted 12-hour dashboard session in a `Secure`, `HttpOnly`, `SameSite=Strict`
+cookie scoped to `/v1/admin`; the page never stores the bearer in browser storage.
+The session survives refreshes and browser restarts until expiry, while signing out
+clears it immediately. Sessions issued by stored administrator keys also stop working
+when their issuer key is revoked. Cookie-authenticated mutations require same-origin
+browser proof. Do not use the dashboard from an untrusted browser or expose the API
+over plaintext outside local development.
 
 The project overview shows application credential/webhook coverage, catalog mappings,
 customer access counts, recent normalized purchase observations, queue outcomes, and

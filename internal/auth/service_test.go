@@ -160,6 +160,94 @@ func TestCustomerSessionsBindCustomerExpiryAndIssuer(t *testing.T) {
 	}
 }
 
+// TestAdminSessionsPersistWithoutRetainingBearers verifies protected dashboard sessions survive independently of plaintext admin keys.
+func TestAdminSessionsPersistWithoutRetainingBearers(t *testing.T) {
+	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}
+	apiKeys, err := NewService(store, testBootstrapAdminKey, 4)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	storedBearer, err := apiKeys.Create(context.Background(), Principal{Role: persistence.APIKeyRoleAdmin})
+	if err != nil {
+		t.Fatalf("Create() administrator key error = %v", err)
+	}
+	storedIssuer, err := apiKeys.Authenticate(context.Background(), storedBearer)
+	if err != nil {
+		t.Fatalf("Authenticate() stored issuer error = %v", err)
+	}
+	bootstrapIssuer, err := apiKeys.Authenticate(context.Background(), testBootstrapAdminKey)
+	if err != nil {
+		t.Fatalf("Authenticate() bootstrap issuer error = %v", err)
+	}
+
+	sessions, err := NewAdminSessions(store, newCustomerSessionKeyring(t))
+	if err != nil {
+		t.Fatalf("NewAdminSessions() error = %v", err)
+	}
+	now := time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC)
+	sessions.clock = func() time.Time { return now }
+
+	storedSession, err := sessions.Mint(context.Background(), storedIssuer)
+	if err != nil {
+		t.Fatalf("Mint() stored session error = %v", err)
+	}
+	if !strings.HasPrefix(storedSession.Token, adminSessionPrefix) ||
+		!storedSession.ExpiresAt.Equal(now.Add(defaultAdminSessionTTL)) ||
+		strings.Contains(storedSession.Token, storedBearer) {
+		t.Fatalf("Mint() stored session metadata is invalid")
+	}
+	storedPrincipal, err := sessions.Authenticate(context.Background(), storedSession.Token)
+	if err != nil {
+		t.Fatalf("Authenticate() stored session error = %v", err)
+	}
+	if storedPrincipal.KeyID != storedIssuer.KeyID || storedPrincipal.Role != persistence.APIKeyRoleAdmin {
+		t.Fatalf("Authenticate() stored principal = %#v", storedPrincipal)
+	}
+
+	bootstrapSession, err := sessions.Mint(context.Background(), bootstrapIssuer)
+	if err != nil {
+		t.Fatalf("Mint() bootstrap session error = %v", err)
+	}
+	bootstrapPrincipal, err := sessions.Authenticate(context.Background(), bootstrapSession.Token)
+	if err != nil || bootstrapPrincipal.KeyID != "" || bootstrapPrincipal.Role != persistence.APIKeyRoleAdmin {
+		t.Fatalf("Authenticate() bootstrap principal = %#v, %v", bootstrapPrincipal, err)
+	}
+
+	replacement := byte('A')
+	if storedSession.Token[len(storedSession.Token)-1] == replacement {
+		replacement = 'B'
+	}
+	tampered := storedSession.Token[:len(storedSession.Token)-1] + string(replacement)
+	if _, err := sessions.Authenticate(context.Background(), tampered); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("tampered administrator session error = %v, want unauthorized", err)
+	}
+	sessions.clock = func() time.Time { return storedSession.ExpiresAt }
+	if _, err := sessions.Authenticate(context.Background(), storedSession.Token); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expired administrator session error = %v, want unauthorized", err)
+	}
+	sessions.clock = func() time.Time { return now }
+	delete(store.records, storedIssuer.KeyID)
+	if _, err := sessions.Authenticate(context.Background(), storedSession.Token); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("revoked issuer session error = %v, want unauthorized", err)
+	}
+}
+
+// TestAdminSessionsRejectApplicationIssuers verifies application keys cannot gain dashboard access.
+func TestAdminSessionsRejectApplicationIssuers(t *testing.T) {
+	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}
+	sessions, err := NewAdminSessions(store, newCustomerSessionKeyring(t))
+	if err != nil {
+		t.Fatalf("NewAdminSessions() error = %v", err)
+	}
+	_, err = sessions.Mint(context.Background(), Principal{
+		KeyID: "application-key", Role: persistence.APIKeyRoleApplication,
+		ProjectID: "project-1", ApplicationID: "application-1",
+	})
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Mint() application issuer error = %v, want unauthorized", err)
+	}
+}
+
 // newCustomerSessionKeyring constructs deterministic root material for session tests.
 func newCustomerSessionKeyring(t *testing.T) *platformprotection.Keyring {
 	t.Helper()

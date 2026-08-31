@@ -110,6 +110,14 @@ Pub/Sub pushes.
 
 ## Administrative read model
 
+The dashboard exchanges an explicit administrator bearer through
+`POST /v1/admin/dashboard-session` for a protected 12-hour browser session. The
+encrypted session value is returned only as a `Secure`, `HttpOnly`,
+`SameSite=Strict` cookie scoped to `/v1/admin`; it is never exposed to dashboard
+JavaScript. `DELETE /v1/admin/dashboard-session` clears the cookie. Existing API
+clients may continue using administrator bearer authentication directly. Dashboard
+cookie mutations additionally require the same-origin browser marker and `Origin`.
+
 The initial dashboard uses two bounded, read-only administrator contracts:
 
 - `GET /v1/admin/projects` lists up to 200 projects with application, customer, and product counts.
