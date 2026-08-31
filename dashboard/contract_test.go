@@ -33,6 +33,8 @@ func TestDashboardUsesDocumentedAdminOperations(t *testing.T) {
 		path        string
 		operationID string
 	}{
+		{method: http.MethodPost, path: "/v1/admin/dashboard-session", operationID: "createAdminDashboardSession"},
+		{method: http.MethodDelete, path: "/v1/admin/dashboard-session", operationID: "deleteAdminDashboardSession"},
 		{method: http.MethodGet, path: "/v1/admin/api-keys", operationID: "listApiKeys"},
 		{method: http.MethodPost, path: "/v1/admin/api-keys", operationID: "createApiKey"},
 		{method: http.MethodDelete, path: "/v1/admin/api-keys/{key_id}", operationID: "revokeApiKey"},
@@ -64,7 +66,7 @@ func TestDashboardUsesDocumentedAdminOperations(t *testing.T) {
 		t.Fatalf("read embedded app.js: %v", err)
 	}
 	for _, fragment := range []string{
-		"/v1/admin/api-keys", "/v1/admin/projects", "/overview", "/applications/",
+		"/v1/admin/dashboard-session", "/v1/admin/api-keys", "/v1/admin/projects", "/overview", "/applications/",
 		"/customers/", "/entitlements/", "/products/", "/store-products/", "/credentials/", "/webhook",
 	} {
 		if !strings.Contains(string(script), fragment) {

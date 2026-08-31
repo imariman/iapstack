@@ -98,6 +98,7 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 		"PurchaseSubmission":           {"external_customer_id", "claimed_products", "evidence"},
 		"CustomerSessionRequest":       {"external_customer_id"},
 		"CustomerSession":              {"token", "expires_at"},
+		"DashboardSession":             {"expires_at"},
 		"VerificationResult":           {"verified_at", "customer_id", "entitlements"},
 		"RestoreResult":                {"results"},
 		"EntitlementSnapshot":          {"customer_id", "entitlements"},
@@ -144,6 +145,9 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 		}},
 		{name: "customer session", schema: "CustomerSession", value: customerSessionResponse{
 			Token: "iaps_opaque", ExpiresAt: now.Add(15 * time.Minute),
+		}},
+		{name: "dashboard session", schema: "DashboardSession", value: dashboardSessionResponse{
+			ExpiresAt: now.Add(12 * time.Hour),
 		}},
 		{name: "project collection", schema: "AdminProjects", value: adminProjectsResponse{
 			Projects: []adminProjectResponse{{ID: "project-1", CreatedAt: now}},

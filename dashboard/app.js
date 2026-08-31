@@ -1,12 +1,10 @@
 "use strict";
 
-const sessionKey = "iapstack.dashboard.admin";
 const huaweiCredentialContentType = "application/vnd.iapstack.huawei-credentials+json";
 const appleCredentialContentType = "application/vnd.iapstack.apple-credentials+json";
 const googleCredentialContentType = "application/vnd.iapstack.google-play-credentials+json";
 const maximumCredentialFileBytes = 1024 * 1024;
 const state = {
-  adminKey: "",
   projects: [],
   selectedProject: "",
   managedApplication: null,
@@ -67,29 +65,9 @@ const elements = {
   copyMessage: document.querySelector("#copy-message"),
 };
 
-function sessionRead() {
-  try {
-    return window.sessionStorage.getItem(sessionKey) || "";
-  } catch (_) {
-    return "";
-  }
-}
-
-function sessionWrite(value) {
-  try {
-    if (value) {
-      window.sessionStorage.setItem(sessionKey, value);
-    } else {
-      window.sessionStorage.removeItem(sessionKey);
-    }
-  } catch (_) {
-    // Private browsing may disable storage; the in-memory session still works.
-  }
-}
-
 async function apiRequest(path, options = {}) {
   const headers = new Headers(options.headers || {});
-  headers.set("Authorization", `Bearer ${state.adminKey}`);
+  headers.set("X-IAPStack-Dashboard", "1");
   if (options.body) {
     headers.set("Content-Type", "application/json");
   }
@@ -97,6 +75,7 @@ async function apiRequest(path, options = {}) {
     ...options,
     headers,
     cache: "no-store",
+    credentials: "same-origin",
   });
   const requestID = response.headers.get("X-Request-ID") || "";
   let body = null;
@@ -120,10 +99,18 @@ function showAuthenticated(authenticated) {
   elements.appShell.hidden = !authenticated;
 }
 
+function clearLegacyBearerStorage() {
+  try {
+    window.sessionStorage.removeItem("iapstack.dashboard.admin");
+  } catch (_) {
+    // Storage access may be disabled; no new bearer material is written there.
+  }
+}
+
 function errorMessage(error) {
   const suffix = error.requestID ? ` · Request ${error.requestID}` : "";
   if (error.status === 401) {
-    return `The admin key is invalid or unauthorized.${suffix}`;
+    return `Administrator access is invalid or expired.${suffix}`;
   }
   if (error.status === 503) {
     return `The database is currently unavailable.${suffix}`;
@@ -154,21 +141,47 @@ function setFormBusy(form, busy) {
 }
 
 async function connect(adminKey) {
-  state.adminKey = adminKey.trim();
   elements.authMessage.textContent = "";
   setFormBusy(elements.authForm, true);
   try {
+    await createDashboardSession(adminKey.trim());
+    elements.adminKey.value = "";
     await loadProjects();
-    sessionWrite(state.adminKey);
     showAuthenticated(true);
   } catch (error) {
-    state.adminKey = "";
-    sessionWrite("");
+    elements.adminKey.value = "";
     elements.authMessage.textContent = errorMessage(error);
     showAuthenticated(false);
   } finally {
     setFormBusy(elements.authForm, false);
   }
+}
+
+async function createDashboardSession(adminKey) {
+  const response = await fetch("/v1/admin/dashboard-session", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${adminKey}`,
+      "X-IAPStack-Dashboard": "1",
+    },
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  const requestID = response.headers.get("X-Request-ID") || "";
+  let body = null;
+  try {
+    body = await response.json();
+  } catch (_) {
+    body = null;
+  }
+  if (!response.ok) {
+    const error = new Error(body?.error?.message || `HTTP ${response.status}`);
+    error.status = response.status;
+    error.code = body?.error?.code || "request_failed";
+    error.requestID = body?.error?.request_id || requestID;
+    throw error;
+  }
+  return body;
 }
 
 async function loadProjects(preferredProject = state.selectedProject) {
@@ -968,8 +981,18 @@ function setSignalWarning(name, warning) {
   document.querySelector(`[data-signal="${name}"]`).classList.toggle("warning", warning);
 }
 
-function logout() {
-  state.adminKey = "";
+async function logout() {
+  let logoutError = null;
+  try {
+    await fetch("/v1/admin/dashboard-session", {
+      method: "DELETE",
+      headers: { "X-IAPStack-Dashboard": "1" },
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+  } catch (error) {
+    logoutError = error;
+  }
   state.projects = [];
   state.selectedProject = "";
   state.managedApplication = null;
@@ -985,9 +1008,11 @@ function logout() {
   ]) {
     if (dialog.open) dialog.close();
   }
-  sessionWrite("");
   elements.adminKey.value = "";
   showAuthenticated(false);
+  if (logoutError) {
+    elements.authMessage.textContent = "The browser session could not be cleared while the server was unavailable.";
+  }
   elements.adminKey.focus();
 }
 
@@ -1255,10 +1280,18 @@ elements.keyDialog.addEventListener("close", () => {
   elements.copyMessage.textContent = "";
 });
 
-const savedKey = sessionRead();
+clearLegacyBearerStorage();
 syncSetupProvider();
-if (savedKey) {
-  connect(savedKey);
-} else {
-  showAuthenticated(false);
+resumeDashboardSession();
+
+async function resumeDashboardSession() {
+  try {
+    await loadProjects();
+    showAuthenticated(true);
+  } catch (error) {
+    showAuthenticated(false);
+    if (error.status !== 401) {
+      elements.authMessage.textContent = errorMessage(error);
+    }
+  }
 }

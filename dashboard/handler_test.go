@@ -28,7 +28,7 @@ func TestHandlerServesSecureEmbeddedAssets(t *testing.T) {
 	}{
 		{path: "/dashboard/", status: http.StatusOK, contentType: "text/html; charset=utf-8", body: "IAPStack Operations"},
 		{path: "/dashboard/app.css", status: http.StatusOK, contentType: "text/css; charset=utf-8", body: "--accent"},
-		{path: "/dashboard/app.js", status: http.StatusOK, contentType: "text/javascript; charset=utf-8", body: "sessionStorage"},
+		{path: "/dashboard/app.js", status: http.StatusOK, contentType: "text/javascript; charset=utf-8", body: "/v1/admin/dashboard-session"},
 	}
 	for _, test := range tests {
 		recorder := httptest.NewRecorder()
@@ -60,11 +60,15 @@ func TestDashboardSecretLifecycleAvoidsPersistentStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read embedded index.html: %v", err)
 	}
-	if strings.Contains(string(script), "localStorage") {
-		t.Fatal("dashboard script must not persist bearer or secret values in localStorage")
+	for _, forbidden := range []string{"localStorage", "sessionStorage.getItem", "sessionStorage.setItem", "state.adminKey"} {
+		if strings.Contains(string(script), forbidden) {
+			t.Fatalf("dashboard script must not retain administrator bearer material through %q", forbidden)
+		}
 	}
 	for _, required := range []string{
-		"sessionStorage", "credentialForm.reset()", "webhookForm.reset()", `revealedKey.value = ""`,
+		`credentials: "same-origin"`, "/v1/admin/dashboard-session", `elements.adminKey.value = ""`,
+		`sessionStorage.removeItem("iapstack.dashboard.admin")`,
+		"credentialForm.reset()", "webhookForm.reset()", `revealedKey.value = ""`,
 	} {
 		if !strings.Contains(string(script), required) {
 			t.Fatalf("dashboard script does not contain secret lifecycle control %q", required)

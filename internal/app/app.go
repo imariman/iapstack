@@ -201,10 +201,14 @@ func runAPI(
 	if err != nil {
 		return err
 	}
+	adminSessions, err := auth.NewAdminSessions(store, keyring)
+	if err != nil {
+		return err
+	}
 	api, err := httpapi.New(httpapi.Dependencies{
 		Store: store, Operations: store, Admin: store, Authentication: authentication,
-		CustomerSessions: customerSessions,
-		Credentials:      credentialService, Webhooks: webhookService,
+		AdminSessions: adminSessions, CustomerSessions: customerSessions,
+		Credentials: credentialService, Webhooks: webhookService,
 		Verification: verificationService, Huawei: huaweiAdapter, Apple: appleAdapter, GooglePlay: googlePlayAdapter,
 		Protection: keyring, BodyLimit: cfg.HTTPBodyLimit,
 	})

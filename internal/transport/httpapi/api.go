@@ -46,6 +46,7 @@ type API struct {
 	operations       persistence.OperationsStore
 	admin            persistence.AdminQueryStore
 	authentication   *auth.Service
+	adminSessions    *auth.AdminSessions
 	customerSessions *auth.CustomerSessions
 	credentials      *credentials.Service
 	webhooks         *webhooks.Service
@@ -65,6 +66,7 @@ type Dependencies struct {
 	Operations       persistence.OperationsStore
 	Admin            persistence.AdminQueryStore
 	Authentication   *auth.Service
+	AdminSessions    *auth.AdminSessions
 	CustomerSessions *auth.CustomerSessions
 	Credentials      *credentials.Service
 	Webhooks         *webhooks.Service
@@ -201,6 +203,7 @@ type v1Route struct {
 // New validates dependencies and registers the complete v1 route surface.
 func New(dependencies Dependencies) (*API, error) {
 	if dependencies.Store == nil || dependencies.Operations == nil || dependencies.Admin == nil || dependencies.Authentication == nil ||
+		dependencies.AdminSessions == nil ||
 		dependencies.CustomerSessions == nil ||
 		dependencies.Credentials == nil || dependencies.Webhooks == nil || dependencies.Verification == nil ||
 		dependencies.Huawei == nil || dependencies.Apple == nil || dependencies.GooglePlay == nil ||
@@ -209,9 +212,10 @@ func New(dependencies Dependencies) (*API, error) {
 	}
 	api := &API{
 		store: dependencies.Store, operations: dependencies.Operations, admin: dependencies.Admin,
-		authentication: dependencies.Authentication, customerSessions: dependencies.CustomerSessions,
-		credentials: dependencies.Credentials,
-		webhooks:    dependencies.Webhooks, verification: dependencies.Verification,
+		authentication: dependencies.Authentication, adminSessions: dependencies.AdminSessions,
+		customerSessions: dependencies.CustomerSessions,
+		credentials:      dependencies.Credentials,
+		webhooks:         dependencies.Webhooks, verification: dependencies.Verification,
 		huawei: dependencies.Huawei, apple: dependencies.Apple, googlePlay: dependencies.GooglePlay,
 		protection: dependencies.Protection,
 		bodyLimit:  dependencies.BodyLimit, clock: time.Now,
@@ -228,6 +232,8 @@ func New(dependencies Dependencies) (*API, error) {
 // v1Routes returns the complete machine-checked public operation registry.
 func (api *API) v1Routes() []v1Route {
 	return []v1Route{
+		{Method: http.MethodPost, Path: "/v1/admin/dashboard-session", OperationID: "createAdminDashboardSession", Handler: api.createDashboardSession},
+		{Method: http.MethodDelete, Path: "/v1/admin/dashboard-session", OperationID: "deleteAdminDashboardSession", Handler: api.deleteDashboardSession},
 		{Method: http.MethodGet, Path: "/v1/admin/api-keys", OperationID: "listApiKeys", Handler: api.listAPIKeys},
 		{Method: http.MethodPost, Path: "/v1/admin/api-keys", OperationID: "createApiKey", Handler: api.createAPIKey},
 		{Method: http.MethodDelete, Path: "/v1/admin/api-keys/{key_id}", OperationID: "revokeApiKey", Handler: api.revokeAPIKey},
@@ -826,9 +832,13 @@ func (api *API) scheduleReconciliation(
 
 // requireAdmin authenticates one control-plane bearer.
 func (api *API) requireAdmin(writer http.ResponseWriter, request *http.Request) (auth.Principal, bool) {
-	principal, err := api.authenticate(request)
+	principal, dashboardSession, err := api.authenticateAdmin(request)
 	if err != nil || principal.Role != persistence.APIKeyRoleAdmin {
 		api.writeAuthenticationFailure(writer, request, err)
+		return auth.Principal{}, false
+	}
+	if dashboardSession && !safeRequestMethod(request.Method) && !validDashboardMutation(request) {
+		writeAPIError(writer, request, http.StatusForbidden, "csrf_rejected", "dashboard request origin could not be verified")
 		return auth.Principal{}, false
 	}
 	return principal, true

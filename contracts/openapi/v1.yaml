@@ -19,6 +19,49 @@ tags:
   - name: Apple notifications
   - name: Google Play notifications
 paths:
+  /v1/admin/dashboard-session:
+    post:
+      tags: [Administration]
+      operationId: createAdminDashboardSession
+      summary: Exchange an administrator bearer for a protected browser session
+      description: >-
+        Sets a Secure, HttpOnly, SameSite=Strict cookie scoped to /v1/admin.
+        The administrator bearer is never returned or persisted by the dashboard.
+      security:
+        - adminBearer: []
+      responses:
+        '201':
+          description: Protected dashboard session created
+          headers:
+            Set-Cookie:
+              description: Encrypted administrator session cookie.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardSession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    delete:
+      tags: [Administration]
+      operationId: deleteAdminDashboardSession
+      summary: End the current protected browser session
+      security:
+        - dashboardSession: []
+      responses:
+        '204':
+          description: Dashboard session cookie cleared
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /v1/admin/api-keys:
     get:
       tags: [Administration]
@@ -26,6 +69,7 @@ paths:
       summary: List bounded secret-free API key lifecycle metadata
       security:
         - adminBearer: []
+        - dashboardSession: []
       responses:
         '200':
           description: API keys ordered newest first, including revoked metadata
@@ -45,6 +89,7 @@ paths:
       summary: Create an administrator or application bearer
       security:
         - adminBearer: []
+        - dashboardSession: []
       requestBody:
         required: true
         content:
@@ -62,6 +107,8 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
         '413':
@@ -80,6 +127,7 @@ paths:
       description: The final active administrator key cannot be revoked.
       security:
         - adminBearer: []
+        - dashboardSession: []
       parameters:
         - $ref: '#/components/parameters/ApiKeyId'
       responses:
@@ -91,6 +139,8 @@ paths:
                 $ref: '#/components/schemas/ApiKey'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -106,6 +156,7 @@ paths:
       summary: List bounded project summaries
       security:
         - adminBearer: []
+        - dashboardSession: []
       responses:
         '200':
           description: Project summaries ordered by stable identity
@@ -126,6 +177,7 @@ paths:
       summary: Idempotently create a project
       security:
         - adminBearer: []
+        - dashboardSession: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
       responses:
@@ -135,6 +187,8 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
         '500':
@@ -148,6 +202,7 @@ paths:
       summary: Load one secret-free operational project snapshot
       security:
         - adminBearer: []
+        - dashboardSession: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
       responses:
@@ -172,6 +227,7 @@ paths:
       summary: Idempotently create a provider application
       security:
         - adminBearer: []
+        - dashboardSession: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
         - $ref: '#/components/parameters/ApplicationId'
@@ -188,6 +244,8 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
         '413':
@@ -205,6 +263,7 @@ paths:
       summary: Idempotently create a stable customer binding
       security:
         - adminBearer: []
+        - dashboardSession: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
         - $ref: '#/components/parameters/CustomerId'
@@ -225,6 +284,8 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
         '413':
@@ -242,6 +303,7 @@ paths:
       summary: Idempotently create an entitlement definition
       security:
         - adminBearer: []
+        - dashboardSession: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
         - $ref: '#/components/parameters/EntitlementId'
@@ -258,6 +320,8 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
         '413':
@@ -275,6 +339,7 @@ paths:
       summary: Idempotently create a product and its entitlement grants
       security:
         - adminBearer: []
+        - dashboardSession: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
         - $ref: '#/components/parameters/ProductId'
@@ -291,6 +356,8 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
         '413':
@@ -308,6 +375,7 @@ paths:
       summary: Idempotently map a provider product to an internal product
       security:
         - adminBearer: []
+        - dashboardSession: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
         - $ref: '#/components/parameters/ApplicationId'
@@ -325,6 +393,8 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -344,6 +414,7 @@ paths:
       summary: Create or rotate a protected provider credential package
       security:
         - adminBearer: []
+        - dashboardSession: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
         - $ref: '#/components/parameters/ApplicationId'
@@ -365,6 +436,8 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -384,6 +457,7 @@ paths:
       summary: Create or rotate a signed outbound webhook endpoint
       security:
         - adminBearer: []
+        - dashboardSession: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
         - $ref: '#/components/parameters/ApplicationId'
@@ -404,6 +478,8 @@ paths:
           $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -690,6 +766,11 @@ components:
       scheme: bearer
       bearerFormat: opaque-admin-key
       description: Bootstrap or stored administrator bearer.
+    dashboardSession:
+      type: apiKey
+      in: cookie
+      name: __Secure-iapstack_admin
+      description: Protected 12-hour dashboard session cookie with same-origin mutation checks.
     applicationBearer:
       type: http
       scheme: bearer
@@ -787,6 +868,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
+    Forbidden:
+      description: Cookie-authenticated dashboard mutation failed same-origin verification
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
     NotFound:
       description: Resource was not found in the authenticated scope
       content:
@@ -861,6 +948,14 @@ components:
           type: string
           minLength: 1
           description: Returned once and never retrievable after this response.
+    DashboardSession:
+      type: object
+      additionalProperties: false
+      required: [expires_at]
+      properties:
+        expires_at:
+          type: string
+          format: date-time
     ApiKeyCollection:
       type: object
       additionalProperties: false
