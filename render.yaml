@@ -24,6 +24,24 @@ services:
         sync: false
       - fromGroup: iapstack-sandbox-runtime
 
+  - type: web
+    name: iapstack-sandbox-webhook-receiver
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: /usr/local/bin/iapstack-webhook-receiver
+    healthCheckPath: /readyz
+    autoDeployTrigger: "off"
+    envVars:
+      - key: IAPSTACK_WEBHOOK_RECEIVER_DATABASE_URL
+        fromDatabase:
+          name: iapstack-sandbox-postgres
+          property: connectionString
+      - key: IAPSTACK_WEBHOOK_RECEIVER_SECRET
+        sync: false
+
 databases:
   - name: iapstack-sandbox-postgres
     plan: free
