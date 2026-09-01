@@ -1523,10 +1523,12 @@ components:
     AdminProjectOverview:
       type: object
       additionalProperties: false
-      required: [project, applications, products, customers, recent_transactions, queues, recent_webhook_events]
+      required: [project, analytics, applications, products, customers, recent_transactions, queues, recent_webhook_events]
       properties:
         project:
           $ref: '#/components/schemas/AdminProject'
+        analytics:
+          $ref: '#/components/schemas/AdminAnalytics'
         applications:
           type: array
           maxItems: 200
@@ -1556,6 +1558,103 @@ components:
           maxItems: 50
           items:
             $ref: '#/components/schemas/AdminWebhookEvent'
+    AdminAnalytics:
+      type: object
+      additionalProperties: false
+      required: [window_days, generated_at, verified_count, allowed_count, denied_count, unresolved_count, reversed_count, active_entitlement_count, revenue, daily_activity]
+      properties:
+        window_days:
+          type: integer
+          minimum: 30
+          maximum: 30
+        generated_at:
+          type: string
+          format: date-time
+        verified_count:
+          type: integer
+          format: int64
+          minimum: 0
+        allowed_count:
+          type: integer
+          format: int64
+          minimum: 0
+        denied_count:
+          type: integer
+          format: int64
+          minimum: 0
+        unresolved_count:
+          type: integer
+          format: int64
+          minimum: 0
+        reversed_count:
+          type: integer
+          format: int64
+          minimum: 0
+        active_entitlement_count:
+          type: integer
+          format: int64
+          minimum: 0
+        revenue:
+          $ref: '#/components/schemas/AdminRevenue'
+        daily_activity:
+          type: array
+          minItems: 30
+          maxItems: 30
+          items:
+            $ref: '#/components/schemas/AdminDailyActivity'
+    AdminRevenue:
+      type: object
+      additionalProperties: false
+      required: [status, recognized_minor_units, currency, production_application_count, test_application_count]
+      properties:
+        status:
+          type: string
+          enum: [sandbox_only, store_reports_required, no_applications]
+        recognized_minor_units:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          nullable: true
+        production_application_count:
+          type: integer
+          format: int64
+          minimum: 0
+        test_application_count:
+          type: integer
+          format: int64
+          minimum: 0
+    AdminDailyActivity:
+      type: object
+      additionalProperties: false
+      required: [date, verified, allowed, denied, unresolved, reversed]
+      properties:
+        date:
+          type: string
+          format: date
+        verified:
+          type: integer
+          format: int64
+          minimum: 0
+        allowed:
+          type: integer
+          format: int64
+          minimum: 0
+        denied:
+          type: integer
+          format: int64
+          minimum: 0
+        unresolved:
+          type: integer
+          format: int64
+          minimum: 0
+        reversed:
+          type: integer
+          format: int64
+          minimum: 0
     AdminApplication:
       type: object
       additionalProperties: false

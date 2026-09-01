@@ -121,13 +121,19 @@ cookie mutations additionally require the same-origin browser marker and `Origin
 The initial dashboard uses two bounded, read-only administrator contracts:
 
 - `GET /v1/admin/projects` lists up to 200 projects with application, customer, and product counts.
-- `GET /v1/admin/projects/{project_id}/overview` returns up to 200 applications, products, and customers plus the 50 most recent normalized purchase observations and webhook delivery outcomes.
+- `GET /v1/admin/projects/{project_id}/overview` returns up to 200 applications, products, and customers plus the 50 most recent normalized purchase observations and webhook delivery outcomes. It also returns a fixed 30-day UTC verification-activity series, active-entitlement count, and an explicit revenue-availability status.
 
 The overview also includes aggregate pending, completed, and failed counts for the
 inbox, reconciliation, and outbox queues. These responses deliberately omit API key
 verifiers, credential payloads, ciphertext, fingerprints, provider references,
 purchase evidence, and webhook bodies. Unknown project scopes return the same
 `not_found` envelope used by other scoped resources.
+
+Verification activity is operational data, not a financial ledger. Sandbox-only
+projects report zero real revenue. Projects with production applications report
+`store_reports_required` until authoritative Apple, Google Play, or Huawei financial
+reports are ingested; the API never estimates revenue from client product prices or
+purchase counts.
 
 Application summaries expose only `credential_revision` and `webhook_revision` for
 optimistic dashboard updates. A zero revision means the corresponding configuration

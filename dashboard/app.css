@@ -682,6 +682,7 @@ button[type="submit"]:disabled::before {
 .topbar h1,
 .panel h2,
 .signal-line h2,
+.commerce-heading h2,
 .setup-dialog h2,
 .management-heading h3 {
   font-family: var(--font-data);
@@ -740,6 +741,7 @@ button[type="submit"]:disabled::before {
 
 .signal-line,
 .panel,
+.commerce-panel,
 .metric-grid article {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -875,6 +877,289 @@ button[type="submit"]:disabled::before {
   line-height: 1.45;
   max-width: 120px;
   text-align: right;
+}
+
+.commerce-panel {
+  margin-bottom: 12px;
+  overflow: hidden;
+  position: relative;
+}
+
+.commerce-panel::before {
+  background: var(--primary);
+  content: "";
+  height: 2px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+
+.commerce-heading {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  min-height: 72px;
+  padding: 16px 18px 14px;
+}
+
+.commerce-heading h2 {
+  font-size: 20px;
+}
+
+.commerce-window {
+  background: var(--primary-soft);
+  border: 1px solid rgba(110, 168, 254, 0.24);
+  border-radius: 999px;
+  color: #a9caff;
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 6px 9px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.commerce-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 8fr) minmax(280px, 4fr);
+}
+
+.activity-pane {
+  min-width: 0;
+  padding: 16px 18px 14px;
+}
+
+.activity-vitals {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 14px;
+}
+
+.activity-vitals > span {
+  border-left: 2px solid var(--border-strong);
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding-left: 10px;
+}
+
+.activity-vitals > span:first-child {
+  border-left-color: var(--primary);
+}
+
+.activity-vitals small {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.activity-vitals strong {
+  font-family: var(--font-data);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.activity-figure {
+  margin: 0;
+}
+
+.activity-chart {
+  height: auto;
+  max-height: 230px;
+  overflow: visible;
+  width: 100%;
+}
+
+.activity-chart .chart-grid-line {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.activity-chart .chart-axis-label {
+  fill: var(--muted);
+  font-family: var(--font-data);
+  font-size: 10px;
+}
+
+.activity-chart .chart-bar {
+  transition: opacity var(--duration-fast) linear;
+}
+
+.activity-chart .chart-bar:hover {
+  opacity: 0.76;
+}
+
+.activity-chart .chart-bar-allowed {
+  fill: var(--accent);
+}
+
+.activity-chart .chart-bar-denied {
+  fill: var(--danger);
+}
+
+.activity-chart .chart-bar-unresolved {
+  fill: var(--warning);
+}
+
+.activity-chart .chart-empty-label {
+  fill: var(--muted);
+  font-family: var(--font-data);
+  font-size: 12px;
+}
+
+.activity-figure figcaption {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-family: var(--font-data);
+  font-size: 10px;
+  gap: 12px;
+  margin-top: 3px;
+}
+
+.chart-legend {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+}
+
+.chart-legend i {
+  background: var(--muted);
+  border-radius: 2px;
+  height: 7px;
+  width: 7px;
+}
+
+.chart-legend i.allowed {
+  background: var(--accent);
+}
+
+.chart-legend i.denied {
+  background: var(--danger);
+}
+
+.chart-legend i.unresolved {
+  background: var(--warning);
+}
+
+.chart-caption {
+  margin-left: auto;
+}
+
+.revenue-card {
+  background: var(--surface-raised);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 18px;
+}
+
+.revenue-card-top {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.revenue-badge {
+  background: var(--accent-soft);
+  border: 1px solid rgba(53, 208, 127, 0.28);
+  border-radius: 999px;
+  color: #78e4a9;
+  font-family: var(--font-data);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 5px 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.revenue-badge.reports-required {
+  background: var(--warning-soft);
+  border-color: rgba(246, 185, 74, 0.28);
+  color: var(--warning);
+}
+
+.revenue-badge.no-applications {
+  background: var(--primary-soft);
+  border-color: rgba(110, 168, 254, 0.24);
+  color: #a9caff;
+}
+
+.revenue-number {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 28px 0 8px;
+}
+
+.revenue-number strong {
+  font-family: var(--font-data);
+  font-size: clamp(42px, 5vw, 68px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: -0.07em;
+  line-height: 0.9;
+}
+
+.revenue-number span {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.revenue-card h3 {
+  font-family: var(--font-data);
+  font-size: 14px;
+  margin: 4px 0 7px;
+}
+
+.revenue-card > p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0 0 24px;
+}
+
+.revenue-scope {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: auto 0 0;
+  padding-top: 13px;
+}
+
+.revenue-scope div {
+  display: grid;
+  gap: 4px;
+}
+
+.revenue-scope dt {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.revenue-scope dd {
+  font-family: var(--font-data);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
 }
 
 .dashboard-grid {
@@ -1768,6 +2053,15 @@ td strong {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .commerce-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .revenue-card {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+
   .application-grid,
   .side-stack,
   .split-grid,
@@ -1901,6 +2195,29 @@ td strong {
 
   .metric-grid article {
     min-height: 92px;
+  }
+
+  .commerce-heading {
+    align-items: flex-start;
+    padding-inline: 14px;
+  }
+
+  .activity-pane,
+  .revenue-card {
+    padding-inline: 14px;
+  }
+
+  .activity-vitals small {
+    font-size: 9px;
+  }
+
+  .activity-vitals strong {
+    font-size: 18px;
+  }
+
+  .chart-caption {
+    flex-basis: 100%;
+    margin-left: 0;
   }
 
   .panel {

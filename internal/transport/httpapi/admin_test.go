@@ -40,6 +40,26 @@ type keyLifecycleTransaction struct {
 	store *keyLifecycleStore
 }
 
+// fakeAdminAnalytics returns one complete fixed-size dashboard activity window.
+func fakeAdminAnalytics() persistence.AdminAnalytics {
+	generatedAt := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	zero := int64(0)
+	activity := make([]persistence.AdminDailyActivity, 0, 30)
+	for offset := 29; offset >= 0; offset-- {
+		activity = append(activity, persistence.AdminDailyActivity{
+			Date: generatedAt.AddDate(0, 0, -offset).Format(time.DateOnly),
+		})
+	}
+	return persistence.AdminAnalytics{
+		WindowDays: 30, GeneratedAt: generatedAt,
+		Revenue: persistence.AdminRevenue{
+			Status: persistence.AdminRevenueSandboxOnly, RecognizedMinorUnits: &zero,
+			TestApplicationCount: 1,
+		},
+		DailyActivity: activity,
+	}
+}
+
 // AdminProjects returns one deterministic dashboard project.
 func (fakeAdminQueryStore) AdminProjects(context.Context) ([]persistence.AdminProject, error) {
 	return []persistence.AdminProject{{
@@ -55,6 +75,7 @@ func (fakeAdminQueryStore) AdminProjectOverview(
 ) (persistence.AdminProjectOverview, error) {
 	return persistence.AdminProjectOverview{
 		Project:      persistence.AdminProject{ID: projectID, CreatedAt: time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)},
+		Analytics:    fakeAdminAnalytics(),
 		Applications: []persistence.AdminApplication{}, Products: []persistence.AdminProduct{},
 		Customers: []persistence.AdminCustomer{}, RecentTransactions: []persistence.AdminTransaction{},
 		Queues: []persistence.AdminQueue{}, RecentWebhookEvents: []persistence.AdminWebhookEvent{},
@@ -355,7 +376,8 @@ func TestAdminOverviewSerializesEmptyCollections(t *testing.T) {
 	t.Parallel()
 
 	overview := adminOverviewFromRecord(persistence.AdminProjectOverview{
-		Project: persistence.AdminProject{ID: "project-1", CreatedAt: time.Now().UTC()},
+		Project:   persistence.AdminProject{ID: "project-1", CreatedAt: time.Now().UTC()},
+		Analytics: fakeAdminAnalytics(),
 		Applications: []persistence.AdminApplication{{
 			ID: "application-1", CredentialConfigured: true, CredentialRevision: 3,
 			WebhookConfigured: true, WebhookRevision: 2,
@@ -370,6 +392,7 @@ func TestAdminOverviewSerializesEmptyCollections(t *testing.T) {
 	for _, field := range []string{
 		`"credential_revision":3`, `"webhook_revision":2`, `"products":[]`, `"customers":[]`,
 		`"recent_transactions":[]`, `"queues":[]`, `"recent_webhook_events":[]`,
+		`"status":"sandbox_only"`, `"recognized_minor_units":0`, `"daily_activity":[`,
 	} {
 		if !strings.Contains(string(payload), field) {
 			t.Fatalf("overview JSON = %s, want %s", payload, field)

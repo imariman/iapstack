@@ -109,7 +109,11 @@ over plaintext outside local development.
 
 The project overview shows application credential/webhook coverage, catalog mappings,
 customer access counts, recent normalized purchase observations, queue outcomes, and
-webhook delivery metadata. It never renders protected provider payloads or secrets.
+webhook delivery metadata. Its commerce panel charts the last 30 UTC days of verified
+access outcomes and shows whether authoritative revenue can be calculated. Sandbox
+projects correctly show zero real revenue; production projects require official store
+financial reports and never receive a client-price estimate. It never renders protected
+provider payloads or secrets.
 The access-key workspace lists active and revoked administrator/application key
 metadata, identifies the current stored key, creates one-time administrator bearers,
 and requires explicit confirmation before revocation.

@@ -197,6 +197,49 @@ func TestDashboardProfessionalUIControls(t *testing.T) {
 	}
 }
 
+// TestDashboardRendersTruthfulCommerceAnalytics keeps charts separate from untrusted client pricing.
+func TestDashboardRendersTruthfulCommerceAnalytics(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	styles, err := fs.ReadFile(assets, "app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	for _, required := range []string{
+		`id="activity-chart"`, `id="revenue-value"`, "Recognized store revenue", "Daily verification outcomes",
+	} {
+		if !strings.Contains(string(document), required) {
+			t.Fatalf("dashboard commerce panel does not contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		"renderActivityChart", "store_reports_required", "Test purchases never create real store revenue",
+		`document.createElementNS("http://www.w3.org/2000/svg"`,
+	} {
+		if !strings.Contains(string(script), required) {
+			t.Fatalf("dashboard analytics renderer does not contain %q", required)
+		}
+	}
+	for _, forbidden := range []string{"rawPrice", "raw_price", "estimated revenue"} {
+		if strings.Contains(string(script), forbidden) {
+			t.Fatalf("dashboard analytics must not derive revenue from %q", forbidden)
+		}
+	}
+	for _, required := range []string{".commerce-panel", ".activity-chart", ".revenue-badge.reports-required"} {
+		if !strings.Contains(string(styles), required) {
+			t.Fatalf("dashboard analytics styles do not contain %q", required)
+		}
+	}
+}
+
 // TestHandlerRedirectsAndDelegates verifies the canonical entrypoint and API fallthrough.
 func TestHandlerRedirectsAndDelegates(t *testing.T) {
 	t.Parallel()

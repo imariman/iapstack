@@ -251,6 +251,7 @@ function renderEmptyWorkspace() {
   setText("metric-customers", "0");
   setText("metric-products", "0");
   setText("metric-pending", "0");
+  renderAnalytics(emptyAnalytics());
   for (const id of ["application-grid", "product-list", "queue-list"]) {
     const container = document.querySelector(`#${id}`);
     container.replaceChildren(node("p", "empty-state", "This section will populate after you create a project."));
@@ -280,13 +281,15 @@ function renderOverview() {
   setText("metric-pending", pending);
   setText("metric-pending-note", failed ? countLabel(failed, "terminal failure") : "No terminal failures");
 
+  renderAnalytics(overview.analytics);
+
   setText("signal-store", `${configured}/${overview.applications.length} ready`);
-  setText("signal-verify", countLabel(overview.recent_transactions.length, "recent record"));
-  setText("signal-access", `${allowed} allowed`);
+  setText("signal-verify", countLabel(overview.analytics.verified_count, "30-day event"));
+  setText("signal-access", `${overview.analytics.active_entitlement_count} active`);
   setText("signal-deliver", `${delivered} delivered`);
   setSignalWarning("store", configured !== overview.applications.length);
   setSignalWarning("verify", failed > 0);
-  setSignalWarning("access", overview.recent_transactions.some((item) => item.access === "unresolved"));
+  setSignalWarning("access", overview.analytics.unresolved_count > 0);
   setSignalWarning("deliver", overview.recent_webhook_events.some((event) => event.status === "failed"));
 
   renderApplications(overview.applications);
@@ -295,6 +298,190 @@ function renderOverview() {
   renderTransactions(overview.recent_transactions);
   renderCustomers(overview.customers);
   renderWebhooks(overview.recent_webhook_events);
+}
+
+function emptyAnalytics() {
+  const today = new Date();
+  const dailyActivity = [];
+  for (let offset = 29; offset >= 0; offset -= 1) {
+    const day = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - offset));
+    dailyActivity.push({
+      date: day.toISOString().slice(0, 10),
+      verified: 0,
+      allowed: 0,
+      denied: 0,
+      unresolved: 0,
+      reversed: 0,
+    });
+  }
+  return {
+    window_days: 30,
+    verified_count: 0,
+    active_entitlement_count: 0,
+    reversed_count: 0,
+    daily_activity: dailyActivity,
+    revenue: {
+      status: "no_applications",
+      recognized_minor_units: 0,
+      currency: null,
+      production_application_count: 0,
+      test_application_count: 0,
+    },
+  };
+}
+
+function renderAnalytics(analytics = emptyAnalytics()) {
+  setText("analytics-window", `UTC · ${analytics.window_days || 30} days`);
+  setText("analytics-verified", formatNumber(analytics.verified_count));
+  setText("analytics-active", formatNumber(analytics.active_entitlement_count));
+  setText("analytics-reversed", formatNumber(analytics.reversed_count));
+  renderRevenue(analytics.revenue || emptyAnalytics().revenue);
+  renderActivityChart(analytics.daily_activity || []);
+}
+
+function renderRevenue(revenue) {
+  const badge = document.querySelector("#revenue-status");
+  badge.className = "revenue-badge";
+  setText("revenue-production-apps", formatNumber(revenue.production_application_count));
+  setText("revenue-test-apps", formatNumber(revenue.test_application_count));
+
+  if (revenue.status === "store_reports_required") {
+    badge.textContent = "Reports required";
+    badge.classList.add("reports-required");
+    setText("revenue-value", "—");
+    setText("revenue-currency", "not calculated");
+    setText(
+      "revenue-note",
+      "Official store financial reports are required to calculate proceeds, refunds, tax, and commission.",
+    );
+    return;
+  }
+
+  if (revenue.status === "no_applications") {
+    badge.textContent = "No applications";
+    badge.classList.add("no-applications");
+    setText("revenue-value", "0");
+    setText("revenue-currency", "real revenue");
+    setText("revenue-note", "Add an application to start verification activity.");
+    return;
+  }
+
+  badge.textContent = "Sandbox only";
+  setText("revenue-value", formatRevenue(revenue.recognized_minor_units, revenue.currency));
+  setText("revenue-currency", revenue.currency || "real revenue");
+  setText("revenue-note", "Test purchases never create real store revenue.");
+}
+
+function renderActivityChart(activity) {
+  const chart = document.querySelector("#activity-chart");
+  chart.replaceChildren();
+  const width = 760;
+  const top = 10;
+  const right = 8;
+  const bottom = 30;
+  const left = 34;
+  const plotWidth = width - left - right;
+  const plotHeight = 220 - top - bottom;
+  const baseline = top + plotHeight;
+  const maximum = Math.max(1, ...activity.map((day) => Number(day.verified || 0)));
+  const verified = activity.reduce((total, day) => total + Number(day.verified || 0), 0);
+  const denied = activity.reduce((total, day) => total + Number(day.denied || 0), 0);
+  const unresolved = activity.reduce((total, day) => total + Number(day.unresolved || 0), 0);
+  chart.setAttribute(
+    "aria-label",
+    `${verified} verified events in ${activity.length || 30} days: ${denied} denied and ${unresolved} unresolved.`,
+  );
+
+  const ticks = [...new Set([maximum, Math.ceil(maximum / 2), 0])];
+  for (const tick of ticks) {
+    const y = baseline - (tick / maximum) * plotHeight;
+    chart.append(
+      svgNode("line", { class: "chart-grid-line", x1: left, x2: width - right, y1: y, y2: y }),
+      svgNode("text", { class: "chart-axis-label", x: left - 7, y: y + 3, "text-anchor": "end" }, tick),
+    );
+  }
+
+  if (!verified) {
+    chart.append(svgNode(
+      "text",
+      { class: "chart-empty-label", x: left + plotWidth / 2, y: top + plotHeight / 2, "text-anchor": "middle" },
+      "No verification activity in this window",
+    ));
+  }
+
+  const slotWidth = activity.length ? plotWidth / activity.length : plotWidth;
+  const barWidth = Math.max(3, Math.min(14, slotWidth * 0.62));
+  activity.forEach((day, index) => {
+    const x = left + index * slotWidth + (slotWidth - barWidth) / 2;
+    let stackedHeight = 0;
+    for (const [key, className] of [
+      ["allowed", "chart-bar-allowed"],
+      ["denied", "chart-bar-denied"],
+      ["unresolved", "chart-bar-unresolved"],
+    ]) {
+      const value = Number(day[key] || 0);
+      if (!value) continue;
+      const height = (value / maximum) * plotHeight;
+      const bar = svgNode("rect", {
+        class: `chart-bar ${className}`,
+        x,
+        y: baseline - stackedHeight - height,
+        width: barWidth,
+        height,
+        rx: 2,
+      });
+      bar.append(svgNode(
+        "title",
+        {},
+        `${formatChartDate(day.date)}: ${day.verified} verified, ${day.allowed} allowed, ${day.denied} denied, ${day.unresolved} unresolved`,
+      ));
+      chart.append(bar);
+      stackedHeight += height;
+    }
+
+    if (index === 0 || index === activity.length - 1 || index % 7 === 0) {
+      chart.append(svgNode(
+        "text",
+        { class: "chart-axis-label", x: x + barWidth / 2, y: baseline + 19, "text-anchor": "middle" },
+        formatChartDate(day.date),
+      ));
+    }
+  });
+}
+
+function svgNode(tag, attributes = {}, text = "") {
+  const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [name, value] of Object.entries(attributes)) {
+    element.setAttribute(name, String(value));
+  }
+  if (text !== "") element.textContent = String(text);
+  return element;
+}
+
+function formatChartDate(value) {
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.valueOf())) return "—";
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  }).format(date);
+}
+
+function formatRevenue(minorUnits, currency) {
+  if (minorUnits === null || minorUnits === undefined) return "—";
+  if (!currency) return formatNumber(minorUnits);
+  try {
+    const formatter = new Intl.NumberFormat("en", { style: "currency", currency });
+    const digits = formatter.resolvedOptions().maximumFractionDigits;
+    return formatter.format(Number(minorUnits) / (10 ** digits));
+  } catch (_) {
+    return `${formatNumber(minorUnits)} ${currency}`;
+  }
+}
+
+function formatNumber(value) {
+  return new Intl.NumberFormat("en").format(Number(value || 0));
 }
 
 function renderApplications(applications) {

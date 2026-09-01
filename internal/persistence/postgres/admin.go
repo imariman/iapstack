@@ -15,6 +15,8 @@ const (
 	adminCollectionLimit = 200
 	// adminActivityLimit bounds recent transaction and delivery datasets.
 	adminActivityLimit = 50
+	// adminAnalyticsWindowDays bounds dashboard activity to a fixed UTC window.
+	adminAnalyticsWindowDays = 30
 )
 
 var (
@@ -95,6 +97,10 @@ func (repository *transaction) adminProjectOverview(
 	if err != nil {
 		return persistence.AdminProjectOverview{}, err
 	}
+	analytics, err := repository.adminAnalytics(ctx, projectID)
+	if err != nil {
+		return persistence.AdminProjectOverview{}, err
+	}
 	applications, err := repository.adminApplications(ctx, projectID)
 	if err != nil {
 		return persistence.AdminProjectOverview{}, err
@@ -120,7 +126,7 @@ func (repository *transaction) adminProjectOverview(
 		return persistence.AdminProjectOverview{}, err
 	}
 	return persistence.AdminProjectOverview{
-		Project: project, Applications: applications, Products: products,
+		Project: project, Analytics: analytics, Applications: applications, Products: products,
 		Customers: customers, RecentTransactions: transactions, Queues: queues,
 		RecentWebhookEvents: webhookEvents,
 	}, nil
@@ -150,6 +156,143 @@ func (repository *transaction) adminProject(
 		return persistence.AdminProject{}, classifyError("load admin project", err)
 	}
 	return project, nil
+}
+
+// adminAnalytics loads a fixed 30-day UTC activity series and authoritative revenue state.
+func (repository *transaction) adminAnalytics(
+	ctx context.Context,
+	projectID core.ProjectID,
+) (persistence.AdminAnalytics, error) {
+	analytics := persistence.AdminAnalytics{WindowDays: adminAnalyticsWindowDays}
+	err := repository.tx.QueryRow(ctx, `
+		WITH bounds AS (
+			SELECT CURRENT_TIMESTAMP AS generated_at,
+				(date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+					- ($2::integer - 1) * INTERVAL '1 day' AS window_start,
+				(date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+					+ INTERVAL '1 day' AS window_end
+		), application_counts AS (
+			SELECT count(*) FILTER (WHERE environment = 'production') AS production_count,
+				count(*) FILTER (WHERE environment IN ('sandbox', 'test')) AS test_count
+			FROM applications
+			WHERE project_id = $1
+		), entitlement_counts AS (
+			SELECT count(*) AS active_count
+			FROM customer_entitlements, bounds
+			WHERE project_id = $1
+				AND access_status = 'allowed'
+				AND effective_starts_at <= bounds.generated_at
+				AND (effective_ends_at IS NULL OR effective_ends_at > bounds.generated_at)
+		), observations AS (
+			SELECT observation.id, observation.access_status, observation.lifecycle_state
+			FROM purchase_observations AS observation, bounds
+			WHERE observation.project_id = $1
+				AND observation.observed_at >= bounds.window_start
+				AND observation.observed_at < bounds.window_end
+		)
+		SELECT bounds.generated_at,
+			application_counts.production_count,
+			application_counts.test_count,
+			entitlement_counts.active_count,
+			count(observations.id),
+			count(observations.id) FILTER (WHERE observations.access_status = 'allowed'),
+			count(observations.id) FILTER (WHERE observations.access_status = 'denied'),
+			count(observations.id) FILTER (WHERE observations.access_status = 'unresolved'),
+			count(observations.id) FILTER (WHERE observations.lifecycle_state IN ('refunded', 'revoked'))
+		FROM bounds
+		CROSS JOIN application_counts
+		CROSS JOIN entitlement_counts
+		LEFT JOIN observations ON true
+		GROUP BY bounds.generated_at, application_counts.production_count,
+			application_counts.test_count, entitlement_counts.active_count
+	`, projectID, adminAnalyticsWindowDays).Scan(
+		&analytics.GeneratedAt,
+		&analytics.Revenue.ProductionApplicationCount,
+		&analytics.Revenue.TestApplicationCount,
+		&analytics.ActiveEntitlementCount,
+		&analytics.VerifiedCount,
+		&analytics.AllowedCount,
+		&analytics.DeniedCount,
+		&analytics.UnresolvedCount,
+		&analytics.ReversedCount,
+	)
+	if err != nil {
+		return persistence.AdminAnalytics{}, classifyError("load admin analytics", err)
+	}
+
+	zero := int64(0)
+	switch {
+	case analytics.Revenue.ProductionApplicationCount > 0:
+		analytics.Revenue.Status = persistence.AdminRevenueStoreReportsRequired
+	case analytics.Revenue.TestApplicationCount > 0:
+		analytics.Revenue.Status = persistence.AdminRevenueSandboxOnly
+		analytics.Revenue.RecognizedMinorUnits = &zero
+	default:
+		analytics.Revenue.Status = persistence.AdminRevenueNoApplications
+		analytics.Revenue.RecognizedMinorUnits = &zero
+	}
+
+	dailyActivity, err := repository.adminDailyActivity(ctx, projectID)
+	if err != nil {
+		return persistence.AdminAnalytics{}, err
+	}
+	analytics.DailyActivity = dailyActivity
+	return analytics, nil
+}
+
+// adminDailyActivity returns one zero-filled bucket for every UTC day in the analytics window.
+func (repository *transaction) adminDailyActivity(
+	ctx context.Context,
+	projectID core.ProjectID,
+) ([]persistence.AdminDailyActivity, error) {
+	rows, err := repository.tx.Query(ctx, `
+		WITH bounds AS (
+			SELECT (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+					- ($2::integer - 1) * INTERVAL '1 day' AS window_start,
+				(date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') AS window_end
+		), days AS (
+			SELECT generate_series(bounds.window_start, bounds.window_end, INTERVAL '1 day') AS day
+			FROM bounds
+		), activity AS (
+			SELECT date_trunc('day', observation.observed_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS day,
+				count(*) AS verified,
+				count(*) FILTER (WHERE observation.access_status = 'allowed') AS allowed,
+				count(*) FILTER (WHERE observation.access_status = 'denied') AS denied,
+				count(*) FILTER (WHERE observation.access_status = 'unresolved') AS unresolved,
+				count(*) FILTER (WHERE observation.lifecycle_state IN ('refunded', 'revoked')) AS reversed
+			FROM purchase_observations AS observation, bounds
+			WHERE observation.project_id = $1
+				AND observation.observed_at >= bounds.window_start
+				AND observation.observed_at < bounds.window_end + INTERVAL '1 day'
+			GROUP BY day
+		)
+		SELECT to_char(days.day AT TIME ZONE 'UTC', 'YYYY-MM-DD'),
+			COALESCE(activity.verified, 0), COALESCE(activity.allowed, 0),
+			COALESCE(activity.denied, 0), COALESCE(activity.unresolved, 0),
+			COALESCE(activity.reversed, 0)
+		FROM days
+		LEFT JOIN activity ON activity.day = days.day
+		ORDER BY days.day
+	`, projectID, adminAnalyticsWindowDays)
+	if err != nil {
+		return nil, classifyError("list admin daily activity", err)
+	}
+	defer rows.Close()
+
+	activity := make([]persistence.AdminDailyActivity, 0, adminAnalyticsWindowDays)
+	for rows.Next() {
+		var day persistence.AdminDailyActivity
+		if err := rows.Scan(
+			&day.Date, &day.Verified, &day.Allowed, &day.Denied, &day.Unresolved, &day.Reversed,
+		); err != nil {
+			return nil, classifyError("scan admin daily activity", err)
+		}
+		activity = append(activity, day)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, classifyError("iterate admin daily activity", err)
+	}
+	return activity, nil
 }
 
 // adminApplications loads provider scope and safe configuration coverage.

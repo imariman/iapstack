@@ -25,12 +25,46 @@ type adminProjectResponse struct {
 // adminOverviewResponse contains secret-free operational datasets for one project.
 type adminOverviewResponse struct {
 	Project             adminProjectResponse        `json:"project"`
+	Analytics           adminAnalyticsResponse      `json:"analytics"`
 	Applications        []adminApplicationResponse  `json:"applications"`
 	Products            []adminProductResponse      `json:"products"`
 	Customers           []adminCustomerResponse     `json:"customers"`
 	RecentTransactions  []adminTransactionResponse  `json:"recent_transactions"`
 	Queues              []adminQueueResponse        `json:"queues"`
 	RecentWebhookEvents []adminWebhookEventResponse `json:"recent_webhook_events"`
+}
+
+// adminAnalyticsResponse contains bounded verification activity and revenue availability.
+type adminAnalyticsResponse struct {
+	WindowDays             int                          `json:"window_days"`
+	GeneratedAt            time.Time                    `json:"generated_at"`
+	VerifiedCount          int64                        `json:"verified_count"`
+	AllowedCount           int64                        `json:"allowed_count"`
+	DeniedCount            int64                        `json:"denied_count"`
+	UnresolvedCount        int64                        `json:"unresolved_count"`
+	ReversedCount          int64                        `json:"reversed_count"`
+	ActiveEntitlementCount int64                        `json:"active_entitlement_count"`
+	Revenue                adminRevenueResponse         `json:"revenue"`
+	DailyActivity          []adminDailyActivityResponse `json:"daily_activity"`
+}
+
+// adminRevenueResponse reports authoritative recognized revenue or why it is unavailable.
+type adminRevenueResponse struct {
+	Status                     persistence.AdminRevenueStatus `json:"status"`
+	RecognizedMinorUnits       *int64                         `json:"recognized_minor_units"`
+	Currency                   *string                        `json:"currency"`
+	ProductionApplicationCount int64                          `json:"production_application_count"`
+	TestApplicationCount       int64                          `json:"test_application_count"`
+}
+
+// adminDailyActivityResponse contains one UTC day of normalized outcomes.
+type adminDailyActivityResponse struct {
+	Date       string `json:"date"`
+	Verified   int64  `json:"verified"`
+	Allowed    int64  `json:"allowed"`
+	Denied     int64  `json:"denied"`
+	Unresolved int64  `json:"unresolved"`
+	Reversed   int64  `json:"reversed"`
 }
 
 // adminApplicationResponse reports provider scope and safe setup coverage.
@@ -150,6 +184,7 @@ func adminProjectFromRecord(project persistence.AdminProject) adminProjectRespon
 func adminOverviewFromRecord(overview persistence.AdminProjectOverview) adminOverviewResponse {
 	response := adminOverviewResponse{
 		Project:             adminProjectFromRecord(overview.Project),
+		Analytics:           adminAnalyticsFromRecord(overview.Analytics),
 		Applications:        make([]adminApplicationResponse, 0, len(overview.Applications)),
 		Products:            make([]adminProductResponse, 0, len(overview.Products)),
 		Customers:           make([]adminCustomerResponse, 0, len(overview.Customers)),
@@ -201,6 +236,32 @@ func adminOverviewFromRecord(overview persistence.AdminProjectOverview) adminOve
 			ID: event.ID, ApplicationID: event.ApplicationID, EventType: event.EventType,
 			AggregateID: event.AggregateID, Status: event.Status, ErrorCode: event.ErrorCode,
 			OccurredAt: event.OccurredAt, DeliveredAt: event.DeliveredAt, FailedAt: event.FailedAt,
+		})
+	}
+	return response
+}
+
+// adminAnalyticsFromRecord maps the bounded analytics projection onto the public contract.
+func adminAnalyticsFromRecord(analytics persistence.AdminAnalytics) adminAnalyticsResponse {
+	response := adminAnalyticsResponse{
+		WindowDays: analytics.WindowDays, GeneratedAt: analytics.GeneratedAt,
+		VerifiedCount: analytics.VerifiedCount, AllowedCount: analytics.AllowedCount,
+		DeniedCount: analytics.DeniedCount, UnresolvedCount: analytics.UnresolvedCount,
+		ReversedCount:          analytics.ReversedCount,
+		ActiveEntitlementCount: analytics.ActiveEntitlementCount,
+		Revenue: adminRevenueResponse{
+			Status:                     analytics.Revenue.Status,
+			RecognizedMinorUnits:       analytics.Revenue.RecognizedMinorUnits,
+			Currency:                   analytics.Revenue.Currency,
+			ProductionApplicationCount: analytics.Revenue.ProductionApplicationCount,
+			TestApplicationCount:       analytics.Revenue.TestApplicationCount,
+		},
+		DailyActivity: make([]adminDailyActivityResponse, 0, len(analytics.DailyActivity)),
+	}
+	for _, day := range analytics.DailyActivity {
+		response.DailyActivity = append(response.DailyActivity, adminDailyActivityResponse{
+			Date: day.Date, Verified: day.Verified, Allowed: day.Allowed,
+			Denied: day.Denied, Unresolved: day.Unresolved, Reversed: day.Reversed,
 		})
 	}
 	return response
