@@ -214,7 +214,7 @@ func TestDashboardRendersTruthfulCommerceAnalytics(t *testing.T) {
 		t.Fatalf("read embedded app.js: %v", err)
 	}
 	for _, required := range []string{
-		`id="activity-chart"`, `id="revenue-value"`, "Recognized store revenue", "Daily verification outcomes",
+		`class="activity-chart" id="activity-chart"`, `id="revenue-value"`, "Recognized store revenue", "Daily verification outcomes",
 	} {
 		if !strings.Contains(string(document), required) {
 			t.Fatalf("dashboard commerce panel does not contain %q", required)
@@ -222,7 +222,7 @@ func TestDashboardRendersTruthfulCommerceAnalytics(t *testing.T) {
 	}
 	for _, required := range []string{
 		"renderActivityChart", "store_reports_required", "Test purchases never create real store revenue",
-		`document.createElementNS("http://www.w3.org/2000/svg"`,
+		`document.createElementNS("http://www.w3.org/2000/svg"`, "weeklyTick",
 	} {
 		if !strings.Contains(string(script), required) {
 			t.Fatalf("dashboard analytics renderer does not contain %q", required)

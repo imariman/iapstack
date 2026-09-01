@@ -439,7 +439,9 @@ function renderActivityChart(activity) {
       stackedHeight += height;
     }
 
-    if (index === 0 || index === activity.length - 1 || index % 7 === 0) {
+    const finalDay = index === activity.length - 1;
+    const weeklyTick = index % 7 === 0 && index < activity.length - 2;
+    if (index === 0 || finalDay || weeklyTick) {
       chart.append(svgNode(
         "text",
         { class: "chart-axis-label", x: x + barWidth / 2, y: baseline + 19, "text-anchor": "middle" },
