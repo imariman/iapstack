@@ -96,6 +96,12 @@ type RenewalMode string
 
 type RenewalStatus string
 
+// PurchasePrice is one provider-signed transaction price in thousandths of an ISO 4217 currency unit.
+type PurchasePrice struct {
+	Milliunits int64
+	Currency   string
+}
+
 type Renewal struct {
 	Mode          RenewalMode
 	Status        RenewalStatus
@@ -123,6 +129,7 @@ type PurchaseObservation struct {
 	AccessReason    AccessReason
 	Ownership       Ownership
 	Quantity        uint32
+	Price           *PurchasePrice
 	OccurredAt      time.Time
 	ObservedAt      time.Time
 	EffectivePeriod EffectivePeriod
@@ -173,6 +180,22 @@ func (ownership Ownership) Validate() error {
 	default:
 		return fmt.Errorf("unsupported ownership %q", ownership)
 	}
+}
+
+// Validate checks that one provider-signed transaction price has a non-negative amount and ISO 4217 code.
+func (price PurchasePrice) Validate() error {
+	if price.Milliunits < 0 {
+		return errors.New("purchase price must not be negative")
+	}
+	if len(price.Currency) != 3 {
+		return errors.New("purchase price currency must be a three-letter ISO 4217 code")
+	}
+	for _, character := range price.Currency {
+		if character < 'A' || character > 'Z' {
+			return errors.New("purchase price currency must use uppercase ASCII letters")
+		}
+	}
+	return nil
 }
 
 // Validate checks renewal mode, status, and next-period fields against the product kind.
@@ -239,6 +262,10 @@ func (period EffectivePeriod) Validate() error {
 
 // Validate checks normalized purchase invariants before an observation is persisted.
 func (observation PurchaseObservation) Validate() error {
+	var priceError error
+	if observation.Price != nil {
+		priceError = observation.Price.Validate()
+	}
 	if err := errors.Join(
 		observation.ID.Validate(),
 		observation.ApplicationID.Validate(),
@@ -252,6 +279,7 @@ func (observation PurchaseObservation) Validate() error {
 		observation.Ownership.Validate(),
 		observation.EffectivePeriod.Validate(),
 		observation.Renewal.Validate(observation.ProductKind),
+		priceError,
 	); err != nil {
 		return err
 	}

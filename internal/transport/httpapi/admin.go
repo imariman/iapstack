@@ -45,6 +45,7 @@ type adminAnalyticsResponse struct {
 	ReversedCount          int64                        `json:"reversed_count"`
 	ActiveEntitlementCount int64                        `json:"active_entitlement_count"`
 	Revenue                adminRevenueResponse         `json:"revenue"`
+	SandboxValue           adminSandboxValueResponse    `json:"sandbox_value"`
 	DailyActivity          []adminDailyActivityResponse `json:"daily_activity"`
 }
 
@@ -55,6 +56,19 @@ type adminRevenueResponse struct {
 	Currency                   *string                        `json:"currency"`
 	ProductionApplicationCount int64                          `json:"production_application_count"`
 	TestApplicationCount       int64                          `json:"test_application_count"`
+}
+
+// adminMoneyResponse reports one non-converted provider-signed amount.
+type adminMoneyResponse struct {
+	Milliunits int64  `json:"milliunits"`
+	Currency   string `json:"currency"`
+}
+
+// adminSandboxValueResponse reports non-accounting test transaction value coverage.
+type adminSandboxValueResponse struct {
+	Amounts           []adminMoneyResponse `json:"amounts"`
+	TransactionCount  int64                `json:"transaction_count"`
+	MissingPriceCount int64                `json:"missing_price_count"`
 }
 
 // adminDailyActivityResponse contains one UTC day of normalized outcomes.
@@ -256,7 +270,18 @@ func adminAnalyticsFromRecord(analytics persistence.AdminAnalytics) adminAnalyti
 			ProductionApplicationCount: analytics.Revenue.ProductionApplicationCount,
 			TestApplicationCount:       analytics.Revenue.TestApplicationCount,
 		},
+		SandboxValue: adminSandboxValueResponse{
+			Amounts:           make([]adminMoneyResponse, 0, len(analytics.SandboxValue.Amounts)),
+			TransactionCount:  analytics.SandboxValue.TransactionCount,
+			MissingPriceCount: analytics.SandboxValue.MissingPriceCount,
+		},
 		DailyActivity: make([]adminDailyActivityResponse, 0, len(analytics.DailyActivity)),
+	}
+	for _, amount := range analytics.SandboxValue.Amounts {
+		response.SandboxValue.Amounts = append(response.SandboxValue.Amounts, adminMoneyResponse{
+			Milliunits: amount.Milliunits,
+			Currency:   amount.Currency,
+		})
 	}
 	for _, day := range analytics.DailyActivity {
 		response.DailyActivity = append(response.DailyActivity, adminDailyActivityResponse{

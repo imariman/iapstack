@@ -232,12 +232,96 @@ func (repository *transaction) adminAnalytics(
 		analytics.Revenue.RecognizedMinorUnits = &zero
 	}
 
+	sandboxValue, err := repository.adminSandboxValue(ctx, projectID)
+	if err != nil {
+		return persistence.AdminAnalytics{}, err
+	}
+	analytics.SandboxValue = sandboxValue
+
 	dailyActivity, err := repository.adminDailyActivity(ctx, projectID)
 	if err != nil {
 		return persistence.AdminAnalytics{}, err
 	}
 	analytics.DailyActivity = dailyActivity
 	return analytics, nil
+}
+
+// adminSandboxValue sums the latest non-reversed snapshot of each provider transaction by signed currency.
+func (repository *transaction) adminSandboxValue(
+	ctx context.Context,
+	projectID core.ProjectID,
+) (persistence.AdminSandboxValue, error) {
+	rows, err := repository.tx.Query(ctx, `
+		WITH bounds AS (
+			SELECT (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+					- ($2::integer - 1) * INTERVAL '1 day' AS window_start,
+				(date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+					+ INTERVAL '1 day' AS window_end
+		), latest_transactions AS (
+			SELECT DISTINCT ON (observation.application_id, reference.value_fingerprint)
+				observation.price_milliunits, observation.price_currency,
+				observation.lifecycle_state, observation.ownership
+			FROM purchase_observations AS observation
+			JOIN applications AS application
+				ON application.id = observation.application_id
+				AND application.project_id = observation.project_id
+			JOIN LATERAL (
+				SELECT provider_reference.value_fingerprint
+				FROM observation_references AS observation_reference
+				JOIN provider_references AS provider_reference
+					ON provider_reference.id = observation_reference.reference_id
+					AND provider_reference.application_id = observation_reference.application_id
+				WHERE observation_reference.observation_id = observation.id
+					AND observation_reference.application_id = observation.application_id
+					AND provider_reference.role = 'transaction'
+				ORDER BY provider_reference.kind, provider_reference.value_fingerprint
+				LIMIT 1
+			) AS reference ON true
+			CROSS JOIN bounds
+			WHERE observation.project_id = $1
+				AND application.environment IN ('sandbox', 'test')
+				AND observation.occurred_at >= bounds.window_start
+				AND observation.occurred_at < bounds.window_end
+			ORDER BY observation.application_id, reference.value_fingerprint,
+				observation.observed_at DESC, observation.created_at DESC, observation.id DESC
+		), eligible_transactions AS (
+			SELECT price_milliunits, price_currency
+			FROM latest_transactions
+			WHERE ownership = 'purchased'
+				AND lifecycle_state NOT IN ('pending', 'refunded', 'revoked', 'unresolved')
+		)
+		SELECT price_currency, COALESCE(sum(price_milliunits), 0)::bigint, count(*)::bigint
+		FROM eligible_transactions
+		GROUP BY price_currency
+		ORDER BY price_currency NULLS LAST
+	`, projectID, adminAnalyticsWindowDays)
+	if err != nil {
+		return persistence.AdminSandboxValue{}, classifyError("load admin sandbox value", err)
+	}
+	defer rows.Close()
+
+	value := persistence.AdminSandboxValue{Amounts: make([]persistence.AdminMoney, 0)}
+	for rows.Next() {
+		var currency *string
+		var milliunits int64
+		var count int64
+		if err := rows.Scan(&currency, &milliunits, &count); err != nil {
+			return persistence.AdminSandboxValue{}, classifyError("scan admin sandbox value", err)
+		}
+		if currency == nil {
+			value.MissingPriceCount += count
+			continue
+		}
+		value.TransactionCount += count
+		value.Amounts = append(value.Amounts, persistence.AdminMoney{
+			Milliunits: milliunits,
+			Currency:   *currency,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return persistence.AdminSandboxValue{}, classifyError("iterate admin sandbox value", err)
+	}
+	return value, nil
 }
 
 // adminDailyActivity returns one zero-filled bucket for every UTC day in the analytics window.

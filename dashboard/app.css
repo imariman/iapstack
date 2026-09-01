@@ -1135,6 +1135,61 @@ button[type="submit"]:disabled::before {
   margin: 0 0 24px;
 }
 
+.sandbox-value {
+  position: relative;
+  margin-top: 20px;
+  padding: 18px 0 17px 18px;
+  border-top: 1px solid rgba(155, 170, 190, 0.18);
+  border-bottom: 1px solid rgba(155, 170, 190, 0.18);
+}
+
+.sandbox-value::before {
+  position: absolute;
+  top: 18px;
+  bottom: 17px;
+  left: 0;
+  width: 3px;
+  content: "";
+  background: repeating-linear-gradient(180deg, #77ddc9 0 6px, transparent 6px 10px);
+}
+
+.sandbox-value-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sandbox-value-heading small,
+.sandbox-value-heading span {
+  color: var(--muted);
+  font-size: 0.67rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.sandbox-value-heading h3 {
+  margin-top: 4px;
+}
+
+.sandbox-value > strong {
+  display: block;
+  margin-top: 13px;
+  color: #a7f2df;
+  font-family: var(--display-font);
+  font-size: clamp(1.55rem, 3vw, 2.25rem);
+  font-weight: 640;
+  letter-spacing: -0.035em;
+  line-height: 1;
+}
+
+.sandbox-value > p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
 .revenue-scope {
   border-top: 1px solid var(--border);
   display: grid;

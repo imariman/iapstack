@@ -48,6 +48,19 @@ type AdminProjectOverview struct {
 // AdminRevenueStatus explains whether authoritative real-revenue data is available.
 type AdminRevenueStatus string
 
+// AdminMoney reports one currency amount without applying an exchange-rate conversion.
+type AdminMoney struct {
+	Milliunits int64
+	Currency   string
+}
+
+// AdminSandboxValue reports provider-signed test transaction value separately from accounting revenue.
+type AdminSandboxValue struct {
+	Amounts           []AdminMoney
+	TransactionCount  int64
+	MissingPriceCount int64
+}
+
 // AdminAnalytics contains bounded operational activity and an explicit revenue truth state.
 type AdminAnalytics struct {
 	WindowDays             int
@@ -59,6 +72,7 @@ type AdminAnalytics struct {
 	ReversedCount          int64
 	ActiveEntitlementCount int64
 	Revenue                AdminRevenue
+	SandboxValue           AdminSandboxValue
 	DailyActivity          []AdminDailyActivity
 }
 

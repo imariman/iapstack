@@ -202,6 +202,24 @@ func TestTerminalStateAccessRules(t *testing.T) {
 	}
 }
 
+// TestPurchasePriceValidationRejectsUnsafeAmounts verifies signed price metadata stays bounded and canonical.
+func TestPurchasePriceValidationRejectsUnsafeAmounts(t *testing.T) {
+	t.Parallel()
+
+	for _, price := range []core.PurchasePrice{
+		{Milliunits: -1, Currency: "USD"},
+		{Milliunits: 4990, Currency: "usd"},
+		{Milliunits: 4990, Currency: "US"},
+	} {
+		if err := price.Validate(); err == nil {
+			t.Fatalf("Validate() price = %#v, error = nil", price)
+		}
+	}
+	if err := (core.PurchasePrice{Milliunits: 4990, Currency: "USD"}).Validate(); err != nil {
+		t.Fatalf("Validate() valid price error = %v", err)
+	}
+}
+
 // TestStoreReferenceIsRedacted verifies safe formatting and explicit value access.
 func TestStoreReferenceIsRedacted(t *testing.T) {
 	t.Parallel()
