@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:iapstack/iapstack.dart';
@@ -7,6 +9,7 @@ import 'package:iapstack_apple_example/configuration_page.dart';
 import 'package:iapstack_apple_example/example_config.dart';
 import 'package:iapstack_apple_example/example_cubit.dart';
 import 'package:iapstack_apple_example/example_page.dart';
+import 'package:iapstack_apple_example/sandbox_tools.dart';
 
 /// Root application for manual StoreKit 2 testing.
 class ExampleApp extends StatefulWidget {
@@ -39,12 +42,24 @@ class ExampleAppState extends State<ExampleApp> {
         client: backend,
         productKinds: widget.config.productKinds,
       );
-      _cubit = ExampleCubit(
+      final cubit = ExampleCubit(
         backend: backend,
         apple: apple,
+        sandboxTools: const SandboxTools(),
         externalCustomerId: widget.config.externalCustomerId,
+        subscriptionProductId: widget.config.subscriptionProductId,
         productIds: widget.config.productKinds.keys.toSet(),
-      )..initialize();
+      );
+      _cubit = cubit;
+      unawaited(_start(cubit));
+    }
+  }
+
+  Future<void> _start(ExampleCubit cubit) async {
+    await cubit.initialize();
+    if (widget.config.autoDoubleRestore &&
+        cubit.state.status == ExampleStatus.ready) {
+      await cubit.restoreTwice();
     }
   }
 

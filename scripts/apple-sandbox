@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly REPOSITORY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+readonly CONFIG_FILE="${IAPSTACK_APPLE_SANDBOX_CONFIG:-${SCRIPT_DIR}/apple-sandbox.env}"
+
+fail() {
+  echo "apple-sandbox: $*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./scripts/apple-sandbox keychain set-application-key
+  ./scripts/apple-sandbox keychain set-app-store-key /absolute/path/AuthKey_XXXXXXXXXX.p8
+  ./scripts/apple-sandbox keychain status
+  ./scripts/apple-sandbox run [-- <extra flutter run arguments>]
+  ./scripts/apple-sandbox restore-idempotency [-- <extra flutter run arguments>]
+  ./scripts/apple-sandbox notification-test
+
+One-time setup:
+  cp scripts/apple-sandbox.env.example scripts/apple-sandbox.env
+  # Edit the non-secret identifiers, then store both private values in Keychain.
+
+The run commands mint a fresh 15-minute customer session and never print either
+bearer. restore-idempotency launches the app and automatically performs two
+consecutive StoreKit restores with distinct request IDs.
+USAGE
+}
+
+load_config() {
+  [[ -f "${CONFIG_FILE}" ]] || fail "missing ${CONFIG_FILE}; copy scripts/apple-sandbox.env.example first"
+  # This is a local, gitignored operator configuration file containing identifiers only.
+  set -a
+  # shellcheck disable=SC1090
+  source "${CONFIG_FILE}"
+  set +a
+
+  : "${IAPSTACK_APPLE_KEYCHAIN_SERVICE:=com.imariman.iapstack.apple-sandbox}"
+  export IAPSTACK_APPLE_KEYCHAIN_SERVICE
+}
+
+require_value() {
+  local name="$1"
+  [[ -n "${!name:-}" ]] || fail "${name} is required in ${CONFIG_FILE}"
+}
+
+application_key_account() {
+  printf '%s:application-key' "${IAPSTACK_APPLICATION_ID}"
+}
+
+app_store_key_account() {
+  printf '%s:app-store-private-key' "${IAPSTACK_APPLICATION_ID}"
+}
+
+keychain_has() {
+  security find-generic-password \
+    -s "${IAPSTACK_APPLE_KEYCHAIN_SERVICE}" \
+    -a "$1" >/dev/null 2>&1
+}
+
+keychain_read() {
+  local stored
+  stored="$(security find-generic-password \
+    -s "${IAPSTACK_APPLE_KEYCHAIN_SERVICE}" \
+    -a "$1" \
+    -w)"
+  if [[ "${stored}" == base64:* ]]; then
+    printf '%s' "${stored#base64:}" | base64 --decode
+  else
+    printf '%s' "${stored}"
+  fi
+}
+
+keychain_store() {
+  local account="$1"
+  local label="$2"
+  local secret="$3"
+  security add-generic-password \
+    -U \
+    -s "${IAPSTACK_APPLE_KEYCHAIN_SERVICE}" \
+    -a "${account}" \
+    -l "${label}" \
+    -w "${secret}" >/dev/null
+}
+
+set_application_key() {
+  require_value IAPSTACK_APPLICATION_ID
+  local key
+  IFS= read -r -s -p "IAPStack sandbox application key: " key
+  echo
+  [[ "${key}" == iap_* ]] || fail "application key must be an IAPStack iap_ bearer"
+  keychain_store \
+    "$(application_key_account)" \
+    "IAPStack Apple sandbox application key (${IAPSTACK_APPLICATION_ID})" \
+    "${key}"
+  unset key
+  echo "Application key stored in macOS Keychain."
+}
+
+set_app_store_key() {
+  require_value IAPSTACK_APPLICATION_ID
+  local path="${1:-}"
+  [[ -n "${path}" ]] || fail "an absolute AuthKey .p8 path is required"
+  [[ "${path}" == /* ]] || fail "the AuthKey .p8 path must be absolute"
+  [[ -f "${path}" ]] || fail "App Store private key file not found"
+  local key
+  key="$(<"${path}")"
+  [[ "${key}" == *"BEGIN PRIVATE KEY"* ]] || fail "App Store key must be a PKCS#8 PEM private key"
+  local encoded_key
+  encoded_key="$(printf '%s' "${key}" | base64 | tr -d '\n')"
+  keychain_store \
+    "$(app_store_key_account)" \
+    "IAPStack App Store Server API key (${IAPSTACK_APPLICATION_ID})" \
+    "base64:${encoded_key}"
+  unset key encoded_key
+  echo "App Store Server API private key stored in macOS Keychain."
+}
+
+keychain_status() {
+  require_value IAPSTACK_APPLICATION_ID
+  if keychain_has "$(application_key_account)"; then
+    echo "application key: configured"
+  else
+    echo "application key: missing"
+  fi
+  if keychain_has "$(app_store_key_account)"; then
+    echo "App Store private key: configured"
+  else
+    echo "App Store private key: missing"
+  fi
+}
+
+validate_mobile_config() {
+  require_value IAPSTACK_BASE_URL
+  require_value IAPSTACK_APPLICATION_ID
+  require_value IAPSTACK_EXTERNAL_CUSTOMER_ID
+  require_value IAPSTACK_APPLE_SUBSCRIPTION_ID
+  require_value IAPSTACK_APPLE_NON_CONSUMABLE_ID
+  [[ "${IAPSTACK_EXTERNAL_CUSTOMER_ID}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || \
+    fail "IAPSTACK_EXTERNAL_CUSTOMER_ID must be a canonical lowercase UUID"
+  keychain_has "$(application_key_account)" || fail "application key is missing; run the keychain set-application-key command"
+}
+
+mint_customer_session() {
+  local application_key="$1"
+  local response_file="$2"
+  local request_body
+  request_body="$(jq -cn --arg customer "${IAPSTACK_EXTERNAL_CUSTOMER_ID}" '{external_customer_id:$customer}')"
+  local status
+  status="$(printf 'header = "Authorization: Bearer %s"\n' "${application_key}" | curl --config - \
+    --silent --show-error \
+    --output "${response_file}" \
+    --write-out '%{http_code}' \
+    --request POST \
+    --header 'Content-Type: application/json' \
+    --data "${request_body}" \
+    "${IAPSTACK_BASE_URL%/}/v1/applications/${IAPSTACK_APPLICATION_ID}/customer-sessions")"
+  [[ "${status}" == "201" ]] || {
+    local code
+    code="$(jq -r '.error.code // "unknown_error"' "${response_file}" 2>/dev/null || true)"
+    fail "customer session request failed with HTTP ${status} (${code})"
+  }
+}
+
+select_ios_device() {
+  if [[ -n "${IAPSTACK_IOS_DEVICE_ID:-}" ]]; then
+    printf '%s' "${IAPSTACK_IOS_DEVICE_ID}"
+    return
+  fi
+  local devices
+  devices="$(flutter devices --machine)"
+  local device
+  device="$(jq -r '[.[] | select(.targetPlatform == "ios" and .emulator == false)][0].id // empty' <<<"${devices}")"
+  [[ -n "${device}" ]] || fail "no physical iOS device found; connect one or set IAPSTACK_IOS_DEVICE_ID"
+  printf '%s' "${device}"
+}
+
+run_app() {
+  local automatic_double_restore="$1"
+  shift
+  [[ "${1:-}" != "--" ]] || shift
+  validate_mobile_config
+  command -v jq >/dev/null || fail "jq is required"
+  command -v curl >/dev/null || fail "curl is required"
+  command -v flutter >/dev/null || fail "flutter is required"
+
+  local response_file runtime_file
+  response_file="$(mktemp "${TMPDIR:-/tmp}/iapstack-customer-session.XXXXXX")"
+  runtime_file="$(mktemp "${TMPDIR:-/tmp}/iapstack-flutter-defines.XXXXXX")"
+  chmod 600 "${response_file}"
+  chmod 600 "${runtime_file}"
+  trap 'rm -f "${response_file}" "${runtime_file}"' EXIT
+
+  local application_key
+  application_key="$(keychain_read "$(application_key_account)")"
+  mint_customer_session "${application_key}" "${response_file}"
+  unset application_key
+
+  local customer_token expires_at device
+  customer_token="$(jq -er '.token' "${response_file}")"
+  expires_at="$(jq -er '.expires_at' "${response_file}")"
+  rm -f "${response_file}"
+  device="$(select_ios_device)"
+
+  jq -n \
+    --arg base_url "${IAPSTACK_BASE_URL}" \
+    --arg application_id "${IAPSTACK_APPLICATION_ID}" \
+    --arg customer_token "${customer_token}" \
+    --arg external_customer_id "${IAPSTACK_EXTERNAL_CUSTOMER_ID}" \
+    --arg subscription_id "${IAPSTACK_APPLE_SUBSCRIPTION_ID}" \
+    --arg non_consumable_id "${IAPSTACK_APPLE_NON_CONSUMABLE_ID}" \
+    --argjson auto_double_restore "${automatic_double_restore}" \
+    '{
+      IAPSTACK_BASE_URL: $base_url,
+      IAPSTACK_APPLICATION_ID: $application_id,
+      IAPSTACK_CUSTOMER_TOKEN: $customer_token,
+      IAPSTACK_EXTERNAL_CUSTOMER_ID: $external_customer_id,
+      IAPSTACK_APPLE_SUBSCRIPTION_ID: $subscription_id,
+      IAPSTACK_APPLE_NON_CONSUMABLE_ID: $non_consumable_id,
+      IAPSTACK_APPLE_AUTO_DOUBLE_RESTORE: $auto_double_restore
+    }' >"${runtime_file}"
+  unset customer_token
+
+  echo "Fresh customer session minted (expires ${expires_at}); launching device ${device}."
+  cd "${REPOSITORY_DIR}/sdk/flutter/iapstack_apple/example"
+  flutter run \
+    -d "${device}" \
+    --dart-define-from-file="${runtime_file}" \
+    "$@"
+  rm -f "${runtime_file}"
+  trap - EXIT
+}
+
+notification_test() {
+  require_value IAPSTACK_APPLICATION_ID
+  require_value IAPSTACK_APPLE_ISSUER_ID
+  require_value IAPSTACK_APPLE_KEY_ID
+  require_value IAPSTACK_APPLE_BUNDLE_ID
+  keychain_has "$(app_store_key_account)" || fail "App Store private key is missing; run the keychain set-app-store-key command"
+  command -v go >/dev/null || fail "Go is required"
+
+  local private_key
+  private_key="$(keychain_read "$(app_store_key_account)")"
+  cd "${REPOSITORY_DIR}"
+  printf '%s' "${private_key}" | go run ./cmd/iapstack-apple-notification-test \
+    -issuer-id "${IAPSTACK_APPLE_ISSUER_ID}" \
+    -key-id "${IAPSTACK_APPLE_KEY_ID}" \
+    -bundle-id "${IAPSTACK_APPLE_BUNDLE_ID}"
+  unset private_key
+}
+
+main() {
+  local command="${1:-}"
+  [[ -n "${command}" ]] || {
+    usage
+    exit 2
+  }
+  shift
+  case "${command}" in
+    -h|--help|help)
+      usage
+      return
+      ;;
+  esac
+  load_config
+  case "${command}" in
+    keychain)
+      local operation="${1:-}"
+      [[ -n "${operation}" ]] || fail "a keychain operation is required"
+      shift
+      case "${operation}" in
+        set-application-key) set_application_key "$@" ;;
+        set-app-store-key) set_app_store_key "$@" ;;
+        status) keychain_status "$@" ;;
+        *) fail "unknown keychain operation: ${operation}" ;;
+      esac
+      ;;
+    run) run_app false "$@" ;;
+    restore-idempotency) run_app true "$@" ;;
+    notification-test) notification_test "$@" ;;
+    *) fail "unknown command: ${command}" ;;
+  esac
+}
+
+main "$@"

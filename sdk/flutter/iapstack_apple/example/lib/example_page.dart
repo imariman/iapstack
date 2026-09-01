@@ -52,10 +52,34 @@ class ExamplePage extends StatelessWidget {
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 onPressed: state.storeAvailable && !loading
+                    ? context.read<ExampleCubit>().restoreTwice
+                    : null,
+                icon: const Icon(Icons.check_circle_outline),
+                label: const Text('Run double-restore idempotency test'),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: state.storeAvailable && !loading
                     ? context.read<ExampleCubit>().refresh
                     : null,
                 icon: const Icon(Icons.refresh_outlined),
                 label: const Text('Refresh entitlements'),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: state.storeAvailable && !loading
+                    ? context.read<ExampleCubit>().manageSubscription
+                    : null,
+                icon: const Icon(Icons.manage_accounts_outlined),
+                label: const Text('Manage subscription / disable renewal'),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: state.storeAvailable && !loading
+                    ? context.read<ExampleCubit>().requestSubscriptionRefund
+                    : null,
+                icon: const Icon(Icons.currency_exchange_outlined),
+                label: const Text('Request sandbox subscription refund'),
               ),
               const SizedBox(height: 24),
               StatusPanel(state: state),

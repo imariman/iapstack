@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter/services.dart';
 import 'package:iapstack/iapstack.dart';
 import 'package:iapstack_apple/iapstack_apple.dart';
+import 'package:iapstack_apple_example/sandbox_tools.dart';
 
 /// Async status for one manual StoreKit operation.
 enum ExampleStatus { initial, loading, ready, failure }
@@ -44,11 +46,14 @@ final class ExampleCubit extends Cubit<ExampleState> {
   ExampleCubit({
     required IapStackClient backend,
     required AppleIapStack apple,
+    required SandboxTools sandboxTools,
     required this.externalCustomerId,
+    required this.subscriptionProductId,
     required Set<String> productIds,
     String Function(String operation)? requestIdFactory,
   }) : _backend = backend,
        _apple = apple,
+       _sandboxTools = sandboxTools,
        productIds = Set<String>.unmodifiable(productIds),
        _requestIdFactory = requestIdFactory ?? _newRequestId,
        super(const ExampleState()) {
@@ -60,12 +65,16 @@ final class ExampleCubit extends Cubit<ExampleState> {
 
   final IapStackClient _backend;
   final AppleIapStack _apple;
+  final SandboxTools _sandboxTools;
   final String Function(String operation) _requestIdFactory;
   late final StreamSubscription<ApplePurchase> _purchaseSubscription;
   Future<void> _purchaseQueue = Future<void>.value();
 
   /// Canonical UUID shared with StoreKit and IAPStack.
   final String externalCustomerId;
+
+  /// Auto-renewable product used by subscription management and refund tests.
+  final String subscriptionProductId;
 
   /// Provider products queried at initialization.
   final Set<String> productIds;
@@ -151,6 +160,72 @@ final class ExampleCubit extends Cubit<ExampleState> {
     }
   }
 
+  /// Runs two independent restores and proves logical projections stay unchanged.
+  Future<void> restoreTwice() async {
+    if (_operationBlocked()) {
+      return;
+    }
+    final firstRequestId = _requestIdFactory('restore-idempotency-1');
+    final secondRequestId = _requestIdFactory('restore-idempotency-2');
+    _emitLoading('Running consecutive restore idempotency check…');
+    try {
+      final firstRestore = await _apple.restorePurchases(
+        externalCustomerId: externalCustomerId,
+        requestId: firstRequestId,
+      );
+      final firstSnapshot = await _apple.getEntitlements(
+        externalCustomerId,
+        requestId: '$firstRequestId-refresh',
+      );
+      final secondRestore = await _apple.restorePurchases(
+        externalCustomerId: externalCustomerId,
+        requestId: secondRequestId,
+      );
+      final secondSnapshot = await _apple.getEntitlements(
+        externalCustomerId,
+        requestId: '$secondRequestId-refresh',
+      );
+      if (firstRestore.results.isEmpty || secondRestore.results.isEmpty) {
+        _emitFailure(
+          'Restore idempotency check needs at least one owned App Store transaction.',
+          requestId: secondRequestId,
+        );
+        return;
+      }
+      if (firstRestore.results.length != secondRestore.results.length ||
+          !sameLogicalEntitlementProjections(
+            firstSnapshot.entitlements,
+            secondSnapshot.entitlements,
+          )) {
+        _emitFailure(
+          'Restore idempotency failed: the second restore changed a logical projection.',
+          requestId: secondRequestId,
+        );
+        return;
+      }
+      final versions = secondSnapshot.entitlements
+          .map((entitlement) => '${entitlement.key}=v${entitlement.version}')
+          .join(', ');
+      _emitReady(
+        'PASS: two consecutive restores preserved ${firstRestore.results.length} transaction result(s) and projection versions${versions.isEmpty ? '' : ' ($versions)'}.',
+        entitlements: secondSnapshot.entitlements,
+        requestId: secondRequestId,
+      );
+    } on AppleIapStackException catch (error) {
+      _emitFailure(
+        'Apple restore idempotency check failed: ${error.code}.',
+        requestId: secondRequestId,
+      );
+    } on IapStackApiException catch (error) {
+      _emitFailure(
+        'IAPStack restore idempotency check failed: ${error.code}.',
+        requestId: error.requestId ?? secondRequestId,
+      );
+    } on IapStackException catch (error) {
+      _emitFailure(error.message, requestId: secondRequestId);
+    }
+  }
+
   /// Loads authoritative IAPStack projections without contacting StoreKit.
   Future<void> refresh() async {
     if (_operationBlocked()) {
@@ -175,6 +250,40 @@ final class ExampleCubit extends Cubit<ExampleState> {
       );
     } on IapStackException catch (error) {
       _emitFailure(error.message, requestId: requestId);
+    }
+  }
+
+  /// Opens Apple's system subscription management sheet for cancellation tests.
+  Future<void> manageSubscription() async {
+    if (_operationBlocked()) {
+      return;
+    }
+    _emitLoading('Opening App Store subscription management…');
+    try {
+      await _sandboxTools.showManageSubscriptions();
+      _emitReady(
+        'Subscription management closed. Run restore or refresh after Apple processes the change.',
+      );
+    } on PlatformException catch (error) {
+      _emitFailure('Subscription management failed: ${error.code}.');
+    }
+  }
+
+  /// Opens Apple's sandbox refund sheet for the configured subscription.
+  Future<void> requestSubscriptionRefund() async {
+    if (_operationBlocked()) {
+      return;
+    }
+    _emitLoading('Opening App Store sandbox refund request…');
+    try {
+      final status = await _sandboxTools.beginRefundRequest(
+        subscriptionProductId,
+      );
+      _emitReady(
+        'Refund request sheet closed with status: $status. Wait for the REFUND notification, then restore or refresh.',
+      );
+    } on PlatformException catch (error) {
+      _emitFailure('Refund request failed: ${error.code}.');
     }
   }
 
@@ -297,3 +406,30 @@ final class ExampleCubit extends Cubit<ExampleState> {
 /// _newRequestId creates one diagnostic-only correlation identifier.
 String _newRequestId(String operation) =>
     'apple-$operation-${DateTime.now().toUtc().microsecondsSinceEpoch}';
+
+/// Compares the logical fields whose equality proves a replay did not advance a projection.
+bool sameLogicalEntitlementProjections(
+  List<Entitlement> first,
+  List<Entitlement> second,
+) {
+  if (first.length != second.length) {
+    return false;
+  }
+  String identity(Entitlement entitlement) => <Object?>[
+    entitlement.key,
+    entitlement.access,
+    entitlement.reason,
+    entitlement.version,
+    entitlement.effectiveStartsAt?.toUtc().toIso8601String(),
+    entitlement.effectiveEndsAt?.toUtc().toIso8601String(),
+  ].join('|');
+
+  final firstIdentities = first.map(identity).toList()..sort();
+  final secondIdentities = second.map(identity).toList()..sort();
+  for (var index = 0; index < firstIdentities.length; index++) {
+    if (firstIdentities[index] != secondIdentities[index]) {
+      return false;
+    }
+  }
+  return true;
+}

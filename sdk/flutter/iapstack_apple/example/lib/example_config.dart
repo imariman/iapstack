@@ -10,6 +10,7 @@ final class ExampleConfig {
     required this.externalCustomerId,
     required this.subscriptionProductId,
     required this.nonConsumableProductId,
+    this.autoDoubleRestore = false,
   });
 
   /// Loads values supplied through Flutter `--dart-define` flags.
@@ -25,6 +26,9 @@ final class ExampleConfig {
     nonConsumableProductId: String.fromEnvironment(
       'IAPSTACK_APPLE_NON_CONSUMABLE_ID',
       defaultValue: 'premium_lifetime',
+    ),
+    autoDoubleRestore: bool.fromEnvironment(
+      'IAPSTACK_APPLE_AUTO_DOUBLE_RESTORE',
     ),
   );
 
@@ -45,6 +49,9 @@ final class ExampleConfig {
 
   /// App Store non-consumable identifier.
   final String nonConsumableProductId;
+
+  /// Whether startup should execute the real-sandbox restore idempotency check.
+  final bool autoDoubleRestore;
 
   /// Explicit catalog used by the high-level Apple companion.
   Map<String, AppleProductKind> get productKinds => <String, AppleProductKind>{

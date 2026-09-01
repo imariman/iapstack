@@ -27,6 +27,7 @@ go.work.sum
 
 # env file
 .env
+scripts/apple-sandbox.env
 
 # Editor/IDE
 # .idea/
