@@ -383,6 +383,37 @@ func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
 	if len(overview.RecentTransactions) != 0 || len(overview.RecentWebhookEvents) != 0 {
 		t.Fatalf("overview activity = (%#v, %#v), want empty activity", overview.RecentTransactions, overview.RecentWebhookEvents)
 	}
+	if overview.Analytics.WindowDays != 30 || len(overview.Analytics.DailyActivity) != 30 ||
+		overview.Analytics.Revenue.Status != persistence.AdminRevenueSandboxOnly ||
+		overview.Analytics.Revenue.RecognizedMinorUnits == nil ||
+		*overview.Analytics.Revenue.RecognizedMinorUnits != 0 ||
+		overview.Analytics.Revenue.ProductionApplicationCount != 0 ||
+		overview.Analytics.Revenue.TestApplicationCount != 1 {
+		t.Fatalf("overview analytics = %#v, want a zero-revenue 30-day sandbox window", overview.Analytics)
+	}
+
+	writes := newPurchaseWrites(t, fixture)
+	observedAt := time.Now().UTC().Truncate(time.Second)
+	writes.evidence.ReceivedAt = observedAt.Add(-2 * time.Minute)
+	writes.observation.Observation.ObservedAt = observedAt
+	writes.observation.Observation.OccurredAt = observedAt.Add(-time.Minute)
+	writes.observation.Observation.EffectivePeriod = core.EffectivePeriod{StartsAt: observedAt.Add(-time.Minute)}
+	writes.projection.EffectivePeriod = writes.observation.Observation.EffectivePeriod
+	writes.outbox.OccurredAt = observedAt
+	writes.outbox.AvailableAt = observedAt
+	persistPurchaseWrites(t, database.ctx, store, writes)
+
+	active, err := store.AdminProjectOverview(database.ctx, core.ProjectID(fixture.projectID))
+	if err != nil {
+		t.Fatalf("active AdminProjectOverview() error = %v", err)
+	}
+	lastDay := active.Analytics.DailyActivity[len(active.Analytics.DailyActivity)-1]
+	if active.Analytics.VerifiedCount != 1 || active.Analytics.AllowedCount != 1 ||
+		active.Analytics.DeniedCount != 0 || active.Analytics.UnresolvedCount != 0 ||
+		active.Analytics.ReversedCount != 0 || active.Analytics.ActiveEntitlementCount != 1 ||
+		lastDay.Date != observedAt.Format(time.DateOnly) || lastDay.Verified != 1 || lastDay.Allowed != 1 {
+		t.Fatalf("active analytics = %#v, last day = %#v, want one allowed verification", active.Analytics, lastDay)
+	}
 	if _, err := database.conn.Exec(database.ctx, `
 		INSERT INTO application_credentials (
 			project_id, application_id, kind, content_type, schema_version,
@@ -408,6 +439,21 @@ func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
 	if !configured.Applications[0].CredentialConfigured || configured.Applications[0].CredentialRevision != 3 ||
 		!configured.Applications[0].WebhookConfigured || configured.Applications[0].WebhookRevision != 2 {
 		t.Fatalf("configured application = %#v, want credential revision 3 and webhook revision 2", configured.Applications[0])
+	}
+	if _, err := database.conn.Exec(database.ctx, `
+		UPDATE applications SET environment = 'production' WHERE id = $1
+	`, fixture.applicationID); err != nil {
+		t.Fatalf("move dashboard application to production: %v", err)
+	}
+	production, err := store.AdminProjectOverview(database.ctx, core.ProjectID(fixture.projectID))
+	if err != nil {
+		t.Fatalf("production AdminProjectOverview() error = %v", err)
+	}
+	if production.Analytics.Revenue.Status != persistence.AdminRevenueStoreReportsRequired ||
+		production.Analytics.Revenue.RecognizedMinorUnits != nil ||
+		production.Analytics.Revenue.ProductionApplicationCount != 1 ||
+		production.Analytics.Revenue.TestApplicationCount != 0 {
+		t.Fatalf("production revenue = %#v, want store reports required without an estimate", production.Analytics.Revenue)
 	}
 
 	_, err = store.AdminProjectOverview(database.ctx, "missing-project")

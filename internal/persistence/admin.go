@@ -7,6 +7,15 @@ import (
 	"github.com/imariman/iapstack/internal/core"
 )
 
+const (
+	// AdminRevenueSandboxOnly means every configured application is non-production.
+	AdminRevenueSandboxOnly AdminRevenueStatus = "sandbox_only"
+	// AdminRevenueStoreReportsRequired means production applications need official financial reports.
+	AdminRevenueStoreReportsRequired AdminRevenueStatus = "store_reports_required"
+	// AdminRevenueNoApplications means the project has no application scope yet.
+	AdminRevenueNoApplications AdminRevenueStatus = "no_applications"
+)
+
 // AdminQueryStore exposes read-only, secret-free operational projections for administrators.
 type AdminQueryStore interface {
 	// AdminProjects returns bounded project summaries ordered by stable identity.
@@ -27,12 +36,49 @@ type AdminProject struct {
 // AdminProjectOverview contains the bounded datasets rendered by the operations dashboard.
 type AdminProjectOverview struct {
 	Project             AdminProject
+	Analytics           AdminAnalytics
 	Applications        []AdminApplication
 	Products            []AdminProduct
 	Customers           []AdminCustomer
 	RecentTransactions  []AdminTransaction
 	Queues              []AdminQueue
 	RecentWebhookEvents []AdminWebhookEvent
+}
+
+// AdminRevenueStatus explains whether authoritative real-revenue data is available.
+type AdminRevenueStatus string
+
+// AdminAnalytics contains bounded operational activity and an explicit revenue truth state.
+type AdminAnalytics struct {
+	WindowDays             int
+	GeneratedAt            time.Time
+	VerifiedCount          int64
+	AllowedCount           int64
+	DeniedCount            int64
+	UnresolvedCount        int64
+	ReversedCount          int64
+	ActiveEntitlementCount int64
+	Revenue                AdminRevenue
+	DailyActivity          []AdminDailyActivity
+}
+
+// AdminRevenue reports only authoritative real revenue, never client-supplied price estimates.
+type AdminRevenue struct {
+	Status                     AdminRevenueStatus
+	RecognizedMinorUnits       *int64
+	Currency                   *string
+	ProductionApplicationCount int64
+	TestApplicationCount       int64
+}
+
+// AdminDailyActivity reports one UTC day of normalized verification outcomes.
+type AdminDailyActivity struct {
+	Date       string
+	Verified   int64
+	Allowed    int64
+	Denied     int64
+	Unresolved int64
+	Reversed   int64
 }
 
 // AdminApplication reports provider scope and configuration coverage for one application.

@@ -99,6 +99,44 @@
           <article><span>Pending jobs</span><strong id="metric-pending">0</strong><small id="metric-pending-note">—</small></article>
         </section>
 
+        <section class="commerce-panel" aria-labelledby="commerce-title">
+          <header class="commerce-heading">
+            <div><p class="eyebrow">30-day commerce pulse</p><h2 id="commerce-title">Revenue &amp; activity</h2></div>
+            <span class="commerce-window" id="analytics-window">UTC · 30 days</span>
+          </header>
+          <div class="commerce-grid">
+            <div class="activity-pane">
+              <div class="activity-vitals" aria-label="Activity totals">
+                <span><small>Verified events</small><strong id="analytics-verified">0</strong></span>
+                <span><small>Active access</small><strong id="analytics-active">0</strong></span>
+                <span><small>Reversed</small><strong id="analytics-reversed">0</strong></span>
+              </div>
+              <figure class="activity-figure">
+                <svg class="activity-chart" id="activity-chart" viewBox="0 0 760 220" role="img" aria-label="No verification activity in the last 30 days"></svg>
+                <figcaption>
+                  <span class="chart-legend"><i class="allowed" aria-hidden="true"></i>Allowed</span>
+                  <span class="chart-legend"><i class="denied" aria-hidden="true"></i>Denied</span>
+                  <span class="chart-legend"><i class="unresolved" aria-hidden="true"></i>Unresolved</span>
+                  <span class="chart-caption">Daily verification outcomes · UTC</span>
+                </figcaption>
+              </figure>
+            </div>
+            <aside class="revenue-card" aria-labelledby="revenue-title" aria-live="polite">
+              <div class="revenue-card-top">
+                <p class="eyebrow">Authoritative total</p>
+                <span class="revenue-badge" id="revenue-status">Sandbox only</span>
+              </div>
+              <div class="revenue-number"><strong id="revenue-value">0</strong><span id="revenue-currency">real revenue</span></div>
+              <h3 id="revenue-title">Recognized store revenue</h3>
+              <p id="revenue-note">Test purchases never create real store revenue.</p>
+              <dl class="revenue-scope">
+                <div><dt>Production apps</dt><dd id="revenue-production-apps">0</dd></div>
+                <div><dt>Test apps</dt><dd id="revenue-test-apps">0</dd></div>
+              </dl>
+            </aside>
+          </div>
+        </section>
+
         <div class="dashboard-grid">
           <section class="panel applications-panel" aria-labelledby="apps-title">
             <div class="panel-heading">

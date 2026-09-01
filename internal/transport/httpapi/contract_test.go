@@ -103,7 +103,10 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 		"RestoreResult":                {"results"},
 		"EntitlementSnapshot":          {"customer_id", "entitlements"},
 		"ErrorEnvelope":                {"error"},
-		"AdminProjectOverview":         {"project", "applications", "products", "customers", "recent_transactions", "queues", "recent_webhook_events"},
+		"AdminProjectOverview":         {"project", "analytics", "applications", "products", "customers", "recent_transactions", "queues", "recent_webhook_events"},
+		"AdminAnalytics":               {"window_days", "generated_at", "verified_count", "allowed_count", "denied_count", "unresolved_count", "reversed_count", "active_entitlement_count", "revenue", "daily_activity"},
+		"AdminRevenue":                 {"status", "recognized_minor_units", "currency", "production_application_count", "test_application_count"},
+		"AdminDailyActivity":           {"date", "verified", "allowed", "denied", "unresolved", "reversed"},
 		"CredentialMetadata":           {"project_id", "application_id", "kind", "content_type", "schema_version", "revision", "created_at", "updated_at"},
 		"ApiKeyCollection":             {"api_keys"},
 		"ApiKey":                       {"id", "role", "created_at", "current"},
@@ -128,6 +131,13 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	zero := int64(0)
+	dailyActivity := make([]adminDailyActivityResponse, 0, 30)
+	for offset := 29; offset >= 0; offset-- {
+		dailyActivity = append(dailyActivity, adminDailyActivityResponse{
+			Date: now.AddDate(0, 0, -offset).Format(time.DateOnly),
+		})
+	}
 	document := loadOpenAPIContract(t)
 	tests := []struct {
 		name   string
@@ -159,7 +169,14 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 			}},
 		}},
 		{name: "project overview", schema: "AdminProjectOverview", value: adminOverviewResponse{
-			Project:      adminProjectResponse{ID: "project-1", CreatedAt: now},
+			Project: adminProjectResponse{ID: "project-1", CreatedAt: now},
+			Analytics: adminAnalyticsResponse{
+				WindowDays: 30, GeneratedAt: now,
+				Revenue: adminRevenueResponse{
+					Status: persistence.AdminRevenueSandboxOnly, RecognizedMinorUnits: &zero,
+				},
+				DailyActivity: dailyActivity,
+			},
 			Applications: []adminApplicationResponse{}, Products: []adminProductResponse{},
 			Customers: []adminCustomerResponse{}, RecentTransactions: []adminTransactionResponse{},
 			Queues: []adminQueueResponse{}, RecentWebhookEvents: []adminWebhookEventResponse{},
