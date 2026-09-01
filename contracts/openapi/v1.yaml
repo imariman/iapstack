@@ -1561,7 +1561,7 @@ components:
     AdminAnalytics:
       type: object
       additionalProperties: false
-      required: [window_days, generated_at, verified_count, allowed_count, denied_count, unresolved_count, reversed_count, active_entitlement_count, revenue, daily_activity]
+      required: [window_days, generated_at, verified_count, allowed_count, denied_count, unresolved_count, reversed_count, active_entitlement_count, revenue, sandbox_value, daily_activity]
       properties:
         window_days:
           type: integer
@@ -1596,6 +1596,8 @@ components:
           minimum: 0
         revenue:
           $ref: '#/components/schemas/AdminRevenue'
+        sandbox_value:
+          $ref: '#/components/schemas/AdminSandboxValue'
         daily_activity:
           type: array
           minItems: 30
@@ -1627,6 +1629,35 @@ components:
           type: integer
           format: int64
           minimum: 0
+    AdminSandboxValue:
+      type: object
+      additionalProperties: false
+      required: [amounts, transaction_count, missing_price_count]
+      properties:
+        amounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminMoney'
+        transaction_count:
+          type: integer
+          format: int64
+          minimum: 0
+        missing_price_count:
+          type: integer
+          format: int64
+          minimum: 0
+    AdminMoney:
+      type: object
+      additionalProperties: false
+      required: [milliunits, currency]
+      properties:
+        milliunits:
+          type: integer
+          format: int64
+          minimum: 0
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
     AdminDailyActivity:
       type: object
       additionalProperties: false

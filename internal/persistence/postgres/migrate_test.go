@@ -72,6 +72,7 @@ func TestMigrationLifecycle(t *testing.T) {
 		"api_keys",
 		"reconciliation_jobs_customer_idx",
 		"outbox_events_failed_retention_idx",
+		"purchase_observations_sandbox_value_idx",
 	}
 	if got, want := len(relations), int(postgres.LatestVersion); got != want {
 		t.Fatalf("migration relation count = %d, want %d", got, want)
@@ -229,6 +230,33 @@ func TestPurchaseEvidenceMigrationConstraints(t *testing.T) {
 		INSERT INTO observation_references (observation_id, application_id, reference_id)
 		VALUES ($1, $2, $3)
 	`, purchase.observationID, purchase.catalog.applicationID, foreignReferenceID)
+}
+
+// TestPurchasePriceMigrationConstraints verifies signed transaction prices remain paired and canonical.
+func TestPurchasePriceMigrationConstraints(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	purchase := seedPurchase(t, database)
+
+	mustExec(t, database, `
+		UPDATE purchase_observations
+		SET price_milliunits = 4990, price_currency = 'USD'
+		WHERE id = $1
+	`, purchase.observationID)
+	expectConstraint(t, database, "purchase_observations_price_pair_valid", `
+		UPDATE purchase_observations
+		SET price_milliunits = 4990, price_currency = NULL
+		WHERE id = $1
+	`, purchase.observationID)
+	expectConstraint(t, database, "purchase_observations_price_amount_valid", `
+		UPDATE purchase_observations
+		SET price_milliunits = -1, price_currency = 'USD'
+		WHERE id = $1
+	`, purchase.observationID)
+	expectConstraint(t, database, "purchase_observations_price_currency_valid", `
+		UPDATE purchase_observations
+		SET price_milliunits = 4990, price_currency = 'usd'
+		WHERE id = $1
+	`, purchase.observationID)
 }
 
 // TestEntitlementProjectionMigrationConstraints verifies source and catalog integrity for current access.

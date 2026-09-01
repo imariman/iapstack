@@ -89,11 +89,13 @@ func TestAdapterVerifiesAuthoritativeLifetimeTransaction(t *testing.T) {
 
 	now := time.Date(2026, time.August, 25, 10, 0, 0, 0, time.UTC)
 	fixture := newSigningFixture(t, now)
+	price := int64(4990)
 	transaction := transactionPayload{
 		OriginalTransactionID: "2000000123456789", TransactionID: "2000000123456790",
 		BundleID: fixtureBundleID, ProductID: fixtureProductID, PurchaseDate: now.Add(-time.Hour).UnixMilli(),
 		Quantity: 1, Type: appleNonConsumableType, AppAccountToken: fixtureAccountToken,
 		OwnershipType: applePurchasedOwnership, SignedDate: now.UnixMilli(), Environment: "Sandbox",
+		Price: &price, Currency: "USD",
 	}
 	configuration := credentialFixture(t, fixture, core.EnvironmentSandbox)
 	adapter, err := New(fakeCredentialSource{credential: configuration}, time.Second)
@@ -133,7 +135,9 @@ func TestAdapterVerifiesAuthoritativeLifetimeTransaction(t *testing.T) {
 		t.Fatalf("Verify() error = %v", err)
 	}
 	if len(result.Observations) != 1 || result.Observations[0].Access != core.AccessAllowed ||
-		result.Observations[0].ProductKind != core.ProductKindNonConsumable {
+		result.Observations[0].ProductKind != core.ProductKindNonConsumable ||
+		result.Observations[0].Price == nil || result.Observations[0].Price.Milliunits != price ||
+		result.Observations[0].Price.Currency != "USD" {
 		t.Fatalf("Verify() observations = %#v", result.Observations)
 	}
 	if len(result.Artifacts) != 1 || result.Artifacts[0].Kind != "apple_server_transaction" {

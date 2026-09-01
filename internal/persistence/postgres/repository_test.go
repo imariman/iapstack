@@ -398,6 +398,7 @@ func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
 	writes.observation.Observation.ObservedAt = observedAt
 	writes.observation.Observation.OccurredAt = observedAt.Add(-time.Minute)
 	writes.observation.Observation.EffectivePeriod = core.EffectivePeriod{StartsAt: observedAt.Add(-time.Minute)}
+	writes.observation.Observation.Price = &core.PurchasePrice{Milliunits: 4990, Currency: "USD"}
 	writes.projection.EffectivePeriod = writes.observation.Observation.EffectivePeriod
 	writes.outbox.OccurredAt = observedAt
 	writes.outbox.AvailableAt = observedAt
@@ -413,6 +414,13 @@ func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
 		active.Analytics.ReversedCount != 0 || active.Analytics.ActiveEntitlementCount != 1 ||
 		lastDay.Date != observedAt.Format(time.DateOnly) || lastDay.Verified != 1 || lastDay.Allowed != 1 {
 		t.Fatalf("active analytics = %#v, last day = %#v, want one allowed verification", active.Analytics, lastDay)
+	}
+	if active.Analytics.SandboxValue.TransactionCount != 1 ||
+		active.Analytics.SandboxValue.MissingPriceCount != 0 ||
+		len(active.Analytics.SandboxValue.Amounts) != 1 ||
+		active.Analytics.SandboxValue.Amounts[0].Milliunits != 4990 ||
+		active.Analytics.SandboxValue.Amounts[0].Currency != "USD" {
+		t.Fatalf("sandbox value = %#v, want one signed USD transaction", active.Analytics.SandboxValue)
 	}
 	if _, err := database.conn.Exec(database.ctx, `
 		INSERT INTO application_credentials (
@@ -454,6 +462,10 @@ func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
 		production.Analytics.Revenue.ProductionApplicationCount != 1 ||
 		production.Analytics.Revenue.TestApplicationCount != 0 {
 		t.Fatalf("production revenue = %#v, want store reports required without an estimate", production.Analytics.Revenue)
+	}
+	if production.Analytics.SandboxValue.TransactionCount != 0 ||
+		len(production.Analytics.SandboxValue.Amounts) != 0 {
+		t.Fatalf("production sandbox value = %#v, want no test transaction value", production.Analytics.SandboxValue)
 	}
 
 	_, err = store.AdminProjectOverview(database.ctx, "missing-project")
@@ -567,6 +579,33 @@ func TestTransactionalPurchasePersistence(t *testing.T) {
 	assertTableCount(t, database, "provider_references", 1)
 	assertTableCount(t, database, "customer_entitlements", 1)
 	assertTableCount(t, database, "outbox_events", 1)
+
+	pricedWrites := writes
+	if err := database.conn.QueryRow(
+		database.ctx,
+		"SELECT id FROM purchase_evidence WHERE application_id = $1",
+		fixture.applicationID,
+	).Scan(&pricedWrites.observation.EvidenceID); err != nil {
+		t.Fatalf("load persisted evidence ID for price enrichment: %v", err)
+	}
+	pricedWrites.observation.Observation.Price = &core.PurchasePrice{Milliunits: 4990, Currency: "USD"}
+	if err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		return repository.SaveObservation(database.ctx, pricedWrites.observation)
+	}); err != nil {
+		t.Fatalf("enrich SaveObservation() error = %v", err)
+	}
+	var storedMilliunits int64
+	var storedCurrency string
+	if err := database.conn.QueryRow(database.ctx, `
+		SELECT price_milliunits, price_currency
+		FROM purchase_observations
+		WHERE id = $1
+	`, writes.observation.Observation.ID).Scan(&storedMilliunits, &storedCurrency); err != nil {
+		t.Fatalf("load enriched observation price: %v", err)
+	}
+	if storedMilliunits != 4990 || storedCurrency != "USD" {
+		t.Fatalf("enriched observation price = (%d, %q), want (4990, USD)", storedMilliunits, storedCurrency)
+	}
 
 	var purchaseContext persistence.PurchaseReferenceContext
 	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {

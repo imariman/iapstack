@@ -107,6 +107,8 @@ type transactionPayload struct {
 	PurchaseDate          int64  `json:"purchaseDate"`
 	ExpiresDate           int64  `json:"expiresDate"`
 	Quantity              uint32 `json:"quantity"`
+	Price                 *int64 `json:"price,omitempty"`
+	Currency              string `json:"currency,omitempty"`
 	Type                  string `json:"type"`
 	AppAccountToken       string `json:"appAccountToken"`
 	OwnershipType         string `json:"inAppOwnershipType"`
@@ -447,6 +449,10 @@ func (adapter *Adapter) result(
 	if quantity == 0 {
 		quantity = 1
 	}
+	price, err := applePurchasePrice(transaction)
+	if err != nil {
+		return stores.VerificationResult{}, invalid("normalize", err)
+	}
 	ownership := core.OwnershipUnknown
 	switch transaction.OwnershipType {
 	case applePurchasedOwnership, "":
@@ -487,6 +493,7 @@ func (adapter *Adapter) result(
 		AccessReason:    reason,
 		Ownership:       ownership,
 		Quantity:        quantity,
+		Price:           price,
 		OccurredAt:      startsAt,
 		ObservedAt:      observedAt,
 		EffectivePeriod: core.EffectivePeriod{StartsAt: startsAt, EndsAt: endsAt},
@@ -501,6 +508,21 @@ func (adapter *Adapter) result(
 		Artifacts:    []stores.VerifiedArtifact{{Kind: appleArtifactKind(kind), Evidence: artifact}},
 		Observations: []core.PurchaseObservation{observation},
 	}, nil
+}
+
+// applePurchasePrice returns Apple-signed transaction pricing without treating it as accounting revenue.
+func applePurchasePrice(transaction transactionPayload) (*core.PurchasePrice, error) {
+	if transaction.Price == nil && transaction.Currency == "" {
+		return nil, nil
+	}
+	if transaction.Price == nil || transaction.Currency == "" {
+		return nil, errors.New("apple transaction price and currency must be present together")
+	}
+	price := &core.PurchasePrice{Milliunits: *transaction.Price, Currency: transaction.Currency}
+	if err := price.Validate(); err != nil {
+		return nil, fmt.Errorf("apple transaction price: %w", err)
+	}
+	return price, nil
 }
 
 // parseEvidence decodes the submitted versioned Apple evidence envelope.
@@ -615,7 +637,7 @@ func providerState(transaction transactionPayload, state core.LifecycleState) st
 	return string(state)
 }
 
-// observationSnapshotIdentity hashes all authoritative fields that affect one immutable normalized snapshot.
+// observationSnapshotIdentity hashes access-affecting fields while leaving enrichable signed pricing outside identity.
 func observationSnapshotIdentity(
 	applicationID core.ApplicationID,
 	kind core.ProductKind,

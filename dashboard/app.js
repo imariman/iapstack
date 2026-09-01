@@ -327,6 +327,11 @@ function emptyAnalytics() {
       production_application_count: 0,
       test_application_count: 0,
     },
+    sandbox_value: {
+      amounts: [],
+      transaction_count: 0,
+      missing_price_count: 0,
+    },
   };
 }
 
@@ -336,6 +341,7 @@ function renderAnalytics(analytics = emptyAnalytics()) {
   setText("analytics-active", formatNumber(analytics.active_entitlement_count));
   setText("analytics-reversed", formatNumber(analytics.reversed_count));
   renderRevenue(analytics.revenue || emptyAnalytics().revenue);
+  renderSandboxValue(analytics.sandbox_value || emptyAnalytics().sandbox_value);
   renderActivityChart(analytics.daily_activity || []);
 }
 
@@ -370,6 +376,39 @@ function renderRevenue(revenue) {
   setText("revenue-value", formatRevenue(revenue.recognized_minor_units, revenue.currency));
   setText("revenue-currency", revenue.currency || "real revenue");
   setText("revenue-note", "Test purchases never create real store revenue.");
+}
+
+function renderSandboxValue(sandboxValue) {
+  const amounts = Array.isArray(sandboxValue.amounts) ? sandboxValue.amounts : [];
+  const transactionCount = Number(sandboxValue.transaction_count || 0);
+  const missingPriceCount = Number(sandboxValue.missing_price_count || 0);
+  setText("sandbox-value-count", countLabel(transactionCount, "priced transaction"));
+
+  if (!amounts.length) {
+    setText("sandbox-value-amounts", "0");
+    if (missingPriceCount > 0) {
+      setText(
+        "sandbox-value-note",
+        `${countLabel(missingPriceCount, "transaction")} need a fresh verification to capture the signed store price.`,
+      );
+      return;
+    }
+    setText("sandbox-value-note", "No priced sandbox transactions in this window.");
+    return;
+  }
+
+  setText(
+    "sandbox-value-amounts",
+    amounts.map((amount) => formatMilliunitValue(amount.milliunits, amount.currency)).join(" + "),
+  );
+  if (missingPriceCount > 0) {
+    setText(
+      "sandbox-value-note",
+      `Provider-signed test value; ${countLabel(missingPriceCount, "older transaction")} still have no captured price.`,
+    );
+    return;
+  }
+  setText("sandbox-value-note", "Provider-signed test value, not real proceeds or accounting revenue.");
 }
 
 function renderActivityChart(activity) {
@@ -479,6 +518,17 @@ function formatRevenue(minorUnits, currency) {
     return formatter.format(Number(minorUnits) / (10 ** digits));
   } catch (_) {
     return `${formatNumber(minorUnits)} ${currency}`;
+  }
+}
+
+function formatMilliunitValue(milliunits, currency) {
+  const value = Number(milliunits || 0) / 1000;
+  if (!currency) return formatNumber(value);
+  try {
+    const formatter = new Intl.NumberFormat("en", { style: "currency", currency });
+    return formatter.format(value);
+  } catch (_error) {
+    return `${value.toFixed(3)} ${currency}`;
   }
 }
 

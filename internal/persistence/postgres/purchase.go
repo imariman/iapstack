@@ -194,6 +194,9 @@ func (repository *transaction) SaveObservation(
 		return err
 	}
 	if !inserted {
+		if err := repository.enrichObservationPrice(ctx, write); err != nil {
+			return err
+		}
 		matches, err := repository.observationMatches(ctx, write)
 		if err != nil {
 			return err
@@ -251,10 +254,12 @@ func (repository *transaction) insertObservation(
 			renewal_mode,
 			renewal_status,
 			next_provider_product_id,
-			next_renewal_at
+			next_renewal_at,
+			price_milliunits,
+			price_currency
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-			$12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+			$12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
 		)
 		ON CONFLICT (id) DO NOTHING
 		RETURNING id
@@ -281,6 +286,8 @@ func (repository *transaction) insertObservation(
 		observation.Renewal.Status,
 		nullableString(string(observation.Renewal.NextProductID)),
 		nullableTimePointer(observation.Renewal.NextRenewalAt),
+		nullablePriceMilliunits(observation.Price),
+		nullablePriceCurrency(observation.Price),
 	).Scan(&insertedID)
 	if err == nil {
 		return true, nil
@@ -289,6 +296,27 @@ func (repository *transaction) insertObservation(
 		return false, nil
 	}
 	return false, classifyError("save purchase observation", err)
+}
+
+// enrichObservationPrice adds newly available provider-signed pricing to an existing immutable snapshot.
+func (repository *transaction) enrichObservationPrice(
+	ctx context.Context,
+	write persistence.ObservationWrite,
+) error {
+	if write.Observation.Price == nil {
+		return nil
+	}
+	_, err := repository.tx.Exec(ctx, `
+		UPDATE purchase_observations
+		SET price_milliunits = $2, price_currency = $3
+		WHERE id = $1
+			AND price_milliunits IS NULL
+			AND price_currency IS NULL
+	`, write.Observation.ID, write.Observation.Price.Milliunits, write.Observation.Price.Currency)
+	if err != nil {
+		return classifyError("enrich purchase observation price", err)
+	}
+	return nil
 }
 
 // observationMatches checks the immutable logical snapshot independently of receipt evidence and observation time.
@@ -322,6 +350,13 @@ func (repository *transaction) observationMatches(
 				AND renewal_status = $18
 				AND next_provider_product_id IS NOT DISTINCT FROM $19::text
 				AND next_renewal_at IS NOT DISTINCT FROM $20::timestamptz
+				AND (
+					$21::bigint IS NULL
+					OR (
+						price_milliunits IS NOT DISTINCT FROM $21::bigint
+						AND price_currency IS NOT DISTINCT FROM $22::text
+					)
+				)
 		)
 	`,
 		observation.ID,
@@ -344,6 +379,8 @@ func (repository *transaction) observationMatches(
 		observation.Renewal.Status,
 		nullableString(string(observation.Renewal.NextProductID)),
 		nullableTimePointer(observation.Renewal.NextRenewalAt),
+		nullablePriceMilliunits(observation.Price),
+		nullablePriceCurrency(observation.Price),
 	).Scan(&matches)
 	if err != nil {
 		return false, classifyError("compare purchase observation", err)
@@ -481,6 +518,22 @@ func nullableString(value string) any {
 		return nil
 	}
 	return value
+}
+
+// nullablePriceMilliunits converts optional provider-signed pricing into a SQL value.
+func nullablePriceMilliunits(price *core.PurchasePrice) any {
+	if price == nil {
+		return nil
+	}
+	return price.Milliunits
+}
+
+// nullablePriceCurrency converts optional provider-signed pricing into a SQL value.
+func nullablePriceCurrency(price *core.PurchasePrice) any {
+	if price == nil {
+		return nil
+	}
+	return price.Currency
 }
 
 // protectedFingerprintMatches compares a stored fingerprint without leaking it.

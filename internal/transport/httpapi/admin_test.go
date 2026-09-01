@@ -56,6 +56,10 @@ func fakeAdminAnalytics() persistence.AdminAnalytics {
 			Status: persistence.AdminRevenueSandboxOnly, RecognizedMinorUnits: &zero,
 			TestApplicationCount: 1,
 		},
+		SandboxValue: persistence.AdminSandboxValue{
+			Amounts:          []persistence.AdminMoney{{Milliunits: 4990, Currency: "USD"}},
+			TransactionCount: 1,
+		},
 		DailyActivity: activity,
 	}
 }
@@ -393,6 +397,7 @@ func TestAdminOverviewSerializesEmptyCollections(t *testing.T) {
 		`"credential_revision":3`, `"webhook_revision":2`, `"products":[]`, `"customers":[]`,
 		`"recent_transactions":[]`, `"queues":[]`, `"recent_webhook_events":[]`,
 		`"status":"sandbox_only"`, `"recognized_minor_units":0`, `"daily_activity":[`,
+		`"sandbox_value":{"amounts":[{"milliunits":4990,"currency":"USD"}],"transaction_count":1,"missing_price_count":0}`,
 	} {
 		if !strings.Contains(string(payload), field) {
 			t.Fatalf("overview JSON = %s, want %s", payload, field)

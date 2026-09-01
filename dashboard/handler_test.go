@@ -214,14 +214,16 @@ func TestDashboardRendersTruthfulCommerceAnalytics(t *testing.T) {
 		t.Fatalf("read embedded app.js: %v", err)
 	}
 	for _, required := range []string{
-		`class="activity-chart" id="activity-chart"`, `id="revenue-value"`, "Recognized store revenue", "Daily verification outcomes",
+		`class="activity-chart" id="activity-chart"`, `id="revenue-value"`, "Recognized store revenue",
+		`id="sandbox-value-amounts"`, "Sandbox test value", "Daily verification outcomes",
 	} {
 		if !strings.Contains(string(document), required) {
 			t.Fatalf("dashboard commerce panel does not contain %q", required)
 		}
 	}
 	for _, required := range []string{
-		"renderActivityChart", "store_reports_required", "Test purchases never create real store revenue",
+		"renderActivityChart", "renderSandboxValue", "formatMilliunitValue", "store_reports_required",
+		"Test purchases never create real store revenue", "Provider-signed test value",
 		`document.createElementNS("http://www.w3.org/2000/svg"`, "weeklyTick",
 	} {
 		if !strings.Contains(string(script), required) {
@@ -233,7 +235,7 @@ func TestDashboardRendersTruthfulCommerceAnalytics(t *testing.T) {
 			t.Fatalf("dashboard analytics must not derive revenue from %q", forbidden)
 		}
 	}
-	for _, required := range []string{".commerce-panel", ".activity-chart", ".revenue-badge.reports-required"} {
+	for _, required := range []string{".commerce-panel", ".activity-chart", ".revenue-badge.reports-required", ".sandbox-value"} {
 		if !strings.Contains(string(styles), required) {
 			t.Fatalf("dashboard analytics styles do not contain %q", required)
 		}
