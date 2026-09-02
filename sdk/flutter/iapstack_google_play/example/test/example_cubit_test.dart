@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -70,6 +71,129 @@ void main() {
       expect(cubit.state.requestId, 'play-refresh-test');
     },
   );
+
+  test('verifies purchase stream updates and publishes entitlements', () async {
+    final updates = StreamController<GooglePlayPurchase>.broadcast();
+    final verified = Completer<void>();
+    final backend = _backend((request) async {
+      verified.complete();
+      return http.Response(jsonEncode(_verificationJson), 200);
+    });
+    final product = _subscriptionProduct();
+    final platform = _FakePlatform(
+      updates: updates.stream,
+      query: GooglePlayProductQuery(
+        products: <GooglePlayProduct>[product],
+        notFoundProductIds: const <String>{},
+      ),
+    );
+    final cubit = _cubit(backend: backend, platform: platform);
+    addTearDown(() async {
+      await cubit.close();
+      await updates.close();
+    });
+    await cubit.initialize();
+
+    updates.add(_purchase());
+    await verified.future;
+    await _flushAsync();
+
+    expect(cubit.state.status, ExampleStatus.ready);
+    expect(cubit.state.message, contains('verified and acknowledged'));
+    expect(cubit.state.entitlements.single.grantsAccess, isTrue);
+    expect(cubit.state.requestId, 'play-verify-test');
+  });
+
+  test(
+    'handles cancellation and purchase stream failures without backend calls',
+    () async {
+      final updates = StreamController<GooglePlayPurchase>.broadcast();
+      var backendCalled = false;
+      final backend = _backend((request) async {
+        backendCalled = true;
+        return http.Response('{}', 500);
+      });
+      final cubit = _cubit(
+        backend: backend,
+        platform: _FakePlatform(updates: updates.stream),
+      );
+      addTearDown(() async {
+        await cubit.close();
+        await updates.close();
+      });
+
+      updates.add(_purchase(status: GooglePlayPurchaseStatus.cancelled));
+      await _flushAsync();
+      expect(cubit.state.message, 'Purchase cancelled.');
+
+      updates.addError(StateError('native secret'));
+      await _flushAsync();
+      expect(cubit.state.status, ExampleStatus.failure);
+      expect(cubit.state.message, isNot(contains('native secret')));
+      expect(backendCalled, isFalse);
+    },
+  );
+
+  test('restores owned purchases before refreshing entitlements', () async {
+    final requests = <String>[];
+    final backend = _backend((request) async {
+      requests.add(request.url.path);
+      if (request.url.path.endsWith('purchases:restore')) {
+        return http.Response(
+          jsonEncode(<String, Object?>{
+            'results': <Object?>[_verificationJson],
+          }),
+          200,
+        );
+      }
+      return http.Response(jsonEncode(_snapshotJson), 200);
+    });
+    final product = _subscriptionProduct();
+    final platform = _FakePlatform(
+      owned: <GooglePlayPurchase>[_purchase()],
+      query: GooglePlayProductQuery(
+        products: <GooglePlayProduct>[product],
+        notFoundProductIds: const <String>{},
+      ),
+    );
+    final cubit = _cubit(backend: backend, platform: platform);
+    addTearDown(cubit.close);
+    await cubit.initialize();
+
+    await cubit.restore();
+
+    expect(requests, hasLength(2));
+    expect(requests.first, endsWith('purchases:restore'));
+    expect(requests.last, endsWith('/entitlements'));
+    expect(cubit.state.status, ExampleStatus.ready);
+    expect(cubit.state.entitlements.single.grantsAccess, isTrue);
+    expect(cubit.state.requestId, 'play-restore-test');
+  });
+
+  test('surfaces a redacted purchase launch failure', () async {
+    final product = _subscriptionProduct();
+    final platform = _FakePlatform(
+      launchError: const GooglePlayIapStackException(
+        code: 'billing_unavailable',
+        message: 'redacted',
+      ),
+      query: GooglePlayProductQuery(
+        products: <GooglePlayProduct>[product],
+        notFoundProductIds: const <String>{},
+      ),
+    );
+    final cubit = _cubit(
+      backend: _backend((request) async => http.Response('{}', 500)),
+      platform: platform,
+    );
+    addTearDown(cubit.close);
+    await cubit.initialize();
+
+    await cubit.purchase(product);
+
+    expect(cubit.state.status, ExampleStatus.failure);
+    expect(cubit.state.message, contains('billing_unavailable'));
+  });
 }
 
 ExampleCubit _cubit({
@@ -134,22 +258,50 @@ final Map<String, Object?> _snapshotJson = <String, Object?>{
   ],
 };
 
+final Map<String, Object?> _verificationJson = <String, Object?>{
+  'verified_at': '2026-09-02T12:00:00Z',
+  ..._snapshotJson,
+};
+
+GooglePlayPurchase _purchase({
+  GooglePlayPurchaseStatus status = GooglePlayPurchaseStatus.purchased,
+}) => GooglePlayPurchase(
+  purchaseToken: 'purchase-token',
+  productIds: const <String>['premium-monthly'],
+  status: status,
+  isAcknowledged: false,
+  obfuscatedAccountId: 'customer-1',
+);
+
+Future<void> _flushAsync() async {
+  await Future<void>.delayed(Duration.zero);
+  await Future<void>.delayed(Duration.zero);
+}
+
 final class _FakePlatform implements GooglePlayIapPlatform {
-  _FakePlatform({this.available = true, GooglePlayProductQuery? query})
-    : query =
-          query ??
-          GooglePlayProductQuery(
-            products: <GooglePlayProduct>[],
-            notFoundProductIds: const <String>{'premium-monthly'},
-          );
+  _FakePlatform({
+    this.available = true,
+    GooglePlayProductQuery? query,
+    this.updates = const Stream<GooglePlayPurchase>.empty(),
+    this.owned = const <GooglePlayPurchase>[],
+    this.launchError,
+  }) : query =
+           query ??
+           GooglePlayProductQuery(
+             products: <GooglePlayProduct>[],
+             notFoundProductIds: const <String>{'premium-monthly'},
+           );
 
   final bool available;
   final GooglePlayProductQuery query;
+  final Stream<GooglePlayPurchase> updates;
+  final List<GooglePlayPurchase> owned;
+  final GooglePlayIapStackException? launchError;
   GooglePlayProduct? launchedProduct;
   String? launchedAccountId;
 
   @override
-  Stream<GooglePlayPurchase> get purchaseUpdates => const Stream.empty();
+  Stream<GooglePlayPurchase> get purchaseUpdates => updates;
 
   @override
   Future<bool> isAvailable() async => available;
@@ -159,6 +311,10 @@ final class _FakePlatform implements GooglePlayIapPlatform {
     required GooglePlayProduct product,
     required String obfuscatedAccountId,
   }) async {
+    final error = launchError;
+    if (error != null) {
+      throw error;
+    }
     launchedProduct = product;
     launchedAccountId = obfuscatedAccountId;
   }
@@ -166,7 +322,7 @@ final class _FakePlatform implements GooglePlayIapPlatform {
   @override
   Future<List<GooglePlayPurchase>> ownedPurchases({
     required String obfuscatedAccountId,
-  }) async => const <GooglePlayPurchase>[];
+  }) async => List<GooglePlayPurchase>.of(owned);
 
   @override
   Future<GooglePlayProductQuery> queryProducts(Set<String> productIds) async =>

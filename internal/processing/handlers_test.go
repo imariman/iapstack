@@ -196,6 +196,77 @@ func TestGooglePlayReconciliationCommandRetriesUnknownPurchaseAndRejectsScopeMis
 	}
 }
 
+// TestHandleGooglePlayInboxSkipsAuditSignalsAndRejectsMalformedPayload verifies no-op RTDNs never reach verification.
+func TestHandleGooglePlayInboxSkipsAuditSignalsAndRejectsMalformedPayload(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	message := persistence.QueueMessage{
+		ProjectID: "project-1", ApplicationID: "application-1",
+		Provider: core.ProviderGooglePlay,
+	}
+	for _, kind := range []googleplay.NotificationKind{
+		googleplay.NotificationKindTest,
+		googleplay.NotificationKindPendingRefundReview,
+	} {
+		kind := kind
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+
+			payload, err := json.Marshal(googleplay.NotificationEnvelope{
+				MessageID: "pubsub-message-1", Kind: kind,
+				EventTime: time.Date(2026, time.August, 25, 15, 0, 0, 0, time.UTC),
+			})
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+			if err := service.handleGooglePlayInbox(context.Background(), message, payload); err != nil {
+				t.Fatalf("handleGooglePlayInbox() error = %v", err)
+			}
+		})
+	}
+
+	if err := service.handleGooglePlayInbox(context.Background(), message, []byte(`{"unknown":true}`)); err == nil {
+		t.Fatal("handleGooglePlayInbox() malformed payload error = nil")
+	}
+}
+
+// TestWorkerHandlersRejectWrongQueueProviderAndPayload verifies durable job routing is fail closed.
+func TestWorkerHandlersRejectWrongQueueProviderAndPayload(t *testing.T) {
+	t.Parallel()
+
+	if err := (&Service{}).HandleInbox(context.Background(), persistence.QueueMessage{
+		Queue: persistence.QueueReconciliation,
+	}); err == nil {
+		t.Fatal("HandleInbox() wrong queue error = nil")
+	}
+	if err := (&Service{}).HandleReconciliation(context.Background(), persistence.QueueMessage{
+		Queue: persistence.QueueInbox,
+	}); err == nil {
+		t.Fatal("HandleReconciliation() wrong queue error = nil")
+	}
+
+	fingerprint := sha256.Sum256([]byte("protected"))
+	message := persistence.QueueMessage{
+		Queue: persistence.QueueInbox, ProjectID: "project-1", ApplicationID: "application-1",
+		Provider: core.Provider("unsupported"),
+		ProtectedPayload: protection.Value{
+			Ciphertext: []byte{1}, Fingerprint: fingerprint, KeyID: "test-key",
+		},
+	}
+	service := &Service{protection: &processingProtection{opened: []byte(`{}`)}}
+	if err := service.HandleInbox(context.Background(), message); err == nil {
+		t.Fatal("HandleInbox() unsupported provider error = nil")
+	}
+
+	message.Queue = persistence.QueueReconciliation
+	message.Provider = core.ProviderGooglePlay
+	service.protection = &processingProtection{opened: []byte(`{"unknown":true}`)}
+	if err := service.HandleReconciliation(context.Background(), message); err == nil {
+		t.Fatal("HandleReconciliation() malformed payload error = nil")
+	}
+}
+
 // TestReconciliationSchedulesNextGenerationBeforeProviderRefresh verifies terminal failures cannot stop the chain.
 func TestReconciliationSchedulesNextGenerationBeforeProviderRefresh(t *testing.T) {
 	t.Parallel()

@@ -1,5 +1,3 @@
-import 'dart:collection';
-
 import 'package:iapstack_huawei/src/product_kind.dart';
 
 /// One product returned by Huawei AppGallery for the current account and locale.
@@ -111,8 +109,8 @@ final class HuaweiProductQuery {
   HuaweiProductQuery({
     required List<HuaweiProduct> products,
     required Set<String> notFoundProductIds,
-  })  : products = UnmodifiableListView<HuaweiProduct>(products),
-        notFoundProductIds = UnmodifiableSetView<String>(notFoundProductIds);
+  })  : products = List<HuaweiProduct>.unmodifiable(products),
+        notFoundProductIds = Set<String>.unmodifiable(notFoundProductIds);
 
   /// Products returned by AppGallery in requested product-ID order.
   final List<HuaweiProduct> products;

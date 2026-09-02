@@ -99,6 +99,102 @@ func TestAppleNotificationUsesPathProjectScope(t *testing.T) {
 	}
 }
 
+// TestGooglePlayNotificationRejectsMalformedBearerBeforeReadingBody verifies Pub/Sub auth is fail fast.
+func TestGooglePlayNotificationRejectsMalformedBearerBeforeReadingBody(t *testing.T) {
+	t.Parallel()
+
+	for _, authorization := range []string{
+		"",
+		"Basic signed-pubsub-token",
+		"bearer signed-pubsub-token",
+		"Bearer ",
+		"Bearer signed token",
+		"Bearer signed-pubsub-token\nsecond-token",
+	} {
+		authorization := authorization
+		t.Run(authorization, func(t *testing.T) {
+			t.Parallel()
+
+			store := &notificationScopeStore{}
+			api := &API{operations: store, bodyLimit: 1}
+			request := httptest.NewRequest(
+				http.MethodPost,
+				"/v1/providers/google-play/projects/project-1/applications/application-1/notifications",
+				strings.NewReader("oversized body that must not be read"),
+			)
+			request.Header.Set("Authorization", authorization)
+			recorder := httptest.NewRecorder()
+
+			api.googlePlayNotification(recorder, request)
+
+			if recorder.Code != http.StatusUnauthorized {
+				t.Fatalf("notification status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+			}
+			if store.projectID != "" || store.applicationID != "" {
+				t.Fatalf("application lookup occurred before authentication: %#v", store)
+			}
+		})
+	}
+}
+
+// TestProviderNotificationsEnforceJSONBodyContract verifies media type and size limits consistently.
+func TestProviderNotificationsEnforceJSONBodyContract(t *testing.T) {
+	t.Parallel()
+
+	handlers := []struct {
+		name    string
+		handler func(*API, http.ResponseWriter, *http.Request)
+	}{
+		{name: "Huawei", handler: func(api *API, writer http.ResponseWriter, request *http.Request) {
+			api.huaweiNotification(writer, request)
+		}},
+		{name: "Google Play", handler: func(api *API, writer http.ResponseWriter, request *http.Request) {
+			api.googlePlayNotification(writer, request)
+		}},
+		{name: "Apple", handler: func(api *API, writer http.ResponseWriter, request *http.Request) {
+			api.appleNotification(writer, request)
+		}},
+	}
+	for _, handler := range handlers {
+		handler := handler
+		t.Run(handler.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, testCase := range []struct {
+				name        string
+				contentType string
+				body        string
+				wantStatus  int
+			}{
+				{name: "missing media type", body: `{}`, wantStatus: http.StatusUnsupportedMediaType},
+				{name: "wrong media type", contentType: "text/plain", body: `{}`, wantStatus: http.StatusUnsupportedMediaType},
+				{name: "oversized body", contentType: "application/json; charset=utf-8", body: `{"too":"large"}`, wantStatus: http.StatusRequestEntityTooLarge},
+			} {
+				testCase := testCase
+				t.Run(testCase.name, func(t *testing.T) {
+					t.Parallel()
+
+					store := &notificationScopeStore{}
+					api := &API{operations: store, bodyLimit: 4}
+					request := httptest.NewRequest(http.MethodPost, "/notifications", strings.NewReader(testCase.body))
+					request.Header.Set("Content-Type", testCase.contentType)
+					request.Header.Set("Authorization", "Bearer signed-pubsub-token")
+					recorder := httptest.NewRecorder()
+
+					handler.handler(api, recorder, request)
+
+					if recorder.Code != testCase.wantStatus {
+						t.Fatalf("notification status = %d, want %d", recorder.Code, testCase.wantStatus)
+					}
+					if store.projectID != "" || store.applicationID != "" {
+						t.Fatalf("application lookup occurred before body validation: %#v", store)
+					}
+				})
+			}
+		})
+	}
+}
+
 // Operate executes one scope-capturing application lookup callback.
 func (store *notificationScopeStore) Operate(ctx context.Context, operation persistence.OperationsFunc) error {
 	return operation(&notificationScopeTransaction{store: store})

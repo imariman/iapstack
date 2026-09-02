@@ -180,6 +180,113 @@ func TestNotificationRejectsMultipleVariantsAndSkipsAuditOnlySignals(t *testing.
 	if evidence, process, err := testEnvelope.VerificationEvidence(); err != nil || process || evidence != nil {
 		t.Fatalf("VerificationEvidence() test signal = (%s, %t, %v)", evidence, process, err)
 	}
+
+	pendingPayload := notificationPush(t, map[string]any{
+		"version": "1.0", "packageName": fixturePackageName, "eventTimeMillis": "1787666400000",
+		"pendingRefundReviewNotification": map[string]any{
+			"version": "1.0", "pendingRefundToken": "pending-refund-token",
+			"orderId": "GPA.1234-5678-9012-34567", "refundReason": 1,
+		},
+	})
+	pendingEnvelope, err := decodeNotification(
+		googleApplication(core.EnvironmentProduction), configuration, pendingPayload,
+	)
+	if err != nil || pendingEnvelope.Kind != NotificationKindPendingRefundReview {
+		t.Fatalf("decodeNotification() pending refund = (%#v, %v)", pendingEnvelope, err)
+	}
+	if evidence, process, err := pendingEnvelope.VerificationEvidence(); err != nil || process || evidence != nil {
+		t.Fatalf("VerificationEvidence() pending refund = (%s, %t, %v)", evidence, process, err)
+	}
+}
+
+// TestDecodeNotificationRejectsMalformedProviderInput verifies strict RTDN boundary validation.
+func TestDecodeNotificationRejectsMalformedProviderInput(t *testing.T) {
+	t.Parallel()
+
+	configuration := rtdnConfiguration{
+		Subscription: fixtureRTDNSubscription, Audience: fixtureRTDNAudience,
+		PushServiceAccountEmail: fixtureRTDNServiceAccount,
+	}
+	base := func() map[string]any {
+		return map[string]any{
+			"version": "1.0", "packageName": fixturePackageName, "eventTimeMillis": "1787666400000",
+			"subscriptionNotification": map[string]any{
+				"version": "1.0", "notificationType": 2, "purchaseToken": fixturePurchaseToken,
+			},
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "unknown field", mutate: func(payload map[string]any) { payload["unknown"] = true }},
+		{name: "zero event time", mutate: func(payload map[string]any) { payload["eventTimeMillis"] = 0 }},
+		{name: "wrong envelope version", mutate: func(payload map[string]any) { payload["version"] = "2.0" }},
+		{name: "missing variant", mutate: func(payload map[string]any) { delete(payload, "subscriptionNotification") }},
+		{name: "wrong variant version", mutate: func(payload map[string]any) {
+			payload["subscriptionNotification"].(map[string]any)["version"] = "2.0"
+		}},
+		{name: "blank purchase token", mutate: func(payload map[string]any) {
+			payload["subscriptionNotification"].(map[string]any)["purchaseToken"] = " "
+		}},
+		{name: "control character in message data", mutate: func(payload map[string]any) {
+			payload["subscriptionNotification"].(map[string]any)["purchaseToken"] = "token\nvalue"
+		}},
+		{name: "out of scope package", mutate: func(payload map[string]any) { payload["packageName"] = "com.example.other" }},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			developerPayload := base()
+			test.mutate(developerPayload)
+			_, err := decodeNotification(
+				googleApplication(core.EnvironmentProduction), configuration,
+				notificationPush(t, developerPayload),
+			)
+			if !errors.Is(err, ErrNotificationInvalid) {
+				t.Fatalf("decodeNotification() error = %v", err)
+			}
+		})
+	}
+}
+
+// TestDecodeNotificationRejectsMalformedPubSubEnvelope verifies wrapper scope and base64 constraints.
+func TestDecodeNotificationRejectsMalformedPubSubEnvelope(t *testing.T) {
+	t.Parallel()
+
+	configuration := rtdnConfiguration{
+		Subscription: fixtureRTDNSubscription, Audience: fixtureRTDNAudience,
+		PushServiceAccountEmail: fixtureRTDNServiceAccount,
+	}
+	for _, payload := range [][]byte{
+		[]byte(`{"message":{"data":"%%%","messageId":"pubsub-message-1"},"subscription":"projects/example/subscriptions/iapstack"}`),
+		[]byte(`{"message":{"data":"e30=","messageId":" "},"subscription":"projects/example/subscriptions/iapstack"}`),
+		[]byte(`{"message":{"data":"e30=","messageId":"pubsub-message-1"},"subscription":"projects/other/subscriptions/iapstack"}`),
+		[]byte(`{"message":{"data":"e30=","messageId":"pubsub-message-1"},"subscription":"projects/example/subscriptions/iapstack","unknown":true}`),
+	} {
+		if _, err := decodeNotification(
+			googleApplication(core.EnvironmentProduction), configuration, payload,
+		); !errors.Is(err, ErrNotificationInvalid) {
+			t.Fatalf("decodeNotification(%s) error = %v", payload, err)
+		}
+	}
+}
+
+// FuzzDecodeNotificationNeverPanics exercises the unauthenticated Pub/Sub JSON boundary.
+func FuzzDecodeNotificationNeverPanics(f *testing.F) {
+	configuration := rtdnConfiguration{
+		Subscription: fixtureRTDNSubscription, Audience: fixtureRTDNAudience,
+		PushServiceAccountEmail: fixtureRTDNServiceAccount,
+	}
+	f.Add([]byte(`{}`))
+	f.Add([]byte(`{"message":{"data":"e30=","messageId":"message-1"},"subscription":"projects/example/subscriptions/iapstack"}`))
+	f.Fuzz(func(t *testing.T, payload []byte) {
+		_, _ = decodeNotification(
+			googleApplication(core.EnvironmentProduction), configuration, payload,
+		)
+	})
 }
 
 // Validate records the supplied token and audience before returning deterministic claims.

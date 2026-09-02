@@ -163,6 +163,90 @@ func TestServiceReconcilePersistsProviderNotificationSignal(t *testing.T) {
 	}
 }
 
+// TestServiceReconcilePreservesDurableResultWhenPostCommitFails verifies retryable acknowledgement ordering.
+func TestServiceReconcilePreservesDurableResultWhenPostCommitFails(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	queryReference, err := core.NewStoreReference(
+		core.ReferenceQuery,
+		"purchase_token",
+		"sensitive-purchase-token",
+	)
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	customerBinding, err := core.NewStoreReference(
+		core.ReferenceCustomerBinding,
+		"obfuscated_external_account_id",
+		verificationExternalCustomerID,
+	)
+	if err != nil {
+		t.Fatalf("NewStoreReference() customer binding error = %v", err)
+	}
+	fixture.result.Observations[0].References = append(
+		fixture.result.Observations[0].References,
+		queryReference,
+		customerBinding,
+	)
+	fixture.result.PostCommitActions = []stores.PostCommitAction{{
+		Kind: "acknowledge_purchase", ProductID: verificationProviderProductID,
+		ProductKind:     core.ProductKindNonConsumable,
+		QueryReferences: []core.StoreReference{queryReference},
+	}}
+	signal, err := stores.NewEvidence(
+		"application/vnd.iapstack.google-play-rtdn+json",
+		[]byte(`{"kind":"one_time_product","purchase_token":"sensitive-purchase-token"}`),
+	)
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	store := newFakeStore(fixture)
+	providerFailure := stores.NewFailure(
+		core.ProviderHuaweiAppGallery,
+		"acknowledge",
+		stores.FailureTemporary,
+		0,
+		context.DeadlineExceeded,
+	)
+	adapter := &fakeAdapter{result: fixture.result}
+	adapter.postCommit = func(request stores.PostCommitRequest) error {
+		if len(store.repository.evidence) != 1 ||
+			len(store.repository.observations) != 1 ||
+			len(store.repository.entitlements) != 1 ||
+			len(store.repository.outbox) != 1 {
+			t.Fatalf("PostCommit() observed reconciliation before durable commit: %#v", store.repository)
+		}
+		return providerFailure
+	}
+	service := newVerificationService(t, store, adapter, &fakeProtector{}, fixture.clock)
+
+	_, err = service.Reconcile(context.Background(), verification.ReconciliationCommand{
+		ProjectID:                verificationProjectID,
+		ApplicationID:            verificationApplicationID,
+		ExternalCustomerID:       verificationExternalCustomerID,
+		ExpectedProducts:         []core.ProviderProductID{verificationProviderProductID},
+		ExpectedProductKind:      core.ProductKindNonConsumable,
+		ExpectedCustomerBindings: []core.StoreReference{customerBinding},
+		QueryReferences:          []core.StoreReference{queryReference},
+		Signal:                   signal,
+	})
+	var actualFailure *stores.Failure
+	if !errors.As(err, &actualFailure) || actualFailure != providerFailure {
+		t.Fatalf("Reconcile() error = %v, want post-commit provider failure", err)
+	}
+	if adapter.reconcileCalls != 1 || adapter.postCommitCalls != 1 {
+		t.Fatalf(
+			"Reconcile() calls = %d, post-commit calls = %d",
+			adapter.reconcileCalls,
+			adapter.postCommitCalls,
+		)
+	}
+	if len(store.repository.entitlements) != 1 || len(store.repository.outbox) != 1 {
+		t.Fatalf("repository lost durable reconciliation after post-commit failure: %#v", store.repository)
+	}
+}
+
 // TestServiceVerifyPersistsAndReplays verifies one atomic success and logical replay.
 func TestServiceVerifyPersistsAndReplays(t *testing.T) {
 	t.Parallel()

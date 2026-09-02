@@ -102,6 +102,129 @@ void main() {
     expect(product.isPurchasable, isTrue);
     expect(product.pricingPhases, isEmpty);
   });
+
+  test('rejects plugin errors and non-Google product details', () async {
+    officialPlatform.productResponse = ProductDetailsResponse(
+      productDetails: const <ProductDetails>[],
+      notFoundIDs: const <String>[],
+      error: IAPError(
+        source: 'google_play',
+        code: 'billing_unavailable',
+        message: 'sensitive provider message',
+      ),
+    );
+
+    await expectLater(
+      bridge.queryProducts(const <String>{'premium'}),
+      throwsA(
+        isA<GooglePlayIapStackException>()
+            .having((error) => error.code, 'code', 'billing_unavailable')
+            .having(
+              (error) => error.message,
+              'message',
+              isNot(contains('sensitive')),
+            ),
+      ),
+    );
+
+    officialPlatform.productResponse = ProductDetailsResponse(
+      productDetails: <ProductDetails>[
+        ProductDetails(
+          id: 'premium',
+          title: 'Wrong platform',
+          description: 'Not Android',
+          price: r'$1.00',
+          rawPrice: 1,
+          currencyCode: 'USD',
+        ),
+      ],
+      notFoundIDs: const <String>[],
+    );
+    await expectLater(
+      bridge.queryProducts(const <String>{'premium'}),
+      throwsA(
+        isA<GooglePlayIapStackException>().having(
+          (error) => error.code,
+          'code',
+          'invalid_plugin_response',
+        ),
+      ),
+    );
+  });
+
+  test(
+    'requires a native cached product and a launched Billing flow',
+    () async {
+      final product = GooglePlayProduct(
+        id: 'premium_lifetime',
+        kind: GooglePlayProductKind.nonConsumable,
+        title: 'Premium Lifetime',
+        description: 'Permanent access',
+        price: r'$49.99',
+        priceMicros: 49990000,
+        currencyCode: 'USD',
+      );
+      await expectLater(
+        bridge.launchPurchase(
+          product: product,
+          obfuscatedAccountId: 'customer-1',
+        ),
+        throwsA(
+          isA<GooglePlayIapStackException>().having(
+            (error) => error.code,
+            'code',
+            'product_not_queried',
+          ),
+        ),
+      );
+
+      final nativeProduct = GooglePlayProductDetails.fromProductDetails(
+        _oneTimeDetails,
+      ).single;
+      officialPlatform.productResponse = ProductDetailsResponse(
+        productDetails: <ProductDetails>[nativeProduct],
+        notFoundIDs: const <String>[],
+      );
+      officialPlatform.purchaseLaunched = false;
+      final query = await bridge.queryProducts(const <String>{
+        'premium_lifetime',
+      });
+      await expectLater(
+        bridge.launchPurchase(
+          product: query.products.single,
+          obfuscatedAccountId: 'customer-1',
+        ),
+        throwsA(
+          isA<GooglePlayIapStackException>().having(
+            (error) => error.code,
+            'code',
+            'purchase_not_launched',
+          ),
+        ),
+      );
+    },
+  );
+
+  test('redacts unexpected platform exceptions', () async {
+    officialPlatform.availabilityError = StateError('secret native details');
+
+    await expectLater(
+      bridge.isAvailable(),
+      throwsA(
+        isA<GooglePlayIapStackException>()
+            .having(
+              (error) => error.code,
+              'code',
+              'google_play_availability_failed',
+            )
+            .having(
+              (error) => error.message,
+              'message',
+              isNot(contains('secret')),
+            ),
+      ),
+    );
+  });
 }
 
 final class _FakeOfficialPlatform extends Fake
@@ -115,9 +238,20 @@ final class _FakeOfficialPlatform extends Fake
     notFoundIDs: const <String>[],
   );
   PurchaseParam? purchaseParam;
+  Object? availabilityError;
+  bool purchaseLaunched = true;
 
   @override
   Stream<List<PurchaseDetails>> get purchaseStream => _purchases.stream;
+
+  @override
+  Future<bool> isAvailable() async {
+    final error = availabilityError;
+    if (error != null) {
+      throw error;
+    }
+    return true;
+  }
 
   @override
   Future<ProductDetailsResponse> queryProductDetails(
@@ -127,7 +261,7 @@ final class _FakeOfficialPlatform extends Fake
   @override
   Future<bool> buyNonConsumable({required PurchaseParam purchaseParam}) async {
     this.purchaseParam = purchaseParam;
-    return true;
+    return purchaseLaunched;
   }
 
   void emitPurchase(PurchaseWrapper purchase) {

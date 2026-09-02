@@ -14,6 +14,30 @@ void main() {
       expect(await googlePlay.isAvailable(), isFalse);
     });
 
+    test('requires a non-empty catalog with unique normalized IDs', () {
+      final client = _backend((request) async => http.Response('{}', 500));
+
+      expect(
+        () => GooglePlayIapStack(
+          client: client,
+          productKinds: const <String, GooglePlayProductKind>{},
+          platform: _FakePlatform(),
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => GooglePlayIapStack(
+          client: client,
+          productKinds: const <String, GooglePlayProductKind>{
+            'premium': GooglePlayProductKind.nonConsumable,
+            ' premium ': GooglePlayProductKind.nonConsumable,
+          },
+          platform: _FakePlatform(),
+        ),
+        throwsArgumentError,
+      );
+    });
+
     test('rejects account identifiers longer than the Billing limit', () async {
       final platform = _FakePlatform();
       final googlePlay = _googlePlay(platform: platform);
@@ -191,6 +215,72 @@ void main() {
       );
     });
 
+    test(
+      'rejects invalid query input and duplicate or unusable offers',
+      () async {
+        final googlePlay = _googlePlay(platform: _FakePlatform());
+        await expectLater(
+          googlePlay.queryProducts(const <String>{}),
+          throwsArgumentError,
+        );
+        await expectLater(
+          googlePlay.queryProducts(const <String>{'not_configured'}),
+          throwsA(
+            isA<GooglePlayIapStackException>().having(
+              (error) => error.code,
+              'code',
+              'unconfigured_product',
+            ),
+          ),
+        );
+
+        final product = GooglePlayProduct(
+          id: 'premium_lifetime',
+          kind: GooglePlayProductKind.nonConsumable,
+          title: 'Premium Lifetime',
+          description: 'Permanent access',
+          price: r'$49.99',
+          priceMicros: 49990000,
+          currencyCode: 'USD',
+        );
+        final duplicate = _googlePlay(
+          platform: _FakePlatform(
+            productQuery: GooglePlayProductQuery(
+              products: <GooglePlayProduct>[product, product],
+              notFoundProductIds: const <String>{},
+            ),
+          ),
+        );
+        await expectLater(
+          duplicate.queryProducts(const <String>{'premium_lifetime'}),
+          throwsA(isA<GooglePlayIapStackException>()),
+        );
+
+        final unusable = _googlePlay(
+          platform: _FakePlatform(
+            productQuery: GooglePlayProductQuery(
+              products: <GooglePlayProduct>[
+                GooglePlayProduct(
+                  id: 'premium_lifetime',
+                  kind: GooglePlayProductKind.nonConsumable,
+                  title: 'Premium Lifetime',
+                  description: 'Permanent access',
+                  price: r'$49.99',
+                  priceMicros: -1,
+                  currencyCode: 'USD',
+                ),
+              ],
+              notFoundProductIds: const <String>{},
+            ),
+          ),
+        );
+        await expectLater(
+          unusable.queryProducts(const <String>{'premium_lifetime'}),
+          throwsA(isA<GooglePlayIapStackException>()),
+        );
+      },
+    );
+
     test('verifies exact token evidence and configured product kind', () async {
       late Map<String, Object?> requestJson;
       final backend = _backend((request) async {
@@ -300,6 +390,27 @@ void main() {
       expect(restored.results, hasLength(101));
     });
 
+    test('returns an empty restore without contacting IAPStack', () async {
+      var backendCalled = false;
+      final googlePlay = GooglePlayIapStack(
+        client: _backend((request) async {
+          backendCalled = true;
+          return http.Response('{}', 500);
+        }),
+        productKinds: const <String, GooglePlayProductKind>{
+          'premium_lifetime': GooglePlayProductKind.nonConsumable,
+        },
+        platform: _FakePlatform(),
+      );
+
+      final result = await googlePlay.restorePurchases(
+        externalCustomerId: 'customer-1',
+      );
+
+      expect(result.results, isEmpty);
+      expect(backendCalled, isFalse);
+    });
+
     test('rejects cancelled and multi-product updates', () async {
       final googlePlay = _googlePlay(platform: _FakePlatform());
       await expectLater(
@@ -336,6 +447,54 @@ void main() {
         ),
       );
     });
+
+    test(
+      'rejects failed and unknown-product updates before the backend',
+      () async {
+        var backendCalled = false;
+        final googlePlay = GooglePlayIapStack(
+          client: _backend((request) async {
+            backendCalled = true;
+            return http.Response('{}', 500);
+          }),
+          productKinds: const <String, GooglePlayProductKind>{
+            'premium_lifetime': GooglePlayProductKind.nonConsumable,
+          },
+          platform: _FakePlatform(),
+        );
+
+        await expectLater(
+          googlePlay.verifyPurchase(
+            externalCustomerId: 'customer-1',
+            purchase: _purchase(
+              'premium_lifetime',
+              status: GooglePlayPurchaseStatus.failed,
+            ),
+          ),
+          throwsA(
+            isA<GooglePlayIapStackException>().having(
+              (error) => error.code,
+              'code',
+              'purchase_failed',
+            ),
+          ),
+        );
+        await expectLater(
+          googlePlay.verifyPurchase(
+            externalCustomerId: 'customer-1',
+            purchase: _purchase('unknown_product'),
+          ),
+          throwsA(
+            isA<GooglePlayIapStackException>().having(
+              (error) => error.code,
+              'code',
+              'unknown_product',
+            ),
+          ),
+        );
+        expect(backendCalled, isFalse);
+      },
+    );
 
     test('keeps evidence and purchase string representations redacted', () {
       final purchase = _purchase(

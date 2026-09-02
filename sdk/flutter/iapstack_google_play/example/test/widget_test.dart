@@ -1,8 +1,12 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:iapstack_google_play/iapstack_google_play.dart';
+import 'package:iapstack/iapstack.dart';
 import 'package:iapstack_google_play_example/app.dart';
+import 'package:iapstack_google_play_example/billing_status_card.dart';
 import 'package:iapstack_google_play_example/example_config.dart';
+import 'package:iapstack_google_play_example/example_cubit.dart';
+import 'package:iapstack_google_play_example/example_status_panel.dart';
 import 'package:iapstack_google_play_example/product_offer_card.dart';
 
 void main() {
@@ -88,5 +92,57 @@ void main() {
     expect(find.text('Offer: trial'), findsOneWidget);
     expect(find.text('Tag: new-users'), findsOneWidget);
     expect(find.text(r'$0.00 / P7D · finite'), findsOneWidget);
+  });
+
+  testWidgets('renders Billing availability and catalog readiness separately', (
+    tester,
+  ) async {
+    Future<void> pump(ExampleState state) => tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: BillingStatusCard(state: state)),
+      ),
+    );
+
+    await pump(const ExampleState());
+    expect(find.text('Play Billing unavailable'), findsOneWidget);
+
+    await pump(const ExampleState(billingAvailable: true));
+    expect(
+      find.text('Play Billing connected; catalog incomplete'),
+      findsOneWidget,
+    );
+
+    await pump(const ExampleState(billingAvailable: true, catalogReady: true));
+    expect(find.text('Play Billing and catalog ready'), findsOneWidget);
+  });
+
+  testWidgets('renders loading, request identity, and entitlement projection', (
+    tester,
+  ) async {
+    const state = ExampleState(
+      status: ExampleStatus.loading,
+      message: 'Verifying purchase',
+      requestId: 'play-verify-1',
+      entitlements: <Entitlement>[
+        Entitlement(
+          key: 'premium',
+          access: 'allowed',
+          reason: 'purchase_valid',
+          version: 4,
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: ExampleStatusPanel(state: state)),
+      ),
+    );
+
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+    expect(find.text('Request ID: play-verify-1'), findsOneWidget);
+    expect(find.text('premium'), findsOneWidget);
+    expect(find.text('allowed · purchase_valid'), findsOneWidget);
+    expect(find.text('Projection version 4'), findsOneWidget);
   });
 }

@@ -1,5 +1,3 @@
-import 'dart:collection';
-
 import 'package:iapstack_google_play/src/product_kind.dart';
 
 /// Recurrence behavior reported for one Google Play subscription pricing phase.
@@ -83,10 +81,8 @@ final class GooglePlayProduct {
     List<String> offerTags = const <String>[],
     List<GooglePlayPricingPhase> pricingPhases =
         const <GooglePlayPricingPhase>[],
-  }) : offerTags = UnmodifiableListView<String>(offerTags),
-       pricingPhases = UnmodifiableListView<GooglePlayPricingPhase>(
-         pricingPhases,
-       );
+  }) : offerTags = List<String>.unmodifiable(offerTags),
+       pricingPhases = List<GooglePlayPricingPhase>.unmodifiable(pricingPhases);
 
   /// Provider product identifier configured in Play Console and IAPStack.
   final String id;
@@ -188,8 +184,8 @@ final class GooglePlayProductQuery {
   GooglePlayProductQuery({
     required List<GooglePlayProduct> products,
     required Set<String> notFoundProductIds,
-  }) : products = UnmodifiableListView<GooglePlayProduct>(products),
-       notFoundProductIds = UnmodifiableSetView<String>(notFoundProductIds);
+  }) : products = List<GooglePlayProduct>.unmodifiable(products),
+       notFoundProductIds = Set<String>.unmodifiable(notFoundProductIds);
 
   /// Product and offer rows returned by Google Play.
   final List<GooglePlayProduct> products;
