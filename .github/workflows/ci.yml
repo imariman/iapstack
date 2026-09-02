@@ -37,7 +37,9 @@ jobs:
           test -s dashboard/app.css
           test -s contracts/openapi/v1.yaml
           test -s .github/workflows/release.yml
+          test -x .github/scripts/check-coverage.sh
           test -x .github/scripts/install-flutter.sh
+          bash -n .github/scripts/check-coverage.sh
           node --check dashboard/app.js
           test -x deploy/e2e/run.sh
 
@@ -103,9 +105,11 @@ jobs:
         if: steps.module.outputs.present == 'true'
         run: go vet ./...
 
-      - name: Run tests
+      - name: Run tests and enforce coverage
         if: steps.module.outputs.present == 'true'
-        run: go test -race -count=1 ./...
+        run: |
+          go test -race -tags=integration -count=1 -coverprofile="$RUNNER_TEMP/go-coverage.out" ./...
+          .github/scripts/check-coverage.sh go "$RUNNER_TEMP/go-coverage.out" 57 "Go statements"
 
       - name: Report bootstrap state
         if: steps.module.outputs.present != 'true'
@@ -154,7 +158,8 @@ jobs:
           dart pub get
           dart format --output=none --set-exit-if-changed .
           dart analyze
-          dart test
+          flutter test --coverage
+          "$GITHUB_WORKSPACE/.github/scripts/check-coverage.sh" lcov coverage/lcov.info 84 "Provider-neutral SDK lines"
 
       - name: Check Huawei SDK
         working-directory: sdk/flutter/iapstack_huawei
@@ -162,7 +167,8 @@ jobs:
           flutter pub get
           dart format --output=none --set-exit-if-changed .
           flutter analyze
-          flutter test
+          flutter test --coverage
+          "$GITHUB_WORKSPACE/.github/scripts/check-coverage.sh" lcov coverage/lcov.info 82 "Huawei SDK lines"
 
       - name: Check Huawei sandbox example
         working-directory: sdk/flutter/iapstack_huawei/example
@@ -170,7 +176,8 @@ jobs:
           flutter pub get
           dart format --output=none --set-exit-if-changed lib test
           flutter analyze
-          flutter test
+          flutter test --coverage
+          "$GITHUB_WORKSPACE/.github/scripts/check-coverage.sh" lcov coverage/lcov.info 62 "Huawei example lines"
           flutter build apk --debug --target-platform android-arm64
 
       - name: Reclaim Huawei Android build space
@@ -184,7 +191,8 @@ jobs:
           flutter pub get
           dart format --output=none --set-exit-if-changed .
           flutter analyze
-          flutter test
+          flutter test --coverage
+          "$GITHUB_WORKSPACE/.github/scripts/check-coverage.sh" lcov coverage/lcov.info 86 "Google Play SDK lines"
 
       - name: Check Google Play internal-testing example
         working-directory: sdk/flutter/iapstack_google_play/example
@@ -192,7 +200,8 @@ jobs:
           flutter pub get
           dart format --output=none --set-exit-if-changed lib test
           flutter analyze
-          flutter test
+          flutter test --coverage
+          "$GITHUB_WORKSPACE/.github/scripts/check-coverage.sh" lcov coverage/lcov.info 67 "Google Play example lines"
           flutter build apk --debug --target-platform android-arm64
 
       - name: Check Apple SDK
@@ -201,7 +210,8 @@ jobs:
           flutter pub get
           dart format --output=none --set-exit-if-changed .
           flutter analyze
-          flutter test
+          flutter test --coverage
+          "$GITHUB_WORKSPACE/.github/scripts/check-coverage.sh" lcov coverage/lcov.info 79 "Apple SDK lines"
 
       - name: Check Apple StoreKit example
         working-directory: sdk/flutter/iapstack_apple/example
@@ -209,7 +219,8 @@ jobs:
           flutter pub get
           dart format --output=none --set-exit-if-changed lib test
           flutter analyze
-          flutter test
+          flutter test --coverage
+          "$GITHUB_WORKSPACE/.github/scripts/check-coverage.sh" lcov coverage/lcov.info 40 "Apple example lines"
 
   flutter-ios:
     name: Flutter iOS build
