@@ -167,18 +167,27 @@ func (service *Service) huaweiReconciliationCommand(
 	if err != nil {
 		return verification.ReconciliationCommand{}, err
 	}
+	customerBinding, err := core.NewStoreReference(
+		core.ReferenceCustomerBinding,
+		"developer_payload",
+		purchase.Customer.ExternalID,
+	)
+	if err != nil {
+		return verification.ReconciliationCommand{}, err
+	}
 	signal, err := stores.NewEvidence(huawei.NotificationContentType, payload)
 	if err != nil {
 		return verification.ReconciliationCommand{}, err
 	}
 	return verification.ReconciliationCommand{
-		ProjectID:           message.ProjectID,
-		ApplicationID:       message.ApplicationID,
-		ExternalCustomerID:  purchase.Customer.ExternalID,
-		ExpectedProducts:    []core.ProviderProductID{purchase.ProviderProductID},
-		ExpectedProductKind: purchase.ProductKind,
-		QueryReferences:     []core.StoreReference{queryReference},
-		Signal:              signal,
+		ProjectID:                message.ProjectID,
+		ApplicationID:            message.ApplicationID,
+		ExternalCustomerID:       purchase.Customer.ExternalID,
+		ExpectedProducts:         []core.ProviderProductID{purchase.ProviderProductID},
+		ExpectedProductKind:      purchase.ProductKind,
+		ExpectedCustomerBindings: []core.StoreReference{customerBinding},
+		QueryReferences:          []core.StoreReference{queryReference},
+		Signal:                   signal,
 	}, nil
 }
 
@@ -192,29 +201,41 @@ func (service *Service) handleGooglePlayInbox(
 	if err := decodeStrict(payload, &notification); err != nil {
 		return fmt.Errorf("decode Google Play notification: %w", err)
 	}
-	verificationPayload, process, err := service.googlePlayVerificationPayload(ctx, message, notification)
+	command, process, err := service.googlePlayReconciliationCommand(ctx, message, notification, payload)
 	if err != nil || !process {
 		return err
 	}
-	result, err := service.verify(ctx, message.ProjectID, message.ApplicationID, verificationPayload)
+	result, err := service.verification.Reconcile(ctx, command)
 	if err != nil {
 		return err
 	}
-	if !requiresReconciliation(verificationPayload.Evidence) {
+	if notification.ProductKind != core.ProductKindSubscription {
 		return nil
 	}
-	return service.schedule(ctx, message.ProjectID, message.ApplicationID, result.Customer.ID, verificationPayload)
+	queryEvidence, _, err := notification.VerificationEvidence()
+	if err != nil {
+		return err
+	}
+	return service.schedule(ctx, message.ProjectID, message.ApplicationID, result.Customer.ID, jobs.VerificationPayload{
+		ExternalCustomerID: command.ExternalCustomerID,
+		ClaimedProducts:    append([]core.ProviderProductID(nil), command.ExpectedProducts...),
+		Evidence:           queryEvidence,
+	})
 }
 
-// googlePlayVerificationPayload binds an RTDN purchase token to previously verified customer and catalog scope.
-func (service *Service) googlePlayVerificationPayload(
+// googlePlayReconciliationCommand binds an RTDN token to a known purchase and preserves the native signal.
+func (service *Service) googlePlayReconciliationCommand(
 	ctx context.Context,
 	message persistence.QueueMessage,
 	notification googleplay.NotificationEnvelope,
-) (jobs.VerificationPayload, bool, error) {
-	evidence, process, err := notification.VerificationEvidence()
-	if err != nil || !process {
-		return jobs.VerificationPayload{}, process, err
+	payload []byte,
+) (verification.ReconciliationCommand, bool, error) {
+	if err := notification.Validate(); err != nil {
+		return verification.ReconciliationCommand{}, false, err
+	}
+	if notification.Kind == googleplay.NotificationKindTest ||
+		notification.Kind == googleplay.NotificationKindPendingRefundReview {
+		return verification.ReconciliationCommand{}, false, nil
 	}
 	token := []byte(notification.PurchaseToken)
 	defer zero(token)
@@ -223,7 +244,7 @@ func (service *Service) googlePlayVerificationPayload(
 		Purpose: providerReferencePurpose + ":" + string(core.ReferenceQuery) + ":purchase_token",
 	}, token)
 	if err != nil {
-		return jobs.VerificationPayload{}, false, fmt.Errorf(
+		return verification.ReconciliationCommand{}, false, fmt.Errorf(
 			"protect Google Play notification lookup: %w",
 			err,
 		)
@@ -240,22 +261,43 @@ func (service *Service) googlePlayVerificationPayload(
 	})
 	if err != nil {
 		if errors.Is(err, persistence.ErrNotFound) || errors.Is(err, persistence.ErrUnavailable) {
-			return jobs.VerificationPayload{}, false, stores.NewFailure(
+			return verification.ReconciliationCommand{}, false, stores.NewFailure(
 				core.ProviderGooglePlay, "notification_lookup", stores.FailureTemporary, 0, err,
 			)
 		}
-		return jobs.VerificationPayload{}, false, err
+		return verification.ReconciliationCommand{}, false, err
 	}
 	if purchase.ProductKind != notification.ProductKind ||
 		(notification.ProviderProductID != "" && notification.ProviderProductID != purchase.ProviderProductID) {
-		return jobs.VerificationPayload{}, false, stores.NewFailure(
+		return verification.ReconciliationCommand{}, false, stores.NewFailure(
 			core.ProviderGooglePlay, "notification_lookup", stores.FailureInvalidEvidence, 0, nil,
 		)
 	}
-	return jobs.VerificationPayload{
-		ExternalCustomerID: purchase.Customer.ExternalID,
-		ClaimedProducts:    []core.ProviderProductID{purchase.ProviderProductID},
-		Evidence:           evidence,
+	queryReference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", notification.PurchaseToken)
+	if err != nil {
+		return verification.ReconciliationCommand{}, false, err
+	}
+	customerBinding, err := core.NewStoreReference(
+		core.ReferenceCustomerBinding,
+		"obfuscated_external_account_id",
+		purchase.Customer.ExternalID,
+	)
+	if err != nil {
+		return verification.ReconciliationCommand{}, false, err
+	}
+	signal, err := stores.NewEvidence(googleplay.NotificationContentType, payload)
+	if err != nil {
+		return verification.ReconciliationCommand{}, false, err
+	}
+	return verification.ReconciliationCommand{
+		ProjectID:                message.ProjectID,
+		ApplicationID:            message.ApplicationID,
+		ExternalCustomerID:       purchase.Customer.ExternalID,
+		ExpectedProducts:         []core.ProviderProductID{purchase.ProviderProductID},
+		ExpectedProductKind:      purchase.ProductKind,
+		ExpectedCustomerBindings: []core.StoreReference{customerBinding},
+		QueryReferences:          []core.StoreReference{queryReference},
+		Signal:                   signal,
 	}, true, nil
 }
 

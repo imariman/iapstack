@@ -259,6 +259,22 @@ func (service *Service) Reconcile(ctx context.Context, command ReconciliationCom
 	if err := providerResult.ValidateForReconciliation(request); err != nil {
 		return Result{}, fmt.Errorf("validate provider reconciliation result: %w", err)
 	}
+	var postCommitter stores.PostCommitter
+	var postCommitRequest stores.PostCommitRequest
+	if len(providerResult.PostCommitActions) > 0 {
+		var supported bool
+		postCommitter, supported = adapter.(stores.PostCommitter)
+		if !supported {
+			return Result{}, errors.New("store adapter returned unsupported post-commit actions")
+		}
+		postCommitRequest = stores.PostCommitRequest{
+			Application: application,
+			Actions:     clonePostCommitActions(providerResult.PostCommitActions),
+		}
+		if err := postCommitRequest.Validate(); err != nil {
+			return Result{}, fmt.Errorf("validate provider post-commit request: %w", err)
+		}
+	}
 	prepared, err := service.prepare(
 		ctx,
 		base,
@@ -270,7 +286,17 @@ func (service *Service) Reconcile(ctx context.Context, command ReconciliationCom
 	if err != nil {
 		return Result{}, err
 	}
-	return service.persist(ctx, base, application, customer, providerResult, prepared)
+	result, err := service.persist(ctx, base, application, customer, providerResult, prepared)
+	if err != nil {
+		return Result{}, err
+	}
+	if postCommitter == nil {
+		return result, nil
+	}
+	if err := postCommitter.PostCommit(ctx, postCommitRequest); err != nil {
+		return Result{}, fmt.Errorf("complete reconciliation with %s: %w", application.Store.Provider, err)
+	}
+	return result, nil
 }
 
 // Validate checks command scope, external customer identity, product claims, bindings, and evidence.

@@ -13,14 +13,15 @@ class BillingStatusCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final available = state.billingAvailable;
-    final statusColor = available ? colors.primary : colors.error;
+    final ready = available && state.catalogReady;
+    final statusColor = ready ? colors.primary : colors.error;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Row(
           children: <Widget>[
             Icon(
-              available ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
+              ready ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
               color: statusColor,
             ),
             const SizedBox(width: 12),
@@ -30,8 +31,10 @@ class BillingStatusCard extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
                   Text(
-                    available
-                        ? 'Play Billing connected'
+                    ready
+                        ? 'Play Billing and catalog ready'
+                        : available
+                        ? 'Play Billing connected; catalog incomplete'
                         : 'Play Billing unavailable',
                     style: Theme.of(
                       context,

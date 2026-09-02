@@ -1,0 +1,5 @@
+# Copy this file to key.properties. The destination and keystore are gitignored.
+storeFile=/absolute/path/to/google-play-upload-key.jks
+storePassword=replace-with-upload-key-store-password
+keyAlias=replace-with-upload-key-alias
+keyPassword=replace-with-upload-key-password

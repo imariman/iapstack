@@ -21,13 +21,13 @@ void main() {
       await expectLater(
         googlePlay.launchPurchase(
           externalCustomerId: 'a' * 65,
-          product: const GooglePlayProduct(
+          product: GooglePlayProduct(
             id: 'premium_lifetime',
             kind: GooglePlayProductKind.nonConsumable,
             title: 'Premium Lifetime',
             description: 'Premium access',
             price: r'$49.99',
-            rawPrice: 49.99,
+            priceMicros: 49990000,
             currencyCode: 'USD',
           ),
         ),
@@ -39,19 +39,30 @@ void main() {
     test(
       'queries configured products and launches with customer binding',
       () async {
-        const product = GooglePlayProduct(
+        final product = GooglePlayProduct(
           id: 'premium_monthly',
           kind: GooglePlayProductKind.subscription,
           title: 'Premium Monthly',
           description: 'Premium access',
           price: r'$4.99',
-          rawPrice: 4.99,
+          priceMicros: 4990000,
           currencyCode: 'USD',
           offerToken: 'base-plan-offer',
+          basePlanId: 'monthly',
+          pricingPhases: const <GooglePlayPricingPhase>[
+            GooglePlayPricingPhase(
+              billingCycleCount: 0,
+              billingPeriod: 'P1M',
+              formattedPrice: r'$4.99',
+              priceMicros: 4990000,
+              currencyCode: 'USD',
+              recurrence: GooglePlayPricingRecurrence.infinite,
+            ),
+          ],
         );
         final platform = _FakePlatform(
           productQuery: GooglePlayProductQuery(
-            products: const <GooglePlayProduct>[product],
+            products: <GooglePlayProduct>[product],
             notFoundProductIds: const <String>{},
           ),
         );
@@ -71,6 +82,114 @@ void main() {
         expect(platform.launchedAccountId, 'customer-1');
       },
     );
+
+    test('requires a complete product query before opening checkout', () async {
+      final platform = _FakePlatform();
+      final googlePlay = _googlePlay(platform: platform);
+      final product = GooglePlayProduct(
+        id: 'premium_lifetime',
+        kind: GooglePlayProductKind.nonConsumable,
+        title: 'Premium Lifetime',
+        description: 'Premium access',
+        price: r'$49.99',
+        priceMicros: 49990000,
+        currencyCode: 'USD',
+      );
+
+      await expectLater(
+        googlePlay.launchPurchase(
+          externalCustomerId: 'customer-1',
+          product: product,
+        ),
+        throwsA(
+          isA<GooglePlayIapStackException>().having(
+            (error) => error.code,
+            'code',
+            'product_not_queried',
+          ),
+        ),
+      );
+      expect(platform.launchedProduct, isNull);
+    });
+
+    test('invalidates cached offers before a failed refresh query', () async {
+      final product = GooglePlayProduct(
+        id: 'premium_lifetime',
+        kind: GooglePlayProductKind.nonConsumable,
+        title: 'Premium Lifetime',
+        description: 'Premium access',
+        price: r'$49.99',
+        priceMicros: 49990000,
+        currencyCode: 'USD',
+      );
+      final platform = _FakePlatform(
+        productQuery: GooglePlayProductQuery(
+          products: <GooglePlayProduct>[product],
+          notFoundProductIds: const <String>{},
+        ),
+      );
+      final googlePlay = _googlePlay(platform: platform);
+      await googlePlay.queryProducts(const <String>{'premium_lifetime'});
+      platform.productQuery = GooglePlayProductQuery(
+        products: <GooglePlayProduct>[],
+        notFoundProductIds: const <String>{},
+      );
+
+      await expectLater(
+        googlePlay.queryProducts(const <String>{'premium_lifetime'}),
+        throwsA(isA<GooglePlayIapStackException>()),
+      );
+      await expectLater(
+        googlePlay.launchPurchase(
+          externalCustomerId: 'customer-1',
+          product: product,
+        ),
+        throwsA(
+          isA<GooglePlayIapStackException>().having(
+            (error) => error.code,
+            'code',
+            'product_not_queried',
+          ),
+        ),
+      );
+    });
+
+    test('rejects incomplete and out-of-scope product query results', () async {
+      final incomplete = _googlePlay(platform: _FakePlatform());
+      await expectLater(
+        incomplete.queryProducts(const <String>{'premium_lifetime'}),
+        throwsA(
+          isA<GooglePlayIapStackException>().having(
+            (error) => error.code,
+            'code',
+            'invalid_plugin_response',
+          ),
+        ),
+      );
+
+      final unexpected = _googlePlay(
+        platform: _FakePlatform(
+          productQuery: GooglePlayProductQuery(
+            products: <GooglePlayProduct>[
+              GooglePlayProduct(
+                id: 'not-requested',
+                kind: GooglePlayProductKind.nonConsumable,
+                title: 'Unexpected',
+                description: '',
+                price: r'$1.00',
+                priceMicros: 1000000,
+                currencyCode: 'USD',
+              ),
+            ],
+            notFoundProductIds: const <String>{'premium_lifetime'},
+          ),
+        ),
+      );
+      await expectLater(
+        unexpected.queryProducts(const <String>{'premium_lifetime'}),
+        throwsA(isA<GooglePlayIapStackException>()),
+      );
+    });
 
     test('verifies exact token evidence and configured product kind', () async {
       late Map<String, Object?> requestJson;
@@ -294,7 +413,7 @@ final class _FakePlatform implements GooglePlayIapPlatform {
            ),
        owned = List<GooglePlayPurchase>.of(owned);
 
-  final GooglePlayProductQuery productQuery;
+  GooglePlayProductQuery productQuery;
   final List<GooglePlayPurchase> owned;
   final bool available;
   Set<String>? queriedProductIds;

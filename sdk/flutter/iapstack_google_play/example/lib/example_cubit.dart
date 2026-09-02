@@ -14,7 +14,9 @@ final class ExampleState {
     this.status = ExampleStatus.initial,
     this.message = 'Checking Google Play Billing availability.',
     this.billingAvailable = false,
+    this.catalogReady = false,
     this.products = const <GooglePlayProduct>[],
+    this.missingProductIds = const <String>{},
     this.entitlements = const <Entitlement>[],
     this.requestId,
   });
@@ -28,8 +30,14 @@ final class ExampleState {
   /// Whether the official plugin can connect to Google Play Billing.
   final bool billingAvailable;
 
+  /// Whether every configured Play Console product resolved to a purchasable offer.
+  final bool catalogReady;
+
   /// Current localized provider product and offer rows.
   final List<GooglePlayProduct> products;
+
+  /// Configured provider IDs that Play Billing did not return.
+  final Set<String> missingProductIds;
 
   /// Latest authoritative entitlement projection.
   final List<Entitlement> entitlements;
@@ -86,15 +94,22 @@ final class ExampleCubit extends Cubit<ExampleState> {
         return;
       }
       final query = await _googlePlay.queryProducts(productIds);
-      final missingSuffix = query.notFoundProductIds.isEmpty
-          ? ''
-          : ' Missing: ${query.notFoundProductIds.join(', ')}.';
+      final ready =
+          query.notFoundProductIds.isEmpty &&
+          query.products.isNotEmpty &&
+          query.products.every((product) => product.isPurchasable);
       emit(
         ExampleState(
-          status: ExampleStatus.ready,
-          message: 'Google Play Billing is ready.$missingSuffix',
+          status: ready ? ExampleStatus.ready : ExampleStatus.failure,
+          message: ready
+              ? 'Google Play Billing and every configured offer are ready.'
+              : query.notFoundProductIds.isNotEmpty
+              ? 'Configured products are missing from this Play build: ${query.notFoundProductIds.join(', ')}.'
+              : 'Google Play returned no purchasable offers for this build.',
           billingAvailable: true,
+          catalogReady: ready,
           products: query.products,
+          missingProductIds: query.notFoundProductIds,
         ),
       );
     } on GooglePlayIapStackException catch (error) {
@@ -104,7 +119,10 @@ final class ExampleCubit extends Cubit<ExampleState> {
 
   /// Opens Google Play purchase UI for one queried product offer.
   Future<void> purchase(GooglePlayProduct product) async {
-    if (_operationBlocked()) {
+    if (state.status == ExampleStatus.loading ||
+        !state.billingAvailable ||
+        !state.catalogReady) {
+      _emitFailure('Complete Google Play Billing and product checks first.');
       return;
     }
     _emitLoading('Opening Google Play purchase UI…');
@@ -121,7 +139,7 @@ final class ExampleCubit extends Cubit<ExampleState> {
 
   /// Restores currently owned products and reloads the full projection.
   Future<void> restore() async {
-    if (_operationBlocked()) {
+    if (state.status == ExampleStatus.loading || !state.billingAvailable) {
       return;
     }
     final requestId = _requestIdFactory('restore');
@@ -154,7 +172,7 @@ final class ExampleCubit extends Cubit<ExampleState> {
 
   /// Loads authoritative IAPStack projections without contacting Google Play.
   Future<void> refresh() async {
-    if (_operationBlocked()) {
+    if (state.status == ExampleStatus.loading) {
       return;
     }
     final requestId = _requestIdFactory('refresh');
@@ -235,16 +253,15 @@ final class ExampleCubit extends Cubit<ExampleState> {
     );
   }
 
-  bool _operationBlocked() =>
-      state.status == ExampleStatus.loading || !state.billingAvailable;
-
   void _emitLoading(String message) {
     emit(
       ExampleState(
         status: ExampleStatus.loading,
         message: message,
         billingAvailable: state.billingAvailable,
+        catalogReady: state.catalogReady,
         products: state.products,
+        missingProductIds: state.missingProductIds,
         entitlements: state.entitlements,
       ),
     );
@@ -260,7 +277,9 @@ final class ExampleCubit extends Cubit<ExampleState> {
         status: ExampleStatus.ready,
         message: message,
         billingAvailable: state.billingAvailable,
+        catalogReady: state.catalogReady,
         products: state.products,
+        missingProductIds: state.missingProductIds,
         entitlements: entitlements ?? state.entitlements,
         requestId: requestId,
       ),
@@ -273,7 +292,9 @@ final class ExampleCubit extends Cubit<ExampleState> {
         status: ExampleStatus.failure,
         message: message,
         billingAvailable: state.billingAvailable,
+        catalogReady: state.catalogReady,
         products: state.products,
+        missingProductIds: state.missingProductIds,
         entitlements: state.entitlements,
         requestId: requestId,
       ),

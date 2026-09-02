@@ -1,6 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/material.dart';
+import 'package:iapstack_google_play/iapstack_google_play.dart';
 import 'package:iapstack_google_play_example/app.dart';
 import 'package:iapstack_google_play_example/example_config.dart';
+import 'package:iapstack_google_play_example/product_offer_card.dart';
 
 void main() {
   testWidgets('lists missing runtime values without rendering secrets', (
@@ -42,5 +45,48 @@ void main() {
       config.productKinds.keys,
       containsAll(<String>['premium_monthly', 'premium_lifetime']),
     );
+  });
+
+  testWidgets('renders base plan and exact pricing schedule', (tester) async {
+    final product = GooglePlayProduct(
+      id: 'premium_monthly',
+      kind: GooglePlayProductKind.subscription,
+      title: 'Premium Monthly',
+      description: 'Premium access',
+      price: r'$0.00',
+      priceMicros: 0,
+      currencyCode: 'USD',
+      offerToken: 'trial-token',
+      basePlanId: 'monthly',
+      offerId: 'trial',
+      offerTags: const <String>['new-users'],
+      pricingPhases: const <GooglePlayPricingPhase>[
+        GooglePlayPricingPhase(
+          billingCycleCount: 1,
+          billingPeriod: 'P7D',
+          formattedPrice: r'$0.00',
+          priceMicros: 0,
+          currencyCode: 'USD',
+          recurrence: GooglePlayPricingRecurrence.finite,
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ProductOfferCard(
+            product: product,
+            enabled: true,
+            onPurchase: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Base plan: monthly'), findsOneWidget);
+    expect(find.text('Offer: trial'), findsOneWidget);
+    expect(find.text('Tag: new-users'), findsOneWidget);
+    expect(find.text(r'$0.00 / P7D · finite'), findsOneWidget);
   });
 }

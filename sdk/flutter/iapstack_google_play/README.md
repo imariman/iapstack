@@ -65,7 +65,9 @@ when the owning application service is disposed. Do not log a
 ## Query and purchase
 
 Product kinds are checked against the values returned by Play Billing before
-checkout can open. Subscription base plans and offers are returned as separate
+checkout can open. Every requested ID must be returned as an offer or explicitly
+reported missing, and checkout accepts only an immutable offer from that successful
+query. Subscription base plans and offers are returned as separate
 `GooglePlayProduct` rows with distinct in-memory selection keys.
 
 ```dart
@@ -83,6 +85,11 @@ await googlePlay.launchPurchase(
   product: query.products.first,
 );
 ```
+
+Each product retains Google Play's exact `priceMicros` value. Subscription rows
+also expose `basePlanId`, optional `offerId`, offer tags, and the complete ordered
+pricing-phase schedule with ISO 8601 periods and recurrence modes. Use localized
+formatted values for display; client-side pricing never grants entitlement.
 
 The official plugin sends `externalCustomerId` as Google Play's
 `obfuscatedAccountId`. Never pass an email address, Google account, developer
@@ -117,6 +124,11 @@ IAPStack acknowledges a completed Google Play purchase through Android
 Publisher only after evidence, observation, entitlement projection, and the
 outbox event commit durably. Keeping one acknowledgement owner prevents a
 client-side success from racing or masking a failed server transaction.
+
+The same ordering applies to authenticated RTDN processing. IAPStack stores the
+normalized RTDN as protected reconciliation evidence, resolves its purchase token
+to the previously verified customer and product, re-queries Android Publisher, and
+only then runs any required acknowledgement action.
 
 If verification fails, leave the purchase unacknowledged and retry the same
 token through IAPStack. Duplicate verification and restore submissions are

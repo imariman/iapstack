@@ -49,6 +49,15 @@ void main() {
       final purchaseParam = officialPlatform.purchaseParam;
       expect(result.products.single.kind, GooglePlayProductKind.subscription);
       expect(result.products.single.offerToken, 'monthly-base-plan-token');
+      expect(result.products.single.basePlanId, 'monthly');
+      expect(result.products.single.offerId, isNull);
+      expect(result.products.single.priceMicros, 4990000);
+      expect(result.products.single.rawPrice, 4.99);
+      expect(result.products.single.pricingPhases, hasLength(1));
+      expect(
+        result.products.single.pricingPhases.single.recurrence,
+        GooglePlayPricingRecurrence.infinite,
+      );
       expect(result.notFoundProductIds, <String>{'missing_product'});
       expect(purchaseParam, isA<GooglePlayPurchaseParam>());
       expect(purchaseParam?.applicationUserName, 'opaque-customer-1');
@@ -72,6 +81,26 @@ void main() {
     expect(purchase.isAcknowledged, isFalse);
     expect(purchase.toString(), isNot(contains('opaque-purchase-token')));
     expect(purchase.toString(), isNot(contains('native-purchase-json')));
+  });
+
+  test('preserves exact one-time product price micros', () async {
+    final nativeProduct = GooglePlayProductDetails.fromProductDetails(
+      _oneTimeDetails,
+    ).single;
+    officialPlatform.productResponse = ProductDetailsResponse(
+      productDetails: <ProductDetails>[nativeProduct],
+      notFoundIDs: const <String>[],
+    );
+
+    final result = await bridge.queryProducts(<String>{'premium_lifetime'});
+
+    final product = result.products.single;
+    expect(product.kind, GooglePlayProductKind.nonConsumable);
+    expect(product.price, r'$49.99');
+    expect(product.priceMicros, 49990000);
+    expect(product.currencyCode, 'USD');
+    expect(product.isPurchasable, isTrue);
+    expect(product.pricingPhases, isEmpty);
   });
 }
 
@@ -131,6 +160,19 @@ const ProductDetailsWrapper _subscriptionDetails = ProductDetailsWrapper(
     ),
   ],
   title: 'Premium Monthly (IAPStack)',
+);
+
+const ProductDetailsWrapper _oneTimeDetails = ProductDetailsWrapper(
+  description: 'Permanent premium access',
+  name: 'Premium Lifetime',
+  productId: 'premium_lifetime',
+  productType: ProductType.inapp,
+  oneTimePurchaseOfferDetails: OneTimePurchaseOfferDetailsWrapper(
+    formattedPrice: r'$49.99',
+    priceAmountMicros: 49990000,
+    priceCurrencyCode: 'USD',
+  ),
+  title: 'Premium Lifetime (IAPStack)',
 );
 
 const PurchaseWrapper _nativePurchase = PurchaseWrapper(

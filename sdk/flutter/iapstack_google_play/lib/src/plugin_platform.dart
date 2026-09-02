@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:iapstack_google_play/src/errors.dart';
 import 'package:iapstack_google_play/src/platform.dart';
+import 'package:iapstack_google_play/src/product.dart';
 import 'package:iapstack_google_play/src/product_kind.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:in_app_purchase_android/billing_client_wrappers.dart';
@@ -130,18 +131,82 @@ Future<T> _guard<T>({
 
 /// _googlePlayProduct converts official plugin details into the public safe model.
 GooglePlayProduct _googlePlayProduct(GooglePlayProductDetails details) {
-  final kind = details.productDetails.productType == ProductType.subs
-      ? GooglePlayProductKind.subscription
-      : GooglePlayProductKind.nonConsumable;
+  final native = details.productDetails;
+  if (native.productType == ProductType.inapp) {
+    final offer = native.oneTimePurchaseOfferDetails;
+    if (offer == null) {
+      throw const GooglePlayIapStackException(
+        code: 'invalid_plugin_response',
+        message: 'Google Play returned an incomplete one-time product',
+      );
+    }
+    return GooglePlayProduct(
+      id: details.id,
+      kind: GooglePlayProductKind.nonConsumable,
+      title: details.title,
+      description: details.description,
+      price: offer.formattedPrice,
+      priceMicros: offer.priceAmountMicros,
+      currencyCode: offer.priceCurrencyCode,
+    );
+  }
+  final offers = native.subscriptionOfferDetails;
+  final index = details.subscriptionIndex;
+  if (native.productType != ProductType.subs ||
+      offers == null ||
+      index == null ||
+      index < 0 ||
+      index >= offers.length ||
+      offers[index].pricingPhases.isEmpty) {
+    throw const GooglePlayIapStackException(
+      code: 'invalid_plugin_response',
+      message: 'Google Play returned an incomplete subscription offer',
+    );
+  }
+  final offer = offers[index];
+  final phases = offer.pricingPhases
+      .map(_googlePlayPricingPhase)
+      .toList(growable: false);
+  final firstPhase = phases.first;
   return GooglePlayProduct(
     id: details.id,
-    kind: kind,
+    kind: GooglePlayProductKind.subscription,
     title: details.title,
     description: details.description,
-    price: details.price,
-    rawPrice: details.rawPrice,
-    currencyCode: details.currencyCode,
-    offerToken: details.offerToken,
+    price: firstPhase.formattedPrice,
+    priceMicros: firstPhase.priceMicros,
+    currencyCode: firstPhase.currencyCode,
+    offerToken: offer.offerIdToken,
+    basePlanId: offer.basePlanId,
+    offerId: offer.offerId,
+    offerTags: offer.offerTags,
+    pricingPhases: phases,
+  );
+}
+
+/// _googlePlayPricingPhase preserves exact Billing pricing without double conversion.
+GooglePlayPricingPhase _googlePlayPricingPhase(PricingPhaseWrapper phase) {
+  if (phase.billingCycleCount < 0 ||
+      phase.billingPeriod.isEmpty ||
+      phase.formattedPrice.isEmpty ||
+      phase.priceAmountMicros < 0 ||
+      !RegExp(r'^[A-Z]{3}$').hasMatch(phase.priceCurrencyCode)) {
+    throw const GooglePlayIapStackException(
+      code: 'invalid_plugin_response',
+      message: 'Google Play returned an invalid subscription pricing phase',
+    );
+  }
+  return GooglePlayPricingPhase(
+    billingCycleCount: phase.billingCycleCount,
+    billingPeriod: phase.billingPeriod,
+    formattedPrice: phase.formattedPrice,
+    priceMicros: phase.priceAmountMicros,
+    currencyCode: phase.priceCurrencyCode,
+    recurrence: switch (phase.recurrenceMode) {
+      RecurrenceMode.finiteRecurring => GooglePlayPricingRecurrence.finite,
+      RecurrenceMode.infiniteRecurring => GooglePlayPricingRecurrence.infinite,
+      RecurrenceMode.nonRecurring => GooglePlayPricingRecurrence.nonRecurring,
+    },
   );
 }
 

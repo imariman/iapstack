@@ -5,6 +5,7 @@ import 'package:iapstack_google_play/src/errors.dart';
 import 'package:iapstack_google_play/src/evidence.dart';
 import 'package:iapstack_google_play/src/platform.dart';
 import 'package:iapstack_google_play/src/plugin_platform.dart';
+import 'package:iapstack_google_play/src/product.dart';
 import 'package:iapstack_google_play/src/product_kind.dart';
 
 /// High-level Google Play purchase and restore flows backed by IAPStack.
@@ -16,23 +17,28 @@ final class GooglePlayIapStack {
     GooglePlayIapPlatform? platform,
   }) : _client = client,
        _productKinds = UnmodifiableMapView<String, GooglePlayProductKind>(
-         Map<String, GooglePlayProductKind>.of(productKinds),
+         productKinds.map(
+           (id, kind) =>
+               MapEntry<String, GooglePlayProductKind>(id.trim(), kind),
+         ),
        ),
        _platform = platform ?? GooglePlayPluginPlatform() {
-    for (final productId in _productKinds.keys) {
-      if (productId.trim().isEmpty) {
-        throw ArgumentError.value(
-          productKinds,
-          'productKinds',
-          'must not contain an empty product ID',
-        );
-      }
+    if (_productKinds.isEmpty ||
+        _productKinds.keys.any((productId) => productId.isEmpty) ||
+        _productKinds.length != productKinds.length) {
+      throw ArgumentError.value(
+        productKinds,
+        'productKinds',
+        'must contain unique, non-empty product IDs',
+      );
     }
   }
 
   final IapStackClient _client;
   final Map<String, GooglePlayProductKind> _productKinds;
   final GooglePlayIapPlatform _platform;
+  final Map<String, GooglePlayProduct> _queriedProducts =
+      <String, GooglePlayProduct>{};
 
   /// Emits Play Billing changes that the host should handle from app startup.
   Stream<GooglePlayPurchase> get purchaseUpdates => _platform.purchaseUpdates;
@@ -42,33 +48,67 @@ final class GooglePlayIapStack {
 
   /// Queries localized details and validates provider kinds against local catalog configuration.
   Future<GooglePlayProductQuery> queryProducts(Set<String> productIds) async {
-    if (productIds.any(
-      (productId) =>
-          productId.trim().isEmpty || !_productKinds.containsKey(productId),
-    )) {
+    if (productIds.isEmpty ||
+        productIds.any((productId) => productId.trim().isEmpty)) {
       throw ArgumentError.value(
         productIds,
         'productIds',
-        'must contain only configured non-empty product IDs',
+        'must contain at least one non-empty product ID',
       );
     }
-    if (productIds.isEmpty) {
-      return GooglePlayProductQuery(
-        products: const <GooglePlayProduct>[],
-        notFoundProductIds: const <String>{},
+    final normalized = productIds.map((id) => id.trim()).toSet();
+    final unconfigured = normalized.difference(_productKinds.keys.toSet());
+    if (unconfigured.isNotEmpty) {
+      throw GooglePlayIapStackException(
+        code: 'unconfigured_product',
+        message: 'Google Play product is not configured: ${unconfigured.first}',
       );
     }
-    final result = await _platform.queryProducts(productIds);
+    _queriedProducts.removeWhere(
+      (_, product) => normalized.contains(product.id),
+    );
+    final result = await _platform.queryProducts(normalized);
+    if (!normalized.containsAll(result.notFoundProductIds)) {
+      throw const GooglePlayIapStackException(
+        code: 'invalid_plugin_response',
+        message: 'Google Play reported an unexpected missing product',
+      );
+    }
+    final foundIds = <String>{};
+    final foundSelections = <String>{};
+    final validatedProducts = <String, GooglePlayProduct>{};
     for (final product in result.products) {
       final expectedKind = _productKinds[product.id];
-      if (expectedKind == null || expectedKind != product.kind) {
-        throw GooglePlayIapStackException(
-          code: 'product_kind_mismatch',
-          message: 'Google Play product ${product.id} has an unexpected kind',
+      if (!normalized.contains(product.id) ||
+          expectedKind == null ||
+          expectedKind != product.kind ||
+          !product.isPurchasable) {
+        throw const GooglePlayIapStackException(
+          code: 'invalid_plugin_response',
+          message: 'Google Play returned an unexpected product offer',
         );
       }
+      if (!foundSelections.add(product.selectionKey)) {
+        throw const GooglePlayIapStackException(
+          code: 'invalid_plugin_response',
+          message: 'Google Play returned a duplicate product offer',
+        );
+      }
+      foundIds.add(product.id);
+      validatedProducts[product.selectionKey] = product;
     }
-    return result;
+    if (foundIds.intersection(result.notFoundProductIds).isNotEmpty ||
+        !foundIds.union(result.notFoundProductIds).containsAll(normalized)) {
+      throw const GooglePlayIapStackException(
+        code: 'invalid_plugin_response',
+        message: 'Google Play product query was incomplete',
+      );
+    }
+    _queriedProducts.addAll(validatedProducts);
+    return GooglePlayProductQuery(
+      products: result.products,
+      notFoundProductIds: result.notFoundProductIds,
+    );
   }
 
   /// Opens Play Billing UI with the customer binding required by server verification.
@@ -82,6 +122,18 @@ final class GooglePlayIapStack {
       throw const GooglePlayIapStackException(
         code: 'product_kind_mismatch',
         message: 'Google Play product does not match the configured catalog',
+      );
+    }
+    if (_queriedProducts[product.selectionKey] != product) {
+      throw const GooglePlayIapStackException(
+        code: 'product_not_queried',
+        message: 'Query and select the Google Play offer before purchase',
+      );
+    }
+    if (!product.isPurchasable) {
+      throw const GooglePlayIapStackException(
+        code: 'product_unavailable',
+        message: 'Google Play product offer cannot start a purchase',
       );
     }
     await _platform.launchPurchase(

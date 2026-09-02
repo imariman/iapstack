@@ -272,8 +272,11 @@ configured push service-account email, exact Pub/Sub subscription, Android packa
 RTDN version, and one mutually exclusive notification variant. Subscription,
 one-time-product, and voided-purchase signals are normalized into the protected inbox.
 The worker fingerprints the purchase token in its original protected query scope,
-resolves the previously verified customer and product, and calls Android Publisher
-for current state instead of trusting the RTDN lifecycle type. Unknown purchase tokens
+resolves the previously verified customer, product kind, product ID, and opaque
+customer binding, and calls Android Publisher for current state instead of trusting
+the RTDN lifecycle type. The normalized native RTDN is retained as protected
+`provider_notification_reconciliation` evidence; it is not rewritten as a client
+purchase submission. Unknown purchase tokens
 remain retryable so a client verification racing the notification can arrive first.
 When that authoritative state requires purchase acknowledgement, the worker commits
 the normalized state first and then calls Google using the same protected purchase
@@ -325,6 +328,11 @@ as `obfuscatedAccountId`, submits purchase-token evidence, queries owned purchas
 deduplicates restores, and sends batches of at most 100. It deliberately does not
 call client-side `completePurchase`: IAPStack owns Android Publisher acknowledgement
 after the authoritative transaction commits.
+
+Each queried offer retains exact price micros and complete subscription base-plan,
+offer-tag, and pricing-phase metadata. The coordinator rejects empty, incomplete,
+duplicate, unconfigured, or out-of-scope query results and opens checkout only for a
+purchasable offer retained from the successful query.
 
 The Android harness under `sdk/flutter/iapstack_google_play/example` accepts only
 customer-scoped test configuration through `--dart-define`, subscribes to the

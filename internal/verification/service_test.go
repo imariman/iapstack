@@ -103,7 +103,23 @@ func TestServiceReconcilePersistsProviderNotificationSignal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStoreReference() error = %v", err)
 	}
-	fixture.result.Observations[0].References = append(fixture.result.Observations[0].References, queryReference)
+	customerBinding, err := core.NewStoreReference(
+		core.ReferenceCustomerBinding,
+		"obfuscated_external_account_id",
+		verificationExternalCustomerID,
+	)
+	if err != nil {
+		t.Fatalf("NewStoreReference() customer binding error = %v", err)
+	}
+	fixture.result.Observations[0].References = append(
+		fixture.result.Observations[0].References,
+		queryReference,
+		customerBinding,
+	)
+	fixture.result.PostCommitActions = []stores.PostCommitAction{{
+		Kind: "acknowledge_purchase", ProductID: verificationProviderProductID,
+		ProductKind: core.ProductKindNonConsumable, QueryReferences: []core.StoreReference{queryReference},
+	}}
 	signal, err := stores.NewEvidence(
 		"application/vnd.iapstack.huawei-notification-v2+json",
 		[]byte(`{"event_type":"ORDER","purchase_token":"sensitive-purchase-token"}`),
@@ -113,22 +129,32 @@ func TestServiceReconcilePersistsProviderNotificationSignal(t *testing.T) {
 	}
 	store := newFakeStore(fixture)
 	adapter := &fakeAdapter{result: fixture.result}
+	adapter.postCommit = func(request stores.PostCommitRequest) error {
+		if len(store.repository.entitlements) != 1 || len(store.repository.outbox) != 1 {
+			t.Fatalf("PostCommit() observed reconciliation before durable commit: %#v", store.repository)
+		}
+		if !reflect.DeepEqual(request.Actions, fixture.result.PostCommitActions) {
+			t.Fatalf("PostCommit() actions = %#v", request.Actions)
+		}
+		return nil
+	}
 	service := newVerificationService(t, store, adapter, &fakeProtector{}, fixture.clock)
 
 	result, err := service.Reconcile(context.Background(), verification.ReconciliationCommand{
-		ProjectID:           verificationProjectID,
-		ApplicationID:       verificationApplicationID,
-		ExternalCustomerID:  verificationExternalCustomerID,
-		ExpectedProducts:    []core.ProviderProductID{verificationProviderProductID},
-		ExpectedProductKind: core.ProductKindNonConsumable,
-		QueryReferences:     []core.StoreReference{queryReference},
-		Signal:              signal,
+		ProjectID:                verificationProjectID,
+		ApplicationID:            verificationApplicationID,
+		ExternalCustomerID:       verificationExternalCustomerID,
+		ExpectedProducts:         []core.ProviderProductID{verificationProviderProductID},
+		ExpectedProductKind:      core.ProductKindNonConsumable,
+		ExpectedCustomerBindings: []core.StoreReference{customerBinding},
+		QueryReferences:          []core.StoreReference{queryReference},
+		Signal:                   signal,
 	})
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
-	if adapter.reconcileCalls != 1 || len(result.Entitlements) != 1 {
-		t.Fatalf("Reconcile() = (%#v, calls=%d)", result, adapter.reconcileCalls)
+	if adapter.reconcileCalls != 1 || adapter.postCommitCalls != 1 || len(result.Entitlements) != 1 {
+		t.Fatalf("Reconcile() = (%#v, reconcile calls=%d, post-commit calls=%d)", result, adapter.reconcileCalls, adapter.postCommitCalls)
 	}
 	for _, evidence := range store.repository.evidence {
 		if evidence.Kind != "provider_notification_reconciliation" {

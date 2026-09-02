@@ -39,7 +39,10 @@ class ExamplePage extends StatelessWidget {
                   ProductOfferCard(
                     key: ValueKey<String>(product.selectionKey),
                     product: product,
-                    enabled: state.billingAvailable && !loading,
+                    enabled:
+                        state.billingAvailable &&
+                        state.catalogReady &&
+                        !loading,
                     onPurchase: () =>
                         context.read<ExampleCubit>().purchase(product),
                   ),
@@ -55,7 +58,7 @@ class ExamplePage extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               OutlinedButton.icon(
-                onPressed: state.billingAvailable && !loading
+                onPressed: !loading
                     ? context.read<ExampleCubit>().refresh
                     : null,
                 icon: const Icon(Icons.refresh_outlined),

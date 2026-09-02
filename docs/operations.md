@@ -224,8 +224,11 @@ credential configuration.
 For a completed non-consumable or new subscription purchase, confirm that the Android
 Publisher query reports `ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED` after IAPStack commits the
 entitlement. IAPStack deliberately sends the acknowledgement after its database
-transaction: a transient Google failure leaves the entitlement durable and causes the
-API request or worker job to retry. Google `409` concurrent updates, `429` rate limits,
+transaction for both client submissions and RTDN reconciliation: a transient Google
+failure leaves the entitlement durable and causes the API request or worker job to retry.
+The RTDN itself is retained as encrypted reconciliation evidence and cannot grant access
+without the protected purchase-token, product, kind, and customer-binding lookup.
+Google `409` concurrent updates, `429` rate limits,
 and `5xx` responses are retryable. A persistent `401` or `403` means the protected
 service account credential or Play Console application permission must be corrected.
 Consumable products are not accepted by this slice and require a future fulfillment

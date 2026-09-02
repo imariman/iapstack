@@ -27,6 +27,23 @@ Use a public HTTPS IAPStack URL for a Play-installed device. Android emulator
 debug builds can reach a host API at `http://10.0.2.2:8080`, but that is only a
 local smoke-test path.
 
+Create a Play upload key, copy `android/key.properties.example` to the gitignored
+`android/key.properties`, and fill in its absolute keystore path and credentials.
+Release builds intentionally fail when this file is absent; the harness never falls
+back to a debug signing key. Build the candidate that will be uploaded to the
+internal track with:
+
+```sh
+flutter build appbundle --release \
+  --build-name=0.1.0 \
+  --build-number=<unique-version-code> \
+  --dart-define-from-file=/absolute/path/to/runtime-defines.json
+```
+
+Keep the define file, upload keystore, `key.properties`, and customer session out of
+the repository. Upload the resulting AAB to the internal-testing track and install
+it from the Play testing link.
+
 ## 2. Run the harness
 
 Pass configuration without committing it to source:
@@ -54,8 +71,8 @@ client observations with redacted server logs.
 Verify each assertion against both the harness and the IAPStack dashboard or
 webhook receiver:
 
-- Billing connects and every configured product resolves with the intended
-  kind, localized price, base plan, and offer.
+- Billing connects and every configured product resolves with the intended kind,
+  exact price micros, localized price, base plan, offer, and full pricing phases.
 - A new non-consumable purchase grants the expected entitlement exactly once.
 - A new subscription grants access and is acknowledged only after the IAPStack
   durable transaction succeeds.
@@ -81,3 +98,6 @@ flutter analyze
 flutter test
 flutter build apk --debug
 ```
+
+The debug APK is a local harness only. The release gate requires the upload-key-signed
+AAB installed through Google Play.

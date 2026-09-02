@@ -79,7 +79,8 @@ func TestHuaweiReconciliationCommandResolvesProtectedPurchaseScope(t *testing.T)
 	}
 	if command.ExternalCustomerID != "account-1" || len(command.ExpectedProducts) != 1 ||
 		command.ExpectedProducts[0] != "premium_monthly" || command.Signal.ContentType != huawei.NotificationContentType ||
-		len(command.QueryReferences) != 1 || command.QueryReferences[0].Value() != "purchase-token-1" {
+		len(command.QueryReferences) != 1 || command.QueryReferences[0].Value() != "purchase-token-1" ||
+		len(command.ExpectedCustomerBindings) != 1 || command.ExpectedCustomerBindings[0].Value() != "account-1" {
 		t.Fatalf("huaweiReconciliationCommand() = %#v", command)
 	}
 	if protector.scope.Purpose != "provider_reference:query:purchase_token" || store.lookup.Fingerprint == ([32]byte{}) {
@@ -115,8 +116,8 @@ func TestHuaweiReconciliationCommandRetriesUnknownPurchaseAndRejectsMismatch(t *
 	}
 }
 
-// TestGooglePlayVerificationPayloadResolvesProtectedPurchaseScope verifies RTDN customer and catalog binding.
-func TestGooglePlayVerificationPayloadResolvesProtectedPurchaseScope(t *testing.T) {
+// TestGooglePlayReconciliationCommandResolvesProtectedPurchaseScope verifies native RTDN customer and catalog binding.
+func TestGooglePlayReconciliationCommandResolvesProtectedPurchaseScope(t *testing.T) {
 	t.Parallel()
 
 	store := &googleLookupStore{purchase: persistence.PurchaseReferenceContext{
@@ -134,13 +135,22 @@ func TestGooglePlayVerificationPayloadResolvesProtectedPurchaseScope(t *testing.
 		NotificationType: 2, EventTime: time.Date(2026, time.August, 25, 15, 0, 0, 0, time.UTC),
 		PurchaseToken: "purchase-token-1", ProductKind: core.ProductKindSubscription,
 	}
-	payload, process, err := service.googlePlayVerificationPayload(context.Background(), message, notification)
-	if err != nil || !process {
-		t.Fatalf("googlePlayVerificationPayload() = (%#v, %t, %v)", payload, process, err)
+	notificationPayload, err := json.Marshal(notification)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
 	}
-	if payload.ExternalCustomerID != "account-1" || len(payload.ClaimedProducts) != 1 ||
-		payload.ClaimedProducts[0] != "iapstack.pro" {
-		t.Fatalf("googlePlayVerificationPayload() = %#v", payload)
+	command, process, err := service.googlePlayReconciliationCommand(
+		context.Background(), message, notification, notificationPayload,
+	)
+	if err != nil || !process {
+		t.Fatalf("googlePlayReconciliationCommand() = (%#v, %t, %v)", command, process, err)
+	}
+	if command.ExternalCustomerID != "account-1" || len(command.ExpectedProducts) != 1 ||
+		command.ExpectedProducts[0] != "iapstack.pro" || command.ExpectedProductKind != core.ProductKindSubscription ||
+		len(command.QueryReferences) != 1 || command.QueryReferences[0].Value() != "purchase-token-1" ||
+		len(command.ExpectedCustomerBindings) != 1 || command.ExpectedCustomerBindings[0].Value() != "account-1" ||
+		command.Signal.ContentType != googleplay.NotificationContentType {
+		t.Fatalf("googlePlayReconciliationCommand() = %#v", command)
 	}
 	if protector.scope.Purpose != "provider_reference:query:purchase_token" ||
 		protector.scope.ProjectID != message.ProjectID || protector.scope.ApplicationID != message.ApplicationID {
@@ -150,18 +160,10 @@ func TestGooglePlayVerificationPayloadResolvesProtectedPurchaseScope(t *testing.
 		store.lookup.Fingerprint == ([32]byte{}) {
 		t.Fatalf("provider reference lookup = %#v", store.lookup)
 	}
-	evidence, bindings, err := payload.VerificationInputs(core.ProviderGooglePlay)
-	if err != nil {
-		t.Fatalf("VerificationInputs() error = %v", err)
-	}
-	if evidence.ContentType != googleplay.EvidenceContentType || len(bindings) != 1 ||
-		bindings[0].Value() != "account-1" {
-		t.Fatalf("VerificationInputs() = (%#v, %#v)", evidence, bindings)
-	}
 }
 
-// TestGooglePlayVerificationPayloadRetriesUnknownPurchaseAndRejectsScopeMismatch verifies safe worker classification.
-func TestGooglePlayVerificationPayloadRetriesUnknownPurchaseAndRejectsScopeMismatch(t *testing.T) {
+// TestGooglePlayReconciliationCommandRetriesUnknownPurchaseAndRejectsScopeMismatch verifies safe worker classification.
+func TestGooglePlayReconciliationCommandRetriesUnknownPurchaseAndRejectsScopeMismatch(t *testing.T) {
 	t.Parallel()
 
 	notification := googleplay.NotificationEnvelope{
@@ -171,9 +173,13 @@ func TestGooglePlayVerificationPayloadRetriesUnknownPurchaseAndRejectsScopeMisma
 		ProviderProductID: "iapstack.pro",
 	}
 	message := persistence.QueueMessage{ProjectID: "project-1", ApplicationID: "application-1"}
+	payload, err := json.Marshal(notification)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
 	missingStore := &googleLookupStore{err: persistence.ErrNotFound}
 	service := &Service{store: missingStore, protection: &processingProtection{}}
-	_, _, err := service.googlePlayVerificationPayload(context.Background(), message, notification)
+	_, _, err = service.googlePlayReconciliationCommand(context.Background(), message, notification, payload)
 	var failure *stores.Failure
 	if !errors.As(err, &failure) || !failure.Retryable() {
 		t.Fatalf("unknown purchase error = %#v", err)
@@ -184,7 +190,7 @@ func TestGooglePlayVerificationPayloadRetriesUnknownPurchaseAndRejectsScopeMisma
 		ProviderProductID: "different.product", ProductKind: core.ProductKindNonConsumable,
 	}}
 	service = &Service{store: mismatchStore, protection: &processingProtection{}}
-	_, _, err = service.googlePlayVerificationPayload(context.Background(), message, notification)
+	_, _, err = service.googlePlayReconciliationCommand(context.Background(), message, notification, payload)
 	if !errors.As(err, &failure) || failure.Kind != stores.FailureInvalidEvidence || failure.Retryable() {
 		t.Fatalf("scope mismatch error = %#v", err)
 	}
