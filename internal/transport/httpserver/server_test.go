@@ -9,12 +9,19 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
 
 const (
 	// testMetricsBearerToken is a sufficiently long isolated metrics credential.
 	testMetricsBearerToken = "metrics-test-bearer-token-32-characters"
 )
+
+// TestMain fails the package when HTTP lifecycle tests leave goroutines behind.
+func TestMain(main *testing.M) {
+	goleak.VerifyTestMain(main)
+}
 
 // TestMetricsRequiresConfiguredBearer verifies metrics fail closed and accept only the dedicated token.
 func TestMetricsRequiresConfiguredBearer(t *testing.T) {

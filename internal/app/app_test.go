@@ -9,7 +9,13 @@ import (
 
 	"github.com/imariman/iapstack/internal/app"
 	"github.com/imariman/iapstack/internal/persistence/postgres"
+	"go.uber.org/goleak"
 )
+
+// TestMain fails the package when process lifecycle tests leave goroutines behind.
+func TestMain(main *testing.M) {
+	goleak.VerifyTestMain(main)
+}
 
 // TestRunRequiresKnownMode verifies that Run rejects missing, extra, and unknown modes.
 func TestRunRequiresKnownMode(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"github.com/imariman/iapstack/internal/platform/metrics"
 	"github.com/imariman/iapstack/internal/stores"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/goleak"
 )
 
 // executorStore runs callbacks against one deterministic operations transaction.
@@ -40,6 +41,11 @@ type executorTransaction struct {
 // codedTestError supplies an arbitrary code through the worker error contract.
 type codedTestError struct {
 	code string
+}
+
+// TestMain fails the package when River lifecycle tests leave goroutines behind.
+func TestMain(main *testing.M) {
+	goleak.VerifyTestMain(main)
 }
 
 // Operate executes one fake operations transaction callback.
