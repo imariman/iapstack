@@ -30,5 +30,6 @@ go.work.sum
 scripts/apple-sandbox.env
 
 # Editor/IDE
+.DS_Store
 # .idea/
 # .vscode/
