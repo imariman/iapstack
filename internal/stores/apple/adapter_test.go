@@ -258,6 +258,7 @@ func TestAdapterReconcilesAuthoritativeGracePeriod(t *testing.T) {
 	result, err := adapter.Reconcile(context.Background(), stores.ReconciliationRequest{
 		Application: appleApplication(core.EnvironmentSandbox), CustomerID: "customer-1",
 		ExpectedProducts:         []core.ProviderProductID{fixtureProductID},
+		ExpectedProductKind:      core.ProductKindSubscription,
 		ExpectedCustomerBindings: []core.StoreReference{binding},
 		QueryReferences:          []core.StoreReference{queryReference},
 	})

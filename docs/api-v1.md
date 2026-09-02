@@ -225,9 +225,20 @@ and the real Google Play internal-testing lifecycle gate remain release work.
 
 ## Notifications and reconciliation
 
-Huawei notification ingestion is `POST /v1/providers/huawei/applications/{application_id}/notifications` with the project identity in `X-IAPStack-Project-ID`. Its JSON envelope contains `external_customer_id`, `claimed_products`, and the signed `purchase` evidence above.
+Huawei notification ingestion is
+`POST /v1/providers/huawei/projects/{project_id}/applications/{application_id}/notifications`.
+Configure this complete HTTPS URL as the Huawei IAP V2 callback; no custom header or
+IAPStack bearer is required. The endpoint accepts Huawei's native `ORDER` wrapper or
+`SUBSCRIPTION` wrapper. Subscription status strings are verified with the
+application IAP public key using the declared `SHA256withRSA` or
+`SHA256withRSA/PSS` algorithm before protected inbox persistence.
 
-The notification signature and application/product scope are checked before protected inbox persistence and acknowledgement. The worker then performs the authoritative Huawei query. Successful verification schedules a new uniquely fingerprinted lifecycle check every 24 hours.
+An order wrapper is treated only as an untrusted change signal because Huawei does
+not attach an equivalent signature to that wrapper. The worker resolves its purchase
+token against a previously verified, application-scoped protected reference and
+always queries Huawei's server API before changing access. Unknown tokens are retried
+to tolerate a callback racing the first client verification; event type or product
+scope mismatches are rejected. Callback fields never grant access directly.
 
 App Store Server Notifications V2 ingestion is
 `POST /v1/providers/apple/projects/{project_id}/applications/{application_id}/notifications`.
@@ -294,7 +305,8 @@ application bearer remains in the trusted host backend.
 
 Huawei applications add `sdk/flutter/iapstack_huawei`. The companion uses the
 official `huawei_iap` plugin, retains the exact signed `InAppPurchaseData` JSON
-string, binds purchases through `developerPayload`, walks continuation tokens,
+string, checks regional IAP readiness, loads configured localized AppGallery products,
+binds purchases through `developerPayload`, walks continuation tokens,
 deduplicates repeated provider entries, and sends restore requests in batches
 of at most 100. Consumables remain outside v0.1.
 
@@ -302,8 +314,8 @@ The runnable Android harness under `sdk/flutter/iapstack_huawei/example` takes
 all IAPStack values through `--dart-define`; AppGallery Connect configuration
 and signing files are deliberately gitignored. Follow its README for device
 setup and never commit `agconnect-services.json`, keystores, or customer
-sessions. It calls Huawei's sandbox activation API before enabling purchase or
-restore and displays the request ID used to correlate secret-free release
+sessions. It requires environment readiness, sandbox activation, and a purchasable
+queried product before enabling purchase, and displays the request ID used to correlate secret-free release
 evidence with server logs.
 
 Google Play applications add `sdk/flutter/iapstack_google_play`. The companion

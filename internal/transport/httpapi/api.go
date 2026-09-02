@@ -251,7 +251,7 @@ func (api *API) v1Routes() []v1Route {
 		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/purchases:verify", OperationID: "verifyPurchase", Handler: api.verifyPurchase},
 		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/purchases:restore", OperationID: "restorePurchases", Handler: api.restorePurchases},
 		{Method: http.MethodGet, Path: "/v1/applications/{application_id}/customers/{external_customer_id}/entitlements", OperationID: "getCustomerEntitlements", Handler: api.customerEntitlements},
-		{Method: http.MethodPost, Path: "/v1/providers/huawei/applications/{application_id}/notifications", OperationID: "acceptHuaweiNotification", Handler: api.huaweiNotification},
+		{Method: http.MethodPost, Path: "/v1/providers/huawei/projects/{project_id}/applications/{application_id}/notifications", OperationID: "acceptHuaweiNotification", Handler: api.huaweiNotification},
 		{Method: http.MethodPost, Path: "/v1/providers/apple/projects/{project_id}/applications/{application_id}/notifications", OperationID: "acceptAppleNotification", Handler: api.appleNotification},
 		{Method: http.MethodPost, Path: "/v1/providers/google-play/projects/{project_id}/applications/{application_id}/notifications", OperationID: "acceptGooglePlayNotification", Handler: api.googlePlayNotification},
 	}
@@ -628,7 +628,7 @@ func (api *API) huaweiNotification(writer http.ResponseWriter, request *http.Req
 	defer zero(payload)
 	application, err := api.notificationApplication(
 		request.Context(),
-		strings.TrimSpace(request.Header.Get("X-IAPStack-Project-ID")),
+		request.PathValue("project_id"),
 		request.PathValue("application_id"),
 	)
 	if err != nil {
@@ -656,8 +656,8 @@ func (api *API) huaweiNotification(writer http.ResponseWriter, request *http.Req
 	err = api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
 		_, saveErr := repository.SaveInboxMessage(request.Context(), persistence.InboxMessage{
 			ID: id, ProjectID: application.ProjectID, ApplicationID: application.ID,
-			Provider: application.Store.Provider, Kind: "purchase_lifecycle",
-			ContentType: "application/json", Payload: protected, ReceivedAt: now, AvailableAt: now,
+			Provider: application.Store.Provider, Kind: "huawei_iap_notification_v2",
+			ContentType: huawei.NotificationContentType, Payload: protected, ReceivedAt: now, AvailableAt: now,
 		})
 		return saveErr
 	})

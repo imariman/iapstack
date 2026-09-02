@@ -137,6 +137,28 @@ Credential and signing-secret fields are cleared after submission and never retu
 by the admin read API. Store every newly displayed application bearer immediately in
 your deployment secret manager; the dashboard cannot recover it after the dialog closes.
 
+## Huawei AppGallery notification setup
+
+Configure Huawei IAP V2 with the application's complete callback URL:
+
+```text
+https://iapstack.example/v1/providers/huawei/projects/<project_id>/applications/<application_id>/notifications
+```
+
+The endpoint is public HTTPS and does not use an IAPStack bearer or custom header.
+Choose either Huawei `SHA256withRSA` or `SHA256withRSA/PSS` subscription notification
+signatures and keep the matching IAP public key in the protected application credential.
+IAPStack verifies signed subscription status before inbox insertion. Huawei order
+notifications are token-only signals: they can trigger processing only after their
+protected token resolves to a purchase already verified for the same application and
+product, and access changes only after a successful Huawei server query.
+
+A `400` response indicates an invalid V2 body, signature, algorithm, or provider scope;
+`404` means the path scope is unknown; `502` indicates invalid protected Huawei
+credentials; and `503` means durable storage is temporarily unavailable. Put a bounded
+rate limit in the public reverse proxy because order wrappers are not independently
+signed by Huawei, but do not rewrite the request body.
+
 ## Apple App Store notification setup
 
 Configure the App Store Server Notifications V2 production and sandbox URLs with the

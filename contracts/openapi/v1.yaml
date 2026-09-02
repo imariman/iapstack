@@ -639,20 +639,20 @@ paths:
           $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
-  /v1/providers/huawei/applications/{application_id}/notifications:
+  /v1/providers/huawei/projects/{project_id}/applications/{application_id}/notifications:
     post:
       tags: [Huawei notifications]
       operationId: acceptHuaweiNotification
       summary: Validate and durably accept one Huawei lifecycle notification
       parameters:
+        - $ref: '#/components/parameters/ProjectId'
         - $ref: '#/components/parameters/ApplicationId'
-        - $ref: '#/components/parameters/ProjectScopeHeader'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/HuaweiNotification'
+              $ref: '#/components/schemas/HuaweiNotificationV2'
       responses:
         '200':
           description: Notification validated and persisted before acknowledgement
@@ -843,12 +843,6 @@ components:
       schema:
         type: string
         enum: [apple_app_store_server_api, google_play_android_publisher, huawei_server_api]
-    ProjectScopeHeader:
-      name: X-IAPStack-Project-ID
-      in: header
-      required: true
-      schema:
-        $ref: '#/components/schemas/Identifier'
   responses:
     MutationAccepted:
       description: Idempotent mutation completed
@@ -1392,21 +1386,78 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Entitlement'
-    HuaweiNotification:
+    HuaweiNotificationV2:
+      oneOf:
+        - $ref: '#/components/schemas/HuaweiOrderNotificationV2'
+        - $ref: '#/components/schemas/HuaweiSubscriptionNotificationV2'
+    HuaweiOrderNotificationV2:
       type: object
       additionalProperties: false
-      required: [external_customer_id, claimed_products, purchase]
+      required: [version, eventType, notifyTime, applicationId, orderNotification]
       properties:
-        external_customer_id:
+        version:
+          type: string
+          enum: [v2]
+        eventType:
+          type: string
+          enum: [ORDER]
+        notifyTime:
+          type: integer
+          format: int64
+          minimum: 1
+        applicationId:
           $ref: '#/components/schemas/Identifier'
-        claimed_products:
-          type: array
-          minItems: 1
-          uniqueItems: true
-          items:
-            $ref: '#/components/schemas/Identifier'
-        purchase:
-          $ref: '#/components/schemas/HuaweiEvidence'
+        orderNotification:
+          type: object
+          additionalProperties: false
+          required: [version, notificationType, purchaseToken, productId]
+          properties:
+            version:
+              type: string
+              enum: [v2]
+            notificationType:
+              type: integer
+              enum: [1, 2]
+            purchaseToken:
+              type: string
+              minLength: 1
+            productId:
+              $ref: '#/components/schemas/Identifier'
+    HuaweiSubscriptionNotificationV2:
+      type: object
+      additionalProperties: false
+      required: [version, eventType, notifyTime, applicationId, subNotification]
+      properties:
+        version:
+          type: string
+          enum: [v2]
+        eventType:
+          type: string
+          enum: [SUBSCRIPTION]
+        notifyTime:
+          type: integer
+          format: int64
+          minimum: 1
+        applicationId:
+          $ref: '#/components/schemas/Identifier'
+        subNotification:
+          type: object
+          additionalProperties: false
+          required: [version, statusUpdateNotification, notificationSignature, signatureAlgorithm]
+          properties:
+            version:
+              type: string
+              enum: [v2]
+            statusUpdateNotification:
+              type: string
+              minLength: 2
+              description: Exact Huawei JSON string covered by notificationSignature.
+            notificationSignature:
+              type: string
+              format: byte
+            signatureAlgorithm:
+              type: string
+              enum: [SHA256withRSA, SHA256withRSA/PSS]
     AppleNotificationV2:
       type: object
       additionalProperties: false

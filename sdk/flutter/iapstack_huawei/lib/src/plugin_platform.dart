@@ -4,12 +4,28 @@ import 'package:flutter/services.dart';
 import 'package:huawei_iap/huawei_iap.dart';
 import 'package:iapstack_huawei/src/errors.dart';
 import 'package:iapstack_huawei/src/platform.dart';
+import 'package:iapstack_huawei/src/product.dart';
 import 'package:iapstack_huawei/src/product_kind.dart';
 
 /// Production bridge to Huawei's official `huawei_iap` Flutter plugin.
 final class HuaweiPluginPlatform implements HuaweiIapPlatform {
   /// Creates the stateless plugin bridge.
   const HuaweiPluginPlatform();
+
+  @override
+  Future<bool> isAvailable() async {
+    try {
+      final result = await IapClient.isEnvReady();
+      _requireSuccess(
+        result.returnCode,
+        result.status?.statusMessage,
+        operation: 'environment check',
+      );
+      return true;
+    } on PlatformException catch (error) {
+      throw _platformException(error, operation: 'environment_check');
+    }
+  }
 
   @override
   Future<HuaweiSandboxStatus> sandboxStatus() async {
@@ -28,6 +44,34 @@ final class HuaweiPluginPlatform implements HuaweiIapPlatform {
       );
     } on PlatformException catch (error) {
       throw _platformException(error, operation: 'sandbox_check');
+    }
+  }
+
+  @override
+  Future<List<HuaweiProduct>> queryProducts({
+    required List<String> productIds,
+    required HuaweiProductKind productKind,
+  }) async {
+    if (productIds.isEmpty) {
+      return const <HuaweiProduct>[];
+    }
+    try {
+      final result = await IapClient.obtainProductInfo(
+        ProductInfoReq(
+          priceType: productKind.priceType,
+          skuIds: List<String>.unmodifiable(productIds),
+        ),
+      );
+      _requireSuccess(
+        result.returnCode,
+        result.errMsg ?? result.status?.statusMessage,
+        operation: 'product query',
+      );
+      return (result.productInfoList ?? const <ProductInfo>[])
+          .map((product) => _product(product, expectedKind: productKind))
+          .toList(growable: false);
+    } on PlatformException catch (error) {
+      throw _platformException(error, operation: 'product_query');
     }
   }
 
@@ -97,6 +141,48 @@ final class HuaweiPluginPlatform implements HuaweiIapPlatform {
       throw _platformException(error, operation: 'restore');
     }
   }
+}
+
+HuaweiProduct _product(
+  ProductInfo product, {
+  required HuaweiProductKind expectedKind,
+}) {
+  final id = product.productId;
+  final price = product.price;
+  final priceMicros = product.microsPrice;
+  final currency = product.currency;
+  final status = product.status;
+  if (id == null ||
+      id.isEmpty ||
+      product.priceType != expectedKind.priceType ||
+      price == null ||
+      price.isEmpty ||
+      priceMicros == null ||
+      priceMicros < 0 ||
+      currency == null ||
+      !RegExp(r'^[A-Z]{3}$').hasMatch(currency) ||
+      status == null) {
+    throw const HuaweiIapStackException(
+      code: 'invalid_plugin_response',
+      message: 'Huawei IAP product query returned incomplete product data',
+    );
+  }
+  return HuaweiProduct(
+    id: id,
+    kind: expectedKind,
+    title: _nonEmpty(product.productName) ?? id,
+    description: product.productDesc ?? '',
+    price: price,
+    priceMicros: priceMicros,
+    currency: currency,
+    status: status,
+    originalPrice: _nonEmpty(product.originalLocalPrice),
+    originalPriceMicros: product.originalMicroPrice,
+    promotionalPrice: _nonEmpty(product.subSpecialPrice),
+    promotionalPriceMicros: product.subSpecialPriceMicros,
+    subscriptionPeriod: _nonEmpty(product.subPeriod),
+    freeTrialPeriod: _nonEmpty(product.subFreeTrialPeriod),
+  );
 }
 
 void _requireSuccess(String? code, String? providerMessage,

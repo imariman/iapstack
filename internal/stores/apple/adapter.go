@@ -247,6 +247,9 @@ func (adapter *Adapter) Reconcile(
 	if err != nil {
 		return stores.VerificationResult{}, invalid("reconcile", err)
 	}
+	if productKind != request.ExpectedProductKind {
+		return stores.VerificationResult{}, invalid("reconcile", errors.New("authoritative Apple product kind mismatch"))
+	}
 	verificationRequest := stores.VerificationRequest{
 		Application: request.Application, CustomerID: request.CustomerID,
 		ClaimedProducts: request.ExpectedProducts, ExpectedCustomerBindings: request.ExpectedCustomerBindings,

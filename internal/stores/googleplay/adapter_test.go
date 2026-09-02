@@ -274,6 +274,7 @@ func TestAdapterReconcilesAuthoritativeAccountHold(t *testing.T) {
 	result, err := fixture.adapter.Reconcile(context.Background(), stores.ReconciliationRequest{
 		Application: verification.Application, CustomerID: verification.CustomerID,
 		ExpectedProducts:         []core.ProviderProductID{fixtureProductID},
+		ExpectedProductKind:      core.ProductKindSubscription,
 		ExpectedCustomerBindings: verification.ExpectedCustomerBindings,
 		QueryReferences:          []core.StoreReference{queryReference},
 	})

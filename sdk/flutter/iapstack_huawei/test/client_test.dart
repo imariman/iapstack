@@ -21,12 +21,19 @@ void main() {
         requestJson = jsonDecode(request.body) as Map<String, dynamic>;
         return http.Response(jsonEncode(_verificationJson), 200);
       });
-      final huawei = HuaweiIapStack(client: backend, platform: platform);
+      final huawei = HuaweiIapStack(
+        client: backend,
+        productKinds: _productKinds,
+        platform: platform,
+      );
+
+      final products = await huawei.queryProducts(
+        const <String>{'premium_monthly'},
+      );
 
       final result = await huawei.purchaseAndVerify(
         externalCustomerId: 'customer-1',
-        productId: 'premium_monthly',
-        productKind: HuaweiProductKind.subscription,
+        product: products.products.single,
       );
 
       expect(platform.purchasedProductId, 'premium_monthly');
@@ -50,6 +57,7 @@ void main() {
       );
       final huawei = HuaweiIapStack(
         client: _backend((request) async => http.Response('{}', 500)),
+        productKinds: _productKinds,
         platform: _FakePlatform(sandboxResult: expected),
       );
 
@@ -57,6 +65,61 @@ void main() {
 
       expect(status, same(expected));
       expect(status.isActive, isTrue);
+    });
+
+    test('checks Huawei environment readiness', () async {
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async => http.Response('{}', 500)),
+        productKinds: _productKinds,
+        platform: _FakePlatform(environmentAvailable: true),
+      );
+
+      expect(await huawei.isAvailable(), isTrue);
+    });
+
+    test('groups configured product queries by kind and reports missing IDs',
+        () async {
+      final platform = _FakePlatform(
+        omittedProductIds: const <String>{'premium_lifetime'},
+      );
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async => http.Response('{}', 500)),
+        productKinds: _productKinds,
+        platform: platform,
+      );
+
+      final result = await huawei.queryProducts(_productKinds.keys.toSet());
+
+      expect(result.products.single.id, 'premium_monthly');
+      expect(result.notFoundProductIds, <String>{'premium_lifetime'});
+      expect(platform.productQueryCalls, <String>[
+        'nonConsumable:premium_lifetime',
+        'subscription:premium_monthly',
+      ]);
+    });
+
+    test('requires a queried, purchasable product', () async {
+      final platform = _FakePlatform();
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async => http.Response('{}', 500)),
+        productKinds: _productKinds,
+        platform: platform,
+      );
+
+      await expectLater(
+        huawei.purchaseAndVerify(
+          externalCustomerId: 'customer-1',
+          product: _product('premium_monthly'),
+        ),
+        throwsA(
+          isA<HuaweiIapStackException>().having(
+            (error) => error.code,
+            'code',
+            'product_not_queried',
+          ),
+        ),
+      );
+      expect(platform.purchaseCalls, 0);
     });
 
     test('paginates, deduplicates, and restores both supported kinds',
@@ -97,6 +160,7 @@ void main() {
             200,
           );
         }),
+        productKinds: _productKinds,
         platform: platform,
       );
 
@@ -140,6 +204,7 @@ void main() {
             200,
           );
         }),
+        productKinds: _productKinds,
         platform: platform,
       );
 
@@ -175,8 +240,10 @@ void main() {
         },
       );
       final huawei = HuaweiIapStack(
-          client: _backend((request) async => http.Response('{}', 500)),
-          platform: platform);
+        client: _backend((request) async => http.Response('{}', 500)),
+        productKinds: _productKinds,
+        platform: platform,
+      );
 
       await expectLater(
         huawei.restorePurchases(
@@ -200,17 +267,21 @@ void main() {
           backendCalled = true;
           return http.Response('{}', 500);
         }),
+        productKinds: _productKinds,
         platform: _FakePlatform(
           purchaseResult: _signedPurchase('premium_monthly',
               customerId: 'another-customer'),
         ),
       );
 
+      final products = await huawei.queryProducts(
+        const <String>{'premium_monthly'},
+      );
+
       await expectLater(
         huawei.purchaseAndVerify(
           externalCustomerId: 'customer-1',
-          productId: 'premium_monthly',
-          productKind: HuaweiProductKind.subscription,
+          product: products.products.single,
         ),
         throwsA(
           isA<HuaweiIapStackException>().having(
@@ -260,22 +331,62 @@ final Map<String, Object?> _verificationJson = <String, Object?>{
   ],
 };
 
+const Map<String, HuaweiProductKind> _productKinds =
+    <String, HuaweiProductKind>{
+  'premium_lifetime': HuaweiProductKind.nonConsumable,
+  'premium_monthly': HuaweiProductKind.subscription,
+};
+
+HuaweiProduct _product(String id, {int status = 0}) => HuaweiProduct(
+      id: id,
+      kind: _productKinds[id]!,
+      title: id,
+      description: 'Description for $id',
+      price: r'$4.99',
+      priceMicros: 4990000,
+      currency: 'USD',
+      status: status,
+      subscriptionPeriod:
+          _productKinds[id] == HuaweiProductKind.subscription ? 'P1M' : null,
+    );
+
 final class _FakePlatform implements HuaweiIapPlatform {
   _FakePlatform(
       {this.purchaseResult,
+      this.environmentAvailable = false,
       this.sandboxResult = const HuaweiSandboxStatus(
         isSandboxUser: false,
         isSandboxApk: false,
       ),
+      this.omittedProductIds = const <String>{},
       Map<HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>? pages})
       : pages = pages ?? <HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>{};
 
   final HuaweiSignedPurchase? purchaseResult;
+  final bool environmentAvailable;
   final HuaweiSandboxStatus sandboxResult;
+  final Set<String> omittedProductIds;
   final Map<HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>> pages;
   final List<String> restoreCalls = <String>[];
+  final List<String> productQueryCalls = <String>[];
+  int purchaseCalls = 0;
   String? purchasedProductId;
   String? purchasedDeveloperPayload;
+
+  @override
+  Future<bool> isAvailable() async => environmentAvailable;
+
+  @override
+  Future<List<HuaweiProduct>> queryProducts({
+    required List<String> productIds,
+    required HuaweiProductKind productKind,
+  }) async {
+    productQueryCalls.add('${productKind.name}:${productIds.join(',')}');
+    return productIds
+        .where((id) => !omittedProductIds.contains(id))
+        .map(_product)
+        .toList(growable: false);
+  }
 
   @override
   Future<HuaweiSandboxStatus> sandboxStatus() async => sandboxResult;
@@ -286,6 +397,7 @@ final class _FakePlatform implements HuaweiIapPlatform {
     required HuaweiProductKind productKind,
     required String developerPayload,
   }) async {
+    purchaseCalls++;
     purchasedProductId = productId;
     purchasedDeveloperPayload = developerPayload;
     final value = purchaseResult;

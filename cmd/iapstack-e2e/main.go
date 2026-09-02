@@ -262,11 +262,10 @@ func (client *gateClient) enqueueNotification(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	headers := map[string]string{"X-IAPStack-Project-ID": projectID}
 	for attempt := 0; attempt < 2; attempt++ {
 		if _, err := client.request(ctx, http.MethodPost,
-			client.apiBaseURL+"/v1/providers/huawei/applications/"+applicationID+"/notifications",
-			"", scenario.Notification, headers, http.StatusOK); err != nil {
+			client.apiBaseURL+"/v1/providers/huawei/projects/"+projectID+"/applications/"+applicationID+"/notifications",
+			"", scenario.Notification, nil, http.StatusOK); err != nil {
 			return err
 		}
 	}
@@ -313,10 +312,9 @@ func (client *gateClient) assertRecovery(ctx context.Context) error {
 	if err := client.waitForDeliveries(ctx, 2, 2); err != nil {
 		return err
 	}
-	headers := map[string]string{"X-IAPStack-Project-ID": projectID}
 	if _, err := client.request(ctx, http.MethodPost,
-		client.apiBaseURL+"/v1/providers/huawei/applications/"+applicationID+"/notifications",
-		"", scenario.Notification, headers, http.StatusOK); err != nil {
+		client.apiBaseURL+"/v1/providers/huawei/projects/"+projectID+"/applications/"+applicationID+"/notifications",
+		"", scenario.Notification, nil, http.StatusOK); err != nil {
 		return err
 	}
 	timer := time.NewTimer(2 * time.Second)

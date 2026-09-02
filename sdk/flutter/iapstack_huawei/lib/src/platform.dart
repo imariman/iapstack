@@ -1,3 +1,4 @@
+import 'package:iapstack_huawei/src/product.dart';
 import 'package:iapstack_huawei/src/product_kind.dart';
 
 /// Safe device-side result of Huawei's sandbox activation check.
@@ -56,8 +57,17 @@ final class HuaweiOwnedPurchasesPage {
 
 /// Testable boundary around the official Huawei Flutter IAP plugin.
 abstract interface class HuaweiIapPlatform {
+  /// Checks whether Huawei IAP is available for the current account region.
+  Future<bool> isAvailable();
+
   /// Checks whether the current Huawei account and APK can use the sandbox.
   Future<HuaweiSandboxStatus> sandboxStatus();
+
+  /// Loads products of one Huawei price type.
+  Future<List<HuaweiProduct>> queryProducts({
+    required List<String> productIds,
+    required HuaweiProductKind productKind,
+  });
 
   /// Opens Huawei purchase UI and returns exact signed evidence.
   Future<HuaweiSignedPurchase> purchase({

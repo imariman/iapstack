@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -64,13 +65,6 @@ type clientEvidence struct {
 	ProductKind  core.ProductKind `json:"product_kind"`
 }
 
-// NotificationEnvelope is the signed, customer-bound notification contract accepted by IAPStack.
-type NotificationEnvelope struct {
-	ExternalCustomerID string                   `json:"external_customer_id"`
-	ClaimedProducts    []core.ProviderProductID `json:"claimed_products"`
-	Purchase           json.RawMessage          `json:"purchase"`
-}
-
 // purchaseData contains the Huawei fields required for normalization and consistency checks.
 type purchaseData struct {
 	ApplicationID       string `json:"applicationId"`
@@ -89,6 +83,8 @@ type purchaseData struct {
 	SubIsValid          bool   `json:"subIsvalid"`
 	DeveloperPayload    string `json:"developerPayload"`
 	Quantity            uint32 `json:"quantity"`
+	Currency            string `json:"currency"`
+	Price               int64  `json:"price"`
 }
 
 // providerResponse accepts the documented legacy names used by Huawei order and subscription services.
@@ -202,75 +198,21 @@ func (adapter *Adapter) Reconcile(
 		return stores.VerificationResult{}, err
 	}
 	query := purchaseData{ApplicationID: string(request.Application.Store.ID), ProductID: string(request.ExpectedProducts[0]), PurchaseToken: token}
-	for _, productKind := range []core.ProductKind{core.ProductKindSubscription, core.ProductKindNonConsumable} {
-		authoritative, rawArtifact, queryErr := adapter.query(ctx, configuration, query, productKind)
-		if queryErr != nil {
-			var failure *stores.Failure
-			if productKind == core.ProductKindSubscription && errors.As(queryErr, &failure) && failure.Kind == stores.FailureNotFound {
-				continue
-			}
-			return stores.VerificationResult{}, queryErr
-		}
-		if err := verifySignature(publicKey, authoritative.data, authoritative.signature); err != nil {
-			return stores.VerificationResult{}, invalid("reconcile", err)
-		}
-		var current purchaseData
-		if err := json.Unmarshal([]byte(authoritative.data), &current); err != nil {
-			return stores.VerificationResult{}, invalid("reconcile", err)
-		}
-		if current.PurchaseToken != token || current.ProductID != query.ProductID || current.ApplicationID != query.ApplicationID {
-			return stores.VerificationResult{}, invalid("reconcile", errors.New("authoritative Huawei scope mismatch"))
-		}
-		return adapter.result(request.Application, productKind, current, rawArtifact)
-	}
-	return stores.VerificationResult{}, stores.NewFailure(core.ProviderHuaweiAppGallery, "reconcile", stores.FailureNotFound, 0, nil)
-}
-
-// ValidateNotification verifies a signed notification envelope before durable acknowledgement.
-func (adapter *Adapter) ValidateNotification(
-	ctx context.Context,
-	application core.Application,
-	payload []byte,
-) (NotificationEnvelope, error) {
-	var envelope NotificationEnvelope
-	if err := decodeStrict(payload, &envelope); err != nil {
-		return NotificationEnvelope{}, invalid("notification", err)
-	}
-	if strings.TrimSpace(envelope.ExternalCustomerID) == "" || len(envelope.ClaimedProducts) == 0 {
-		return NotificationEnvelope{}, invalid("notification", errors.New("notification customer and products are required"))
-	}
-	evidence, err := stores.NewEvidence(EvidenceContentType, envelope.Purchase)
+	authoritative, rawArtifact, err := adapter.query(ctx, configuration, query, request.ExpectedProductKind)
 	if err != nil {
-		return NotificationEnvelope{}, invalid("notification", err)
+		return stores.VerificationResult{}, err
 	}
-	request := stores.VerificationRequest{Application: application, CustomerID: core.CustomerID("notification-check"),
-		ClaimedProducts: envelope.ClaimedProducts, Evidence: evidence}
-	if err := request.Validate(); err != nil {
-		return NotificationEnvelope{}, invalid("notification", err)
+	if err := verifySignature(publicKey, authoritative.data, authoritative.signature); err != nil {
+		return stores.VerificationResult{}, invalid("reconcile", err)
 	}
-	purchaseEnvelope, purchase, err := parseEvidence(evidence)
-	if err != nil {
-		return NotificationEnvelope{}, invalid("notification", err)
+	var current purchaseData
+	if err := json.Unmarshal([]byte(authoritative.data), &current); err != nil {
+		return stores.VerificationResult{}, invalid("reconcile", err)
 	}
-	if err := validateSubmittedScope(request, purchase); err != nil {
-		return NotificationEnvelope{}, invalid("notification", err)
+	if current.PurchaseToken != token || current.ProductID != query.ProductID || current.ApplicationID != query.ApplicationID {
+		return stores.VerificationResult{}, invalid("reconcile", errors.New("authoritative Huawei scope mismatch"))
 	}
-	if purchase.DeveloperPayload == "" || purchase.DeveloperPayload != envelope.ExternalCustomerID {
-		return NotificationEnvelope{}, invalid("notification", errors.New("notification customer binding mismatch"))
-	}
-	_, publicKey, err := adapter.configuration(ctx, application)
-	if err != nil {
-		return NotificationEnvelope{}, err
-	}
-	if err := verifySignature(publicKey, purchaseEnvelope.PurchaseData, purchaseEnvelope.Signature); err != nil {
-		return NotificationEnvelope{}, invalid("notification", err)
-	}
-	canonicalPurchase, err := json.Marshal(purchaseEnvelope)
-	if err != nil {
-		return NotificationEnvelope{}, invalid("notification", err)
-	}
-	envelope.Purchase = canonicalPurchase
-	return envelope, nil
+	return adapter.result(request.Application, request.ExpectedProductKind, current, rawArtifact)
 }
 
 // configuration opens and validates one application-scoped Huawei credential payload and RSA key.
@@ -457,6 +399,13 @@ func (adapter *Adapter) result(
 	if quantity == 0 {
 		quantity = 1
 	}
+	if err := validatePurchasePrice(purchase); err != nil {
+		return stores.VerificationResult{}, invalid("normalize", err)
+	}
+	price := &core.PurchasePrice{
+		Milliunits: purchase.Price * 10,
+		Currency:   purchase.Currency,
+	}
 	references := make([]core.StoreReference, 0, 3)
 	for _, candidate := range []struct {
 		role  core.ReferenceRole
@@ -498,6 +447,7 @@ func (adapter *Adapter) result(
 		AccessReason:    reason,
 		Ownership:       core.OwnershipPurchased,
 		Quantity:        quantity,
+		Price:           price,
 		OccurredAt:      startsAt,
 		ObservedAt:      observedAt,
 		EffectivePeriod: core.EffectivePeriod{StartsAt: startsAt, EndsAt: endsAt},
@@ -543,6 +493,8 @@ func observationSnapshotIdentity(
 		strconv.FormatBool(purchase.SubIsValid),
 		purchase.DeveloperPayload,
 		strconv.FormatUint(uint64(quantity), 10),
+		strconv.FormatInt(purchase.Price, 10),
+		purchase.Currency,
 		string(state),
 		string(access),
 		string(reason),
@@ -581,14 +533,31 @@ func validateSubmittedScope(request stores.VerificationRequest, purchase purchas
 			return errors.New("submitted Huawei product does not match claim")
 		}
 	}
-	return nil
+	return validatePurchasePrice(purchase)
 }
 
 // comparePurchases enforces stable purchase identity across client and authoritative data.
 func comparePurchases(submitted, authoritative purchaseData) error {
 	if submitted.ApplicationID != authoritative.ApplicationID || submitted.ProductID != authoritative.ProductID ||
-		submitted.PurchaseToken != authoritative.PurchaseToken {
+		submitted.PurchaseToken != authoritative.PurchaseToken || submitted.Price != authoritative.Price ||
+		submitted.Currency != authoritative.Currency {
 		return errors.New("authoritative Huawei purchase does not match submitted evidence")
+	}
+	return validatePurchasePrice(authoritative)
+}
+
+// validatePurchasePrice validates Huawei's signed amount in hundredths of an ISO 4217 unit.
+func validatePurchasePrice(purchase purchaseData) error {
+	if purchase.Price < 0 || purchase.Price > math.MaxInt64/10 {
+		return errors.New("Huawei purchase price is outside the supported range")
+	}
+	if len(purchase.Currency) != 3 {
+		return errors.New("Huawei purchase currency must be a three-letter ISO 4217 code")
+	}
+	for _, character := range purchase.Currency {
+		if character < 'A' || character > 'Z' {
+			return errors.New("Huawei purchase currency must use uppercase ASCII letters")
+		}
 	}
 	return nil
 }
@@ -602,17 +571,24 @@ func normalizeState(
 	if productKind == core.ProductKindSubscription && purchase.CancelTime > 0 {
 		return core.LifecycleRevoked, core.AccessDenied, core.AccessReasonRevoked
 	}
-	if purchase.PurchaseState == 2 {
+	if productKind != core.ProductKindSubscription && purchase.PurchaseState == 2 {
 		return core.LifecycleRefunded, core.AccessDenied, core.AccessReasonRefunded
 	}
 	if purchase.PurchaseState == 1 {
 		return core.LifecycleRevoked, core.AccessDenied, core.AccessReasonRevoked
 	}
-	if purchase.PurchaseState != 0 {
-		return core.LifecyclePending, core.AccessUnresolved, core.AccessReasonPendingPayment
-	}
 	if productKind == core.ProductKindSubscription {
 		expiresAt := milliseconds(purchase.ExpirationDate)
+		if purchase.PurchaseState == 2 {
+			if (purchase.RetryFlag == 1 && purchase.GraceExpirationTime > now.UnixMilli()) ||
+				(purchase.SubIsValid && purchase.ExpirationDate > 0 && expiresAt.After(now)) {
+				return core.LifecycleRefunded, core.AccessAllowed, core.AccessReasonRefunded
+			}
+			return core.LifecycleRefunded, core.AccessDenied, core.AccessReasonRefunded
+		}
+		if purchase.PurchaseState != 0 {
+			return core.LifecyclePending, core.AccessUnresolved, core.AccessReasonPendingPayment
+		}
 		if purchase.RetryFlag == 1 && purchase.GraceExpirationTime > now.UnixMilli() {
 			return core.LifecycleGracePeriod, core.AccessAllowed, core.AccessReasonGracePeriod
 		}
@@ -622,6 +598,9 @@ func normalizeState(
 		if purchase.RenewStatus == 0 || purchase.CancellationTime > 0 {
 			return core.LifecycleCanceled, core.AccessAllowed, core.AccessReasonCanceledAtPeriodEnd
 		}
+	}
+	if purchase.PurchaseState != 0 {
+		return core.LifecyclePending, core.AccessUnresolved, core.AccessReasonPendingPayment
 	}
 	return core.LifecycleActive, core.AccessAllowed, core.AccessReasonPurchaseValid
 }

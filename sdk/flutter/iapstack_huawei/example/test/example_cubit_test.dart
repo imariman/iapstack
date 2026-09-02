@@ -26,6 +26,7 @@ void main() {
       backend: backend,
       huawei: HuaweiIapStack(
         client: backend,
+        productKinds: _productKinds,
         platform: _FakePlatform(),
       ),
       externalCustomerId: 'customer-1',
@@ -67,7 +68,11 @@ void main() {
     );
     final cubit = ExampleCubit(
       backend: backend,
-      huawei: HuaweiIapStack(client: backend, platform: platform),
+      huawei: HuaweiIapStack(
+        client: backend,
+        productKinds: _productKinds,
+        platform: platform,
+      ),
       externalCustomerId: 'customer-1',
       productId: 'premium-monthly',
       productKind: HuaweiProductKind.subscription,
@@ -78,9 +83,38 @@ void main() {
     await cubit.purchase();
 
     expect(cubit.state.status, ExampleStatus.failure);
-    expect(cubit.state.message, contains('sandbox eligibility'));
+    expect(cubit.state.message, contains('sandbox'));
     expect(platform.purchaseCalls, 0);
     expect(backendCalled, isFalse);
+  });
+
+  test('stops initialization when Huawei IAP is unavailable', () async {
+    final backend = IapStackClient(
+      IapStackConfig(
+        baseUri: Uri.parse('https://iap.example'),
+        applicationId: 'application-1',
+        customerToken: 'customer-token',
+      ),
+      httpClient: MockClient((request) async => http.Response('{}', 500)),
+    );
+    final cubit = ExampleCubit(
+      backend: backend,
+      huawei: HuaweiIapStack(
+        client: backend,
+        productKinds: _productKinds,
+        platform: _FakePlatform(environmentAvailable: false),
+      ),
+      externalCustomerId: 'customer-1',
+      productId: 'premium-monthly',
+      productKind: HuaweiProductKind.subscription,
+    );
+    addTearDown(cubit.close);
+
+    await cubit.initialize();
+
+    expect(cubit.state.status, ExampleStatus.failure);
+    expect(cubit.state.environmentAvailable, isFalse);
+    expect(cubit.state.message, contains('not available'));
   });
 }
 
@@ -97,8 +131,14 @@ final Map<String, Object?> _verificationJson = <String, Object?>{
   ],
 };
 
+const Map<String, HuaweiProductKind> _productKinds =
+    <String, HuaweiProductKind>{
+  'premium-monthly': HuaweiProductKind.subscription,
+};
+
 final class _FakePlatform implements HuaweiIapPlatform {
   _FakePlatform({
+    this.environmentAvailable = true,
     this.sandboxResult = const HuaweiSandboxStatus(
       isSandboxUser: true,
       isSandboxApk: true,
@@ -107,8 +147,12 @@ final class _FakePlatform implements HuaweiIapPlatform {
     ),
   });
 
+  final bool environmentAvailable;
   final HuaweiSandboxStatus sandboxResult;
   int purchaseCalls = 0;
+
+  @override
+  Future<bool> isAvailable() async => environmentAvailable;
 
   @override
   Future<HuaweiOwnedPurchasesPage> ownedPurchases({
@@ -116,6 +160,27 @@ final class _FakePlatform implements HuaweiIapPlatform {
     String? continuationToken,
   }) async =>
       HuaweiOwnedPurchasesPage(purchases: const <HuaweiSignedPurchase>[]);
+
+  @override
+  Future<List<HuaweiProduct>> queryProducts({
+    required List<String> productIds,
+    required HuaweiProductKind productKind,
+  }) async =>
+      productIds
+          .map(
+            (id) => HuaweiProduct(
+              id: id,
+              kind: productKind,
+              title: 'Premium Monthly',
+              description: 'Monthly access',
+              price: r'$4.99',
+              priceMicros: 4990000,
+              currency: 'USD',
+              status: 0,
+              subscriptionPeriod: 'P1M',
+            ),
+          )
+          .toList(growable: false);
 
   @override
   Future<HuaweiSignedPurchase> purchase({

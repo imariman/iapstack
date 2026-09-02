@@ -10,9 +10,11 @@ final class ExampleState {
   /// Creates an example state.
   const ExampleState({
     this.status = ExampleStatus.initial,
-    this.message = 'Checking Huawei sandbox eligibility.',
+    this.message = 'Checking Huawei IAP readiness.',
     this.entitlements = const <Entitlement>[],
+    this.environmentAvailable,
     this.sandboxStatus,
+    this.product,
     this.requestId,
   });
 
@@ -25,8 +27,14 @@ final class ExampleState {
   /// Latest authoritative entitlement snapshot.
   final List<Entitlement> entitlements;
 
+  /// Whether Huawei IAP supports the current account region.
+  final bool? environmentAvailable;
+
   /// Current device-side Huawei sandbox eligibility, when checked.
   final HuaweiSandboxStatus? sandboxStatus;
+
+  /// Product returned by AppGallery for the configured product ID.
+  final HuaweiProduct? product;
 
   /// Correlation ID supplied to the latest successful IAPStack request.
   final String? requestId;
@@ -60,35 +68,65 @@ final class ExampleCubit extends Cubit<ExampleState> {
   /// Product type exercised by purchase.
   final HuaweiProductKind productKind;
 
-  /// Verifies that both the signed-in Huawei account and APK use the sandbox.
-  Future<void> checkSandbox() async {
+  /// Checks environment and sandbox readiness, then loads the configured product.
+  Future<void> initialize() async {
     if (state.status == ExampleStatus.loading) {
       return;
     }
     emit(ExampleState(
       status: ExampleStatus.loading,
-      message: 'Checking Huawei sandbox eligibility…',
+      message: 'Checking Huawei IAP and loading the product…',
       entitlements: state.entitlements,
+      environmentAvailable: state.environmentAvailable,
       sandboxStatus: state.sandboxStatus,
+      product: state.product,
     ));
     try {
+      final available = await _huawei.isAvailable();
+      if (!available) {
+        emit(ExampleState(
+          status: ExampleStatus.failure,
+          message:
+              'Huawei IAP is not available for the current account region.',
+          entitlements: state.entitlements,
+          environmentAvailable: false,
+        ));
+        return;
+      }
       final status = await _huawei.sandboxStatus();
+      final query = await _huawei.queryProducts(<String>{productId});
+      final product = query.products.isEmpty ? null : query.products.single;
+      final ready = status.isActive && product?.isPurchasable == true;
       emit(ExampleState(
-        status: status.isActive ? ExampleStatus.success : ExampleStatus.failure,
-        message: status.isActive
-            ? 'Huawei sandbox is active for this account and APK.'
-            : 'Sandbox is not active for both the Huawei account and APK. Do not start a purchase.',
+        status: ready ? ExampleStatus.success : ExampleStatus.failure,
+        message: switch ((status.isActive, product)) {
+          (false, _) =>
+            'Sandbox is not active for both the Huawei account and APK. Do not start a purchase.',
+          (true, null) =>
+            'The configured product was not returned by AppGallery Connect.',
+          (true, final value?) when !value.isPurchasable =>
+            'The configured Huawei product is not available for a new purchase.',
+          _ => 'Huawei IAP, sandbox, and product are ready.',
+        },
         entitlements: state.entitlements,
+        environmentAvailable: true,
         sandboxStatus: status,
+        product: product,
       ));
     } on HuaweiIapStackException catch (error) {
       emit(ExampleState(
         status: ExampleStatus.failure,
-        message: 'Huawei sandbox check failed: ${error.code}',
+        message: 'Huawei initialization failed: ${error.code}',
         entitlements: state.entitlements,
+        environmentAvailable: state.environmentAvailable,
+        sandboxStatus: state.sandboxStatus,
+        product: state.product,
       ));
     }
   }
+
+  /// Re-runs the complete Huawei readiness check.
+  Future<void> checkSandbox() => initialize();
 
   /// Opens Huawei purchase UI and verifies the returned evidence.
   Future<void> purchase() {
@@ -97,10 +135,10 @@ final class ExampleCubit extends Cubit<ExampleState> {
     }
     final requestId = _requestIdFactory('purchase');
     return _run(() async {
+      final product = state.product!;
       final result = await _huawei.purchaseAndVerify(
         externalCustomerId: externalCustomerId,
-        productId: productId,
-        productKind: productKind,
+        product: product,
         requestId: requestId,
       );
       return result.entitlements;
@@ -150,14 +188,18 @@ final class ExampleCubit extends Cubit<ExampleState> {
         status: ExampleStatus.loading,
         message: 'Working…',
         entitlements: state.entitlements,
-        sandboxStatus: state.sandboxStatus));
+        environmentAvailable: state.environmentAvailable,
+        sandboxStatus: state.sandboxStatus,
+        product: state.product));
     try {
       final entitlements = await operation();
       emit(ExampleState(
         status: ExampleStatus.success,
         message: successMessage,
         entitlements: entitlements,
+        environmentAvailable: state.environmentAvailable,
         sandboxStatus: state.sandboxStatus,
+        product: state.product,
         requestId: requestId,
       ));
     } on HuaweiIapStackException catch (error) {
@@ -167,14 +209,18 @@ final class ExampleCubit extends Cubit<ExampleState> {
             ? 'Purchase cancelled.'
             : 'Huawei error: ${error.code}',
         entitlements: state.entitlements,
+        environmentAvailable: state.environmentAvailable,
         sandboxStatus: state.sandboxStatus,
+        product: state.product,
       ));
     } on IapStackApiException catch (error) {
       emit(ExampleState(
         status: ExampleStatus.failure,
         message: 'IAPStack error: ${error.code}.',
         entitlements: state.entitlements,
+        environmentAvailable: state.environmentAvailable,
         sandboxStatus: state.sandboxStatus,
+        product: state.product,
         requestId: error.requestId ?? requestId,
       ));
     } on IapStackException catch (error) {
@@ -182,20 +228,27 @@ final class ExampleCubit extends Cubit<ExampleState> {
         status: ExampleStatus.failure,
         message: error.message,
         entitlements: state.entitlements,
+        environmentAvailable: state.environmentAvailable,
         sandboxStatus: state.sandboxStatus,
+        product: state.product,
       ));
     }
   }
 
   bool _sandboxEligible() {
-    if (state.sandboxStatus?.isActive == true) {
+    if (state.environmentAvailable == true &&
+        state.sandboxStatus?.isActive == true &&
+        state.product?.isPurchasable == true) {
       return true;
     }
     emit(ExampleState(
       status: ExampleStatus.failure,
-      message: 'Confirm Huawei sandbox eligibility before this operation.',
+      message:
+          'Complete Huawei environment, sandbox, and product checks first.',
       entitlements: state.entitlements,
+      environmentAvailable: state.environmentAvailable,
       sandboxStatus: state.sandboxStatus,
+      product: state.product,
     ));
     return false;
   }

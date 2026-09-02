@@ -13,6 +13,89 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
+  test('reports Huawei IAP environment readiness', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      expect(call.method, 'isEnvReady');
+      return jsonEncode(<String, Object?>{'returnCode': '0'});
+    });
+
+    expect(await const HuaweiPluginPlatform().isAvailable(), isTrue);
+  });
+
+  test('maps localized Huawei products without losing price precision',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      expect(call.method, 'obtainProductInfo');
+      expect((call.arguments as Map<Object?, Object?>)['priceType'], 2);
+      expect((call.arguments as Map<Object?, Object?>)['skuIds'],
+          <String>['premium_monthly']);
+      return jsonEncode(<String, Object?>{
+        'returnCode': '0',
+        'productInfoList': <Object?>[
+          <String, Object?>{
+            'productId': 'premium_monthly',
+            'priceType': 2,
+            'productName': 'Premium Monthly',
+            'productDesc': 'Monthly access',
+            'price': r'$4.99',
+            'microsPrice': 4990000,
+            'currency': 'USD',
+            'status': 0,
+            'subPeriod': 'P1M',
+            'subFreeTrialPeriod': 'P7D',
+            'subSpecialPrice': r'$1.99',
+            'subSpecialPriceMicros': 1990000,
+          },
+        ],
+      });
+    });
+
+    final products = await const HuaweiPluginPlatform().queryProducts(
+      productIds: const <String>['premium_monthly'],
+      productKind: HuaweiProductKind.subscription,
+    );
+
+    final product = products.single;
+    expect(product.id, 'premium_monthly');
+    expect(product.priceMicros, 4990000);
+    expect(product.currency, 'USD');
+    expect(product.subscriptionPeriod, 'P1M');
+    expect(product.freeTrialPeriod, 'P7D');
+    expect(product.promotionalPriceMicros, 1990000);
+    expect(product.isPurchasable, isTrue);
+  });
+
+  test('rejects incomplete product data', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      return jsonEncode(<String, Object?>{
+        'returnCode': '0',
+        'productInfoList': <Object?>[
+          <String, Object?>{
+            'productId': 'premium_monthly',
+            'priceType': 2,
+            'price': r'$4.99',
+            'microsPrice': 4990000,
+            'status': 0,
+          },
+        ],
+      });
+    });
+
+    await expectLater(
+      const HuaweiPluginPlatform().queryProducts(
+        productIds: const <String>['premium_monthly'],
+        productKind: HuaweiProductKind.subscription,
+      ),
+      throwsA(
+        isA<HuaweiIapStackException>()
+            .having((error) => error.code, 'code', 'invalid_plugin_response'),
+      ),
+    );
+  });
+
   test('reports both sandbox account and APK eligibility', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {

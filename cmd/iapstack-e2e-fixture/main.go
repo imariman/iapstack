@@ -84,6 +84,8 @@ type purchaseData struct {
 	PurchaseTime     int64  `json:"purchaseTime"`
 	DeveloperPayload string `json:"developerPayload"`
 	Quantity         uint32 `json:"quantity"`
+	Currency         string `json:"currency"`
+	Price            int64  `json:"price"`
 }
 
 // evidence contains one Huawei SDK-compatible detached signature envelope.
@@ -103,11 +105,21 @@ type credential struct {
 	SubscriptionURL string `json:"subscription_url"`
 }
 
-// notification contains one signed application-scoped provider notification.
+// notification contains one native Huawei IAP V2 order callback.
 type notification struct {
-	ExternalCustomerID string   `json:"external_customer_id"`
-	ClaimedProducts    []string `json:"claimed_products"`
-	Purchase           evidence `json:"purchase"`
+	Version           string            `json:"version"`
+	EventType         string            `json:"eventType"`
+	NotifyTime        int64             `json:"notifyTime"`
+	ApplicationID     string            `json:"applicationId"`
+	OrderNotification orderNotification `json:"orderNotification"`
+}
+
+// orderNotification contains the token-only lifecycle hint reconciled by IAPStack.
+type orderNotification struct {
+	Version          string `json:"version"`
+	NotificationType int    `json:"notificationType"`
+	PurchaseToken    string `json:"purchaseToken"`
+	ProductID        string `json:"productId"`
 }
 
 // scenario exposes safe configuration and signed evidence to the host-side gate client.
@@ -246,9 +258,11 @@ func (service *fixture) getScenario(writer http.ResponseWriter, _ *http.Request)
 		},
 		Evidence: evidenceValue,
 		Notification: notification{
-			ExternalCustomerID: externalCustomerID,
-			ClaimedProducts:    []string{providerProductID},
-			Purchase:           evidenceValue,
+			Version: "v2", EventType: "ORDER", NotifyTime: service.purchasedAt.UnixMilli(),
+			ApplicationID: providerApplicationID,
+			OrderNotification: orderNotification{
+				Version: "v2", NotificationType: 2, PurchaseToken: purchaseToken, ProductID: providerProductID,
+			},
 		},
 	})
 }
@@ -367,7 +381,7 @@ func (service *fixture) signedPurchase() (string, string, error) {
 	payload, err := json.Marshal(purchaseData{
 		ApplicationID: providerApplicationID, ProductID: providerProductID, OrderID: orderID,
 		PurchaseToken: purchaseToken, PurchaseState: purchaseState, PurchaseTime: service.purchasedAt.UnixMilli(),
-		DeveloperPayload: externalCustomerID, Quantity: 1,
+		DeveloperPayload: externalCustomerID, Quantity: 1, Currency: "USD", Price: 499,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("marshal fixture purchase: %w", err)

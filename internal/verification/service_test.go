@@ -54,6 +54,7 @@ type fakeAdapter struct {
 	result          stores.VerificationResult
 	err             error
 	calls           int
+	reconcileCalls  int
 	postCommitCalls int
 	postCommit      func(stores.PostCommitRequest) error
 }
@@ -92,6 +93,49 @@ var (
 	// errFakeOutbox indicates an injected durable outbox failure.
 	errFakeOutbox = errors.New("fake outbox failure")
 )
+
+// TestServiceReconcilePersistsProviderNotificationSignal verifies token-only refresh orchestration.
+func TestServiceReconcilePersistsProviderNotificationSignal(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	queryReference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", "sensitive-purchase-token")
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	fixture.result.Observations[0].References = append(fixture.result.Observations[0].References, queryReference)
+	signal, err := stores.NewEvidence(
+		"application/vnd.iapstack.huawei-notification-v2+json",
+		[]byte(`{"event_type":"ORDER","purchase_token":"sensitive-purchase-token"}`),
+	)
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	store := newFakeStore(fixture)
+	adapter := &fakeAdapter{result: fixture.result}
+	service := newVerificationService(t, store, adapter, &fakeProtector{}, fixture.clock)
+
+	result, err := service.Reconcile(context.Background(), verification.ReconciliationCommand{
+		ProjectID:           verificationProjectID,
+		ApplicationID:       verificationApplicationID,
+		ExternalCustomerID:  verificationExternalCustomerID,
+		ExpectedProducts:    []core.ProviderProductID{verificationProviderProductID},
+		ExpectedProductKind: core.ProductKindNonConsumable,
+		QueryReferences:     []core.StoreReference{queryReference},
+		Signal:              signal,
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if adapter.reconcileCalls != 1 || len(result.Entitlements) != 1 {
+		t.Fatalf("Reconcile() = (%#v, calls=%d)", result, adapter.reconcileCalls)
+	}
+	for _, evidence := range store.repository.evidence {
+		if evidence.Kind != "provider_notification_reconciliation" {
+			t.Fatalf("evidence kind = %q", evidence.Kind)
+		}
+	}
+}
 
 // TestServiceVerifyPersistsAndReplays verifies one atomic success and logical replay.
 func TestServiceVerifyPersistsAndReplays(t *testing.T) {
@@ -353,12 +397,13 @@ func (adapter *fakeAdapter) Verify(
 	return adapter.result, adapter.err
 }
 
-// Reconcile is not used by purchase verification unit tests.
+// Reconcile returns the configured authoritative provider result.
 func (adapter *fakeAdapter) Reconcile(
 	_ context.Context,
 	_ stores.ReconciliationRequest,
 ) (stores.VerificationResult, error) {
-	return stores.VerificationResult{}, errors.New("fake reconciliation is unavailable")
+	adapter.reconcileCalls++
+	return adapter.result, adapter.err
 }
 
 // PostCommit runs the configured provider completion callback after persistence.

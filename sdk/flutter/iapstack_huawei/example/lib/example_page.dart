@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:iapstack_huawei_example/example_config.dart';
 import 'package:iapstack_huawei_example/example_cubit.dart';
 import 'package:iapstack_huawei_example/example_status_panel.dart';
+import 'package:iapstack_huawei_example/huawei_product_card.dart';
 import 'package:iapstack_huawei_example/sandbox_status_card.dart';
 
 /// Manual controls used by the Huawei sandbox release gate.
@@ -32,16 +33,21 @@ class ExamplePage extends StatelessWidget {
                   const SizedBox(height: 24),
                   SandboxStatusCard(status: state.sandboxStatus),
                   const SizedBox(height: 12),
+                  HuaweiProductCard(product: state.product),
+                  const SizedBox(height: 12),
                   OutlinedButton.icon(
                     onPressed: loading
                         ? null
                         : context.read<ExampleCubit>().checkSandbox,
                     icon: const Icon(Icons.verified_user_outlined),
-                    label: const Text('Recheck sandbox'),
+                    label: const Text('Recheck Huawei readiness'),
                   ),
                   const SizedBox(height: 24),
                   FilledButton(
-                    onPressed: loading || state.sandboxStatus?.isActive != true
+                    onPressed: loading ||
+                            state.environmentAvailable != true ||
+                            state.sandboxStatus?.isActive != true ||
+                            state.product?.isPurchasable != true
                         ? null
                         : context.read<ExampleCubit>().purchase,
                     child: const Text('Purchase and verify'),

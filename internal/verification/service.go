@@ -22,6 +22,8 @@ import (
 const (
 	// purchaseSubmissionEvidenceKind identifies client evidence persisted by verification.
 	purchaseSubmissionEvidenceKind = "purchase_submission"
+	// reconciliationSignalEvidenceKind identifies a validated provider notification that triggered reconciliation.
+	reconciliationSignalEvidenceKind = "provider_notification_reconciliation"
 	// purchaseEvidencePurpose scopes protection of submitted purchase evidence.
 	purchaseEvidencePurpose = "purchase_evidence"
 	// verifiedArtifactPurpose scopes protection of authoritative provider artifacts.
@@ -59,6 +61,18 @@ type Command struct {
 	ClaimedProducts          []core.ProviderProductID
 	ExpectedCustomerBindings []core.StoreReference
 	Evidence                 stores.Evidence
+}
+
+// ReconciliationCommand describes one provider signal resolved to a known purchase.
+type ReconciliationCommand struct {
+	ProjectID                core.ProjectID
+	ApplicationID            core.ApplicationID
+	ExternalCustomerID       string
+	ExpectedProducts         []core.ProviderProductID
+	ExpectedProductKind      core.ProductKind
+	ExpectedCustomerBindings []core.StoreReference
+	QueryReferences          []core.StoreReference
+	Signal                   stores.Evidence
 }
 
 // Result contains the verified time and resulting current entitlement snapshot.
@@ -188,7 +202,7 @@ func (service *Service) Verify(ctx context.Context, command Command) (Result, er
 		}
 	}
 
-	prepared, err := service.prepare(ctx, command, customer, providerResult, receivedAt)
+	prepared, err := service.prepare(ctx, command, customer, providerResult, receivedAt, purchaseSubmissionEvidenceKind)
 	if err != nil {
 		return Result{}, err
 	}
@@ -203,6 +217,60 @@ func (service *Service) Verify(ctx context.Context, command Command) (Result, er
 		return Result{}, fmt.Errorf("complete purchase with %s: %w", application.Store.Provider, err)
 	}
 	return result, nil
+}
+
+// Reconcile refreshes a previously verified purchase from a validated provider signal.
+func (service *Service) Reconcile(ctx context.Context, command ReconciliationCommand) (Result, error) {
+	if err := command.Validate(); err != nil {
+		return Result{}, validation.Wrap(err)
+	}
+	receivedAt := service.clock.Now().UTC()
+	if receivedAt.IsZero() {
+		return Result{}, errors.New("verification clock returned zero time")
+	}
+	base := Command{
+		ProjectID:                command.ProjectID,
+		ApplicationID:            command.ApplicationID,
+		ExternalCustomerID:       command.ExternalCustomerID,
+		ClaimedProducts:          append([]core.ProviderProductID(nil), command.ExpectedProducts...),
+		ExpectedCustomerBindings: append([]core.StoreReference(nil), command.ExpectedCustomerBindings...),
+		Evidence:                 command.Signal,
+	}
+	application, customer, err := service.loadScope(ctx, base)
+	if err != nil {
+		return Result{}, err
+	}
+	adapter, err := service.adapters.Adapter(application.Store.Provider)
+	if err != nil {
+		return Result{}, fmt.Errorf("resolve store adapter: %w", err)
+	}
+	request := stores.ReconciliationRequest{
+		Application:              application,
+		CustomerID:               customer.ID,
+		ExpectedProducts:         append([]core.ProviderProductID(nil), command.ExpectedProducts...),
+		ExpectedProductKind:      command.ExpectedProductKind,
+		ExpectedCustomerBindings: append([]core.StoreReference(nil), command.ExpectedCustomerBindings...),
+		QueryReferences:          append([]core.StoreReference(nil), command.QueryReferences...),
+	}
+	providerResult, err := adapter.Reconcile(ctx, request)
+	if err != nil {
+		return Result{}, fmt.Errorf("reconcile purchase with %s: %w", application.Store.Provider, err)
+	}
+	if err := providerResult.ValidateForReconciliation(request); err != nil {
+		return Result{}, fmt.Errorf("validate provider reconciliation result: %w", err)
+	}
+	prepared, err := service.prepare(
+		ctx,
+		base,
+		customer,
+		providerResult,
+		receivedAt,
+		reconciliationSignalEvidenceKind,
+	)
+	if err != nil {
+		return Result{}, err
+	}
+	return service.persist(ctx, base, application, customer, providerResult, prepared)
 }
 
 // Validate checks command scope, external customer identity, product claims, bindings, and evidence.
@@ -236,6 +304,41 @@ func (command Command) Validate() error {
 		for previous := 0; previous < index; previous++ {
 			if reference.Equal(command.ExpectedCustomerBindings[previous]) {
 				return errors.New("duplicate expected customer binding")
+			}
+		}
+	}
+	return nil
+}
+
+// Validate checks reconciliation scope, products, references, and trigger evidence.
+func (command ReconciliationCommand) Validate() error {
+	if err := command.ExpectedProductKind.Validate(); err != nil {
+		return err
+	}
+	base := Command{
+		ProjectID:                command.ProjectID,
+		ApplicationID:            command.ApplicationID,
+		ExternalCustomerID:       command.ExternalCustomerID,
+		ClaimedProducts:          command.ExpectedProducts,
+		ExpectedCustomerBindings: command.ExpectedCustomerBindings,
+		Evidence:                 command.Signal,
+	}
+	if err := base.Validate(); err != nil {
+		return err
+	}
+	if len(command.QueryReferences) == 0 {
+		return errors.New("reconciliation requires at least one query reference")
+	}
+	for index, reference := range command.QueryReferences {
+		if err := reference.Validate(); err != nil {
+			return fmt.Errorf("query reference %d: %w", index, err)
+		}
+		if reference.Role != core.ReferenceQuery {
+			return fmt.Errorf("query reference %d has role %q", index, reference.Role)
+		}
+		for previous := 0; previous < index; previous++ {
+			if reference.Equal(command.QueryReferences[previous]) {
+				return errors.New("duplicate query reference")
 			}
 		}
 	}
@@ -282,6 +385,7 @@ func (service *Service) prepare(
 	customer core.Customer,
 	result stores.VerificationResult,
 	receivedAt time.Time,
+	evidenceKind string,
 ) (preparedVerification, error) {
 	protectedEvidence, err := service.protect(
 		ctx,
@@ -298,7 +402,7 @@ func (service *Service) prepare(
 			ProjectID:     command.ProjectID,
 			ApplicationID: command.ApplicationID,
 			CustomerID:    customer.ID,
-			Kind:          purchaseSubmissionEvidenceKind,
+			Kind:          evidenceKind,
 			ContentType:   command.Evidence.ContentType,
 			Payload:       protectedEvidence,
 			ReceivedAt:    receivedAt,

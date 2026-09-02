@@ -23,6 +23,31 @@ type notificationScopeTransaction struct {
 	store *notificationScopeStore
 }
 
+// TestHuaweiNotificationUsesPathProjectScope verifies AppGallery-compatible scope without custom headers.
+func TestHuaweiNotificationUsesPathProjectScope(t *testing.T) {
+	t.Parallel()
+
+	store := &notificationScopeStore{}
+	api := &API{operations: store, bodyLimit: 1024}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/providers/huawei/projects/project-1/applications/application-1/notifications",
+		strings.NewReader(`{"version":"v2"}`),
+	)
+	request.SetPathValue("project_id", "project-1")
+	request.SetPathValue("application_id", "application-1")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-IAPStack-Project-ID", "wrong-header-project")
+	recorder := httptest.NewRecorder()
+	api.huaweiNotification(recorder, request)
+	if store.projectID != "project-1" || store.applicationID != "application-1" {
+		t.Fatalf("application lookup scope = (%q, %q)", store.projectID, store.applicationID)
+	}
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("notification status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+}
+
 // TestGooglePlayNotificationUsesPathProjectScope verifies Pub/Sub-compatible scope without custom headers.
 func TestGooglePlayNotificationUsesPathProjectScope(t *testing.T) {
 	t.Parallel()

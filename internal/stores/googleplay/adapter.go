@@ -279,17 +279,7 @@ func (adapter *Adapter) Reconcile(
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}
-	var result queryResult
-	for _, kind := range []core.ProductKind{core.ProductKindSubscription, core.ProductKindNonConsumable} {
-		result, err = adapter.query(ctx, request.Application, configuration, purchaseToken, kind)
-		if err == nil {
-			break
-		}
-		var failure *stores.Failure
-		if kind != core.ProductKindSubscription || !errors.As(err, &failure) || failure.Kind != stores.FailureNotFound {
-			return stores.VerificationResult{}, err
-		}
-	}
+	result, err := adapter.query(ctx, request.Application, configuration, purchaseToken, request.ExpectedProductKind)
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}

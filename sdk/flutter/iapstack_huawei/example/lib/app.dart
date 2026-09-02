@@ -36,11 +36,16 @@ class ExampleAppState extends State<ExampleApp> {
       );
       _cubit = ExampleCubit(
         backend: backend,
-        huawei: HuaweiIapStack(client: backend),
+        huawei: HuaweiIapStack(
+          client: backend,
+          productKinds: <String, HuaweiProductKind>{
+            widget.config.productId: widget.config.productKind,
+          },
+        ),
         externalCustomerId: widget.config.externalCustomerId,
         productId: widget.config.productId,
         productKind: widget.config.productKind,
-      )..checkSandbox();
+      )..initialize();
     }
   }
 

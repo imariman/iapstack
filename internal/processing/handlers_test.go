@@ -14,6 +14,7 @@ import (
 	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/stores"
 	"github.com/imariman/iapstack/internal/stores/googleplay"
+	"github.com/imariman/iapstack/internal/stores/huawei"
 )
 
 // googleLookupStore returns one verified purchase context for processing tests.
@@ -46,6 +47,72 @@ type reconciliationStore struct {
 type reconciliationTransaction struct {
 	persistence.OperationsTransaction
 	store *reconciliationStore
+}
+
+// TestHuaweiReconciliationCommandResolvesProtectedPurchaseScope verifies native V2 token binding.
+func TestHuaweiReconciliationCommandResolvesProtectedPurchaseScope(t *testing.T) {
+	t.Parallel()
+
+	store := &googleLookupStore{purchase: persistence.PurchaseReferenceContext{
+		Customer:          core.Customer{ID: "customer-1", ProjectID: "project-1", ExternalID: "account-1"},
+		ProviderProductID: "premium_monthly", ProductKind: core.ProductKindSubscription,
+	}}
+	protector := &processingProtection{}
+	service := &Service{store: store, protection: protector}
+	message := persistence.QueueMessage{
+		Queue: persistence.QueueInbox, ProjectID: "project-1", ApplicationID: "application-1",
+		Provider: core.ProviderHuaweiAppGallery,
+	}
+	notification := huawei.NotificationEnvelope{
+		Version: "v2", EventType: "SUBSCRIPTION", NotifyTime: time.Now().UTC(),
+		ApplicationID: "provider-app-1", NotificationType: 2,
+		PurchaseToken: "purchase-token-1", ProviderProductID: "premium_monthly",
+		ProductKind: core.ProductKindSubscription,
+	}
+	payload, err := json.Marshal(notification)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	command, err := service.huaweiReconciliationCommand(context.Background(), message, notification, payload)
+	if err != nil {
+		t.Fatalf("huaweiReconciliationCommand() error = %v", err)
+	}
+	if command.ExternalCustomerID != "account-1" || len(command.ExpectedProducts) != 1 ||
+		command.ExpectedProducts[0] != "premium_monthly" || command.Signal.ContentType != huawei.NotificationContentType ||
+		len(command.QueryReferences) != 1 || command.QueryReferences[0].Value() != "purchase-token-1" {
+		t.Fatalf("huaweiReconciliationCommand() = %#v", command)
+	}
+	if protector.scope.Purpose != "provider_reference:query:purchase_token" || store.lookup.Fingerprint == ([32]byte{}) {
+		t.Fatalf("lookup protection = (%#v, %#v)", protector.scope, store.lookup)
+	}
+}
+
+// TestHuaweiReconciliationCommandRetriesUnknownPurchaseAndRejectsMismatch verifies safe classification.
+func TestHuaweiReconciliationCommandRetriesUnknownPurchaseAndRejectsMismatch(t *testing.T) {
+	t.Parallel()
+
+	message := persistence.QueueMessage{ProjectID: "project-1", ApplicationID: "application-1"}
+	notification := huawei.NotificationEnvelope{
+		PurchaseToken: "purchase-token-1", ProviderProductID: "premium_lifetime",
+		ProductKind: core.ProductKindNonConsumable,
+	}
+	payload, _ := json.Marshal(notification)
+	service := &Service{store: &googleLookupStore{err: persistence.ErrNotFound}, protection: &processingProtection{}}
+	_, err := service.huaweiReconciliationCommand(context.Background(), message, notification, payload)
+	var failure *stores.Failure
+	if !errors.As(err, &failure) || !failure.Retryable() {
+		t.Fatalf("unknown purchase error = %#v", err)
+	}
+
+	store := &googleLookupStore{purchase: persistence.PurchaseReferenceContext{
+		Customer:          core.Customer{ID: "customer-1", ProjectID: "project-1", ExternalID: "account-1"},
+		ProviderProductID: "another-product", ProductKind: core.ProductKindNonConsumable,
+	}}
+	service = &Service{store: store, protection: &processingProtection{}}
+	_, err = service.huaweiReconciliationCommand(context.Background(), message, notification, payload)
+	if !errors.As(err, &failure) || failure.Kind != stores.FailureInvalidEvidence || failure.Retryable() {
+		t.Fatalf("scope mismatch error = %#v", err)
+	}
 }
 
 // TestGooglePlayVerificationPayloadResolvesProtectedPurchaseScope verifies RTDN customer and catalog binding.

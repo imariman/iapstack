@@ -105,7 +105,7 @@ func (service *Service) handleAppleInbox(
 	return service.schedule(ctx, message.ProjectID, message.ApplicationID, result.Customer.ID, verificationPayload)
 }
 
-// handleHuaweiInbox decodes one signed Huawei envelope and refreshes its authoritative purchase state.
+// handleHuaweiInbox resolves one native Huawei V2 token and reconciles authoritative state.
 func (service *Service) handleHuaweiInbox(
 	ctx context.Context,
 	message persistence.QueueMessage,
@@ -115,19 +115,71 @@ func (service *Service) handleHuaweiInbox(
 	if err := decodeStrict(payload, &notification); err != nil {
 		return fmt.Errorf("decode Huawei notification: %w", err)
 	}
-	verificationPayload := jobs.VerificationPayload{
-		ExternalCustomerID: notification.ExternalCustomerID,
-		ClaimedProducts:    notification.ClaimedProducts,
-		Evidence:           notification.Purchase,
-	}
-	result, err := service.verify(ctx, message.ProjectID, message.ApplicationID, verificationPayload)
+	command, err := service.huaweiReconciliationCommand(ctx, message, notification, payload)
 	if err != nil {
 		return err
 	}
-	if !requiresReconciliation(verificationPayload.Evidence) {
-		return nil
+	_, err = service.verification.Reconcile(ctx, command)
+	return err
+}
+
+// huaweiReconciliationCommand binds a V2 callback token to an existing customer and catalog product.
+func (service *Service) huaweiReconciliationCommand(
+	ctx context.Context,
+	message persistence.QueueMessage,
+	notification huawei.NotificationEnvelope,
+	payload []byte,
+) (verification.ReconciliationCommand, error) {
+	token := []byte(notification.PurchaseToken)
+	defer zero(token)
+	protected, err := protection.Protect(ctx, service.protection, protection.Scope{
+		ProjectID: message.ProjectID, ApplicationID: message.ApplicationID,
+		Purpose: providerReferencePurpose + ":" + string(core.ReferenceQuery) + ":purchase_token",
+	}, token)
+	if err != nil {
+		return verification.ReconciliationCommand{}, fmt.Errorf("protect Huawei notification lookup: %w", err)
 	}
-	return service.schedule(ctx, message.ProjectID, message.ApplicationID, result.Customer.ID, verificationPayload)
+	defer zero(protected.Ciphertext)
+	var purchase persistence.PurchaseReferenceContext
+	err = service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var lookupErr error
+		purchase, lookupErr = repository.PurchaseContextByReference(ctx, persistence.ProviderReferenceLookup{
+			ProjectID: message.ProjectID, ApplicationID: message.ApplicationID,
+			Role: core.ReferenceQuery, Kind: "purchase_token", Fingerprint: protected.Fingerprint,
+		})
+		return lookupErr
+	})
+	if err != nil {
+		if errors.Is(err, persistence.ErrNotFound) || errors.Is(err, persistence.ErrUnavailable) {
+			return verification.ReconciliationCommand{}, stores.NewFailure(
+				core.ProviderHuaweiAppGallery, "notification_lookup", stores.FailureTemporary, 0, err,
+			)
+		}
+		return verification.ReconciliationCommand{}, err
+	}
+	if purchase.ProductKind != notification.ProductKind ||
+		purchase.ProviderProductID != notification.ProviderProductID {
+		return verification.ReconciliationCommand{}, stores.NewFailure(
+			core.ProviderHuaweiAppGallery, "notification_lookup", stores.FailureInvalidEvidence, 0, nil,
+		)
+	}
+	queryReference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", notification.PurchaseToken)
+	if err != nil {
+		return verification.ReconciliationCommand{}, err
+	}
+	signal, err := stores.NewEvidence(huawei.NotificationContentType, payload)
+	if err != nil {
+		return verification.ReconciliationCommand{}, err
+	}
+	return verification.ReconciliationCommand{
+		ProjectID:           message.ProjectID,
+		ApplicationID:       message.ApplicationID,
+		ExternalCustomerID:  purchase.Customer.ExternalID,
+		ExpectedProducts:    []core.ProviderProductID{purchase.ProviderProductID},
+		ExpectedProductKind: purchase.ProductKind,
+		QueryReferences:     []core.StoreReference{queryReference},
+		Signal:              signal,
+	}, nil
 }
 
 // handleGooglePlayInbox resolves one RTDN token to its verified customer and refreshes Android Publisher state.

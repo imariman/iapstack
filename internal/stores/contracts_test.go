@@ -164,9 +164,10 @@ func TestReconciliationUsesOpaqueQueryReferences(t *testing.T) {
 
 	application := googleApplication()
 	request := stores.ReconciliationRequest{
-		Application:      application,
-		CustomerID:       "customer_1",
-		ExpectedProducts: []core.ProviderProductID{"pro_monthly"},
+		Application:         application,
+		CustomerID:          "customer_1",
+		ExpectedProducts:    []core.ProviderProductID{"pro_monthly"},
+		ExpectedProductKind: core.ProductKindSubscription,
 		QueryReferences: []core.StoreReference{
 			storeReference(t, core.ReferenceQuery, "purchase_token", "secret-token"),
 		},
@@ -199,10 +200,11 @@ func TestReconciliationResultMustMatchQueryReference(t *testing.T) {
 	}
 	query := storeReference(t, core.ReferenceQuery, "purchase_token", "requested-token")
 	request := stores.ReconciliationRequest{
-		Application:      application,
-		CustomerID:       "customer_1",
-		ExpectedProducts: []core.ProviderProductID{"coins_100"},
-		QueryReferences:  []core.StoreReference{query},
+		Application:         application,
+		CustomerID:          "customer_1",
+		ExpectedProducts:    []core.ProviderProductID{"coins_100"},
+		ExpectedProductKind: core.ProductKindConsumable,
+		QueryReferences:     []core.StoreReference{query},
 	}
 	observation := productObservation(t, application, "observation_1", "coins_100")
 	result := stores.VerificationResult{

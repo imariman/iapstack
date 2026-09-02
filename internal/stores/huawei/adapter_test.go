@@ -51,7 +51,7 @@ func TestAdapterVerifiesAuthoritativeLifetimePurchase(t *testing.T) {
 	purchase := purchaseData{
 		ApplicationID: "provider-app-1", ProductID: "lifetime", OrderID: "order-1",
 		PurchaseToken: "opaque-purchase-token", PurchaseState: 0,
-		PurchaseTime: purchasedAt.UnixMilli(), Quantity: 1,
+		PurchaseTime: purchasedAt.UnixMilli(), Quantity: 1, Currency: "USD", Price: 499,
 	}
 	purchaseJSON, _ := json.Marshal(purchase)
 	signature := signFixture(t, privateKey, purchaseJSON)
@@ -115,6 +115,10 @@ func TestAdapterVerifiesAuthoritativeLifetimePurchase(t *testing.T) {
 	if result.Observations[0].Access != core.AccessAllowed || result.Observations[0].State != core.LifecycleActive {
 		t.Fatalf("observation = %#v, want active allowed", result.Observations[0])
 	}
+	if result.Observations[0].Price == nil || result.Observations[0].Price.Milliunits != 4990 ||
+		result.Observations[0].Price.Currency != "USD" {
+		t.Fatalf("observation price = %#v, want 4990 USD", result.Observations[0].Price)
+	}
 }
 
 // TestNormalizeSubscriptionLifecycle covers renewal, cancellation, expiration, grace, and refund outcomes.
@@ -138,7 +142,10 @@ func TestNormalizeSubscriptionLifecycle(t *testing.T) {
 		{name: "grace", purchase: purchaseData{PurchaseState: 0, RetryFlag: 1,
 			GraceExpirationTime: now.Add(time.Hour).UnixMilli(), ExpirationDate: now.Add(-time.Minute).UnixMilli()},
 			state: core.LifecycleGracePeriod, access: core.AccessAllowed},
-		{name: "refunded", purchase: purchaseData{PurchaseState: 2}, state: core.LifecycleRefunded, access: core.AccessDenied},
+		{name: "refunded and still valid", purchase: purchaseData{PurchaseState: 2, SubIsValid: true,
+			RenewStatus: 1, ExpirationDate: now.Add(time.Hour).UnixMilli()}, state: core.LifecycleRefunded, access: core.AccessAllowed},
+		{name: "refunded and expired", purchase: purchaseData{PurchaseState: 2, SubIsValid: false,
+			ExpirationDate: now.Add(-time.Hour).UnixMilli()}, state: core.LifecycleRefunded, access: core.AccessDenied},
 		{name: "revoked after refund", purchase: purchaseData{PurchaseState: 2,
 			CancelTime: now.Add(-time.Minute).UnixMilli()}, state: core.LifecycleRevoked, access: core.AccessDenied},
 	}
@@ -152,6 +159,24 @@ func TestNormalizeSubscriptionLifecycle(t *testing.T) {
 	}
 }
 
+// TestComparePurchasesRejectsPriceMismatch prevents client/server signed amount drift.
+func TestComparePurchasesRejectsPriceMismatch(t *testing.T) {
+	submitted := purchaseData{
+		ApplicationID: "provider-app-1", ProductID: "lifetime", PurchaseToken: "token-1",
+		Currency: "USD", Price: 499,
+	}
+	authoritative := submitted
+	authoritative.Price = 599
+	if err := comparePurchases(submitted, authoritative); err == nil {
+		t.Fatal("comparePurchases() price mismatch error = nil, want rejection")
+	}
+	authoritative = submitted
+	authoritative.Currency = "EUR"
+	if err := comparePurchases(submitted, authoritative); err == nil {
+		t.Fatal("comparePurchases() currency mismatch error = nil, want rejection")
+	}
+}
+
 // TestObservationSnapshotIdentitySeparatesLifecycleChangesButNotReceiptTime verifies durable replay semantics.
 func TestObservationSnapshotIdentitySeparatesLifecycleChangesButNotReceiptTime(t *testing.T) {
 	application := core.Application{ID: "application-1", ProjectID: "project-1", Store: core.StoreApplication{
@@ -162,6 +187,7 @@ func TestObservationSnapshotIdentitySeparatesLifecycleChangesButNotReceiptTime(t
 		ApplicationID: "provider-app-1", ProductID: "subscription", OrderID: "order-1",
 		PurchaseToken: "token-1", PurchaseState: 0, PurchaseTime: firstTime.Add(-time.Hour).UnixMilli(),
 		ExpirationDate: firstTime.Add(time.Hour).UnixMilli(), RenewStatus: 1, SubIsValid: true, Quantity: 1,
+		Currency: "USD", Price: 499,
 	}
 	artifact, err := stores.NewEvidence("application/json", []byte(`{"authoritative":true}`))
 	if err != nil {
@@ -241,61 +267,25 @@ func TestVerifySignatureRejectsTampering(t *testing.T) {
 
 // TestValidateNotificationCanonicalizesEquivalentPayloads verifies replay identity ignores harmless JSON formatting.
 func TestValidateNotificationCanonicalizesEquivalentPayloads(t *testing.T) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("GenerateKey() error = %v", err)
-	}
-	purchase := purchaseData{
-		ApplicationID: "provider-app-1", ProductID: "lifetime", OrderID: "order-1",
-		PurchaseToken: "purchase-token-1", PurchaseState: 0, PurchaseTime: time.Now().UTC().UnixMilli(),
-		DeveloperPayload: "customer-1", Quantity: 1,
-	}
-	purchaseJSON, err := json.Marshal(purchase)
-	if err != nil {
-		t.Fatalf("Marshal() purchase error = %v", err)
-	}
-	signature := signFixture(t, privateKey, purchaseJSON)
-	credentialJSON, err := json.Marshal(credentialPayload{
-		ClientID: "client", ClientSecret: "secret", PublicKey: publicKeyFixture(t, &privateKey.PublicKey),
-		TokenURL: "https://provider.example/token", OrderURL: "https://provider.example/order",
-		SubscriptionURL: "https://provider.example/subscription",
-	})
-	if err != nil {
-		t.Fatalf("Marshal() credential error = %v", err)
-	}
-	credential, err := stores.NewCredential(CredentialKind, CredentialContentType, CredentialSchemaVersion, credentialJSON)
-	if err != nil {
-		t.Fatalf("NewCredential() error = %v", err)
-	}
-	adapter, err := New(fakeCredentialSource{credential: credential}, time.Second, false)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
+	adapter := &Adapter{}
 	application := core.Application{ID: "application-1", ProjectID: "project-1", Store: core.StoreApplication{
 		Provider: core.ProviderHuaweiAppGallery, Environment: core.EnvironmentSandbox, ID: "provider-app-1",
 	}}
-	firstPurchase, err := json.Marshal(clientEvidence{
-		PurchaseData: string(purchaseJSON), Signature: signature, ProductKind: core.ProductKindNonConsumable,
-	})
-	if err != nil {
-		t.Fatalf("Marshal() first evidence error = %v", err)
-	}
-	secondPurchase, err := json.Marshal(map[string]any{
-		"signature": signature, "product_kind": core.ProductKindNonConsumable,
-		"purchase_data": string(purchaseJSON),
-	})
-	if err != nil {
-		t.Fatalf("Marshal() second evidence error = %v", err)
-	}
-	firstPayload, err := json.Marshal(NotificationEnvelope{
-		ExternalCustomerID: "customer-1", ClaimedProducts: []core.ProviderProductID{"lifetime"}, Purchase: firstPurchase,
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	firstPayload, err := json.Marshal(map[string]any{
+		"version": "v2", "eventType": "ORDER", "notifyTime": now.UnixMilli(), "applicationId": "provider-app-1",
+		"orderNotification": map[string]any{
+			"version": "v2", "notificationType": 2, "purchaseToken": "purchase-token-1", "productId": "lifetime",
+		},
 	})
 	if err != nil {
 		t.Fatalf("Marshal() first notification error = %v", err)
 	}
 	secondPayload, err := json.Marshal(map[string]any{
-		"purchase": json.RawMessage(secondPurchase), "claimed_products": []string{"lifetime"},
-		"external_customer_id": "customer-1",
+		"applicationId": "provider-app-1", "notifyTime": now.UnixMilli(), "eventType": "ORDER", "version": "v2",
+		"orderNotification": map[string]any{
+			"productId": "lifetime", "purchaseToken": "purchase-token-1", "notificationType": 2, "version": "v2",
+		},
 	})
 	if err != nil {
 		t.Fatalf("Marshal() second notification error = %v", err)
@@ -320,14 +310,17 @@ func TestValidateNotificationCanonicalizesEquivalentPayloads(t *testing.T) {
 		t.Fatalf("canonical notifications differ:\nfirst:  %s\nsecond: %s", firstCanonical, secondCanonical)
 	}
 
-	duplicateClaims := first
-	duplicateClaims.ClaimedProducts = []core.ProviderProductID{"lifetime", "lifetime"}
-	duplicatePayload, err := json.Marshal(duplicateClaims)
+	wrongScope, err := json.Marshal(map[string]any{
+		"version": "v2", "eventType": "ORDER", "notifyTime": now.UnixMilli(), "applicationId": "wrong-app",
+		"orderNotification": map[string]any{
+			"version": "v2", "notificationType": 2, "purchaseToken": "purchase-token-1", "productId": "lifetime",
+		},
+	})
 	if err != nil {
-		t.Fatalf("Marshal() duplicate notification error = %v", err)
+		t.Fatalf("Marshal() wrong-scope notification error = %v", err)
 	}
-	if _, err := adapter.ValidateNotification(context.Background(), application, duplicatePayload); err == nil {
-		t.Fatal("ValidateNotification() duplicate claims error = nil, want rejection")
+	if _, err := adapter.ValidateNotification(context.Background(), application, wrongScope); err == nil {
+		t.Fatal("ValidateNotification() wrong scope error = nil, want rejection")
 	}
 }
 

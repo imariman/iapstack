@@ -22,6 +22,7 @@ type ReconciliationRequest struct {
 	Application              core.Application
 	CustomerID               core.CustomerID
 	ExpectedProducts         []core.ProviderProductID
+	ExpectedProductKind      core.ProductKind
 	ExpectedCustomerBindings []core.StoreReference
 	QueryReferences          []core.StoreReference
 }
@@ -125,7 +126,11 @@ func (request VerificationRequest) Validate() error {
 
 // Validate checks reconciliation scope, expected products, bindings, and query references.
 func (request ReconciliationRequest) Validate() error {
-	if err := errors.Join(request.Application.Validate(), request.CustomerID.Validate()); err != nil {
+	if err := errors.Join(
+		request.Application.Validate(),
+		request.CustomerID.Validate(),
+		request.ExpectedProductKind.Validate(),
+	); err != nil {
 		return err
 	}
 	if err := validateProductSet(request.ExpectedProducts); err != nil {
@@ -158,12 +163,20 @@ func (result VerificationResult) ValidateForReconciliation(request Reconciliatio
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("reconciliation request: %w", err)
 	}
-	return result.validate(
+	if err := result.validate(
 		request.Application,
 		request.ExpectedProducts,
 		request.ExpectedCustomerBindings,
 		request.QueryReferences,
-	)
+	); err != nil {
+		return err
+	}
+	for index, observation := range result.Observations {
+		if observation.ProductKind != request.ExpectedProductKind {
+			return fmt.Errorf("observation %d has unexpected product kind %q", index, observation.ProductKind)
+		}
+	}
+	return nil
 }
 
 // validate enforces shared result, scope, product, binding, and reference invariants.

@@ -13,17 +13,29 @@ final backend = IapStackClient(
     customerToken: runtimeCustomerToken,
   ),
 );
-final huawei = HuaweiIapStack(client: backend);
+final huawei = HuaweiIapStack(
+  client: backend,
+  productKinds: const <String, HuaweiProductKind>{
+    'premium_monthly': HuaweiProductKind.subscription,
+    'premium_lifetime': HuaweiProductKind.nonConsumable,
+  },
+);
+
+if (!await huawei.isAvailable()) {
+  throw StateError('Huawei IAP is unavailable for this account region');
+}
 
 final sandbox = await huawei.sandboxStatus();
 if (!sandbox.isActive) {
   throw StateError('Huawei account and APK are not sandbox eligible');
 }
 
+final catalog = await huawei.queryProducts(<String>{'premium_monthly'});
+final product = catalog.products.single;
+
 final verification = await huawei.purchaseAndVerify(
   externalCustomerId: 'customer-123',
-  productId: 'premium_monthly',
-  productKind: HuaweiProductKind.subscription,
+  product: product,
   requestId: 'checkout-session-123',
 );
 
@@ -32,6 +44,11 @@ final restored = await huawei.restorePurchases(
   requestId: 'restore-session-123',
 );
 ```
+
+`queryProducts` groups IDs by Huawei price type, returns localized prices and
+subscription periods, and reports IDs AppGallery did not return. Checkout accepts
+only a product returned by the same coordinator and rejects removed or otherwise
+unavailable products.
 
 The host Android app must complete Huawei's official HMS IAP and AppGallery
 Connect setup, including `agconnect-services.json`. The SDK intentionally does
