@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "status": "partial",
+  "status": "passed",
   "release": "v0.1.0-rc.1",
-  "candidate_commit": "3e75b38d133122a40f9cd6716a7256dc5a947411",
-  "executed_at": "2026-09-03T20:50:40Z",
+  "candidate_commit": "7b6bc4d8b2eac484a1634424ca86c87e21cf9c3e",
+  "executed_at": "2026-09-03T21:14:06Z",
   "environment": {
     "install_source": "google_play_internal_testing",
     "application_id": "com.imariman.iapstack.test",
@@ -21,11 +21,12 @@
     },
     {
       "name": "real_non_consumable_verification_and_restore",
-      "status": "partial",
+      "status": "passed",
       "request_ids": [
-        "play-verify-1788461512501163"
+        "play-restore-1788469928168844",
+        "play-restore-1788469976520481"
       ],
-      "observation": "A real internal-test lifetime purchase verified with HTTP 200 and allowed access. A correlated restore request and unchanged logical-event count were not captured together."
+      "observation": "A zero-charge license-test lifetime purchase was the currently owned non-consumable returned by Google Play. After deploying commit 7b6bc4d, a baseline restore and its immediate repeat both returned HTTP 200 with allowed access and reason purchase_valid. The projection remained at version 24 and the receiver's accepted entitlement-event count remained at five after the repeat, proving idempotent restore without a new logical event."
     },
     {
       "name": "real_subscription_verification_and_restore",
@@ -63,10 +64,10 @@
     }
   ],
   "summary": {
-    "passed": 5,
-    "partial": 1,
+    "passed": 6,
+    "partial": 0,
     "failed": 0,
-    "smoke_gate_passed": false,
+    "smoke_gate_passed": true,
     "full_release_gate_passed": false
   },
   "attestation": {
