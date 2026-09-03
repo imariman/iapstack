@@ -106,6 +106,7 @@ type preparedObservation struct {
 // entitlementEventPayload is the stable JSON contract written to the webhook outbox.
 type entitlementEventPayload struct {
 	SchemaVersion       int                `json:"schema_version"`
+	EventType           string             `json:"event_type"`
 	ProjectID           core.ProjectID     `json:"project_id"`
 	ApplicationID       core.ApplicationID `json:"application_id"`
 	CustomerID          core.CustomerID    `json:"customer_id"`
@@ -695,6 +696,7 @@ func newEntitlementEvent(
 	projection := entitlement.Projection
 	payloadContract := entitlementEventPayload{
 		SchemaVersion:       entitlementEventSchemaVersion,
+		EventType:           entitlementChangedEventType,
 		ProjectID:           projection.ProjectID,
 		ApplicationID:       applicationID,
 		CustomerID:          projection.CustomerID,

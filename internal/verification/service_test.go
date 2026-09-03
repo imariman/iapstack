@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"sort"
@@ -283,6 +284,17 @@ func TestServiceVerifyPersistsAndReplays(t *testing.T) {
 	for _, evidence := range store.repository.evidence {
 		if bytes.Contains(evidence.Payload.Ciphertext, fixture.command.Evidence.Bytes()) {
 			t.Fatal("persisted evidence ciphertext contains plaintext evidence")
+		}
+	}
+	for _, event := range store.repository.outbox {
+		var payload struct {
+			EventType string `json:"event_type"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal outbox payload: %v", err)
+		}
+		if payload.EventType != event.EventType || payload.EventType != "entitlement.changed" {
+			t.Fatalf("outbox payload event_type = %q, metadata = %q", payload.EventType, event.EventType)
 		}
 	}
 }
