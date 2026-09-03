@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "status": "failed",
+  "status": "partial",
   "release": "v0.1.0-rc.1",
-  "candidate_commit": "254519e51d21f89d3e251a8421b122591479734c",
-  "executed_at": "2026-09-03T19:59:00Z",
+  "candidate_commit": "3e75b38d133122a40f9cd6716a7256dc5a947411",
+  "executed_at": "2026-09-03T20:50:40Z",
   "environment": {
     "install_source": "google_play_internal_testing",
     "application_id": "com.imariman.iapstack.test",
@@ -45,12 +45,13 @@
     },
     {
       "name": "outbound_webhook_acceptance",
-      "status": "failed",
+      "status": "passed",
       "request_ids": [
         "play-verify-1788465225962693",
-        "play-restore-1788465240947547"
+        "play-restore-1788465240947547",
+        "play-verify-1788467597397496"
       ],
-      "observation": "The receiver secret was rotated and the receiver deployment became live. The IAPStack dashboard still reported 0 delivered and 21 terminal webhook failures after a fresh purchase and restore, so end-to-end signed delivery is not accepted."
+      "observation": "The emitted entitlement.changed payload now includes its event_type. After deploying commit 3e75b38, the live receiver accepted and inserted a signed entitlement.changed event at 2026-09-03T20:47:07Z. No purchase tokens, order IDs, customer identifiers, or webhook secrets were retained in this evidence."
     },
     {
       "name": "invalid_token_no_write",
@@ -62,9 +63,9 @@
     }
   ],
   "summary": {
-    "passed": 4,
+    "passed": 5,
     "partial": 1,
-    "failed": 1,
+    "failed": 0,
     "smoke_gate_passed": false,
     "full_release_gate_passed": false
   },
