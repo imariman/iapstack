@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "status": "failed",
+  "release": "v0.1.0-rc.1",
+  "candidate_commit": "254519e51d21f89d3e251a8421b122591479734c",
+  "executed_at": "2026-09-03T19:59:00Z",
+  "environment": {
+    "install_source": "google_play_internal_testing",
+    "application_id": "com.imariman.iapstack.test",
+    "app_version": "0.1.0 (6)",
+    "device_model": "Google sdk_gphone64_arm64",
+    "os_version": "Android 15",
+    "store_runtime_version": "Google Play Store 52.9.21-34; BillingClient 8.0.0"
+  },
+  "checks": [
+    {
+      "name": "billing_and_catalog_readiness",
+      "status": "passed",
+      "request_ids": [],
+      "observation": "The Play-installed harness reported Billing and catalog ready with two offers. Google Play returned the lifetime product at TRY 359.99 and the monthly base plan at TRY 119.99 per month."
+    },
+    {
+      "name": "real_non_consumable_verification_and_restore",
+      "status": "partial",
+      "request_ids": [
+        "play-verify-1788461512501163"
+      ],
+      "observation": "A real internal-test lifetime purchase verified with HTTP 200 and allowed access. A correlated restore request and unchanged logical-event count were not captured together."
+    },
+    {
+      "name": "real_subscription_verification_and_restore",
+      "status": "passed",
+      "request_ids": [
+        "play-verify-1788465225962693",
+        "play-restore-1788465240947547",
+        "play-restore-1788465240947547-refresh"
+      ],
+      "observation": "A zero-charge license-test monthly subscription verified with HTTP 200, restored with HTTP 200, and remained allowed with reason purchase_valid. A later restore advanced the safe client projection to version 18."
+    },
+    {
+      "name": "rtdn_authoritative_state_change",
+      "status": "passed",
+      "request_ids": [],
+      "observation": "Authenticated Google RTDN processing was observed to re-query provider state and converge a monthly entitlement from allowed to denied with reason expired. This is smoke evidence only because the full release scenario lacks correlated request and exactly-once counts."
+    },
+    {
+      "name": "outbound_webhook_acceptance",
+      "status": "failed",
+      "request_ids": [
+        "play-verify-1788465225962693",
+        "play-restore-1788465240947547"
+      ],
+      "observation": "The receiver secret was rotated and the receiver deployment became live. The IAPStack dashboard still reported 0 delivered and 21 terminal webhook failures after a fresh purchase and restore, so end-to-end signed delivery is not accepted."
+    },
+    {
+      "name": "invalid_token_no_write",
+      "status": "passed",
+      "request_ids": [
+        "gp-invalid-token-20260903T1945Z"
+      ],
+      "observation": "An intentionally invalid token returned provider_error and did not increase verification or webhook counters, confirming no observation, entitlement, acknowledgement, or outbox write."
+    }
+  ],
+  "summary": {
+    "passed": 4,
+    "partial": 1,
+    "failed": 1,
+    "smoke_gate_passed": false,
+    "full_release_gate_passed": false
+  },
+  "attestation": {
+    "contains_purchase_tokens": false,
+    "contains_order_ids": false,
+    "contains_customer_identifiers": false,
+    "contains_webhook_secrets": false
+  }
+}

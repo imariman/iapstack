@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "status": "incomplete",
+  "release": "v0.1.0-rc.1",
+  "candidate_commit": "254519e51d21f89d3e251a8421b122591479734c",
+  "executed_at": "2026-09-03T19:59:00Z",
+  "environment": {
+    "tester_account_ready": true,
+    "provider_configuration_ready": true,
+    "application_id": "com.imariman.iapstack.test",
+    "app_version": "0.1.0 (6)",
+    "device_model": "Google sdk_gphone64_arm64",
+    "os_version": "Android 15",
+    "store_runtime_version": "Google Play Store 52.9.21-34; BillingClient 8.0.0"
+  },
+  "observations": [
+    {
+      "name": "non_consumable_purchase",
+      "status": "partial",
+      "request_ids": [
+        "play-verify-1788461512501163"
+      ],
+      "assertion": "A real internal-testing lifetime purchase was verified with HTTP 200 and access was observed as allowed, but exactly-once logical event counting was not captured."
+    },
+    {
+      "name": "non_consumable_duplicate_restore",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "Two owned-purchase submissions with an unchanged projection version were not captured."
+    },
+    {
+      "name": "subscription_initial",
+      "status": "partial",
+      "request_ids": [
+        "play-restore-1788463748820665",
+        "play-restore-1788463748820665-refresh"
+      ],
+      "assertion": "A real monthly purchase was restored with HTTP 200 and produced allowed access at projection version 13, but acknowledgement ordering was not independently captured."
+    },
+    {
+      "name": "subscription_renewal",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "Repeated active observations exist, but an authoritative period advance and single logical transition were not captured together."
+    },
+    {
+      "name": "subscription_cancellation",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "Cancellation was issued in Play Console, but the canceled-at-period-end allowed projection was not observed before accelerated expiration."
+    },
+    {
+      "name": "subscription_expiration",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "Authenticated RTDN processing appeared to change the monthly entitlement from allowed to denied with reason expired, but the required correlated request ID and single-transition evidence were not captured."
+    },
+    {
+      "name": "subscription_grace",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "A declined renewal entering grace with retained access was not observed."
+    },
+    {
+      "name": "subscription_account_hold",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "Account-hold denial and recovery were not observed."
+    },
+    {
+      "name": "subscription_pause",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "Pause denial and resume restoration were not observed."
+    },
+    {
+      "name": "subscription_refund",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "A lifetime-product refund was observed, but the required subscription refund was not captured."
+    },
+    {
+      "name": "subscription_revocation",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "Immediate subscription revocation denial was not observed."
+    },
+    {
+      "name": "pending_purchase",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "A slow test-card pending purchase was not observed."
+    },
+    {
+      "name": "post_commit_acknowledgement",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "The real-provider commit-before-acknowledgement ordering was not independently captured."
+    },
+    {
+      "name": "invalid_purchase_token",
+      "status": "passed",
+      "request_ids": [
+        "gp-invalid-token-20260903T1945Z"
+      ],
+      "assertion": "An intentionally invalid token returned provider_error; verification and webhook counters remained unchanged at 34 and 17, confirming no observation, entitlement, acknowledgement, or outbox write."
+    },
+    {
+      "name": "wrong_application_binding",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "A valid token submitted to a different application scope was not observed."
+    },
+    {
+      "name": "wrong_product_binding",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "A valid token with a mismatched claimed product was not observed."
+    },
+    {
+      "name": "wrong_customer_binding",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "A valid token with a mismatched opaque account binding was not observed."
+    },
+    {
+      "name": "duplicate_notification",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "Authenticated duplicate RTDN delivery and single inbox identity were not captured together."
+    },
+    {
+      "name": "missed_notification_reconciliation",
+      "status": "not_observed",
+      "request_ids": [],
+      "assertion": "A deliberately omitted RTDN followed by authoritative reconciliation was not observed."
+    }
+  ],
+  "webhook": {
+    "status": "blocked",
+    "signed_delivery_passed": false,
+    "tamper_rejected": false,
+    "stale_rejected": false,
+    "duplicate_deduplicated": false,
+    "blocker": "The receiver secret was rotated and its live deployment was verified, but the application-side secret update was not independently readable after save. A fresh restore still left the dashboard at 0 delivered and 21 terminal webhook failures, so signed delivery remains unproven."
+  },
+  "attestation": {
+    "contains_purchase_tokens": false,
+    "contains_order_ids": false,
+    "contains_customer_identifiers": false,
+    "contains_webhook_secrets": false
+  }
+}
