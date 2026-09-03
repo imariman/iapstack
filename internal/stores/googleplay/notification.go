@@ -97,11 +97,13 @@ type pubSubPushEnvelope struct {
 
 // pubSubMessage contains the encoded RTDN bytes and delivery identity.
 type pubSubMessage struct {
-	Attributes  map[string]string `json:"attributes,omitempty"`
-	Data        string            `json:"data"`
-	MessageID   string            `json:"messageId"`
-	OrderingKey string            `json:"orderingKey,omitempty"`
-	PublishTime time.Time         `json:"publishTime,omitempty"`
+	Attributes        map[string]string `json:"attributes,omitempty"`
+	Data              string            `json:"data"`
+	MessageID         string            `json:"messageId,omitempty"`
+	MessageIDLegacy   string            `json:"message_id,omitempty"`
+	OrderingKey       string            `json:"orderingKey,omitempty"`
+	PublishTime       time.Time         `json:"publishTime,omitempty"`
+	PublishTimeLegacy time.Time         `json:"publish_time,omitempty"`
 }
 
 // developerNotification contains every mutually exclusive RTDN payload documented for Google Play.
@@ -332,8 +334,18 @@ func decodeNotification(
 	var push pubSubPushEnvelope
 	if err := decodeStrict(payload, &push); err != nil ||
 		push.Subscription != configuration.Subscription ||
-		validateNotificationText("Pub/Sub message ID", push.Message.MessageID) != nil ||
 		strings.TrimSpace(push.Message.Data) == "" {
+		return NotificationEnvelope{}, notificationInvalid()
+	}
+	messageID := push.Message.MessageID
+	if messageID == "" {
+		messageID = push.Message.MessageIDLegacy
+	}
+	if validateNotificationText("Pub/Sub message ID", messageID) != nil ||
+		(push.Message.MessageID != "" && push.Message.MessageIDLegacy != "" &&
+			push.Message.MessageID != push.Message.MessageIDLegacy) ||
+		(!push.Message.PublishTime.IsZero() && !push.Message.PublishTimeLegacy.IsZero() &&
+			!push.Message.PublishTime.Equal(push.Message.PublishTimeLegacy)) {
 		return NotificationEnvelope{}, notificationInvalid()
 	}
 	data, err := base64.StdEncoding.Strict().DecodeString(push.Message.Data)
@@ -349,7 +361,7 @@ func decodeNotification(
 		return NotificationEnvelope{}, notificationInvalid()
 	}
 	result := NotificationEnvelope{
-		MessageID: push.Message.MessageID,
+		MessageID: messageID,
 		EventTime: time.UnixMilli(notification.EventTimeMillis.value).UTC(),
 	}
 	if err := normalizeDeveloperNotification(notification, &result); err != nil {

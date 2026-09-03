@@ -265,12 +265,51 @@ func TestDecodeNotificationRejectsMalformedPubSubEnvelope(t *testing.T) {
 		[]byte(`{"message":{"data":"e30=","messageId":" "},"subscription":"projects/example/subscriptions/iapstack"}`),
 		[]byte(`{"message":{"data":"e30=","messageId":"pubsub-message-1"},"subscription":"projects/other/subscriptions/iapstack"}`),
 		[]byte(`{"message":{"data":"e30=","messageId":"pubsub-message-1"},"subscription":"projects/example/subscriptions/iapstack","unknown":true}`),
+		[]byte(`{"message":{"data":"e30=","messageId":"message-1","message_id":"message-2"},"subscription":"projects/example/subscriptions/iapstack"}`),
 	} {
 		if _, err := decodeNotification(
 			googleApplication(core.EnvironmentProduction), configuration, payload,
 		); !errors.Is(err, ErrNotificationInvalid) {
 			t.Fatalf("decodeNotification(%s) error = %v", payload, err)
 		}
+	}
+}
+
+// TestDecodeNotificationAcceptsPubSubCompatibilityAliases verifies Google's wrapped push aliases are accepted.
+func TestDecodeNotificationAcceptsPubSubCompatibilityAliases(t *testing.T) {
+	t.Parallel()
+
+	data, err := json.Marshal(map[string]any{
+		"version": "1.0", "packageName": fixturePackageName, "eventTimeMillis": "1787666400000",
+		"testNotification": map[string]any{"version": "1.0"},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() developer notification error = %v", err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"message": map[string]any{
+			"data":      base64.StdEncoding.EncodeToString(data),
+			"messageId": "pubsub-test-1", "message_id": "pubsub-test-1",
+			"publishTime": "2026-08-25T15:00:00Z", "publish_time": "2026-08-25T15:00:00Z",
+		},
+		"subscription": fixtureRTDNSubscription,
+	})
+	if err != nil {
+		t.Fatalf("Marshal() Pub/Sub push error = %v", err)
+	}
+	notification, err := decodeNotification(
+		googleApplication(core.EnvironmentProduction),
+		rtdnConfiguration{
+			Subscription: fixtureRTDNSubscription, Audience: fixtureRTDNAudience,
+			PushServiceAccountEmail: fixtureRTDNServiceAccount,
+		},
+		payload,
+	)
+	if err != nil {
+		t.Fatalf("decodeNotification() error = %v", err)
+	}
+	if notification.MessageID != "pubsub-test-1" || notification.Kind != NotificationKindTest {
+		t.Fatalf("decodeNotification() = %#v", notification)
 	}
 }
 
