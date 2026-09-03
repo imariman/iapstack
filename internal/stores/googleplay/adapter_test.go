@@ -97,6 +97,65 @@ func TestAdapterVerifiesAuthoritativeNonConsumable(t *testing.T) {
 	}
 }
 
+// TestObservationIdentityIgnoresAcknowledgementState verifies provider acknowledgement does not create a new entitlement snapshot.
+func TestObservationIdentityIgnoresAcknowledgementState(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 4, 0, 0, 0, 0, time.UTC)
+	productLine := productLineItem{
+		ProductID: fixtureProductID,
+		ProductOfferDetails: productOfferDetails{
+			Quantity: 1, RefundableQuantity: 1,
+			ConsumptionState: "CONSUMPTION_STATE_YET_TO_BE_CONSUMED", PurchaseOptionID: "buy",
+		},
+	}
+	product := productPurchase{
+		ProductLineItems:            []productLineItem{productLine},
+		PurchaseStateContext:        purchaseStateContext{PurchaseState: productStatePurchased},
+		OrderID:                     "GPA.1234-5678-9012-34567",
+		ObfuscatedExternalAccountID: fixtureAccountID,
+		PurchaseCompletionTime:      now,
+		AcknowledgementState:        acknowledgementStatePending,
+	}
+	productPending := productObservationIdentity(
+		"application-1", fixturePurchaseToken, product, productLine,
+		core.LifecycleActive, core.AccessAllowed, core.AccessReasonPurchaseValid, 1,
+	)
+	product.AcknowledgementState = acknowledgementStateAcknowledged
+	productAcknowledged := productObservationIdentity(
+		"application-1", fixturePurchaseToken, product, productLine,
+		core.LifecycleActive, core.AccessAllowed, core.AccessReasonPurchaseValid, 1,
+	)
+	if productPending != productAcknowledged {
+		t.Fatal("product observation identity changed after acknowledgement")
+	}
+
+	subscriptionLine := subscriptionLineItem{
+		ProductID: fixtureProductID, ExpiryTime: now.Add(24 * time.Hour),
+		LatestSuccessfulOrderID: "GPA.2234-5678-9012-34567",
+		AutoRenewingPlan:        &autoRenewingPlan{AutoRenewEnabled: true},
+	}
+	subscription := subscriptionPurchase{
+		LineItems: []subscriptionLineItem{subscriptionLine},
+		StartTime: now, SubscriptionState: subscriptionStateActive,
+		LatestOrderID: "GPA.2234-5678-9012-34567", AcknowledgementState: acknowledgementStatePending,
+		ExternalAccountIdentifiers: externalAccountIdentifiers{ObfuscatedExternalAccountID: fixtureAccountID},
+	}
+	renewal := core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled}
+	subscriptionPending := subscriptionObservationIdentity(
+		"application-1", fixturePurchaseToken, subscription, subscriptionLine,
+		core.LifecycleActive, core.AccessAllowed, core.AccessReasonPurchaseValid, renewal,
+	)
+	subscription.AcknowledgementState = acknowledgementStateAcknowledged
+	subscriptionAcknowledged := subscriptionObservationIdentity(
+		"application-1", fixturePurchaseToken, subscription, subscriptionLine,
+		core.LifecycleActive, core.AccessAllowed, core.AccessReasonPurchaseValid, renewal,
+	)
+	if subscriptionPending != subscriptionAcknowledged {
+		t.Fatal("subscription observation identity changed after acknowledgement")
+	}
+}
+
 // TestAdapterPostsProductAndSubscriptionAcknowledgements verifies both documented Android Publisher paths and request shape.
 func TestAdapterPostsProductAndSubscriptionAcknowledgements(t *testing.T) {
 	t.Parallel()
