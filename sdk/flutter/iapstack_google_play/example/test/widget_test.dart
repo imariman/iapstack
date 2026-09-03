@@ -18,6 +18,7 @@ void main() {
       baseUrl: '',
       applicationId: 'application-1',
       customerToken: secret,
+      customerSessionBrokerUrl: '',
       externalCustomerId: 'opaque-customer-1',
       subscriptionProductId: '',
       nonConsumableProductId: '',
@@ -39,6 +40,7 @@ void main() {
       baseUrl: 'https://iap.example',
       applicationId: 'application-1',
       customerToken: 'customer-token',
+      customerSessionBrokerUrl: '',
       externalCustomerId: 'opaque-customer-1',
       subscriptionProductId: 'premium_monthly',
       nonConsumableProductId: 'premium_lifetime',
@@ -50,6 +52,24 @@ void main() {
       containsAll(<String>['premium_monthly', 'premium_lifetime']),
     );
   });
+
+  test(
+    'accepts a trusted customer-session broker instead of an embedded token',
+    () {
+      const config = ExampleConfig(
+        baseUrl: 'https://iap.example',
+        applicationId: 'application-1',
+        customerToken: '',
+        customerSessionBrokerUrl: 'http://10.0.2.2:18767/session',
+        externalCustomerId: 'opaque-customer-1',
+        subscriptionProductId: 'premium_monthly',
+        nonConsumableProductId: '',
+      );
+
+      expect(config.isComplete, isTrue);
+      expect(config.missingValues, isEmpty);
+    },
+  );
 
   testWidgets('renders base plan and exact pricing schedule', (tester) async {
     final product = GooglePlayProduct(

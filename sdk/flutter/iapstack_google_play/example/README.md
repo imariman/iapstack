@@ -62,6 +62,18 @@ At least one product define is required. Mint a short-lived customer session
 immediately before the run and compile only that token into this test build.
 Never place an application or administrator bearer in a mobile application.
 
+For Google Play installs on Android Emulator, the example can instead request a
+fresh session from the repository's loopback-only sandbox broker. Keep the
+broker running on the Mac and build with
+`IAPSTACK_CUSTOMER_SESSION_BROKER_URL=https://10.0.2.2:18767/session` instead of
+`IAPSTACK_CUSTOMER_TOKEN`. The app trusts only the test broker certificate for
+that emulator host address; cleartext traffic remains disabled. The broker
+reads the durable application bearer from macOS Keychain for each request and
+never ships it in the Android bundle. Its TLS private key remains outside the
+repository under `~/.config/iapstack/google-play-test`. This mode is
+intentionally emulator-only; use an authenticated trusted backend for physical
+devices and production applications.
+
 The UI never renders the customer session or purchase token and does not use
 local persistence. Request IDs are shown so an operator can correlate safe
 client observations with redacted server logs.

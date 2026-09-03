@@ -7,6 +7,7 @@ final class ExampleConfig {
     required this.baseUrl,
     required this.applicationId,
     required this.customerToken,
+    required this.customerSessionBrokerUrl,
     required this.externalCustomerId,
     required this.subscriptionProductId,
     required this.nonConsumableProductId,
@@ -17,6 +18,9 @@ final class ExampleConfig {
     baseUrl: String.fromEnvironment('IAPSTACK_BASE_URL'),
     applicationId: String.fromEnvironment('IAPSTACK_APPLICATION_ID'),
     customerToken: String.fromEnvironment('IAPSTACK_CUSTOMER_TOKEN'),
+    customerSessionBrokerUrl: String.fromEnvironment(
+      'IAPSTACK_CUSTOMER_SESSION_BROKER_URL',
+    ),
     externalCustomerId: String.fromEnvironment('IAPSTACK_EXTERNAL_CUSTOMER_ID'),
     subscriptionProductId: String.fromEnvironment(
       'IAPSTACK_GOOGLE_PLAY_SUBSCRIPTION_ID',
@@ -34,6 +38,9 @@ final class ExampleConfig {
 
   /// Runtime-only customer session that is never rendered or persisted.
   final String customerToken;
+
+  /// Optional trusted local broker that mints a fresh customer session.
+  final String customerSessionBrokerUrl;
 
   /// Opaque, non-PII customer binding sent to Google Play and IAPStack.
   final String externalCustomerId;
@@ -60,7 +67,8 @@ final class ExampleConfig {
   List<String> get missingValues => <String>[
     if (baseUrl.trim().isEmpty) 'IAPSTACK_BASE_URL',
     if (applicationId.trim().isEmpty) 'IAPSTACK_APPLICATION_ID',
-    if (customerToken.trim().isEmpty) 'IAPSTACK_CUSTOMER_TOKEN',
+    if (customerToken.trim().isEmpty && customerSessionBrokerUrl.trim().isEmpty)
+      'IAPSTACK_CUSTOMER_TOKEN or IAPSTACK_CUSTOMER_SESSION_BROKER_URL',
     if (externalCustomerId.trim().isEmpty) 'IAPSTACK_EXTERNAL_CUSTOMER_ID',
     if (subscriptionProductId.trim().isEmpty &&
         nonConsumableProductId.trim().isEmpty)

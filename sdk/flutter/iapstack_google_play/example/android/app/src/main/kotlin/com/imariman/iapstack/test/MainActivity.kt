@@ -1,4 +1,4 @@
-package com.iapstack.example.iapstack_google_play_example
+package com.imariman.iapstack.test
 
 import io.flutter.embedding.android.FlutterActivity
 

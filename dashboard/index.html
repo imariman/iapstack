@@ -289,7 +289,7 @@
                 <label>Client email<input name="google_client_email" type="email" autocomplete="off" required></label>
                 <label>Private key ID<input name="google_private_key_id" autocomplete="off" required></label>
                 <label class="full-row">Service-account private key<textarea name="google_private_key" rows="6" autocomplete="new-password" required placeholder="-----BEGIN PRIVATE KEY-----"></textarea></label>
-                <p class="credential-note full-row">RTDN fields are optional for purchase verification. Complete all three to accept authenticated Pub/Sub notifications.</p>
+                <p class="credential-note full-row">RTDN fields are optional for purchase verification. Complete all three to accept authenticated Pub/Sub notifications. For an existing Google connection, leave the service-account fields blank to update only RTDN.</p>
                 <label class="full-row">Pub/Sub subscription<input name="google_rtdn_subscription" autocomplete="off" placeholder="projects/example-project/subscriptions/iapstack-google-play"></label>
                 <label class="full-row">Push service-account email<input name="google_rtdn_push_email" type="email" autocomplete="off" placeholder="iapstack-push@example-project.iam.gserviceaccount.com"></label>
                 <label class="full-row">OIDC audience<input name="google_rtdn_audience" autocomplete="off" placeholder="https://iap.example.com/v1/providers/google-play/…/notifications"></label>

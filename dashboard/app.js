@@ -618,6 +618,12 @@ function configureCredentialForm(application) {
     bundleID.value = application.provider_application_id;
     appAppleID.required = application.environment === "production";
   }
+	if (google) {
+		const credentialRequired = !application.credential_configured;
+		for (const name of ["google_client_email", "google_private_key_id", "google_private_key"]) {
+			elements.googleCredentialFields.querySelector(`[name='${name}']`).required = credentialRequired;
+		}
+	}
 }
 
 function setCredentialFieldsEnabled(container, enabled) {
@@ -718,6 +724,12 @@ async function saveAppleCredential(form) {
 
 async function saveGoogleCredential(form) {
   const data = Object.fromEntries(new FormData(form));
+	const credentialValues = [
+		data.google_client_email.trim(),
+		data.google_private_key_id.trim(),
+		data.google_private_key.trim(),
+	];
+	const configuredCredentialValues = credentialValues.filter(Boolean).length;
   const rtdnValues = [
     data.google_rtdn_subscription.trim(),
     data.google_rtdn_push_email.trim(),
@@ -727,6 +739,24 @@ async function saveGoogleCredential(form) {
   if (configuredRTDNValues > 0 && configuredRTDNValues < rtdnValues.length) {
     throw new Error("Complete all three RTDN fields or leave all of them empty.");
   }
+	if (configuredCredentialValues === 0 && state.managedApplication.credential_configured) {
+		if (configuredRTDNValues !== rtdnValues.length) {
+			throw new Error("Complete all three RTDN fields to update the existing Google connection.");
+		}
+		await apiRequest(applicationAdminPath("/credentials/google_play_android_publisher/rtdn"), {
+			method: "PUT",
+			body: JSON.stringify({
+				subscription: rtdnValues[0],
+				push_service_account_email: rtdnValues[1],
+				audience: rtdnValues[2],
+				expected_revision: state.managedApplication.credential_revision,
+			}),
+		});
+		return;
+	}
+	if (configuredCredentialValues !== credentialValues.length) {
+		throw new Error("Complete all three service-account fields to create or rotate the Google connection.");
+	}
   const payload = {
     client_email: data.google_client_email,
     private_key_id: data.google_private_key_id,

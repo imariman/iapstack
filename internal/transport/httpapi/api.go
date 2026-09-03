@@ -137,6 +137,14 @@ type credentialRequest struct {
 	Payload          json.RawMessage `json:"payload"`
 }
 
+// googleRTDNRequest updates notification metadata without retransmitting service-account secrets.
+type googleRTDNRequest struct {
+	Subscription            string `json:"subscription"`
+	PushServiceAccountEmail string `json:"push_service_account_email"`
+	Audience                string `json:"audience"`
+	ExpectedRevision        int64  `json:"expected_revision"`
+}
+
 // webhookRequest carries a plaintext signing secret only across the explicit protection boundary.
 type webhookRequest struct {
 	URL              string `json:"url"`
@@ -246,6 +254,7 @@ func (api *API) v1Routes() []v1Route {
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/products/{product_id}", OperationID: "putAdminProduct", Handler: api.putProduct},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}/store-products/{provider_product_id}", OperationID: "putAdminStoreProduct", Handler: api.putStoreProduct},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}/credentials/{kind}", OperationID: "putAdminCredential", Handler: api.putCredential},
+		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}/credentials/google_play_android_publisher/rtdn", OperationID: "putAdminGooglePlayRTDN", Handler: api.putGooglePlayRTDN},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}/webhook", OperationID: "putAdminWebhook", Handler: api.putWebhook},
 		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/customer-sessions", OperationID: "createCustomerSession", Handler: api.createCustomerSession},
 		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/purchases:verify", OperationID: "verifyPurchase", Handler: api.verifyPurchase},
@@ -494,6 +503,45 @@ func (api *API) putCredential(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	metadata, err := api.credentials.Put(request.Context(), application, credential, input.ExpectedRevision)
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, metadata)
+}
+
+// putGooglePlayRTDN rotates only authenticated Pub/Sub metadata while preserving
+// the already protected Android Publisher service-account material.
+func (api *API) putGooglePlayRTDN(writer http.ResponseWriter, request *http.Request) {
+	if _, ok := api.requireAdmin(writer, request); !ok {
+		return
+	}
+	var input googleRTDNRequest
+	if !api.decode(writer, request, &input) {
+		return
+	}
+	application, err := api.application(request.Context(), request.PathValue("project_id"), request.PathValue("application_id"))
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	if application.Store.Provider != core.ProviderGooglePlay {
+		api.writeError(writer, request, validation.Wrap(errors.New("RTDN configuration requires a Google Play application")))
+		return
+	}
+	existing, err := api.credentials.Credential(request.Context(), application, googleplay.CredentialKind)
+	if err != nil {
+		api.writeError(writer, request, err)
+		return
+	}
+	updated, err := googleplay.WithRTDN(
+		existing, input.Subscription, input.PushServiceAccountEmail, input.Audience,
+	)
+	if err != nil {
+		api.writeError(writer, request, validation.Wrap(err))
+		return
+	}
+	metadata, err := api.credentials.Put(request.Context(), application, updated, input.ExpectedRevision)
 	if err != nil {
 		api.writeError(writer, request, err)
 		return

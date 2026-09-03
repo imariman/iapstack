@@ -450,6 +450,48 @@ paths:
           $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/applications/{application_id}/credentials/google_play_android_publisher/rtdn:
+    put:
+      tags: [Administration]
+      operationId: putAdminGooglePlayRTDN
+      summary: Update authenticated Google Play RTDN metadata without retransmitting the protected service-account key
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ApplicationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GooglePlayRTDNUpdateRequest'
+      responses:
+        '200':
+          description: Secret-free credential revision metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialMetadata'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /v1/admin/projects/{project_id}/applications/{application_id}/webhook:
     put:
       tags: [Administration]
@@ -1157,6 +1199,24 @@ components:
           type: string
           minLength: 1
           description: Exact OIDC audience configured on the Pub/Sub push subscription.
+    GooglePlayRTDNUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [subscription, push_service_account_email, audience, expected_revision]
+      properties:
+        subscription:
+          type: string
+          pattern: '^projects/[^/]+/subscriptions/[^/]+$'
+        push_service_account_email:
+          type: string
+          format: email
+        audience:
+          type: string
+          minLength: 1
+        expected_revision:
+          type: integer
+          format: int64
+          minimum: 1
     CredentialMetadata:
       type: object
       additionalProperties: false

@@ -101,6 +101,7 @@ func TestDashboardSupportsGooglePlayAndLocalCredentialFiles(t *testing.T) {
 	}
 	for _, required := range []string{
 		"google_play_android_publisher", "googleCredentialContentType", "saveGoogleCredential",
+		"credentials/google_play_android_publisher/rtdn",
 		"maximumCredentialFileBytes", "loadGoogleServiceAccountFile", "readAppleRootCertificate",
 	} {
 		if !strings.Contains(string(script), required) {

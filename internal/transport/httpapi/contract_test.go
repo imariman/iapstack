@@ -92,6 +92,7 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 		"AppleNotificationV2":          {"signedPayload"},
 		"GooglePlayCredentialPayload":  {"client_email", "private_key_id", "private_key"},
 		"GooglePlayRTDNConfiguration":  {"subscription", "push_service_account_email", "audience"},
+		"GooglePlayRTDNUpdateRequest":  {"subscription", "push_service_account_email", "audience", "expected_revision"},
 		"GooglePlayEvidence":           {"purchase_token", "product_kind"},
 		"GooglePlayPubSubPushEnvelope": {"message", "subscription"},
 		"GooglePlayPubSubMessage":      {"data", "messageId"},

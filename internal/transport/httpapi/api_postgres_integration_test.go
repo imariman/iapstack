@@ -180,6 +180,26 @@ func TestAPISuccessPathPersistsAndReturnsPostgreSQLState(t *testing.T) {
 	if bytes.Contains(credentialBody, []byte(apiIntegrationCredentialSecret)) {
 		t.Fatalf("credential response exposed private material: %s", credentialBody)
 	}
+	var rtdnMetadata credentials.Metadata
+	rtdnBody := fixture.requestJSON(t, http.MethodPut,
+		"/v1/admin/projects/"+apiIntegrationProjectID+"/applications/"+apiIntegrationApplicationID+
+			"/credentials/google_play_android_publisher/rtdn",
+		adminBearer,
+		googleRTDNRequest{
+			Subscription:            "projects/example/subscriptions/iapstack-google-play",
+			PushServiceAccountEmail: "iapstack-push@example.iam.gserviceaccount.com",
+			Audience:                "https://iapstack.example/google-play/notifications",
+			ExpectedRevision:        1,
+		},
+		http.StatusOK,
+		&rtdnMetadata,
+	)
+	if rtdnMetadata.Revision != 2 || rtdnMetadata.ApplicationID != apiIntegrationApplicationID {
+		t.Fatalf("RTDN credential metadata = %#v", rtdnMetadata)
+	}
+	if bytes.Contains(rtdnBody, []byte(apiIntegrationCredentialSecret)) {
+		t.Fatalf("RTDN credential response exposed private material: %s", rtdnBody)
+	}
 
 	var webhookMetadata struct {
 		URL      string `json:"url"`
@@ -588,7 +608,7 @@ func assertAPIIntegrationOverview(t *testing.T, overview adminOverviewResponse) 
 	}
 	application := overview.Applications[0]
 	if application.ID != apiIntegrationApplicationID || !application.CredentialConfigured ||
-		application.CredentialRevision != 1 || !application.WebhookConfigured || application.WebhookRevision != 1 {
+		application.CredentialRevision != 2 || !application.WebhookConfigured || application.WebhookRevision != 1 {
 		t.Fatalf("admin application = %#v", application)
 	}
 	if overview.Products[0].ID != apiIntegrationProductID || overview.Products[0].StoreMappingCount != 1 ||
