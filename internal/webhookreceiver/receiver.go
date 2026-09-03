@@ -171,36 +171,36 @@ func (receiver *Receiver) serveWebhook(writer http.ResponseWriter, request *http
 		return
 	}
 	if !isJSON(request.Header.Get("Content-Type")) {
-		writeError(writer, http.StatusUnsupportedMediaType, "content_type_required")
+		receiver.reject(writer, http.StatusUnsupportedMediaType, "content_type_required")
 		return
 	}
 	eventID := request.Header.Get("IAPStack-Event-ID")
 	if !validIdentity(eventID) {
-		writeError(writer, http.StatusBadRequest, "invalid_event_id")
+		receiver.reject(writer, http.StatusBadRequest, "invalid_event_id")
 		return
 	}
 	timestamp, timestampText, ok := receiver.validTimestamp(request.Header.Get("IAPStack-Timestamp"))
 	if !ok {
-		writeError(writer, http.StatusUnauthorized, "invalid_timestamp")
+		receiver.reject(writer, http.StatusUnauthorized, "invalid_timestamp")
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, receiver.bodyLimit))
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeError(writer, http.StatusRequestEntityTooLarge, "body_too_large")
+			receiver.reject(writer, http.StatusRequestEntityTooLarge, "body_too_large")
 			return
 		}
-		writeError(writer, http.StatusBadRequest, "invalid_body")
+		receiver.reject(writer, http.StatusBadRequest, "invalid_body")
 		return
 	}
 	if !receiver.validSignature(timestampText, body, request.Header.Get("IAPStack-Signature")) {
-		writeError(writer, http.StatusUnauthorized, "invalid_signature")
+		receiver.reject(writer, http.StatusUnauthorized, "invalid_signature")
 		return
 	}
 	envelope, err := decodeEnvelope(body)
 	if err != nil {
-		writeError(writer, http.StatusBadRequest, "invalid_event")
+		receiver.reject(writer, http.StatusBadRequest, "invalid_event")
 		return
 	}
 	result, err := receiver.store.Save(request.Context(), Event{
@@ -208,11 +208,11 @@ func (receiver *Receiver) serveWebhook(writer http.ResponseWriter, request *http
 		BodyFingerprint: sha256.Sum256(body), ReceivedAt: receiver.clock().UTC(),
 	})
 	if err != nil {
-		writeError(writer, http.StatusServiceUnavailable, "receiver_unavailable")
+		receiver.reject(writer, http.StatusServiceUnavailable, "receiver_unavailable")
 		return
 	}
 	if result == SaveConflict {
-		writeError(writer, http.StatusConflict, "event_identity_conflict")
+		receiver.reject(writer, http.StatusConflict, "event_identity_conflict")
 		return
 	}
 	receiver.logger.Info("iapstack webhook accepted",
@@ -223,6 +223,13 @@ func (receiver *Receiver) serveWebhook(writer http.ResponseWriter, request *http
 		"signed_at", timestamp.UTC().Format(time.RFC3339),
 	)
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+// reject records only a stable error classification before returning a bounded response.
+// It deliberately omits headers and request bodies because they contain authentication material.
+func (receiver *Receiver) reject(writer http.ResponseWriter, status int, code string) {
+	receiver.logger.Warn("iapstack webhook rejected", "error_code", code, "status", status)
+	writeError(writer, status, code)
 }
 
 // validTimestamp parses a canonical Unix timestamp inside the configured replay window.
