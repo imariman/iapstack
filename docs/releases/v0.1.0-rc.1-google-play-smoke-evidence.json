@@ -3,7 +3,7 @@
   "status": "passed",
   "release": "v0.1.0-rc.1",
   "candidate_commit": "7b6bc4d8b2eac484a1634424ca86c87e21cf9c3e",
-  "executed_at": "2026-09-03T21:14:06Z",
+  "executed_at": "2026-09-03T21:43:55Z",
   "environment": {
     "install_source": "google_play_internal_testing",
     "application_id": "com.imariman.iapstack.test",
@@ -61,13 +61,20 @@
         "gp-invalid-token-20260903T1945Z"
       ],
       "observation": "An intentionally invalid token returned provider_error and did not increase verification or webhook counters, confirming no observation, entitlement, acknowledgement, or outbox write."
+    },
+    {
+      "name": "production_webhook_security_controls",
+      "status": "passed",
+      "request_ids": [],
+      "observation": "The live production-shaped receiver running commit 8be4304 accepted a correctly signed probe with HTTP 204. Reusing that signature after changing the exact raw body returned HTTP 401 with invalid_signature. A correctly signed probe timestamped one hour in the past returned HTTP 401 with invalid_timestamp, outside the configured five-minute tolerance. Replaying the original event with identical headers and body returned HTTP 204; durable receiver logs classified the first delivery as inserted and the replay as duplicate, proving one stored event identity and one applied effect."
     }
   ],
   "summary": {
-    "passed": 6,
+    "passed": 7,
     "partial": 0,
     "failed": 0,
     "smoke_gate_passed": true,
+    "production_webhook_gate_passed": true,
     "full_release_gate_passed": false
   },
   "attestation": {

@@ -137,12 +137,14 @@
     }
   ],
   "webhook": {
-    "status": "blocked",
-    "signed_delivery_passed": false,
-    "tamper_rejected": false,
-    "stale_rejected": false,
-    "duplicate_deduplicated": false,
-    "blocker": "The receiver secret was rotated and its live deployment was verified, but the application-side secret update was not independently readable after save. A fresh restore still left the dashboard at 0 delivered and 21 terminal webhook failures, so signed delivery remains unproven."
+    "status": "passed",
+    "observed_at": "2026-09-03T21:43:55Z",
+    "receiver_commit": "8be4304ac08132e5f1b6391fac8dfb6a5af9348d",
+    "signed_delivery_passed": true,
+    "tamper_rejected": true,
+    "stale_rejected": true,
+    "duplicate_deduplicated": true,
+    "assertion": "The live production-shaped receiver accepted a valid signed event, rejected an exact-body mutation with invalid_signature, rejected a correctly signed event one hour outside its five-minute tolerance with invalid_timestamp, and durably classified an exact replay as duplicate after one inserted identity."
   },
   "attestation": {
     "contains_purchase_tokens": false,
