@@ -33,6 +33,7 @@ func TestValidateNotificationAuthenticatesAndNormalizesSubscription(t *testing.T
 		"eventTimeMillis": "1787666400000",
 		"subscriptionNotification": map[string]any{
 			"version": "1.0", "notificationType": 2, "purchaseToken": fixturePurchaseToken,
+			"subscriptionId": fixtureProductID,
 		},
 	})
 	notification, err := fixture.adapter.ValidateNotification(
@@ -46,7 +47,8 @@ func TestValidateNotificationAuthenticatesAndNormalizesSubscription(t *testing.T
 	}
 	if notification.MessageID != "pubsub-message-1" || notification.Kind != NotificationKindSubscription ||
 		notification.NotificationType != 2 || notification.PurchaseToken != fixturePurchaseToken ||
-		notification.ProductKind != core.ProductKindSubscription || notification.EventTime.IsZero() {
+		notification.ProductKind != core.ProductKindSubscription || notification.ProviderProductID != "" ||
+		notification.EventTime.IsZero() {
 		t.Fatalf("ValidateNotification() = %#v", notification)
 	}
 	evidence, process, err := notification.VerificationEvidence()
@@ -228,6 +230,9 @@ func TestDecodeNotificationRejectsMalformedProviderInput(t *testing.T) {
 		}},
 		{name: "blank purchase token", mutate: func(payload map[string]any) {
 			payload["subscriptionNotification"].(map[string]any)["purchaseToken"] = " "
+		}},
+		{name: "blank legacy subscription ID", mutate: func(payload map[string]any) {
+			payload["subscriptionNotification"].(map[string]any)["subscriptionId"] = " "
 		}},
 		{name: "control character in message data", mutate: func(payload map[string]any) {
 			payload["subscriptionNotification"].(map[string]any)["purchaseToken"] = "token\nvalue"

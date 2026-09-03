@@ -123,6 +123,10 @@ type subscriptionNotification struct {
 	Version          string `json:"version"`
 	NotificationType int    `json:"notificationType"`
 	PurchaseToken    string `json:"purchaseToken"`
+	// SubscriptionID is a deprecated compatibility field still emitted by some
+	// Google Play RTDN messages. Product identity is resolved from the purchase
+	// token instead of trusting this value.
+	SubscriptionID string `json:"subscriptionId,omitempty"`
 }
 
 // oneTimeProductNotification identifies one one-time product token whose authoritative state changed.
@@ -379,7 +383,9 @@ func normalizeDeveloperNotification(notification developerNotification, result *
 	if value := notification.SubscriptionNotification; value != nil {
 		variantCount++
 		if value.Version != developerNotificationVersion || value.NotificationType <= 0 ||
-			validateNotificationText("subscription purchase token", value.PurchaseToken) != nil {
+			validateNotificationText("subscription purchase token", value.PurchaseToken) != nil ||
+			(value.SubscriptionID != "" &&
+				validateNotificationText("legacy subscription ID", value.SubscriptionID) != nil) {
 			return ErrNotificationInvalid
 		}
 		result.Kind = NotificationKindSubscription
