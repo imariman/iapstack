@@ -13,6 +13,7 @@ import (
 	"github.com/imariman/iapstack/internal/jobs"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/platform/metrics"
+	"github.com/imariman/iapstack/internal/stores"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -382,6 +383,7 @@ func (execution *executor) execute(
 		return context.Canceled
 	}
 	code := errorCode(handlerErr)
+	execution.logHandlerFailure(queue, id, attempt, code, handlerErr)
 	if isRetryable(handlerErr) && attempt < maxAttempts {
 		outcome = "retry"
 		execution.metrics.ObserveQueueAttempt(string(queue), "retry")
@@ -394,6 +396,31 @@ func (execution *executor) execute(
 		return errors.New(code)
 	}
 	return river.JobCancel(errors.New(code))
+}
+
+// logHandlerFailure records only bounded provider classification fields, never raw provider errors or payloads.
+func (execution *executor) logHandlerFailure(
+	queue persistence.QueueName,
+	id string,
+	attempt int,
+	code string,
+	err error,
+) {
+	attributes := []any{
+		"queue", queue,
+		"message_id", id,
+		"attempt", attempt,
+		"error_code", code,
+	}
+	var failure *stores.Failure
+	if errors.As(err, &failure) {
+		attributes = append(attributes,
+			"provider", safeErrorCode(string(failure.Provider)),
+			"provider_operation", safeErrorCode(failure.Operation),
+			"provider_failure_kind", safeErrorCode(string(failure.Kind)),
+		)
+	}
+	execution.logger.Warn("queue handler failed", attributes...)
 }
 
 // complete records one successful audit outcome after the handler returns.

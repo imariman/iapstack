@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -207,6 +208,33 @@ func TestExecutorLeavesRetryableAttemptToRiver(t *testing.T) {
 	if len(transaction.completions) != 0 || len(transaction.failures) != 0 {
 		t.Fatalf("terminal outcomes = (%d completions, %d failures), want none",
 			len(transaction.completions), len(transaction.failures))
+	}
+}
+
+// TestExecutorLogsOnlySafeProviderClassification verifies retry diagnostics omit raw causes.
+func TestExecutorLogsOnlySafeProviderClassification(t *testing.T) {
+	transaction := &executorTransaction{}
+	execution := newTestExecutor(transaction, HandlerFunc(func(context.Context, persistence.QueueMessage) error {
+		return stores.NewFailure("google_play", "notification_lookup", stores.FailureTemporary, 0,
+			errors.New("purchase token secret-value"))
+	}))
+	var output bytes.Buffer
+	execution.logger = slog.New(slog.NewTextHandler(&output, nil))
+	if err := execution.execute(context.Background(), persistence.QueueInbox, "message-1", 1, 3); err == nil {
+		t.Fatal("execute() error = nil, want River retry signal")
+	}
+	logged := output.String()
+	for _, expected := range []string{
+		"provider=google_play",
+		"provider_operation=notification_lookup",
+		"provider_failure_kind=temporary",
+	} {
+		if !strings.Contains(logged, expected) {
+			t.Fatalf("log = %q, want %q", logged, expected)
+		}
+	}
+	if strings.Contains(logged, "secret-value") {
+		t.Fatalf("log exposed provider cause: %q", logged)
 	}
 }
 
