@@ -79,6 +79,13 @@ type fakeTransaction struct {
 	failOutbox   bool
 }
 
+// fakeEntitlementSourceKey identifies one in-memory application-product source and entitlement.
+type fakeEntitlementSourceKey struct {
+	entitlementID core.EntitlementID
+	applicationID core.ApplicationID
+	productID     core.ProductID
+}
+
 // verificationFixture contains one coherent command and provider result.
 type verificationFixture struct {
 	command     verification.Command
@@ -632,18 +639,37 @@ func (repository *fakeTransaction) SaveArtifact(_ context.Context, write persist
 	return nil
 }
 
-// SaveObservation stores one logical immutable observation idempotently.
+// SaveObservation stores one immutable logical observation and refreshes its latest sighting idempotently.
 func (repository *fakeTransaction) SaveObservation(
 	_ context.Context,
 	write persistence.ObservationWrite,
 ) error {
 	if existing, exists := repository.observations[write.Observation.ID]; exists {
-		if !reflect.DeepEqual(existing, write) {
+		candidate := write
+		candidate.EvidenceID = existing.EvidenceID
+		candidate.Observation.ObservedAt = existing.Observation.ObservedAt
+		if !reflect.DeepEqual(existing, candidate) {
 			return persistence.ErrConflict
+		}
+		if write.Observation.ObservedAt.After(existing.Observation.ObservedAt) {
+			existing.Observation.ObservedAt = write.Observation.ObservedAt
+			repository.observations[write.Observation.ID] = existing
 		}
 		return nil
 	}
 	repository.observations[write.Observation.ID] = write
+	return nil
+}
+
+// LockCustomer confirms and serializes one in-memory customer projection scope.
+func (repository *fakeTransaction) LockCustomer(
+	_ context.Context,
+	projectID core.ProjectID,
+	customerID core.CustomerID,
+) error {
+	if repository.customer.ProjectID != projectID || repository.customer.ID != customerID {
+		return persistence.ErrNotFound
+	}
 	return nil
 }
 
@@ -668,6 +694,68 @@ func (repository *fakeTransaction) PutEntitlement(
 	}
 	repository.entitlements[projection.EntitlementID] = entitlement
 	return persistence.EntitlementWriteResult{Entitlement: entitlement, Changed: true}, nil
+}
+
+// CustomerEntitlementSources returns each latest in-memory observation mapped to an entitlement.
+func (repository *fakeTransaction) CustomerEntitlementSources(
+	_ context.Context,
+	projectID core.ProjectID,
+	customerID core.CustomerID,
+) ([]persistence.EntitlementSource, error) {
+	latest := make(map[fakeEntitlementSourceKey]persistence.EntitlementSource)
+	for _, write := range repository.observations {
+		observation := write.Observation
+		if write.ProjectID != projectID || write.CustomerID != customerID {
+			continue
+		}
+		for _, catalogProduct := range repository.catalog {
+			if catalogProduct.Product.ID != write.ProductID ||
+				catalogProduct.Mapping.ApplicationID != observation.ApplicationID {
+				continue
+			}
+			for _, entitlement := range catalogProduct.Entitlements {
+				key := fakeEntitlementSourceKey{
+					entitlementID: entitlement.ID,
+					applicationID: observation.ApplicationID,
+					productID:     write.ProductID,
+				}
+				source := persistence.EntitlementSource{
+					Projection: persistence.EntitlementProjection{
+						ProjectID:           projectID,
+						CustomerID:          customerID,
+						EntitlementID:       entitlement.ID,
+						SourceObservationID: observation.ID,
+						SourceProductID:     write.ProductID,
+						Access:              observation.Access,
+						AccessReason:        observation.AccessReason,
+						EffectivePeriod:     observation.EffectivePeriod,
+					},
+					SourceApplicationID: observation.ApplicationID,
+					ObservedAt:          observation.ObservedAt,
+				}
+				existing, exists := latest[key]
+				if !exists || source.ObservedAt.After(existing.ObservedAt) ||
+					(source.ObservedAt.Equal(existing.ObservedAt) &&
+						source.Projection.SourceObservationID < existing.Projection.SourceObservationID) {
+					latest[key] = source
+				}
+			}
+		}
+	}
+	sources := make([]persistence.EntitlementSource, 0, len(latest))
+	for _, source := range latest {
+		sources = append(sources, source)
+	}
+	sort.Slice(sources, func(left, right int) bool {
+		if sources[left].Projection.EntitlementID != sources[right].Projection.EntitlementID {
+			return sources[left].Projection.EntitlementID < sources[right].Projection.EntitlementID
+		}
+		if sources[left].SourceApplicationID != sources[right].SourceApplicationID {
+			return sources[left].SourceApplicationID < sources[right].SourceApplicationID
+		}
+		return sources[left].Projection.SourceProductID < sources[right].Projection.SourceProductID
+	})
+	return sources, nil
 }
 
 // CustomerEntitlements returns a stable sorted copy of current in-memory projections.

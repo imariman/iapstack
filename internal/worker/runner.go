@@ -459,7 +459,7 @@ func isRetryable(err error) bool {
 	if errors.As(err, &classified) {
 		return classified.Retryable()
 	}
-	return errors.Is(err, context.DeadlineExceeded)
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, persistence.ErrUnavailable)
 }
 
 // errorCode returns a bounded safe code without persisting arbitrary error messages.

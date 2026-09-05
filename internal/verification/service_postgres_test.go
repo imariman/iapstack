@@ -5,11 +5,15 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/persistence/postgres"
+	"github.com/imariman/iapstack/internal/stores"
+	"github.com/imariman/iapstack/internal/verification"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -38,6 +42,20 @@ type failingOutboxStore struct {
 // failingOutboxTransaction delegates every repository except outbox writes.
 type failingOutboxTransaction struct {
 	persistence.Transaction
+}
+
+// coordinatedVerificationAdapter releases one provider result only after every concurrent call is ready.
+type coordinatedVerificationAdapter struct {
+	result stores.VerificationResult
+	ready  chan<- struct{}
+	start  <-chan struct{}
+}
+
+// postgresVerificationScenario contains one provider result and its matching service inputs.
+type postgresVerificationScenario struct {
+	command verification.Command
+	result  stores.VerificationResult
+	clock   fakeClock
 }
 
 // TestServicePersistsAndReplaysWithPostgreSQL verifies the complete use case against real repositories.
@@ -102,6 +120,213 @@ func TestServiceRollsBackPostgreSQLWhenOutboxFails(t *testing.T) {
 	assertVerificationTableCount(t, database, "provider_references", 0)
 	assertVerificationTableCount(t, database, "customer_entitlements", 0)
 	assertVerificationTableCount(t, database, "outbox_events", 0)
+}
+
+// TestServiceRebuildsIndependentSourcesWithPostgreSQL verifies a shadow grant survives revocation of the selected source.
+func TestServiceRebuildsIndependentSourcesWithPostgreSQL(t *testing.T) {
+	database := openVerificationTestDatabase(t)
+	fixture := newVerificationFixture(t)
+	seedVerificationCatalog(t, database, fixture)
+	seedVerificationProduct(
+		t,
+		database,
+		fixture,
+		"product-2",
+		"provider-product-2",
+	)
+
+	initial := postgresVerificationScenario{
+		command: fixture.command,
+		result:  fixture.result,
+		clock:   fixture.clock,
+	}
+	verifyPostgresScenario(t, database, initial)
+
+	secondAllowed := newPostgresVerificationScenario(
+		t,
+		fixture,
+		"provider-product-2",
+		"observation-product-2-allowed",
+		fixture.result.VerifiedAt.Add(time.Minute),
+		core.AccessAllowed,
+	)
+	verifyPostgresScenario(t, database, secondAllowed)
+
+	firstDenied := newPostgresVerificationScenario(
+		t,
+		fixture,
+		verificationProviderProductID,
+		"observation-product-1-denied",
+		fixture.result.VerifiedAt.Add(2*time.Minute),
+		core.AccessDenied,
+	)
+	result := verifyPostgresScenario(t, database, firstDenied)
+	assertVerificationEntitlement(
+		t,
+		result.Entitlements,
+		core.AccessAllowed,
+		"product-2",
+		"observation-product-2-allowed",
+	)
+	assertVerificationTableCount(t, database, "purchase_observations", 3)
+}
+
+// TestServiceRejectsStaleSourceAndRefreshesReobservedStateWithPostgreSQL verifies durable source-time ordering.
+func TestServiceRejectsStaleSourceAndRefreshesReobservedStateWithPostgreSQL(t *testing.T) {
+	database := openVerificationTestDatabase(t)
+	fixture := newVerificationFixture(t)
+	seedVerificationCatalog(t, database, fixture)
+
+	newerDenied := newPostgresVerificationScenario(
+		t,
+		fixture,
+		verificationProviderProductID,
+		"observation-newer-denied",
+		fixture.result.VerifiedAt.Add(2*time.Minute),
+		core.AccessDenied,
+	)
+	verifyPostgresScenario(t, database, newerDenied)
+
+	olderAllowed := newPostgresVerificationScenario(
+		t,
+		fixture,
+		verificationProviderProductID,
+		"observation-older-allowed",
+		fixture.result.VerifiedAt.Add(time.Minute),
+		core.AccessAllowed,
+	)
+	staleResult := verifyPostgresScenario(t, database, olderAllowed)
+	assertVerificationEntitlement(
+		t,
+		staleResult.Entitlements,
+		core.AccessDenied,
+		verificationProductID,
+		"observation-newer-denied",
+	)
+	if staleResult.Entitlements[0].Version != 1 {
+		t.Fatalf("stale projection version = %d, want unchanged version 1", staleResult.Entitlements[0].Version)
+	}
+
+	reobservedAllowed := olderAllowed
+	reobservedAllowed.result.VerifiedAt = fixture.result.VerifiedAt.Add(3 * time.Minute)
+	reobservedAllowed.result.Observations = append(
+		[]core.PurchaseObservation(nil),
+		reobservedAllowed.result.Observations...,
+	)
+	reobservedAllowed.result.Observations[0].ObservedAt = reobservedAllowed.result.VerifiedAt
+	reobservedAllowed.clock.now = reobservedAllowed.result.VerifiedAt.Add(time.Second)
+	freshResult := verifyPostgresScenario(t, database, reobservedAllowed)
+	assertVerificationEntitlement(
+		t,
+		freshResult.Entitlements,
+		core.AccessAllowed,
+		verificationProductID,
+		"observation-older-allowed",
+	)
+	if freshResult.Entitlements[0].Version != 2 {
+		t.Fatalf("reobserved projection version = %d, want 2", freshResult.Entitlements[0].Version)
+	}
+}
+
+// TestServiceSerializesConcurrentIndependentSourcesWithPostgreSQL verifies overlapping grant and revocation cannot lose access.
+func TestServiceSerializesConcurrentIndependentSourcesWithPostgreSQL(t *testing.T) {
+	database := openVerificationTestDatabase(t)
+	fixture := newVerificationFixture(t)
+	seedVerificationCatalog(t, database, fixture)
+	seedVerificationProduct(t, database, fixture, "product-2", "provider-product-2")
+	verifyPostgresScenario(t, database, postgresVerificationScenario{
+		command: fixture.command,
+		result:  fixture.result,
+		clock:   fixture.clock,
+	})
+
+	firstDenied := newPostgresVerificationScenario(
+		t,
+		fixture,
+		verificationProviderProductID,
+		"observation-concurrent-product-1-denied",
+		fixture.result.VerifiedAt.Add(2*time.Minute),
+		core.AccessDenied,
+	)
+	secondAllowed := newPostgresVerificationScenario(
+		t,
+		fixture,
+		"provider-product-2",
+		"observation-concurrent-product-2-allowed",
+		fixture.result.VerifiedAt.Add(time.Minute),
+		core.AccessAllowed,
+	)
+	runConcurrentPostgresVerification(t, database, firstDenied, secondAllowed)
+	assertVerificationEntitlement(
+		t,
+		loadVerificationEntitlements(t, database),
+		core.AccessAllowed,
+		"product-2",
+		"observation-concurrent-product-2-allowed",
+	)
+}
+
+// TestServiceSerializesConcurrentStaleSourceWithPostgreSQL verifies commit order cannot let an older snapshot win.
+func TestServiceSerializesConcurrentStaleSourceWithPostgreSQL(t *testing.T) {
+	database := openVerificationTestDatabase(t)
+	fixture := newVerificationFixture(t)
+	seedVerificationCatalog(t, database, fixture)
+
+	olderAllowed := newPostgresVerificationScenario(
+		t,
+		fixture,
+		verificationProviderProductID,
+		"observation-concurrent-older-allowed",
+		fixture.result.VerifiedAt.Add(time.Minute),
+		core.AccessAllowed,
+	)
+	newerDenied := newPostgresVerificationScenario(
+		t,
+		fixture,
+		verificationProviderProductID,
+		"observation-concurrent-newer-denied",
+		fixture.result.VerifiedAt.Add(2*time.Minute),
+		core.AccessDenied,
+	)
+	runConcurrentPostgresVerification(t, database, olderAllowed, newerDenied)
+	assertVerificationEntitlement(
+		t,
+		loadVerificationEntitlements(t, database),
+		core.AccessDenied,
+		verificationProductID,
+		"observation-concurrent-newer-denied",
+	)
+}
+
+// Provider identifies the provider implemented by the coordinated test adapter.
+func (adapter *coordinatedVerificationAdapter) Provider() core.Provider {
+	return core.ProviderHuaweiAppGallery
+}
+
+// Verify waits for the shared start signal before returning one authoritative result.
+func (adapter *coordinatedVerificationAdapter) Verify(
+	ctx context.Context,
+	_ stores.VerificationRequest,
+) (stores.VerificationResult, error) {
+	select {
+	case adapter.ready <- struct{}{}:
+	case <-ctx.Done():
+		return stores.VerificationResult{}, ctx.Err()
+	}
+	select {
+	case <-adapter.start:
+		return adapter.result, nil
+	case <-ctx.Done():
+		return stores.VerificationResult{}, ctx.Err()
+	}
+}
+
+// Reconcile is unused by coordinated verification tests.
+func (adapter *coordinatedVerificationAdapter) Reconcile(
+	context.Context,
+	stores.ReconciliationRequest,
+) (stores.VerificationResult, error) {
+	return stores.VerificationResult{}, errors.New("unexpected coordinated reconciliation")
 }
 
 // Ping delegates availability checks to the wrapped durable store.
@@ -241,6 +466,193 @@ func seedVerificationCatalog(
 		fixture.catalog.Mapping.ProductID,
 		fixture.catalog.Mapping.ProviderID,
 	)
+}
+
+// seedVerificationProduct adds one independently owned product that grants the fixture entitlement.
+func seedVerificationProduct(
+	t *testing.T,
+	database *verificationTestDatabase,
+	fixture verificationFixture,
+	productID core.ProductID,
+	providerProductID core.ProviderProductID,
+) {
+	t.Helper()
+	mustVerificationExec(t, database, `
+		INSERT INTO products (id, project_id, kind)
+		VALUES ($1, $2, $3)
+	`, productID, fixture.application.ProjectID, fixture.catalog.Product.Kind)
+	for _, entitlement := range fixture.catalog.Entitlements {
+		mustVerificationExec(t, database, `
+			INSERT INTO product_entitlements (project_id, product_id, entitlement_id)
+			VALUES ($1, $2, $3)
+		`, entitlement.ProjectID, productID, entitlement.ID)
+	}
+	mustVerificationExec(t, database, `
+		INSERT INTO store_products (project_id, application_id, product_id, provider_product_id)
+		VALUES ($1, $2, $3, $4)
+	`, fixture.application.ProjectID, fixture.application.ID, productID, providerProductID)
+}
+
+// newPostgresVerificationScenario builds one authoritative lifecycle snapshot for a chosen provider product.
+func newPostgresVerificationScenario(
+	t *testing.T,
+	fixture verificationFixture,
+	providerProductID core.ProviderProductID,
+	observationID core.ObservationID,
+	observedAt time.Time,
+	access core.AccessStatus,
+) postgresVerificationScenario {
+	t.Helper()
+	evidence, err := stores.NewEvidence(
+		repositoryContentType(),
+		[]byte(`{"observation":"`+string(observationID)+`"}`),
+	)
+	if err != nil {
+		t.Fatalf("NewEvidence() PostgreSQL scenario error = %v", err)
+	}
+	observation := fixture.result.Observations[0]
+	observation.ID = observationID
+	observation.ProductID = providerProductID
+	observation.ObservedAt = observedAt
+	observation.Access = access
+	switch access {
+	case core.AccessAllowed:
+		observation.State = core.LifecycleActive
+		observation.ProviderState = "purchased"
+		observation.AccessReason = core.AccessReasonPurchaseValid
+	case core.AccessDenied:
+		observation.State = core.LifecycleExpired
+		observation.ProviderState = "expired"
+		observation.AccessReason = core.AccessReasonExpired
+	default:
+		t.Fatalf("unsupported PostgreSQL scenario access %q", access)
+	}
+	command := fixture.command
+	command.ClaimedProducts = []core.ProviderProductID{providerProductID}
+	command.Evidence = evidence
+	return postgresVerificationScenario{
+		command: command,
+		result: stores.VerificationResult{
+			VerifiedAt: observedAt,
+			Artifacts: []stores.VerifiedArtifact{{
+				Kind: "provider_response", Evidence: evidence,
+			}},
+			Observations: []core.PurchaseObservation{observation},
+		},
+		clock: fakeClock{now: observedAt.Add(time.Second)},
+	}
+}
+
+// verifyPostgresScenario persists one scenario through the complete verification service.
+func verifyPostgresScenario(
+	t *testing.T,
+	database *verificationTestDatabase,
+	scenario postgresVerificationScenario,
+) verification.Result {
+	t.Helper()
+	service := newVerificationService(
+		t,
+		database.store,
+		&fakeAdapter{result: scenario.result},
+		&fakeProtector{},
+		scenario.clock,
+	)
+	result, err := service.Verify(database.ctx, scenario.command)
+	if err != nil {
+		t.Fatalf("Verify() PostgreSQL scenario error = %v", err)
+	}
+	return result
+}
+
+// runConcurrentPostgresVerification starts two provider results together and waits for durable completion.
+func runConcurrentPostgresVerification(
+	t *testing.T,
+	database *verificationTestDatabase,
+	scenarios ...postgresVerificationScenario,
+) {
+	t.Helper()
+	ready := make(chan struct{}, len(scenarios))
+	start := make(chan struct{})
+	errorsChannel := make(chan error, len(scenarios))
+	var workers sync.WaitGroup
+	for _, scenario := range scenarios {
+		scenario := scenario
+		service := newVerificationService(
+			t,
+			database.store,
+			&coordinatedVerificationAdapter{result: scenario.result, ready: ready, start: start},
+			&fakeProtector{},
+			scenario.clock,
+		)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			_, err := service.Verify(database.ctx, scenario.command)
+			errorsChannel <- err
+		}()
+	}
+	for range scenarios {
+		select {
+		case <-ready:
+		case <-database.ctx.Done():
+			close(start)
+			workers.Wait()
+			t.Fatalf("wait for concurrent provider calls: %v", database.ctx.Err())
+		}
+	}
+	close(start)
+	workers.Wait()
+	close(errorsChannel)
+	for err := range errorsChannel {
+		if err != nil {
+			t.Fatalf("concurrent Verify() error = %v", err)
+		}
+	}
+}
+
+// loadVerificationEntitlements returns the committed projection snapshot for the fixture customer.
+func loadVerificationEntitlements(
+	t *testing.T,
+	database *verificationTestDatabase,
+) []persistence.CustomerEntitlement {
+	t.Helper()
+	var entitlements []persistence.CustomerEntitlement
+	err := database.store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		var loadErr error
+		entitlements, loadErr = repository.CustomerEntitlements(
+			database.ctx,
+			verificationProjectID,
+			verificationCustomerID,
+		)
+		return loadErr
+	})
+	if err != nil {
+		t.Fatalf("CustomerEntitlements() PostgreSQL error = %v", err)
+	}
+	return entitlements
+}
+
+// assertVerificationEntitlement checks one final access decision and its durable source.
+func assertVerificationEntitlement(
+	t *testing.T,
+	entitlements []persistence.CustomerEntitlement,
+	wantAccess core.AccessStatus,
+	wantProduct core.ProductID,
+	wantObservation core.ObservationID,
+) {
+	t.Helper()
+	if len(entitlements) != 1 ||
+		entitlements[0].Projection.Access != wantAccess ||
+		entitlements[0].Projection.SourceProductID != wantProduct ||
+		entitlements[0].Projection.SourceObservationID != wantObservation {
+		t.Fatalf(
+			"entitlements = %#v, want access %q from product %q observation %q",
+			entitlements,
+			wantAccess,
+			wantProduct,
+			wantObservation,
+		)
+	}
 }
 
 // mustVerificationExec executes one PostgreSQL fixture statement or fails the test.

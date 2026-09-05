@@ -579,6 +579,23 @@ func TestTransactionalPurchasePersistence(t *testing.T) {
 	assertTableCount(t, database, "provider_references", 1)
 	assertTableCount(t, database, "customer_entitlements", 1)
 	assertTableCount(t, database, "outbox_events", 1)
+	var sources []persistence.EntitlementSource
+	if err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		var loadErr error
+		sources, loadErr = repository.CustomerEntitlementSources(
+			database.ctx,
+			core.ProjectID(fixture.projectID),
+			core.CustomerID(fixture.customerID),
+		)
+		return loadErr
+	}); err != nil {
+		t.Fatalf("CustomerEntitlementSources() error = %v", err)
+	}
+	if len(sources) != 1 ||
+		sources[0].Projection.SourceObservationID != writes.observation.Observation.ID ||
+		!sources[0].ObservedAt.Equal(writes.observation.Observation.ObservedAt) {
+		t.Fatalf("entitlement sources = %#v, want replay-refreshed observation", sources)
+	}
 
 	pricedWrites := writes
 	if err := database.conn.QueryRow(
@@ -732,6 +749,52 @@ func TestSerializableTransactionRetriesConcurrentIdempotentWrites(t *testing.T) 
 		t.Fatalf("transaction attempts = %d, want at least one retry", attempts.Load())
 	}
 	assertTableCount(t, database, "purchase_evidence", 1)
+}
+
+// TestCustomerProjectionLockRetriesConcurrentSnapshots verifies one customer write barrier forces a fresh serializable snapshot.
+func TestCustomerProjectionLockRetriesConcurrentSnapshots(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	ready := make(chan struct{}, 2)
+	start := make(chan struct{})
+	errorsChannel := make(chan error, 2)
+	var attempts atomic.Int32
+	var workers sync.WaitGroup
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			firstAttempt := true
+			err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+				attempts.Add(1)
+				if firstAttempt {
+					firstAttempt = false
+					ready <- struct{}{}
+					<-start
+				}
+				return repository.LockCustomer(
+					database.ctx,
+					core.ProjectID(fixture.projectID),
+					core.CustomerID(fixture.customerID),
+				)
+			})
+			errorsChannel <- err
+		}()
+	}
+	<-ready
+	<-ready
+	close(start)
+	workers.Wait()
+	close(errorsChannel)
+	for err := range errorsChannel {
+		if err != nil {
+			t.Fatalf("concurrent LockCustomer() error = %v", err)
+		}
+	}
+	if attempts.Load() < 3 {
+		t.Fatalf("LockCustomer() transaction attempts = %d, want at least one fresh-snapshot retry", attempts.Load())
+	}
 }
 
 // TestOperationalQueueEnqueueAndCompletion verifies atomic River insertion and idempotent audit outcomes.
@@ -966,6 +1029,13 @@ func persistPurchaseWrites(
 	var entitlementVersion int64
 	var entitlementChanged bool
 	err := store.Transact(ctx, func(repository persistence.Transaction) error {
+		if err := repository.LockCustomer(
+			ctx,
+			writes.projection.ProjectID,
+			writes.projection.CustomerID,
+		); err != nil {
+			return err
+		}
 		evidenceID, err := repository.SaveEvidence(ctx, writes.evidence)
 		if err != nil {
 			return err

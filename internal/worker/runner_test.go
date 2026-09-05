@@ -157,8 +157,8 @@ func (transaction *executorTransaction) PurgeTerminalQueueRecords(
 	return transaction.purgeDeleted, transaction.purgeError
 }
 
-// TestRetryClassificationUsesProviderContract verifies transient and permanent durable outcomes.
-func TestRetryClassificationUsesProviderContract(t *testing.T) {
+// TestRetryClassificationUsesExplicitContracts verifies provider and persistence retry boundaries.
+func TestRetryClassificationUsesExplicitContracts(t *testing.T) {
 	temporary := stores.NewFailure("huawei_appgallery", "verify", stores.FailureTemporary, 0, context.DeadlineExceeded)
 	if !isRetryable(temporary) {
 		t.Fatal("temporary provider failure was not retryable")
@@ -166,6 +166,12 @@ func TestRetryClassificationUsesProviderContract(t *testing.T) {
 	invalid := stores.NewFailure("huawei_appgallery", "verify", stores.FailureInvalidEvidence, 0, nil)
 	if isRetryable(invalid) {
 		t.Fatal("invalid evidence failure was retryable")
+	}
+	if !isRetryable(errors.Join(errors.New("persist verification"), persistence.ErrUnavailable)) {
+		t.Fatal("transient persistence unavailability was not retryable")
+	}
+	if isRetryable(persistence.ErrConflict) {
+		t.Fatal("permanent persistence identity conflict was retryable")
 	}
 	if got := errorCode(temporary); got != "provider_temporary" {
 		t.Fatalf("errorCode() = %q, want provider_temporary", got)
@@ -207,6 +213,35 @@ func TestExecutorLeavesRetryableAttemptToRiver(t *testing.T) {
 	if len(transaction.completions) != 0 || len(transaction.failures) != 0 {
 		t.Fatalf("terminal outcomes = (%d completions, %d failures), want none",
 			len(transaction.completions), len(transaction.failures))
+	}
+}
+
+// TestExecutorRetriesUnavailableHandlerStorageForEveryQueue verifies contention never becomes an early terminal outcome.
+func TestExecutorRetriesUnavailableHandlerStorageForEveryQueue(t *testing.T) {
+	t.Parallel()
+
+	queues := []persistence.QueueName{
+		persistence.QueueInbox,
+		persistence.QueueOutbox,
+		persistence.QueueReconciliation,
+	}
+	for _, queue := range queues {
+		queue := queue
+		t.Run(string(queue), func(t *testing.T) {
+			t.Parallel()
+
+			transaction := &executorTransaction{}
+			execution := newTestExecutor(transaction, HandlerFunc(func(context.Context, persistence.QueueMessage) error {
+				return errors.Join(errors.New("persist verification"), persistence.ErrUnavailable)
+			}))
+			if err := execution.execute(context.Background(), queue, "record-1", 1, 3); err == nil {
+				t.Fatal("execute() error = nil, want River retry signal")
+			}
+			if len(transaction.completions) != 0 || len(transaction.failures) != 0 {
+				t.Fatalf("terminal outcomes = (%d completions, %d failures), want none",
+					len(transaction.completions), len(transaction.failures))
+			}
+		})
 	}
 }
 
