@@ -23,6 +23,8 @@ import (
 const (
 	// signingSecretPurpose binds webhook secrets to their application scope.
 	signingSecretPurpose = "webhook_signing_secret"
+	// minimumSigningSecretBytes prevents trivially brute-forced HMAC keys.
+	minimumSigningSecretBytes = 32
 	// maximumResponseBytes bounds discarded application response data.
 	maximumResponseBytes int64 = 64 << 10
 	// signatureVersion identifies the initial webhook signing contract.
@@ -85,8 +87,10 @@ func (service *Service) Configure(
 	if err := validateWebhookDestination(url, service.allowPrivateNetworks); err != nil {
 		return persistence.WebhookEndpointRecord{}, validation.Wrap(err)
 	}
-	if len(secret) == 0 {
-		return persistence.WebhookEndpointRecord{}, validation.Wrap(errors.New("webhook signing secret is required"))
+	if len(secret) < minimumSigningSecretBytes {
+		return persistence.WebhookEndpointRecord{}, validation.Wrap(
+			errors.New("webhook signing secret must contain at least 32 bytes"),
+		)
 	}
 	protected, err := protection.Protect(ctx, service.protection, webhookScope(application), secret)
 	if err != nil {
