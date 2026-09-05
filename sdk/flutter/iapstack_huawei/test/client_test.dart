@@ -173,6 +173,61 @@ void main() {
       expect(result.results, hasLength(2));
     });
 
+    test('skips unexpected restore history and verifies configured purchases',
+        () async {
+      late List<dynamic> submittedPurchases;
+      final platform = _FakePlatform(
+        pages: <HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>{
+          HuaweiProductKind.nonConsumable: Queue<HuaweiOwnedPurchasesPage>.of(
+            <HuaweiOwnedPurchasesPage>[
+              HuaweiOwnedPurchasesPage(
+                purchases: <HuaweiSignedPurchase>[
+                  _signedPurchase('legacy_product',
+                      customerId: 'customer-1'),
+                  _signedPurchase('premium_lifetime',
+                      customerId: 'another-customer'),
+                  const HuaweiSignedPurchase(
+                      purchaseData: '', signature: ''),
+                  _signedPurchase('premium_lifetime',
+                      customerId: 'customer-1'),
+                ],
+              ),
+            ],
+          ),
+        },
+      );
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async {
+          submittedPurchases = (jsonDecode(request.body)
+              as Map<String, dynamic>)['purchases']! as List<dynamic>;
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'results': <Object?>[_verificationJson],
+            }),
+            200,
+          );
+        }),
+        productKinds: _productKinds,
+        platform: platform,
+      );
+
+      final result = await huawei.restorePurchases(
+        externalCustomerId: 'customer-1',
+        productKinds: const <HuaweiProductKind>{
+          HuaweiProductKind.nonConsumable
+        },
+      );
+
+      expect(submittedPurchases, hasLength(1));
+      final submission =
+          (submittedPurchases.single as Map).cast<String, Object?>();
+      expect(submission['claimed_products'], <String>['premium_lifetime']);
+      expect(
+          (submission['evidence']! as Map)['purchase_data'],
+          _purchaseData('premium_lifetime', customerId: 'customer-1'));
+      expect(result.results, hasLength(1));
+    });
+
     test('splits more than 100 restored purchases into bounded API batches',
         () async {
       final owned = List<HuaweiSignedPurchase>.generate(
@@ -190,6 +245,10 @@ void main() {
       );
       final batchSizes = <int>[];
       final requestIds = <String?>[];
+      final productKinds = <String, HuaweiProductKind>{
+        for (var index = 0; index < 101; index++)
+          'product-$index': HuaweiProductKind.nonConsumable,
+      };
       final huawei = HuaweiIapStack(
         client: _backend((request) async {
           final purchases = (jsonDecode(request.body)
@@ -204,7 +263,7 @@ void main() {
             200,
           );
         }),
-        productKinds: _productKinds,
+        productKinds: productKinds,
         platform: platform,
       );
 

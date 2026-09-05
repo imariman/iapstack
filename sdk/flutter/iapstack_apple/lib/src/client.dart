@@ -110,7 +110,7 @@ final class AppleIapStack {
     return result;
   }
 
-  /// Restores history and verifies each unique signed StoreKit transaction.
+  /// Restores configured, customer-bound StoreKit history in bounded batches.
   Future<RestoreResult> restorePurchases({
     required String externalCustomerId,
     String? requestId,
@@ -121,6 +121,8 @@ final class AppleIapStack {
     final observedTransactions = <String>{};
     for (final purchase in purchases) {
       if (!purchase.canVerify ||
+          purchase.appAccountToken?.toLowerCase() != externalCustomerId ||
+          !_productKinds.containsKey(purchase.productId) ||
           !observedTransactions.add(purchase.transactionId)) {
         continue;
       }

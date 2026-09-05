@@ -105,8 +105,10 @@ final class ApplePurchase {
 
   /// Whether this update contains evidence that can be sent to IAPStack.
   bool get canVerify =>
-      status == ApplePurchaseStatus.purchased ||
-      status == ApplePurchaseStatus.restored;
+      (status == ApplePurchaseStatus.purchased ||
+          status == ApplePurchaseStatus.restored) &&
+      signedTransaction.trim().isNotEmpty &&
+      '.'.allMatches(signedTransaction).length == 2;
 
   @override
   String toString() =>
