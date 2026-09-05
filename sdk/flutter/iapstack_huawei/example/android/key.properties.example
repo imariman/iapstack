@@ -1,0 +1,4 @@
+# Copy this file to key.properties. Keep only non-secret signing identifiers here.
+# The Huawei sandbox helper reads both passwords from macOS Keychain.
+storeFile=/absolute/path/to/huawei-sandbox-upload-key.jks
+keyAlias=iapstack-huawei

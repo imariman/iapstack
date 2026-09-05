@@ -1,10 +1,73 @@
+import java.util.Properties
+
 plugins {
     id "com.android.application"
     id "org.jetbrains.kotlin.android"
     id "dev.flutter.flutter-gradle-plugin"
 }
 
-if (file("agconnect-services.json").exists()) {
+def defaultApplicationId = "com.iapstack.example.iapstack_huawei_example"
+def configuredApplicationId = System.getenv("IAPSTACK_HUAWEI_PACKAGE_NAME") ?: defaultApplicationId
+def agconnectServicesFile = file("agconnect-services.json")
+def signingPropertiesFile = rootProject.file("key.properties")
+def signingProperties = new Properties()
+
+if (signingPropertiesFile.exists()) {
+    signingPropertiesFile.withInputStream { signingProperties.load(it) }
+}
+
+def signingStoreFile = signingProperties.getProperty("storeFile")?.trim()
+def signingKeyAlias = signingProperties.getProperty("keyAlias")?.trim()
+def signingStorePassword = System.getenv("IAPSTACK_HUAWEI_STORE_PASSWORD")
+def signingKeyPassword = System.getenv("IAPSTACK_HUAWEI_KEY_PASSWORD")
+def releaseRequested = gradle.startParameter.taskNames.any {
+    it.toLowerCase().contains("release")
+}
+def releaseSigningConfigured = signingPropertiesFile.exists() &&
+    signingStoreFile &&
+    signingKeyAlias &&
+    signingStorePassword &&
+    signingKeyPassword &&
+    new File(signingStoreFile).isAbsolute() &&
+    new File(signingStoreFile).isFile()
+
+if (releaseRequested) {
+    if (!agconnectServicesFile.isFile()) {
+        throw new GradleException(
+            "Huawei release builds require android/app/agconnect-services.json. " +
+            "Download it from AppGallery Connect; the file is gitignored."
+        )
+    }
+    if (!signingPropertiesFile.isFile()) {
+        throw new GradleException(
+            "Huawei release builds require android/key.properties. " +
+            "Copy key.properties.example and set an absolute storeFile plus keyAlias."
+        )
+    }
+    if (signingProperties.containsKey("storePassword") || signingProperties.containsKey("keyPassword")) {
+        throw new GradleException(
+            "Do not put signing passwords in key.properties. " +
+            "Use IAPSTACK_HUAWEI_STORE_PASSWORD and IAPSTACK_HUAWEI_KEY_PASSWORD."
+        )
+    }
+    if (!signingStoreFile || !new File(signingStoreFile).isAbsolute()) {
+        throw new GradleException("key.properties storeFile must be an absolute path.")
+    }
+    if (!new File(signingStoreFile).isFile()) {
+        throw new GradleException("Huawei signing keystore was not found at the configured storeFile.")
+    }
+    if (!signingKeyAlias) {
+        throw new GradleException("key.properties keyAlias is required.")
+    }
+    if (!signingStorePassword || !signingKeyPassword) {
+        throw new GradleException(
+            "Huawei signing passwords are missing. Run scripts/huawei-sandbox " +
+            "so it can read them from macOS Keychain."
+        )
+    }
+}
+
+if (agconnectServicesFile.exists()) {
     apply plugin: "com.huawei.agconnect"
 }
 
@@ -19,16 +82,30 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.iapstack.example.iapstack_huawei_example"
+        applicationId = configuredApplicationId
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            release {
+                storeFile = file(signingStoreFile)
+                keyAlias = signingKeyAlias
+                storePassword = signingStorePassword
+                keyPassword = signingKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.debug
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.release
+            }
         }
     }
 }

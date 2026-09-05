@@ -1,0 +1,650 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+umask 077
+
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly REPOSITORY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+readonly EXAMPLE_DIR="${REPOSITORY_DIR}/sdk/flutter/iapstack_huawei/example"
+readonly ANDROID_DIR="${EXAMPLE_DIR}/android"
+readonly AGCONNECT_FILE="${ANDROID_DIR}/app/agconnect-services.json"
+readonly SIGNING_PROPERTIES_FILE="${ANDROID_DIR}/key.properties"
+readonly CONFIG_FILE="${IAPSTACK_HUAWEI_SANDBOX_CONFIG:-${SCRIPT_DIR}/huawei-sandbox.env}"
+
+RESPONSE_FILE=""
+RUNTIME_FILE=""
+CLEAN_FLUTTER_BUILD=false
+KEYSTORE_PATH=""
+KEY_ALIAS=""
+SESSION_EXPIRES_AT=""
+KEY_GENERATION_DIR=""
+KEY_GENERATION_KEYSTORE=""
+KEY_GENERATION_PROPERTIES=""
+
+fail() {
+  echo "huawei-sandbox: $*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./scripts/huawei-sandbox keychain set-application-key
+  ./scripts/huawei-sandbox keychain set-signing-passwords
+  ./scripts/huawei-sandbox keychain generate-signing-key
+  ./scripts/huawei-sandbox keychain status
+  ./scripts/huawei-sandbox signing-fingerprint
+  ./scripts/huawei-sandbox preflight
+  ./scripts/huawei-sandbox warmup
+  ./scripts/huawei-sandbox build <subscription|non-consumable>
+  ./scripts/huawei-sandbox run <subscription|non-consumable> [-- <extra flutter run arguments>]
+
+One-time setup:
+  cp scripts/huawei-sandbox.env.example scripts/huawei-sandbox.env
+  # Edit the identifiers, then create a sandbox key:
+  ./scripts/huawei-sandbox keychain generate-signing-key
+  # For an existing key, copy android/key.properties.example instead and run
+  # keychain set-signing-passwords. Store the application key separately.
+
+build creates a signed APK in a private temporary directory for immediate upload
+to AppGallery Connect Cloud Debugging. run targets a connected physical Android
+device (including a remote ADB device) and mints a fresh 15-minute customer
+session. Neither command prints bearer tokens or signing passwords.
+USAGE
+}
+
+cleanup() {
+  local status=$?
+  if [[ -n "${RESPONSE_FILE}" ]]; then
+    rm -f "${RESPONSE_FILE}"
+  fi
+  if [[ -n "${RUNTIME_FILE}" ]]; then
+    rm -f "${RUNTIME_FILE}"
+  fi
+  if [[ -n "${KEY_GENERATION_KEYSTORE}" ]]; then
+    rm -f "${KEY_GENERATION_KEYSTORE}"
+  fi
+  if [[ -n "${KEY_GENERATION_PROPERTIES}" ]]; then
+    rm -f "${KEY_GENERATION_PROPERTIES}"
+  fi
+  if [[ -n "${KEY_GENERATION_DIR}" ]]; then
+    rmdir "${KEY_GENERATION_DIR}" 2>/dev/null || true
+  fi
+  unset IAPSTACK_HUAWEI_STORE_PASSWORD IAPSTACK_HUAWEI_KEY_PASSWORD
+  if [[ "${CLEAN_FLUTTER_BUILD}" == true ]] && command -v flutter >/dev/null 2>&1; then
+    (cd "${EXAMPLE_DIR}" && flutter clean >/dev/null 2>&1) || true
+  fi
+  return "${status}"
+}
+
+load_config() {
+  [[ -f "${CONFIG_FILE}" ]] || fail "missing ${CONFIG_FILE}; copy scripts/huawei-sandbox.env.example first"
+
+  local line name value
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line="${line%$'\r'}"
+    [[ "${line}" =~ ^[[:space:]]*$ ]] && continue
+    [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+    [[ "${line}" =~ ^([A-Z0-9_]+)=(.*)$ ]] || fail "invalid config line; use NAME=value without shell syntax"
+    name="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]}"
+    case "${name}" in
+      IAPSTACK_BASE_URL|IAPSTACK_APPLICATION_ID|IAPSTACK_EXTERNAL_CUSTOMER_ID|\
+      IAPSTACK_HUAWEI_PACKAGE_NAME|IAPSTACK_HUAWEI_SUBSCRIPTION_ID|\
+      IAPSTACK_HUAWEI_NON_CONSUMABLE_ID|IAPSTACK_HUAWEI_BUILD_NAME|\
+      IAPSTACK_HUAWEI_BUILD_NUMBER|IAPSTACK_ANDROID_DEVICE_ID|\
+      IAPSTACK_HUAWEI_KEYCHAIN_SERVICE)
+        printf -v "${name}" '%s' "${value}"
+        export "${name}"
+        ;;
+      *) fail "unsupported config key: ${name}" ;;
+    esac
+  done <"${CONFIG_FILE}"
+
+  : "${IAPSTACK_HUAWEI_KEYCHAIN_SERVICE:=com.imariman.iapstack.huawei-sandbox}"
+  export IAPSTACK_HUAWEI_KEYCHAIN_SERVICE
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
+}
+
+require_value() {
+  local name="$1"
+  [[ -n "${!name:-}" ]] || fail "${name} is required in ${CONFIG_FILE}"
+}
+
+application_key_account() {
+  printf '%s:application-key' "${IAPSTACK_APPLICATION_ID}"
+}
+
+keystore_password_account() {
+  printf '%s:keystore-password' "${IAPSTACK_HUAWEI_PACKAGE_NAME}"
+}
+
+key_password_account() {
+  printf '%s:key-password' "${IAPSTACK_HUAWEI_PACKAGE_NAME}"
+}
+
+keychain_has() {
+  security find-generic-password \
+    -s "${IAPSTACK_HUAWEI_KEYCHAIN_SERVICE}" \
+    -a "$1" >/dev/null 2>&1
+}
+
+keychain_read() {
+  security find-generic-password \
+    -s "${IAPSTACK_HUAWEI_KEYCHAIN_SERVICE}" \
+    -a "$1" \
+    -w
+}
+
+keychain_store() {
+  local account="$1"
+  local label="$2"
+  local secret="$3"
+  security add-generic-password \
+    -U \
+    -s "${IAPSTACK_HUAWEI_KEYCHAIN_SERVICE}" \
+    -a "${account}" \
+    -l "${label}" \
+    -w "${secret}" >/dev/null
+}
+
+set_application_key() {
+  require_value IAPSTACK_APPLICATION_ID
+  local key
+  IFS= read -r -s -p "IAPStack Huawei sandbox application key: " key
+  echo
+  [[ "${key}" == iap_* ]] || fail "application key must be an IAPStack iap_ bearer"
+  keychain_store \
+    "$(application_key_account)" \
+    "IAPStack Huawei sandbox application key (${IAPSTACK_APPLICATION_ID})" \
+    "${key}"
+  unset key
+  echo "Application key stored in macOS Keychain."
+}
+
+set_signing_passwords() {
+  require_value IAPSTACK_HUAWEI_PACKAGE_NAME
+  local store_password store_password_confirmation key_password key_password_confirmation
+  IFS= read -r -s -p "Huawei keystore password: " store_password
+  echo
+  IFS= read -r -s -p "Repeat Huawei keystore password: " store_password_confirmation
+  echo
+  [[ -n "${store_password}" ]] || fail "keystore password cannot be empty"
+  [[ "${store_password}" == "${store_password_confirmation}" ]] || fail "keystore passwords do not match"
+  IFS= read -r -s -p "Huawei key password: " key_password
+  echo
+  IFS= read -r -s -p "Repeat Huawei key password: " key_password_confirmation
+  echo
+  [[ -n "${key_password}" ]] || fail "key password cannot be empty"
+  [[ "${key_password}" == "${key_password_confirmation}" ]] || fail "key passwords do not match"
+
+  keychain_store \
+    "$(keystore_password_account)" \
+    "IAPStack Huawei keystore password (${IAPSTACK_HUAWEI_PACKAGE_NAME})" \
+    "${store_password}"
+  keychain_store \
+    "$(key_password_account)" \
+    "IAPStack Huawei key password (${IAPSTACK_HUAWEI_PACKAGE_NAME})" \
+    "${key_password}"
+  unset store_password store_password_confirmation key_password key_password_confirmation
+  echo "Huawei signing passwords stored in macOS Keychain."
+}
+
+generate_signing_key() {
+  require_command security
+  require_command keytool
+  require_command openssl
+  require_value IAPSTACK_HUAWEI_PACKAGE_NAME
+
+  local keystore_path="${ANDROID_DIR}/huawei-sandbox-upload-key.jks"
+  local key_alias="iapstack-huawei"
+  [[ ! -e "${keystore_path}" ]] || fail "refusing to overwrite existing ${keystore_path}"
+  [[ ! -e "${SIGNING_PROPERTIES_FILE}" ]] || \
+    fail "refusing to overwrite existing ${SIGNING_PROPERTIES_FILE}"
+
+  KEY_GENERATION_DIR="$(mktemp -d "${TMPDIR:-/tmp}/iapstack-huawei-key.XXXXXX")"
+  KEY_GENERATION_KEYSTORE="${KEY_GENERATION_DIR}/huawei-sandbox-upload-key.jks"
+  KEY_GENERATION_PROPERTIES="${KEY_GENERATION_DIR}/key.properties"
+  trap cleanup EXIT
+
+  local signing_password
+  signing_password="$(openssl rand -base64 48 | tr -d '\n')"
+  export IAPSTACK_HUAWEI_STORE_PASSWORD="${signing_password}"
+  export IAPSTACK_HUAWEI_KEY_PASSWORD="${signing_password}"
+
+  if ! keytool -genkeypair -noprompt \
+    -keystore "${KEY_GENERATION_KEYSTORE}" \
+    -storetype JKS \
+    -alias "${key_alias}" \
+    -keyalg RSA \
+    -keysize 2048 \
+    -sigalg SHA256withRSA \
+    -validity 10000 \
+    -dname "CN=IAPStack Huawei Sandbox, OU=Development, O=IAPStack, C=TR" \
+    -storepass:env IAPSTACK_HUAWEI_STORE_PASSWORD \
+    -keypass:env IAPSTACK_HUAWEI_KEY_PASSWORD >/dev/null 2>&1; then
+    unset signing_password IAPSTACK_HUAWEI_STORE_PASSWORD IAPSTACK_HUAWEI_KEY_PASSWORD
+    fail "keytool could not create the Huawei sandbox signing key"
+  fi
+  chmod 600 "${KEY_GENERATION_KEYSTORE}"
+
+  keychain_store \
+    "$(keystore_password_account)" \
+    "IAPStack Huawei keystore password (${IAPSTACK_HUAWEI_PACKAGE_NAME})" \
+    "${signing_password}"
+  keychain_store \
+    "$(key_password_account)" \
+    "IAPStack Huawei key password (${IAPSTACK_HUAWEI_PACKAGE_NAME})" \
+    "${signing_password}"
+
+  printf 'storeFile=%s\nkeyAlias=%s\n' "${keystore_path}" "${key_alias}" >"${KEY_GENERATION_PROPERTIES}"
+  chmod 600 "${KEY_GENERATION_PROPERTIES}"
+  mv "${KEY_GENERATION_KEYSTORE}" "${keystore_path}"
+  KEY_GENERATION_KEYSTORE=""
+  mv "${KEY_GENERATION_PROPERTIES}" "${SIGNING_PROPERTIES_FILE}"
+  KEY_GENERATION_PROPERTIES=""
+  rmdir "${KEY_GENERATION_DIR}"
+  KEY_GENERATION_DIR=""
+  unset signing_password IAPSTACK_HUAWEI_STORE_PASSWORD IAPSTACK_HUAWEI_KEY_PASSWORD
+
+  echo "Huawei sandbox signing key created at ${keystore_path}."
+  echo "Signing passwords are stored only in macOS Keychain."
+}
+
+keychain_status() {
+  require_command security
+  require_value IAPSTACK_APPLICATION_ID
+  require_value IAPSTACK_HUAWEI_PACKAGE_NAME
+  if keychain_has "$(application_key_account)"; then
+    echo "application key: configured"
+  else
+    echo "application key: missing"
+  fi
+  if keychain_has "$(keystore_password_account)"; then
+    echo "keystore password: configured"
+  else
+    echo "keystore password: missing"
+  fi
+  if keychain_has "$(key_password_account)"; then
+    echo "key password: configured"
+  else
+    echo "key password: missing"
+  fi
+}
+
+validate_config() {
+  require_value IAPSTACK_BASE_URL
+  require_value IAPSTACK_APPLICATION_ID
+  require_value IAPSTACK_EXTERNAL_CUSTOMER_ID
+  require_value IAPSTACK_HUAWEI_PACKAGE_NAME
+  require_value IAPSTACK_HUAWEI_SUBSCRIPTION_ID
+  require_value IAPSTACK_HUAWEI_NON_CONSUMABLE_ID
+  require_value IAPSTACK_HUAWEI_BUILD_NAME
+  require_value IAPSTACK_HUAWEI_BUILD_NUMBER
+
+  [[ "${IAPSTACK_BASE_URL}" =~ ^https://[^[:space:]]+$ ]] || \
+    fail "IAPSTACK_BASE_URL must be a public HTTPS origin reachable from the cloud device"
+  [[ "${IAPSTACK_EXTERNAL_CUSTOMER_ID}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || \
+    fail "IAPSTACK_EXTERNAL_CUSTOMER_ID must be a canonical lowercase UUID"
+  [[ "${IAPSTACK_HUAWEI_PACKAGE_NAME}" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$ ]] || \
+    fail "IAPSTACK_HUAWEI_PACKAGE_NAME is not a valid Android package name"
+  [[ "${IAPSTACK_HUAWEI_BUILD_NUMBER}" =~ ^[1-9][0-9]*$ ]] || \
+    fail "IAPSTACK_HUAWEI_BUILD_NUMBER must be a positive integer"
+  [[ "${IAPSTACK_HUAWEI_SUBSCRIPTION_ID}" != *[[:space:]]* ]] || \
+    fail "IAPSTACK_HUAWEI_SUBSCRIPTION_ID cannot contain whitespace"
+  [[ "${IAPSTACK_HUAWEI_NON_CONSUMABLE_ID}" != *[[:space:]]* ]] || \
+    fail "IAPSTACK_HUAWEI_NON_CONSUMABLE_ID cannot contain whitespace"
+}
+
+read_signing_property() {
+  local property="$1"
+  awk -F= -v wanted="${property}" '
+    /^[[:space:]]*#/ { next }
+    {
+      key = $1
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+      if (key == wanted) {
+        sub(/^[^=]*=/, "")
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+        print
+        exit
+      }
+    }
+  ' "${SIGNING_PROPERTIES_FILE}"
+}
+
+signing_property_exists() {
+  local property="$1"
+  awk -F= -v wanted="${property}" '
+    /^[[:space:]]*#/ { next }
+    {
+      key = $1
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+      if (key == wanted) { found = 1 }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "${SIGNING_PROPERTIES_FILE}"
+}
+
+load_signing_properties() {
+  [[ -f "${SIGNING_PROPERTIES_FILE}" ]] || \
+    fail "missing ${SIGNING_PROPERTIES_FILE}; copy android/key.properties.example first"
+  if signing_property_exists storePassword || signing_property_exists keyPassword; then
+    fail "remove storePassword/keyPassword from key.properties; passwords belong in macOS Keychain"
+  fi
+  KEYSTORE_PATH="$(read_signing_property storeFile)"
+  KEY_ALIAS="$(read_signing_property keyAlias)"
+  [[ "${KEYSTORE_PATH}" == /* ]] || fail "key.properties storeFile must be an absolute path"
+  [[ -f "${KEYSTORE_PATH}" ]] || fail "Huawei signing keystore not found at the configured storeFile"
+  [[ -n "${KEY_ALIAS}" ]] || fail "key.properties keyAlias is required"
+}
+
+agconnect_package_name() {
+  jq -r '
+    if (.client | type) == "object" then
+      .client.package_name // empty
+    elif (.client | type) == "array" then
+      .client[0].client_info.android_client_info.package_name // empty
+    else
+      empty
+    end
+  ' "${AGCONNECT_FILE}"
+}
+
+read_signing_fingerprint() {
+  local signing_store_password keytool_output fingerprint
+  signing_store_password="$(keychain_read "$(keystore_password_account)")"
+  export IAPSTACK_HUAWEI_STORE_PASSWORD="${signing_store_password}"
+  unset signing_store_password
+  if ! keytool_output="$(keytool -list -v \
+    -keystore "${KEYSTORE_PATH}" \
+    -alias "${KEY_ALIAS}" \
+    -storepass:env IAPSTACK_HUAWEI_STORE_PASSWORD 2>&1)"; then
+    unset IAPSTACK_HUAWEI_STORE_PASSWORD
+    fail "the configured keystore, alias, or keystore password could not be verified"
+  fi
+  unset IAPSTACK_HUAWEI_STORE_PASSWORD
+  fingerprint="$(awk -F'SHA256:' '/SHA256:/ { value=$2; gsub(/^[[:space:]]+/, "", value); print value; exit }' <<<"${keytool_output}")"
+  unset keytool_output
+  [[ -n "${fingerprint}" ]] || fail "could not read the signing certificate SHA-256 fingerprint"
+  printf '%s' "${fingerprint}"
+}
+
+show_signing_fingerprint() {
+  require_command security
+  require_command keytool
+  require_value IAPSTACK_HUAWEI_PACKAGE_NAME
+  load_signing_properties
+  keychain_has "$(keystore_password_account)" || \
+    fail "keystore password is missing; run keychain set-signing-passwords"
+  echo "Signing SHA-256: $(read_signing_fingerprint)"
+}
+
+preflight() {
+  local require_application_key="${1:-true}"
+  [[ "${require_application_key}" == true || "${require_application_key}" == false ]] || \
+    fail "internal preflight mode must be true or false"
+  validate_config
+  require_command jq
+  require_command curl
+  require_command flutter
+  require_command security
+  require_command keytool
+  [[ -f "${AGCONNECT_FILE}" ]] || \
+    fail "missing ${AGCONNECT_FILE}; download it from AppGallery Connect"
+  jq -e 'type == "object"' "${AGCONNECT_FILE}" >/dev/null || fail "agconnect-services.json is not valid JSON"
+
+  local configured_package
+  configured_package="$(agconnect_package_name)"
+  [[ -n "${configured_package}" ]] || fail "agconnect-services.json does not contain a package name"
+  [[ "${configured_package}" == "${IAPSTACK_HUAWEI_PACKAGE_NAME}" ]] || \
+    fail "agconnect-services.json package does not match IAPSTACK_HUAWEI_PACKAGE_NAME"
+
+  load_signing_properties
+  if [[ "${require_application_key}" == true ]]; then
+    keychain_has "$(application_key_account)" || \
+      fail "application key is missing; run keychain set-application-key"
+  fi
+  keychain_has "$(keystore_password_account)" || \
+    fail "keystore password is missing; run keychain set-signing-passwords"
+  keychain_has "$(key_password_account)" || \
+    fail "key password is missing; run keychain set-signing-passwords"
+
+  local fingerprint
+  fingerprint="$(read_signing_fingerprint)"
+
+  if [[ "${require_application_key}" == true ]]; then
+    echo "Huawei sandbox preflight passed."
+  else
+    echo "Huawei signing preflight passed."
+  fi
+  echo "Package: ${IAPSTACK_HUAWEI_PACKAGE_NAME}"
+  echo "Signing SHA-256: ${fingerprint}"
+}
+
+mint_customer_session() {
+  local application_key="$1"
+  local request_body status
+  request_body="$(jq -cn --arg customer "${IAPSTACK_EXTERNAL_CUSTOMER_ID}" '{external_customer_id:$customer}')"
+  status="$(printf 'header = "Authorization: Bearer %s"\n' "${application_key}" | curl --config - \
+    --silent --show-error \
+    --output "${RESPONSE_FILE}" \
+    --write-out '%{http_code}' \
+    --request POST \
+    --header 'Content-Type: application/json' \
+    --data "${request_body}" \
+    "${IAPSTACK_BASE_URL%/}/v1/applications/${IAPSTACK_APPLICATION_ID}/customer-sessions")"
+  [[ "${status}" == "201" ]] || {
+    local code
+    code="$(jq -r '.error.code // "unknown_error"' "${RESPONSE_FILE}" 2>/dev/null || true)"
+    fail "customer session request failed with HTTP ${status} (${code})"
+  }
+}
+
+resolve_product() {
+  local requested_kind="$1"
+  case "${requested_kind}" in
+    subscription)
+      PRODUCT_ID="${IAPSTACK_HUAWEI_SUBSCRIPTION_ID}"
+      PRODUCT_KIND="subscription"
+      ;;
+    non-consumable|non_consumable)
+      PRODUCT_ID="${IAPSTACK_HUAWEI_NON_CONSUMABLE_ID}"
+      PRODUCT_KIND="non_consumable"
+      ;;
+    *) fail "product kind must be subscription or non-consumable" ;;
+  esac
+}
+
+prepare_runtime() {
+  local requested_kind="$1"
+  resolve_product "${requested_kind}"
+
+  RESPONSE_FILE="$(mktemp "${TMPDIR:-/tmp}/iapstack-huawei-session.XXXXXX")"
+  RUNTIME_FILE="$(mktemp "${TMPDIR:-/tmp}/iapstack-huawei-defines.XXXXXX")"
+  chmod 600 "${RESPONSE_FILE}" "${RUNTIME_FILE}"
+  trap cleanup EXIT
+
+  local application_key customer_token
+  application_key="$(keychain_read "$(application_key_account)")"
+  mint_customer_session "${application_key}"
+  unset application_key
+  customer_token="$(jq -er '.token' "${RESPONSE_FILE}")"
+  SESSION_EXPIRES_AT="$(jq -er '.expires_at' "${RESPONSE_FILE}")"
+  rm -f "${RESPONSE_FILE}"
+  RESPONSE_FILE=""
+
+  jq -n \
+    --arg base_url "${IAPSTACK_BASE_URL}" \
+    --arg application_id "${IAPSTACK_APPLICATION_ID}" \
+    --arg customer_token "${customer_token}" \
+    --arg external_customer_id "${IAPSTACK_EXTERNAL_CUSTOMER_ID}" \
+    --arg product_id "${PRODUCT_ID}" \
+    --arg product_kind "${PRODUCT_KIND}" \
+    '{
+      IAPSTACK_BASE_URL: $base_url,
+      IAPSTACK_APPLICATION_ID: $application_id,
+      IAPSTACK_CUSTOMER_TOKEN: $customer_token,
+      IAPSTACK_EXTERNAL_CUSTOMER_ID: $external_customer_id,
+      IAPSTACK_HUAWEI_PRODUCT_ID: $product_id,
+      IAPSTACK_HUAWEI_PRODUCT_KIND: $product_kind
+    }' >"${RUNTIME_FILE}"
+  unset customer_token
+}
+
+load_signing_passwords() {
+  local store_password key_password
+  store_password="$(keychain_read "$(keystore_password_account)")"
+  key_password="$(keychain_read "$(key_password_account)")"
+  export IAPSTACK_HUAWEI_STORE_PASSWORD="${store_password}"
+  export IAPSTACK_HUAWEI_KEY_PASSWORD="${key_password}"
+  unset store_password key_password
+}
+
+run_flutter_without_daemon() {
+  GRADLE_OPTS="${GRADLE_OPTS:+${GRADLE_OPTS} }-Dorg.gradle.daemon=false" flutter "$@"
+}
+
+warmup_build() {
+  preflight false
+  load_signing_passwords
+  RUNTIME_FILE="$(mktemp "${TMPDIR:-/tmp}/iapstack-huawei-warmup.XXXXXX")"
+  chmod 600 "${RUNTIME_FILE}"
+  trap cleanup EXIT
+
+  jq -n \
+    --arg base_url "${IAPSTACK_BASE_URL}" \
+    --arg application_id "${IAPSTACK_APPLICATION_ID}" \
+    --arg external_customer_id "${IAPSTACK_EXTERNAL_CUSTOMER_ID}" \
+    --arg product_id "${IAPSTACK_HUAWEI_SUBSCRIPTION_ID}" \
+    '{
+      IAPSTACK_BASE_URL: $base_url,
+      IAPSTACK_APPLICATION_ID: $application_id,
+      IAPSTACK_CUSTOMER_TOKEN: "invalid-warmup-token",
+      IAPSTACK_EXTERNAL_CUSTOMER_ID: $external_customer_id,
+      IAPSTACK_HUAWEI_PRODUCT_ID: $product_id,
+      IAPSTACK_HUAWEI_PRODUCT_KIND: "subscription"
+    }' >"${RUNTIME_FILE}"
+
+  echo "Warming the signed release build before a customer session is minted."
+  cd "${EXAMPLE_DIR}"
+  run_flutter_without_daemon build apk \
+    --release \
+    --build-name="${IAPSTACK_HUAWEI_BUILD_NAME}" \
+    --build-number="${IAPSTACK_HUAWEI_BUILD_NUMBER}" \
+    --dart-define-from-file="${RUNTIME_FILE}"
+  rm -f "${EXAMPLE_DIR}/build/app/outputs/flutter-apk/app-release.apk"
+  echo "Warmup complete. Acquire the Cloud Debugging device, then run build immediately."
+}
+
+build_apk() {
+  local requested_kind="${1:-}"
+  [[ -n "${requested_kind}" ]] || fail "build requires subscription or non-consumable"
+  preflight
+  prepare_runtime "${requested_kind}"
+  load_signing_passwords
+  CLEAN_FLUTTER_BUILD=true
+
+  local artifact_dir artifact_path source_apk
+  artifact_dir="$(mktemp -d "${TMPDIR:-/tmp}/iapstack-huawei-apk.XXXXXX")"
+  chmod 700 "${artifact_dir}"
+  artifact_path="${artifact_dir}/iapstack-huawei-${PRODUCT_KIND}.apk"
+  source_apk="${EXAMPLE_DIR}/build/app/outputs/flutter-apk/app-release.apk"
+
+  echo "Fresh customer session minted (expires ${SESSION_EXPIRES_AT}); building signed APK."
+  cd "${EXAMPLE_DIR}"
+  run_flutter_without_daemon build apk \
+    --release \
+    --build-name="${IAPSTACK_HUAWEI_BUILD_NAME}" \
+    --build-number="${IAPSTACK_HUAWEI_BUILD_NUMBER}" \
+    --dart-define-from-file="${RUNTIME_FILE}"
+  [[ -f "${source_apk}" ]] || fail "Flutter completed without producing app-release.apk"
+  cp "${source_apk}" "${artifact_path}"
+  chmod 600 "${artifact_path}"
+
+  echo "Signed Cloud Debugging APK: ${artifact_path}"
+  echo "Upload it immediately; its customer session expires at ${SESSION_EXPIRES_AT}."
+  echo "Delete the temporary APK after the Cloud Debugging session."
+}
+
+select_android_device() {
+  if [[ -n "${IAPSTACK_ANDROID_DEVICE_ID:-}" ]]; then
+    printf '%s' "${IAPSTACK_ANDROID_DEVICE_ID}"
+    return
+  fi
+  local devices device
+  devices="$(flutter devices --machine)"
+  device="$(jq -r '[.[] | select((.targetPlatform | startswith("android")) and .emulator == false)][0].id // empty' <<<"${devices}")"
+  [[ -n "${device}" ]] || \
+    fail "no physical Android device found; connect HMS Toolkit/remote ADB or set IAPSTACK_ANDROID_DEVICE_ID"
+  printf '%s' "${device}"
+}
+
+run_app() {
+  local requested_kind="${1:-}"
+  [[ -n "${requested_kind}" ]] || fail "run requires subscription or non-consumable"
+  shift
+  [[ "${1:-}" != "--" ]] || shift
+  preflight
+  local device
+  device="$(select_android_device)"
+  prepare_runtime "${requested_kind}"
+  load_signing_passwords
+  CLEAN_FLUTTER_BUILD=true
+
+  echo "Fresh customer session minted (expires ${SESSION_EXPIRES_AT}); launching ${device}."
+  cd "${EXAMPLE_DIR}"
+  run_flutter_without_daemon run \
+    --release \
+    -d "${device}" \
+    --dart-define-from-file="${RUNTIME_FILE}" \
+    "$@"
+}
+
+main() {
+  local command="${1:-}"
+  [[ -n "${command}" ]] || {
+    usage
+    exit 2
+  }
+  shift
+  case "${command}" in
+    -h|--help|help)
+      usage
+      return
+      ;;
+  esac
+
+  load_config
+  case "${command}" in
+    keychain)
+      local operation="${1:-}"
+      [[ -n "${operation}" ]] || fail "a keychain operation is required"
+      shift
+      case "${operation}" in
+        set-application-key)
+          require_command security
+          set_application_key "$@"
+          ;;
+        set-signing-passwords)
+          require_command security
+          set_signing_passwords "$@"
+          ;;
+        generate-signing-key) generate_signing_key "$@" ;;
+        status) keychain_status "$@" ;;
+        *) fail "unknown keychain operation: ${operation}" ;;
+      esac
+      ;;
+    preflight) preflight "$@" ;;
+    signing-fingerprint) show_signing_fingerprint "$@" ;;
+    warmup) warmup_build "$@" ;;
+    build) build_apk "$@" ;;
+    run) run_app "$@" ;;
+    *) fail "unknown command: ${command}" ;;
+  esac
+}
+
+main "$@"

@@ -5,7 +5,11 @@ buildscript {
         maven { url "https://developer.huawei.com/repo/" }
     }
     dependencies {
-        classpath "com.huawei.agconnect:agcp:1.9.1.304"
+        // AG Connect's Gradle plugin still discovers the Android Gradle Plugin
+        // version from the root buildscript classpath when no version catalog is
+        // present. Keep this aligned with android/settings.gradle.
+        classpath "com.android.tools.build:gradle:8.11.1"
+        classpath "com.huawei.agconnect:agcp:1.9.6.300"
     }
 }
 

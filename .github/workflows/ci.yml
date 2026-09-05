@@ -40,6 +40,14 @@ jobs:
           test -x .github/scripts/check-coverage.sh
           test -x .github/scripts/install-flutter.sh
           bash -n .github/scripts/check-coverage.sh
+          test -x scripts/huawei-sandbox
+          test -s scripts/huawei-sandbox.env.example
+          test -s sdk/flutter/iapstack_huawei/example/android/key.properties.example
+          bash -n scripts/huawei-sandbox
+          scripts/huawei-sandbox --help >/dev/null
+          git check-ignore -q scripts/huawei-sandbox.env
+          git check-ignore -q sdk/flutter/iapstack_huawei/example/android/app/agconnect-services.json
+          git check-ignore -q sdk/flutter/iapstack_huawei/example/android/key.properties
           node --check dashboard/app.js
           test -x deploy/e2e/run.sh
 

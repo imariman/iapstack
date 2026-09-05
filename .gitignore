@@ -28,8 +28,12 @@ go.work.sum
 # env file
 .env
 scripts/apple-sandbox.env
+scripts/huawei-sandbox.env
 
 # Editor/IDE
 .DS_Store
 # .idea/
 # .vscode/
+
+# Local research and generated scratch files
+/tmp/
