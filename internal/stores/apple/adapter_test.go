@@ -50,6 +50,39 @@ type signingFixture struct {
 	apiKeyPEM string
 }
 
+// TestAppleJWSRequiresAppStoreLeafExtension verifies a generic WWDR-issued signer cannot authenticate server data.
+func TestAppleJWSRequiresAppStoreLeafExtension(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 27, 2, 0, 0, 0, time.UTC)
+	fixture := newSigningFixtureWithLeafExtension(t, now, false)
+	roots, err := parseTrustedRoots([]string{fixture.rootPEM})
+	if err != nil {
+		t.Fatalf("parseTrustedRoots() error = %v", err)
+	}
+	transaction := transactionPayload{TransactionID: "2000000023456790", SignedDate: now.UnixMilli()}
+	if _, err := verifyTransactionJWS(signTransactionFixture(t, fixture, transaction), roots); err == nil ||
+		!strings.Contains(err.Error(), "leaf certificate is not an App Store certificate") {
+		t.Fatalf("verifyTransactionJWS() error = %v, want missing App Store leaf policy", err)
+	}
+}
+
+// TestAppleJWSUsesSignedDateForOfflineCertificateValidity verifies historical Apple signatures survive leaf expiry.
+func TestAppleJWSUsesSignedDateForOfflineCertificateValidity(t *testing.T) {
+	t.Parallel()
+
+	signedAt := time.Date(2020, time.January, 2, 3, 0, 0, 0, time.UTC)
+	fixture := newSigningFixture(t, signedAt)
+	roots, err := parseTrustedRoots([]string{fixture.rootPEM})
+	if err != nil {
+		t.Fatalf("parseTrustedRoots() error = %v", err)
+	}
+	transaction := transactionPayload{TransactionID: "2000000023456790", SignedDate: signedAt.UnixMilli()}
+	if _, err := verifyTransactionJWS(signTransactionFixture(t, fixture, transaction), roots); err != nil {
+		t.Fatalf("verifyTransactionJWS() historical signature error = %v", err)
+	}
+}
+
 // TestAppleJWSCanonicalizesUUIDBindings verifies Apple UUID text casing cannot break customer scope checks.
 func TestAppleJWSCanonicalizesUUIDBindings(t *testing.T) {
 	t.Parallel()
@@ -494,6 +527,12 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 // newSigningFixture creates an Apple-style P-256 root, WWDR intermediate, leaf, and API key.
 func newSigningFixture(t *testing.T, now time.Time) signingFixture {
 	t.Helper()
+	return newSigningFixtureWithLeafExtension(t, now, true)
+}
+
+// newSigningFixtureWithLeafExtension controls the App Store signer policy extension for negative tests.
+func newSigningFixtureWithLeafExtension(t *testing.T, now time.Time, includeLeafExtension bool) signingFixture {
+	t.Helper()
 
 	rootKey := generateKey(t)
 	rootTemplate := &x509.Certificate{
@@ -520,6 +559,11 @@ func newSigningFixture(t *testing.T, now time.Time) signingFixture {
 		SerialNumber: big.NewInt(3), Subject: pkix.Name{CommonName: "App Store Transaction Test"},
 		NotBefore: now.Add(-24 * time.Hour), NotAfter: now.Add(30 * 24 * time.Hour),
 		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature,
+	}
+	if includeLeafExtension {
+		leafTemplate.ExtraExtensions = []pkix.Extension{{
+			Id: asn1.ObjectIdentifier(appleAppStoreLeafOID), Value: []byte{0x05, 0x00},
+		}}
 	}
 	leafDER := createCertificate(t, leafTemplate, intermediateCertificate, &leafKey.PublicKey, intermediateKey)
 	apiKey := generateKey(t)
