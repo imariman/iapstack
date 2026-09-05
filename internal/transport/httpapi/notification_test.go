@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,6 +22,14 @@ type notificationScopeStore struct {
 type notificationScopeTransaction struct {
 	persistence.OperationsTransaction
 	store *notificationScopeStore
+}
+
+// failingReader returns one deterministic transport-level request body failure.
+type failingReader struct{}
+
+// Read reports that the request body could not be consumed.
+func (failingReader) Read([]byte) (int, error) {
+	return 0, errors.New("request body read failed")
 }
 
 // TestHuaweiNotificationUsesPathProjectScope verifies AppGallery-compatible scope without custom headers.
@@ -192,6 +201,27 @@ func TestProviderNotificationsEnforceJSONBodyContract(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+// TestReadBodyDistinguishesReadFailuresFromOversizeBodies verifies transport failures are not reported as 413.
+func TestReadBodyDistinguishesReadFailuresFromOversizeBodies(t *testing.T) {
+	t.Parallel()
+
+	api := &API{bodyLimit: 1024}
+	request := httptest.NewRequest(http.MethodPost, "/notifications", failingReader{})
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	if _, ok := api.readBody(recorder, request); ok {
+		t.Fatal("readBody() ok = true, want false")
+	}
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("read failure status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"invalid_request"`) ||
+		strings.Contains(recorder.Body.String(), "request_too_large") {
+		t.Fatalf("read failure response = %s", recorder.Body.String())
 	}
 }
 

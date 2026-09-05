@@ -14,6 +14,7 @@ import (
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/platform/metrics"
 	"github.com/imariman/iapstack/internal/stores"
+	"github.com/imariman/iapstack/internal/webhooks"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/goleak"
 )
@@ -203,6 +204,22 @@ func TestExecutorLeavesRetryableAttemptToRiver(t *testing.T) {
 	}))
 	if err := execution.execute(context.Background(), persistence.QueueInbox, "message-1", 1, 3); err == nil {
 		t.Fatal("execute() error = nil, want River retry signal")
+	}
+	if len(transaction.completions) != 0 || len(transaction.failures) != 0 {
+		t.Fatalf("terminal outcomes = (%d completions, %d failures), want none",
+			len(transaction.completions), len(transaction.failures))
+	}
+}
+
+// TestExecutorRetriesWebhookDependencyFailures verifies delivery classification prevents premature outbox cancellation.
+func TestExecutorRetriesWebhookDependencyFailures(t *testing.T) {
+	transaction := &executorTransaction{}
+	execution := newTestExecutor(transaction, HandlerFunc(func(context.Context, persistence.QueueMessage) error {
+		return &webhooks.DeliveryError{Code: "webhook_endpoint_unavailable", CanRetry: true}
+	}))
+	err := execution.execute(context.Background(), persistence.QueueOutbox, "event-1", 1, 3)
+	if err == nil || err.Error() != "webhook_endpoint_unavailable" {
+		t.Fatalf("execute() error = %v, want webhook_endpoint_unavailable retry signal", err)
 	}
 	if len(transaction.completions) != 0 || len(transaction.failures) != 0 {
 		t.Fatalf("terminal outcomes = (%d completions, %d failures), want none",

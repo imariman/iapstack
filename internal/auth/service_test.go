@@ -21,6 +21,44 @@ const (
 // fakeOperationsStore retains API key verifiers for authentication tests.
 type fakeOperationsStore struct {
 	records map[string]persistence.APIKeyRecord
+	err     error
+}
+
+// TestAuthenticationPreservesOperationalLoadFailures verifies storage outages are not reported as invalid keys.
+func TestAuthenticationPreservesOperationalLoadFailures(t *testing.T) {
+	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}
+	service, err := NewService(store, "", 4)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	bearer, err := service.Create(context.Background(), Principal{
+		Role: persistence.APIKeyRoleApplication, ProjectID: "project-1", ApplicationID: "application-1",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	store.err = persistence.ErrUnavailable
+	if _, err := service.Authenticate(context.Background(), bearer); !errors.Is(err, persistence.ErrUnavailable) {
+		t.Fatalf("Authenticate() storage error = %v, want ErrUnavailable", err)
+	}
+	store.err = nil
+
+	id, secret, err := parseBearer(bearer)
+	if err != nil {
+		t.Fatalf("parseBearer() error = %v", err)
+	}
+	zero(secret)
+	record := store.records[id]
+	record.SecretHash[0] ^= 0xff
+	store.records[record.ID] = record
+	if _, err := service.Authenticate(context.Background(), bearer); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Authenticate() hash mismatch error = %v, want ErrUnauthorized", err)
+	}
+	delete(store.records, record.ID)
+	if _, err := service.Authenticate(context.Background(), bearer); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Authenticate() missing key error = %v, want ErrUnauthorized", err)
+	}
 }
 
 // fakeOperationsTransaction embeds unused repositories and implements API key operations.
@@ -140,6 +178,11 @@ func TestCustomerSessionsBindCustomerExpiryAndIssuer(t *testing.T) {
 		principal.ProjectID != issuer.ProjectID || principal.ApplicationID != issuer.ApplicationID {
 		t.Fatalf("Authenticate() session = %#v", principal)
 	}
+	store.err = persistence.ErrUnavailable
+	if _, err := sessions.Authenticate(context.Background(), session.Token); !errors.Is(err, persistence.ErrUnavailable) {
+		t.Fatalf("Authenticate() session storage error = %v, want ErrUnavailable", err)
+	}
+	store.err = nil
 
 	replacement := byte('A')
 	if session.Token[len(session.Token)-1] == replacement {
@@ -203,6 +246,11 @@ func TestAdminSessionsPersistWithoutRetainingBearers(t *testing.T) {
 	if storedPrincipal.KeyID != storedIssuer.KeyID || storedPrincipal.Role != persistence.APIKeyRoleAdmin {
 		t.Fatalf("Authenticate() stored principal = %#v", storedPrincipal)
 	}
+	store.err = persistence.ErrUnavailable
+	if _, err := sessions.Authenticate(context.Background(), storedSession.Token); !errors.Is(err, persistence.ErrUnavailable) {
+		t.Fatalf("Authenticate() administrator session storage error = %v, want ErrUnavailable", err)
+	}
+	store.err = nil
 
 	bootstrapSession, err := sessions.Mint(context.Background(), bootstrapIssuer)
 	if err != nil {
@@ -267,6 +315,9 @@ func newCustomerSessionKeyring(t *testing.T) *platformprotection.Keyring {
 
 // Operate executes one fake atomic operations callback.
 func (store *fakeOperationsStore) Operate(ctx context.Context, operation persistence.OperationsFunc) error {
+	if store.err != nil {
+		return store.err
+	}
 	return operation(&fakeOperationsTransaction{records: store.records})
 }
 

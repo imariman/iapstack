@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -146,7 +147,13 @@ func (service *CustomerSessions) Authenticate(ctx context.Context, token string)
 		issuer, loadErr = repository.APIKey(ctx, claims.IssuerKeyID)
 		return loadErr
 	})
-	if err != nil || issuer.Role != persistence.APIKeyRoleApplication ||
+	if err != nil {
+		if errors.Is(err, persistence.ErrNotFound) {
+			return CustomerPrincipal{}, ErrUnauthorized
+		}
+		return CustomerPrincipal{}, fmt.Errorf("load customer session issuer: %w", err)
+	}
+	if issuer.Role != persistence.APIKeyRoleApplication ||
 		issuer.ProjectID != envelope.ProjectID || issuer.ApplicationID != envelope.ApplicationID {
 		return CustomerPrincipal{}, ErrUnauthorized
 	}

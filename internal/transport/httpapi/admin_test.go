@@ -30,8 +30,9 @@ type authOperationsStore struct{}
 
 // keyLifecycleStore retains active and revoked API keys for HTTP lifecycle tests.
 type keyLifecycleStore struct {
-	records   map[string]persistence.APIKeyRecord
-	revokedAt map[string]time.Time
+	records      map[string]persistence.APIKeyRecord
+	revokedAt    map[string]time.Time
+	operateError error
 }
 
 // keyLifecycleTransaction implements the API key repository against deterministic test state.
@@ -235,6 +236,22 @@ func TestAuthenticationCapacityReturnsServiceUnavailable(t *testing.T) {
 	}
 }
 
+// TestAuthenticationStorageFailureReturnsServiceUnavailable verifies database outages remain retryable at the HTTP boundary.
+func TestAuthenticationStorageFailureReturnsServiceUnavailable(t *testing.T) {
+	t.Parallel()
+
+	api := &API{}
+	request := httptest.NewRequest(http.MethodGet, "/v1/admin/projects", nil)
+	recorder := httptest.NewRecorder()
+	api.writeAuthenticationFailure(recorder, request, persistence.ErrUnavailable)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("storage failure status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"authentication_unavailable"`) {
+		t.Fatalf("storage failure response = %s", recorder.Body.String())
+	}
+}
+
 // TestRequestDeadlineReturnsRetryableServiceUnavailable verifies bounded restore work has a stable response.
 func TestRequestDeadlineReturnsRetryableServiceUnavailable(t *testing.T) {
 	t.Parallel()
@@ -274,6 +291,9 @@ func TestWriteErrorRequiresTypedValidation(t *testing.T) {
 
 // Operate executes one deterministic API key lifecycle callback.
 func (store *keyLifecycleStore) Operate(ctx context.Context, operation persistence.OperationsFunc) error {
+	if store.operateError != nil {
+		return store.operateError
+	}
 	return operation(&keyLifecycleTransaction{store: store})
 }
 

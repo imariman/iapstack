@@ -867,7 +867,7 @@ func (api *API) requireCustomerSession(
 	}
 	principal, err := api.customerSessions.Authenticate(request.Context(), token)
 	if err != nil || string(principal.ApplicationID) != request.PathValue("application_id") {
-		writeAPIError(writer, request, http.StatusUnauthorized, "unauthorized", "authentication required")
+		api.writeAuthenticationFailure(writer, request, err)
 		return auth.CustomerPrincipal{}, false
 	}
 	return principal, true
@@ -882,17 +882,21 @@ func (api *API) authenticate(request *http.Request) (auth.Principal, error) {
 	return api.authentication.Authenticate(request.Context(), token)
 }
 
-// writeAuthenticationFailure distinguishes bounded server capacity from invalid credentials.
+// writeAuthenticationFailure distinguishes retryable service failures from invalid credentials.
 func (api *API) writeAuthenticationFailure(
 	writer http.ResponseWriter,
 	request *http.Request,
 	err error,
 ) {
-	if errors.Is(err, auth.ErrCapacity) {
+	if errors.Is(err, auth.ErrCapacity) || errors.Is(err, persistence.ErrUnavailable) {
 		writeAPIError(
 			writer, request, http.StatusServiceUnavailable,
 			"authentication_unavailable", "authentication is temporarily unavailable",
 		)
+		return
+	}
+	if err != nil && !errors.Is(err, auth.ErrUnauthorized) {
+		api.writeError(writer, request, err)
 		return
 	}
 	writeAPIError(writer, request, http.StatusUnauthorized, "unauthorized", "authentication required")
@@ -974,7 +978,11 @@ func (api *API) readBody(writer http.ResponseWriter, request *http.Request) ([]b
 		return nil, false
 	}
 	payload, err := io.ReadAll(io.LimitReader(request.Body, api.bodyLimit+1))
-	if err != nil || int64(len(payload)) > api.bodyLimit {
+	if err != nil {
+		writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", "request body could not be read")
+		return nil, false
+	}
+	if int64(len(payload)) > api.bodyLimit {
 		writeAPIError(writer, request, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the configured limit")
 		return nil, false
 	}
