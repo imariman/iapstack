@@ -20,7 +20,7 @@
 > IAPStack is prerelease software. The existing `v0.1.0-rc1` and `v0.1.0-rc2`
 > releases are legacy previews that predate the current release gate and security
 > fixes; they are not supported for production use. The default branch remains in
-> development, and its three real-store lifecycle gates are still open.
+> development, and its three-provider real-store lifecycle gate is not yet complete.
 
 IAPStack is a self-hosted control plane for validating in-app purchases and turning
 store transactions into durable application entitlements. It gives teams one
@@ -286,6 +286,12 @@ tag and GitHub release. The workflow publishes signed-provenance, SBOM-bearing
 `linux/amd64` and `linux/arm64` images to `ghcr.io/imariman/iapstack`; release
 candidates are GitHub prereleases and never update stable container aliases. Tags must
 not be created manually.
+
+Automated alpha builds such as `v0.1.0-alpha.1` may be published before every
+real-provider gate is complete. An alpha must use a clean, successful `main` CI run
+and include a public known-limitations note. Alpha releases are GitHub prereleases,
+never update stable container aliases, and do not claim the three-provider
+certification required for an RC or stable release.
 
 Purchase verification is coordinated by the provider-neutral `internal/verification`
 use case. Provider network calls and protection of sensitive evidence happen before

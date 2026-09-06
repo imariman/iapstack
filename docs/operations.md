@@ -313,13 +313,20 @@ On failure the harness prints Compose status and logs before cleanup. The fixtur
 
 ## Release publication
 
-Release candidates and stable releases are created only through
-`.github/workflows/release.yml`. Run the workflow manually from `main` after the
-version-specific evidence pull request has merged and main CI has succeeded. Supply a
-numbered candidate such as `v0.1.0-rc.1` or a stable version such as `v0.1.0`; do not
-create the Git tag first.
+Alpha, release-candidate, and stable releases are created only through
+`.github/workflows/release.yml`. Run the workflow manually from `main` after main CI
+has succeeded. Supply a numbered alpha such as `v0.1.0-alpha.1`, a numbered candidate
+such as `v0.1.0-rc.1`, or a stable version such as `v0.1.0`; do not create the Git tag
+first.
 
-Before any registry or release write, the workflow requires:
+An alpha release requires a public known-limitations note and uses the exact successful
+`main` commit as its automated test candidate. It is marked as a prerelease, publishes
+only its exact container tag, and does not attach or claim completed real-provider
+evidence. Use alpha releases for integration evaluation while a provider gate is
+externally blocked.
+
+Release candidates and stable releases additionally require a version-specific
+evidence pull request. Before any registry or release write, the workflow requires:
 
 1. A valid schema-v2 `docs/releases/<version>-release-evidence.json` record containing
    the Apple App Store, Google Play, and Huawei AppGallery gates.

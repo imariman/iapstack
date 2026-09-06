@@ -4,12 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Stable or numbered release-candidate version to publish
+        description: Stable, alpha, or release-candidate version to publish
         required: true
-        default: v0.1.0-rc.1
+        default: v0.1.0-alpha.1
+        type: string
+      known_limitations:
+        description: Public limitations note required for alpha releases
+        required: false
+        default: ""
         type: string
 
 permissions:
+  actions: read
   contents: write
   packages: write
   attestations: write
@@ -43,8 +49,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Validate immutable release evidence
+      - name: Validate release inputs
         env:
+          KNOWN_LIMITATIONS: ${{ inputs.known_limitations }}
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
         shell: bash
@@ -55,43 +62,71 @@ jobs:
             echo "Releases must be dispatched from main."
             exit 1
           fi
-          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]; then
-            echo "Version must be stable or a numbered candidate such as v0.1.0 or v0.1.0-rc.1."
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|rc)\.[1-9][0-9]*)?$ ]]; then
+            echo "Version must be stable, alpha, or a numbered candidate such as v0.1.0, v0.1.0-alpha.1, or v0.1.0-rc.1."
             exit 1
           fi
 
-          evidence_path="docs/releases/${VERSION}-release-evidence.json"
-          test -s "$evidence_path"
-          go run ./cmd/iapstack-release "$evidence_path"
+          if [[ "$VERSION" == *-alpha.* ]]; then
+            if [[ -z "${KNOWN_LIMITATIONS//[[:space:]]/}" ]]; then
+              echo "Alpha releases require a public known-limitations note."
+              exit 1
+            fi
+            if (( ${#KNOWN_LIMITATIONS} > 500 )); then
+              echo "Alpha known-limitations note must not exceed 500 characters."
+              exit 1
+            fi
 
-          evidence_release="$(jq -r '.release' "$evidence_path")"
-          candidate="$(jq -r '.commit' "$evidence_path")"
-          test "$evidence_release" = "$VERSION"
-          git cat-file -e "${candidate}^{commit}"
-          git merge-base --is-ancestor "$candidate" "$GITHUB_SHA"
+            release_channel="alpha"
+            candidate="$GITHUB_SHA"
+            candidate_ci="$(gh run list --workflow ci.yml --commit "$candidate" --event push --limit 1 --json headSha,status,conclusion,url)"
+            test "$(jq -r 'length' <<<"$candidate_ci")" = "1"
+            test "$(jq -r '.[0].headSha' <<<"$candidate_ci")" = "$candidate"
+            test "$(jq -r '.[0].status' <<<"$candidate_ci")" = "completed"
+            test "$(jq -r '.[0].conclusion' <<<"$candidate_ci")" = "success"
+            candidate_ci_url="$(jq -r '.[0].url' <<<"$candidate_ci")"
+          else
+            if [[ "$VERSION" == *-rc.* ]]; then
+              release_channel="candidate"
+            else
+              release_channel="stable"
+            fi
 
-          changed_files="$(git diff --name-only "$candidate" "$GITHUB_SHA")"
-          if [[ "$changed_files" != "$evidence_path" ]]; then
-            echo "Only the release evidence file may differ from the tested candidate."
-            git diff --name-only "$candidate" "$GITHUB_SHA"
-            exit 1
+            evidence_path="docs/releases/${VERSION}-release-evidence.json"
+            test -s "$evidence_path"
+            go run ./cmd/iapstack-release "$evidence_path"
+
+            evidence_release="$(jq -r '.release' "$evidence_path")"
+            candidate="$(jq -r '.commit' "$evidence_path")"
+            test "$evidence_release" = "$VERSION"
+            git cat-file -e "${candidate}^{commit}"
+            git merge-base --is-ancestor "$candidate" "$GITHUB_SHA"
+
+            changed_files="$(git diff --name-only "$candidate" "$GITHUB_SHA")"
+            if [[ "$changed_files" != "$evidence_path" ]]; then
+              echo "Only the release evidence file may differ from the tested candidate."
+              git diff --name-only "$candidate" "$GITHUB_SHA"
+              exit 1
+            fi
+
+            candidate_ci_url="$(jq -r '.automated.ci_run_url' "$evidence_path")"
+            candidate_run_id="${candidate_ci_url##*/}"
+            if [[ ! "$candidate_run_id" =~ ^[0-9]+$ ]]; then
+              echo "Evidence CI URL must end with a GitHub Actions run ID."
+              exit 1
+            fi
+            candidate_ci="$(gh run view "$candidate_run_id" --json headSha,status,conclusion,url)"
+            test "$(jq -r '.url' <<<"$candidate_ci")" = "$candidate_ci_url"
+            test "$(jq -r '.headSha' <<<"$candidate_ci")" = "$candidate"
+            test "$(jq -r '.status' <<<"$candidate_ci")" = "completed"
+            test "$(jq -r '.conclusion' <<<"$candidate_ci")" = "success"
+
+            head_ci="$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --event push --limit 1 --json status,conclusion)"
+            test "$(jq -r '.[0].status' <<<"$head_ci")" = "completed"
+            test "$(jq -r '.[0].conclusion' <<<"$head_ci")" = "success"
+
+            echo "EVIDENCE_PATH=$evidence_path" >> "$GITHUB_ENV"
           fi
-
-          candidate_ci_url="$(jq -r '.automated.ci_run_url' "$evidence_path")"
-          candidate_run_id="${candidate_ci_url##*/}"
-          if [[ ! "$candidate_run_id" =~ ^[0-9]+$ ]]; then
-            echo "Evidence CI URL must end with a GitHub Actions run ID."
-            exit 1
-          fi
-          candidate_ci="$(gh run view "$candidate_run_id" --json headSha,status,conclusion,url)"
-          test "$(jq -r '.url' <<<"$candidate_ci")" = "$candidate_ci_url"
-          test "$(jq -r '.headSha' <<<"$candidate_ci")" = "$candidate"
-          test "$(jq -r '.status' <<<"$candidate_ci")" = "completed"
-          test "$(jq -r '.conclusion' <<<"$candidate_ci")" = "success"
-
-          head_ci="$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --event push --limit 1 --json status,conclusion)"
-          test "$(jq -r '.[0].status' <<<"$head_ci")" = "completed"
-          test "$(jq -r '.[0].conclusion' <<<"$head_ci")" = "success"
 
           if git show-ref --verify --quiet "refs/tags/$VERSION"; then
             echo "Tag $VERSION already exists."
@@ -102,7 +137,9 @@ jobs:
             exit 1
           fi
 
-          echo "EVIDENCE_PATH=$evidence_path" >> "$GITHUB_ENV"
+          echo "CANDIDATE=$candidate" >> "$GITHUB_ENV"
+          echo "CANDIDATE_CI_URL=$candidate_ci_url" >> "$GITHUB_ENV"
+          echo "RELEASE_CHANNEL=$release_channel" >> "$GITHUB_ENV"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4
@@ -124,8 +161,8 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=${{ inputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }},enable=${{ !contains(inputs.version, '-rc.') }}
-            type=raw,value=latest,enable=${{ !contains(inputs.version, '-rc.') }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }},enable=${{ !contains(inputs.version, '-') }}
+            type=raw,value=latest,enable=${{ !contains(inputs.version, '-') }}
           labels: |
             org.opencontainers.image.title=IAPStack
             org.opencontainers.image.description=Self-hosted in-app purchase verification and entitlement infrastructure
@@ -154,24 +191,31 @@ jobs:
 
       - name: Prepare release notes
         env:
-          VERSION: ${{ inputs.version }}
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          KNOWN_LIMITATIONS: ${{ inputs.known_limitations }}
+          VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
-          candidate="$(jq -r '.commit' "$EVIDENCE_PATH")"
-          candidate_ci_url="$(jq -r '.automated.ci_run_url' "$EVIDENCE_PATH")"
           image_reference="${REGISTRY}/${IMAGE_NAME}@${IMAGE_DIGEST}"
           notes_path="$RUNNER_TEMP/release-notes.md"
 
           # shellcheck disable=SC2016
           {
             printf '# IAPStack %s\n\n' "$VERSION"
-            printf 'This release passed the automated and real-provider Apple App Store, Google Play, and Huawei AppGallery v0.1 gates.\n\n'
+            if [[ "$RELEASE_CHANNEL" == "alpha" ]]; then
+              printf 'This alpha passed the automated release gates. It does not claim completion of the real-provider lifecycle gates required for a release candidate or stable release.\n\n'
+              printf '## Known limitations\n\n%s\n\n' "$KNOWN_LIMITATIONS"
+            else
+              printf 'This release passed the automated and real-provider Apple App Store, Google Play, and Huawei AppGallery v0.1 gates.\n\n'
+            fi
             printf '## Immutable inputs\n\n'
-            printf -- '- Tested candidate: `%s`\n' "$candidate"
-            printf -- '- Candidate CI: %s\n' "$candidate_ci_url"
-            printf -- '- Release evidence: `%s`\n\n' "$EVIDENCE_PATH"
+            printf -- '- Tested candidate: `%s`\n' "$CANDIDATE"
+            printf -- '- Candidate CI: %s\n' "$CANDIDATE_CI_URL"
+            if [[ "$RELEASE_CHANNEL" != "alpha" ]]; then
+              printf -- '- Release evidence: `%s`\n' "$EVIDENCE_PATH"
+            fi
+            printf '\n'
             printf '## Container image\n\n'
             printf -- '- Version tag: `%s/%s:%s`\n' "$REGISTRY" "$IMAGE_NAME" "$VERSION"
             printf -- '- Immutable digest: `%s`\n\n' "$image_reference"
@@ -195,11 +239,15 @@ jobs:
             --title "IAPStack $VERSION"
             --notes-file "$RELEASE_NOTES"
           )
-          if [[ "$VERSION" == *-rc.* ]]; then
+          if [[ "$VERSION" == *-* ]]; then
             release_flags+=(--prerelease)
           else
             release_flags+=(--latest)
           fi
-          gh release create "$VERSION" \
-            "$EVIDENCE_PATH#Three-provider release evidence" \
-            "${release_flags[@]}"
+          if [[ "$RELEASE_CHANNEL" == "alpha" ]]; then
+            gh release create "$VERSION" "${release_flags[@]}"
+          else
+            gh release create "$VERSION" \
+              "$EVIDENCE_PATH#Three-provider release evidence" \
+              "${release_flags[@]}"
+          fi
