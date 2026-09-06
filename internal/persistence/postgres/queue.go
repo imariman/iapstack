@@ -38,6 +38,9 @@ func (repository *transaction) SaveInboxMessage(ctx context.Context, message per
 		if err != nil {
 			return "", classifyError("resolve inbox message", err)
 		}
+		if err := repository.requeueFailedInbox(ctx, messageID, message.AvailableAt); err != nil {
+			return "", err
+		}
 	}
 	if err := repository.ensureRiverJob(ctx, persistence.QueueInbox, messageID, message.AvailableAt); err != nil {
 		return "", err
@@ -203,6 +206,32 @@ func (repository *transaction) PurgeTerminalQueueRecords(
 		return 0, classifyError("purge terminal queue records", err)
 	}
 	return deleted, nil
+}
+
+// requeueFailedInbox clears only a terminal failure so an explicit provider redelivery can run again.
+func (repository *transaction) requeueFailedInbox(
+	ctx context.Context,
+	messageID string,
+	availableAt time.Time,
+) error {
+	command, err := repository.tx.Exec(ctx, `
+		UPDATE inbox_messages
+		SET failed_at = NULL,
+			last_error_code = NULL,
+			river_job_id = NULL,
+			available_at = GREATEST(received_at, $2),
+			updated_at = CURRENT_TIMESTAMP
+		WHERE id = $1
+			AND failed_at IS NOT NULL
+			AND processed_at IS NULL
+	`, messageID, normalizeTime(availableAt))
+	if err != nil {
+		return classifyError("requeue failed inbox message", err)
+	}
+	if command.RowsAffected() > 1 {
+		return fmt.Errorf("requeue failed inbox message: %w", persistence.ErrConflict)
+	}
+	return nil
 }
 
 // ensureRiverJob creates exactly one River job for a durable record inside the caller transaction.
