@@ -2,7 +2,7 @@
 
 This document defines the security boundary for the self-hosted Apple App Store,
 Google Play, and Huawei AppGallery lifetime and subscription vertical slices. It
-applies to the `server`, `api`, `worker`, and `migrate` modes, PostgreSQL 17, the embedded
+applies to the `server`, `api`, `worker`, and `migrate` modes, PostgreSQL 18, the embedded
 operations dashboard, the Flutter SDKs, provider integrations, and outbound
 application webhooks.
 
@@ -113,7 +113,7 @@ The following conditions are release-blocking:
 - [ ] `gofmt -w .` produces no diff.
 - [ ] `go vet ./...` succeeds.
 - [ ] `go test -race -count=1 ./...` succeeds.
-- [ ] PostgreSQL integration tests run against a clean PostgreSQL 17 database.
+- [ ] PostgreSQL integration tests run against a clean PostgreSQL 18 database.
 - [ ] Every migration applies, rolls back, and reapplies.
 - [ ] OpenAPI contract validation and dashboard/Flutter checks succeed.
 - [ ] The container smoke test confirms non-root and read-only filesystem operation.

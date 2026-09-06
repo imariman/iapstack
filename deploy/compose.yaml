@@ -13,7 +13,7 @@ services:
       timeout: 5s
       retries: 20
     volumes:
-      - iapstack-postgres:/var/lib/postgresql/data
+      - iapstack-postgres:/var/lib/postgresql
     restart: unless-stopped
 
   migrate:
