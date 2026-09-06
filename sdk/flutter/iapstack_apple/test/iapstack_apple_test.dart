@@ -165,6 +165,56 @@ void main() {
     );
 
     test(
+      'skips unexpected restore history and verifies configured purchases',
+      () async {
+        late List<Object?> submittedPurchases;
+        final platform = _FakePlatform(
+          restored: <ApplePurchase>[
+            _purchase(transactionId: 'unknown', productId: 'legacy_product'),
+            _purchase(
+              transactionId: 'unbound',
+              appAccountToken: '018f59d0-a200-7000-8000-000000000002',
+            ),
+            _purchase(transactionId: 'empty', signedTransaction: ''),
+            _purchase(transactionId: 'malformed', signedTransaction: 'not-jws'),
+            _purchase(transactionId: 'configured'),
+          ],
+        );
+        final apple = AppleIapStack(
+          client: _backend((request) async {
+            final body = (jsonDecode(request.body) as Map)
+                .cast<String, Object?>();
+            submittedPurchases = body['purchases']! as List<Object?>;
+            return http.Response(
+              jsonEncode(<String, Object?>{
+                'results': <Object?>[_verificationJson],
+              }),
+              200,
+            );
+          }),
+          productKinds: const <String, AppleProductKind>{
+            'premium_monthly': AppleProductKind.subscription,
+          },
+          platform: platform,
+        );
+
+        final result = await apple.restorePurchases(
+          externalCustomerId: _customerId,
+        );
+
+        expect(submittedPurchases, hasLength(1));
+        final submission = (submittedPurchases.single as Map)
+            .cast<String, Object?>();
+        expect(submission['claimed_products'], <String>['premium_monthly']);
+        expect(
+          (submission['evidence']! as Map)['signed_transaction'],
+          'header.payload.signature',
+        );
+        expect(result.results, hasLength(1));
+      },
+    );
+
+    test(
       'rejects mismatched customer bindings and redacts JWS strings',
       () async {
         var backendCalled = false;
@@ -255,12 +305,14 @@ IapStackClient _backend(Future<http.Response> Function(http.Request) handler) =>
 
 ApplePurchase _purchase({
   String transactionId = '100',
+  String productId = 'premium_monthly',
+  String signedTransaction = 'header.payload.signature',
   String appAccountToken = _customerId,
   bool pendingCompletion = false,
 }) => ApplePurchase(
   transactionId: transactionId,
-  productId: 'premium_monthly',
-  signedTransaction: 'header.payload.signature',
+  productId: productId,
+  signedTransaction: signedTransaction,
   appAccountToken: appAccountToken,
   status: ApplePurchaseStatus.restored,
   pendingCompletion: pendingCompletion,

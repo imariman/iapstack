@@ -155,7 +155,7 @@ final class GooglePlayIapStack {
     return _client.verifyPurchase(submission, requestId: requestId);
   }
 
-  /// Restores currently owned completed purchases in bounded IAPStack batches.
+  /// Restores configured, customer-bound purchases in bounded IAPStack batches.
   Future<RestoreResult> restorePurchases({
     required String externalCustomerId,
     String? requestId,
@@ -171,7 +171,14 @@ final class GooglePlayIapStack {
           purchase.status != GooglePlayPurchaseStatus.restored) {
         continue;
       }
-      if (!observedTokens.add(purchase.purchaseToken)) {
+      if (purchase.purchaseToken.trim().isEmpty ||
+          purchase.obfuscatedAccountId != externalCustomerId ||
+          purchase.productIds.length != 1) {
+        continue;
+      }
+      final productId = purchase.productIds.single;
+      if (!_productKinds.containsKey(productId) ||
+          !observedTokens.add(purchase.purchaseToken)) {
         continue;
       }
       submissions.add(

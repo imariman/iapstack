@@ -390,6 +390,65 @@ void main() {
       expect(restored.results, hasLength(101));
     });
 
+    test(
+      'skips unexpected restore history and verifies configured purchases',
+      () async {
+        late List<Object?> submittedPurchases;
+        final googlePlay = GooglePlayIapStack(
+          client: _backend((request) async {
+            final body = (jsonDecode(request.body) as Map)
+                .cast<String, Object?>();
+            submittedPurchases = body['purchases']! as List<Object?>;
+            return http.Response(
+              jsonEncode(<String, Object?>{
+                'results': <Object?>[_verificationJson],
+              }),
+              200,
+            );
+          }),
+          productKinds: const <String, GooglePlayProductKind>{
+            'premium_lifetime': GooglePlayProductKind.nonConsumable,
+          },
+          platform: _FakePlatform(
+            owned: <GooglePlayPurchase>[
+              _purchase('legacy_product', token: 'unknown-token'),
+              _purchase(
+                'premium_lifetime',
+                token: 'unbound-token',
+                accountId: 'another-customer',
+              ),
+              _purchase('premium_lifetime', token: ''),
+              GooglePlayPurchase(
+                purchaseToken: 'multi-product-token',
+                productIds: const <String>[
+                  'premium_lifetime',
+                  'legacy_product',
+                ],
+                status: GooglePlayPurchaseStatus.purchased,
+                isAcknowledged: false,
+                obfuscatedAccountId: 'customer-1',
+              ),
+              _purchase('premium_lifetime', token: 'configured-token'),
+            ],
+          ),
+        );
+
+        final result = await googlePlay.restorePurchases(
+          externalCustomerId: 'customer-1',
+        );
+
+        expect(submittedPurchases, hasLength(1));
+        final submission = (submittedPurchases.single as Map)
+            .cast<String, Object?>();
+        expect(submission['claimed_products'], <String>['premium_lifetime']);
+        expect(
+          (submission['evidence']! as Map)['purchase_token'],
+          'configured-token',
+        );
+        expect(result.results, hasLength(1));
+      },
+    );
+
     test('returns an empty restore without contacting IAPStack', () async {
       var backendCalled = false;
       final googlePlay = GooglePlayIapStack(
