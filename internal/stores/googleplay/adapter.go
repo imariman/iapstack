@@ -796,7 +796,7 @@ func productObservationIdentity(
 	return sha256.Sum256([]byte(strings.Join([]string{
 		string(applicationID), purchaseToken, lineItem.ProductID, purchase.OrderID,
 		purchase.ObfuscatedExternalAccountID, purchase.PurchaseCompletionTime.UTC().Format(time.RFC3339Nano),
-		purchase.PurchaseStateContext.PurchaseState, purchase.AcknowledgementState,
+		purchase.PurchaseStateContext.PurchaseState,
 		lineItem.ProductOfferDetails.PurchaseOptionID, lineItem.ProductOfferDetails.ConsumptionState,
 		strconv.FormatUint(uint64(quantity), 10), strconv.FormatUint(uint64(lineItem.ProductOfferDetails.RefundableQuantity), 10),
 		string(state), string(access), string(reason),
@@ -819,7 +819,7 @@ func subscriptionObservationIdentity(
 		purchase.LatestOrderID, lineItem.LatestSuccessfulOrderID,
 		purchase.ExternalAccountIdentifiers.ObfuscatedExternalAccountID,
 		purchase.StartTime.UTC().Format(time.RFC3339Nano), lineItem.ExpiryTime.UTC().Format(time.RFC3339Nano),
-		purchase.SubscriptionState, purchase.AcknowledgementState,
+		purchase.SubscriptionState,
 		string(state), string(access), string(reason), string(renewal.Mode), string(renewal.Status),
 	}, "\x00")))
 }

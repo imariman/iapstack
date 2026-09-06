@@ -294,6 +294,83 @@ func TestServiceVerifyPersistsAndReplays(t *testing.T) {
 	}
 }
 
+// TestServiceReconcileReusesUnchangedObservationProjection verifies provider completion does not churn entitlement events.
+func TestServiceReconcileReusesUnchangedObservationProjection(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	queryReference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", "sensitive-purchase-token")
+	if err != nil {
+		t.Fatalf("NewStoreReference() query error = %v", err)
+	}
+	customerBinding, err := core.NewStoreReference(
+		core.ReferenceCustomerBinding,
+		"obfuscated_external_account_id",
+		verificationExternalCustomerID,
+	)
+	if err != nil {
+		t.Fatalf("NewStoreReference() customer binding error = %v", err)
+	}
+	fixture.command.ExpectedCustomerBindings = []core.StoreReference{customerBinding}
+	fixture.result.Observations[0].References = append(
+		fixture.result.Observations[0].References,
+		queryReference,
+		customerBinding,
+	)
+	fixture.result.PostCommitActions = []stores.PostCommitAction{{
+		Kind: "acknowledge_purchase", ProductID: verificationProviderProductID,
+		ProductKind: core.ProductKindNonConsumable, QueryReferences: []core.StoreReference{queryReference},
+	}}
+	store := newFakeStore(fixture)
+	adapter := &fakeAdapter{result: fixture.result}
+	service := newVerificationService(t, store, adapter, &fakeProtector{}, fixture.clock)
+
+	first, err := service.Verify(context.Background(), fixture.command)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if adapter.postCommitCalls != 1 {
+		t.Fatalf("PostCommit() calls = %d, want 1", adapter.postCommitCalls)
+	}
+
+	acknowledgedArtifact, err := stores.NewEvidence(repositoryContentType(), []byte(`{"acknowledged":true}`))
+	if err != nil {
+		t.Fatalf("NewEvidence() acknowledged artifact error = %v", err)
+	}
+	adapter.result.PostCommitActions = nil
+	adapter.result.VerifiedAt = fixture.result.VerifiedAt.Add(time.Minute)
+	adapter.result.Artifacts = []stores.VerifiedArtifact{{Kind: "provider_response", Evidence: acknowledgedArtifact}}
+	adapter.result.Observations[0].ObservedAt = fixture.result.Observations[0].ObservedAt.Add(time.Minute)
+	signal, err := stores.NewEvidence(repositoryContentType(), []byte(`{"acknowledgement_changed":true}`))
+	if err != nil {
+		t.Fatalf("NewEvidence() signal error = %v", err)
+	}
+	second, err := service.Reconcile(context.Background(), verification.ReconciliationCommand{
+		ProjectID:                verificationProjectID,
+		ApplicationID:            verificationApplicationID,
+		ExternalCustomerID:       verificationExternalCustomerID,
+		ExpectedProducts:         []core.ProviderProductID{verificationProviderProductID},
+		ExpectedProductKind:      core.ProductKindNonConsumable,
+		ExpectedCustomerBindings: []core.StoreReference{customerBinding},
+		QueryReferences:          []core.StoreReference{queryReference},
+		Signal:                   signal,
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(first.Entitlements) != 1 || len(second.Entitlements) != 1 ||
+		first.Entitlements[0].Version != 1 || second.Entitlements[0].Version != 1 {
+		t.Fatalf("entitlement versions = (%#v, %#v), want one stable version-one projection", first.Entitlements, second.Entitlements)
+	}
+	if len(store.repository.observations) != 1 || len(store.repository.entitlements) != 1 || len(store.repository.outbox) != 1 {
+		t.Fatalf("post-reconciliation repository state = %#v, want one observation, entitlement, and outbox event", store.repository)
+	}
+	if len(store.repository.evidence) != 2 || len(store.repository.artifacts) != 2 {
+		t.Fatalf("audit records = (%d evidence, %d artifacts), want acknowledged provider snapshot retained",
+			len(store.repository.evidence), len(store.repository.artifacts))
+	}
+}
+
 // TestServiceRejectsCatalogMismatchBeforeWrites verifies catalog authority over provider output.
 func TestServiceRejectsCatalogMismatchBeforeWrites(t *testing.T) {
 	t.Parallel()
