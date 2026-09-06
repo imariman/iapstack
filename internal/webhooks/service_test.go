@@ -38,6 +38,16 @@ type fakeProtection struct {
 	openError error
 }
 
+// fakeAddressResolver returns deterministic DNS answers to network policy tests.
+type fakeAddressResolver struct {
+	addresses []netip.Addr
+}
+
+// recordingConnectionDialer records whether an address passed policy enforcement.
+type recordingConnectionDialer struct {
+	calls int
+}
+
 // TestDeliverClassifiesDependencyFailures verifies only durable absence and invalid ciphertext are permanent.
 func TestDeliverClassifiesDependencyFailures(t *testing.T) {
 	protected := protection.Value{Ciphertext: []byte("ciphertext"), KeyID: "key-1"}
@@ -80,16 +90,6 @@ func TestDeliverClassifiesDependencyFailures(t *testing.T) {
 			}
 		})
 	}
-}
-
-// fakeAddressResolver returns deterministic DNS answers to network policy tests.
-type fakeAddressResolver struct {
-	addresses []netip.Addr
-}
-
-// recordingConnectionDialer records whether an address passed policy enforcement.
-type recordingConnectionDialer struct {
-	calls int
 }
 
 // TestSignUsesTimestampDotRawBody verifies the stable v1 webhook signature contract.

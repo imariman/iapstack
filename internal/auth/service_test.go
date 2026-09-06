@@ -24,6 +24,12 @@ type fakeOperationsStore struct {
 	err     error
 }
 
+// fakeOperationsTransaction embeds unused repositories and implements API key operations.
+type fakeOperationsTransaction struct {
+	persistence.OperationsTransaction
+	records map[string]persistence.APIKeyRecord
+}
+
 // TestAuthenticationPreservesOperationalLoadFailures verifies storage outages are not reported as invalid keys.
 func TestAuthenticationPreservesOperationalLoadFailures(t *testing.T) {
 	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}
@@ -59,12 +65,6 @@ func TestAuthenticationPreservesOperationalLoadFailures(t *testing.T) {
 	if _, err := service.Authenticate(context.Background(), bearer); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Authenticate() missing key error = %v, want ErrUnauthorized", err)
 	}
-}
-
-// fakeOperationsTransaction embeds unused repositories and implements API key operations.
-type fakeOperationsTransaction struct {
-	persistence.OperationsTransaction
-	records map[string]persistence.APIKeyRecord
 }
 
 // TestServiceCreatesAndAuthenticatesScopedKeys verifies one-time bearer creation and scope recovery.
