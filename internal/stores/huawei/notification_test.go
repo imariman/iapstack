@@ -48,27 +48,8 @@ func TestValidateNotificationAuthenticatesNativeSubscriptionV2(t *testing.T) {
 		t.Fatalf("GenerateKey() error = %v", err)
 	}
 	adapter := notificationAdapter(t, privateKey)
-	status := `{"notificationType":2,"subscriptionId":"premium_monthly","purchaseToken":"purchase-token-1"}`
-	digest := sha256.Sum256([]byte(status))
-	signature, err := rsa.SignPSS(rand.Reader, privateKey, crypto.SHA256, digest[:], &rsa.PSSOptions{
-		SaltLength: rsa.PSSSaltLengthEqualsHash,
-		Hash:       crypto.SHA256,
-	})
-	if err != nil {
-		t.Fatalf("SignPSS() error = %v", err)
-	}
-	payload, err := json.Marshal(map[string]any{
-		"version": "v2", "eventType": "SUBSCRIPTION", "notifyTime": time.Now().UTC().UnixMilli(),
-		"applicationId": "provider-app-1",
-		"subNotification": map[string]any{
-			"version": "v2", "statusUpdateNotification": status,
-			"notificationSignature": base64.StdEncoding.EncodeToString(signature),
-			"signatureAlgorithm":    "SHA256withRSA/PSS",
-		},
-	})
-	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
-	}
+	status := `{"notificationType":2,"subscriptionId":"1665732615152.08082DFB.3006","purchaseToken":"purchase-token-1","productId":"premium_monthly"}`
+	payload := signedSubscriptionNotification(t, privateKey, status)
 	notification, err := adapter.ValidateNotification(context.Background(), huaweiApplication(), payload)
 	if err != nil {
 		t.Fatalf("ValidateNotification() error = %v", err)
@@ -90,6 +71,21 @@ func TestValidateNotificationAuthenticatesNativeSubscriptionV2(t *testing.T) {
 	}
 }
 
+// TestValidateNotificationRejectsSubscriptionWithoutProductID verifies the signed catalog identity is mandatory.
+func TestValidateNotificationRejectsSubscriptionWithoutProductID(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	adapter := notificationAdapter(t, privateKey)
+	status := `{"notificationType":2,"subscriptionId":"1665732615152.08082DFB.3006","purchaseToken":"purchase-token-1"}`
+	payload := signedSubscriptionNotification(t, privateKey, status)
+
+	if _, err := adapter.ValidateNotification(context.Background(), huaweiApplication(), payload); err == nil {
+		t.Fatal("ValidateNotification() missing productId error = nil, want rejection")
+	}
+}
+
 // TestValidateNotificationRejectsAmbiguousBodies verifies fail-closed event parsing.
 func TestValidateNotificationRejectsAmbiguousBodies(t *testing.T) {
 	adapter := &Adapter{}
@@ -105,6 +101,32 @@ func TestValidateNotificationRejectsAmbiguousBodies(t *testing.T) {
 	if _, err := adapter.ValidateNotification(context.Background(), huaweiApplication(), payload); err == nil {
 		t.Fatal("ValidateNotification() ambiguous body error = nil, want rejection")
 	}
+}
+
+// signedSubscriptionNotification builds one native V2 wrapper around an exact signed status string.
+func signedSubscriptionNotification(t *testing.T, privateKey *rsa.PrivateKey, status string) []byte {
+	t.Helper()
+	digest := sha256.Sum256([]byte(status))
+	signature, err := rsa.SignPSS(rand.Reader, privateKey, crypto.SHA256, digest[:], &rsa.PSSOptions{
+		SaltLength: rsa.PSSSaltLengthEqualsHash,
+		Hash:       crypto.SHA256,
+	})
+	if err != nil {
+		t.Fatalf("SignPSS() error = %v", err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"version": "v2", "eventType": "SUBSCRIPTION", "notifyTime": time.Now().UTC().UnixMilli(),
+		"applicationId": "provider-app-1",
+		"subNotification": map[string]any{
+			"version": "v2", "statusUpdateNotification": status,
+			"notificationSignature": base64.StdEncoding.EncodeToString(signature),
+			"signatureAlgorithm":    "SHA256withRSA/PSS",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	return payload
 }
 
 // notificationAdapter builds an adapter with the supplied IAP signing key.
