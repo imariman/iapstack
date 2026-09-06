@@ -151,13 +151,16 @@ signatures and keep the matching IAP public key in the protected application cre
 IAPStack verifies signed subscription status before inbox insertion. Huawei order
 notifications are token-only signals: they can trigger processing only after their
 protected token resolves to a purchase already verified for the same application and
-product, and access changes only after a successful Huawei server query.
+product kind. That lookup and inbox insertion are atomic; unknown tokens or mismatched
+products return `422` without durable work. Access changes only after a successful Huawei
+server query.
 
 A `400` response indicates an invalid V2 body, signature, algorithm, or provider scope;
-`404` means the path scope is unknown; `502` indicates invalid protected Huawei
-credentials; and `503` means durable storage is temporarily unavailable. Put a bounded
-rate limit in the public reverse proxy because order wrappers are not independently
-signed by Huawei, but do not rewrite the request body.
+`404` means the path scope is unknown; `422` means an unsigned order token is unknown or
+does not match its product; `502` indicates invalid protected Huawei credentials; and
+`503` means durable storage is temporarily unavailable. Put a bounded rate limit in the
+public reverse proxy because order wrappers are not independently signed by Huawei, but
+do not rewrite the request body.
 
 ## Apple App Store notification setup
 

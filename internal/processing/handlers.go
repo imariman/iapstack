@@ -150,7 +150,12 @@ func (service *Service) huaweiReconciliationCommand(
 		return lookupErr
 	})
 	if err != nil {
-		if errors.Is(err, persistence.ErrNotFound) || errors.Is(err, persistence.ErrUnavailable) {
+		if errors.Is(err, persistence.ErrNotFound) {
+			return verification.ReconciliationCommand{}, stores.NewFailure(
+				core.ProviderHuaweiAppGallery, "notification_lookup", stores.FailureInvalidEvidence, 0, err,
+			)
+		}
+		if errors.Is(err, persistence.ErrUnavailable) {
 			return verification.ReconciliationCommand{}, stores.NewFailure(
 				core.ProviderHuaweiAppGallery, "notification_lookup", stores.FailureTemporary, 0, err,
 			)
