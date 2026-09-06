@@ -234,11 +234,13 @@ application IAP public key using the declared `SHA256withRSA` or
 `SHA256withRSA/PSS` algorithm before protected inbox persistence.
 
 An order wrapper is treated only as an untrusted change signal because Huawei does
-not attach an equivalent signature to that wrapper. The worker resolves its purchase
-token against a previously verified, application-scoped protected reference and
-always queries Huawei's server API before changing access. Unknown tokens are retried
-to tolerate a callback racing the first client verification; event type or product
-scope mismatches are rejected. Callback fields never grant access directly.
+not attach an equivalent signature to that wrapper. Before inserting the inbox row or
+returning `200`, the handler resolves its protected purchase-token fingerprint against
+a previously verified purchase and requires the same application, product, and product
+kind. The lookup and inbox insertion share one transaction. Unknown tokens and scope
+mismatches are rejected without durable work; only an unavailable persistence lookup is
+retryable. The worker still queries Huawei's server API before changing access, so
+callback fields never grant access directly.
 
 App Store Server Notifications V2 ingestion is
 `POST /v1/providers/apple/projects/{project_id}/applications/{application_id}/notifications`.
