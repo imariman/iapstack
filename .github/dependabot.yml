@@ -29,3 +29,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+  - package-ecosystem: docker-compose
+    directories:
+      - /deploy
+      - /deploy/coolify
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

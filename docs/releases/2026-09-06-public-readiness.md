@@ -77,8 +77,8 @@ plan. The publication procedure therefore changes visibility and immediately app
 - An active `v*` tag ruleset blocking tag updates, force pushes, and deletion.
 - Secret scanning, push protection, private vulnerability reporting, Dependabot
   alerts/security updates, and weekly dependency update configuration.
-- CodeQL default setup for Go, JavaScript/TypeScript, and GitHub Actions with extended
-  queries. Dart is covered by the SDK analyzer/tests and dependency review, not CodeQL.
+- A CodeQL workflow for Go, JavaScript/TypeScript, and GitHub Actions with extended
+  queries on pushes, PRs (including forks), and a weekly schedule. Dart is covered by the SDK analyzer/tests and dependency review, not CodeQL.
 - A `stable-release` environment limited to `main` with maintainer review.
 
 The settings must be read back from GitHub after activation, and the initial CodeQL
