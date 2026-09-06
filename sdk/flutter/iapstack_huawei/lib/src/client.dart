@@ -152,7 +152,7 @@ final class HuaweiIapStack {
     );
   }
 
-  /// Restores all active non-consumables and subscriptions for one customer.
+  /// Restores configured, customer-bound purchases for one customer.
   Future<RestoreResult> restorePurchases({
     required String externalCustomerId,
     Set<HuaweiProductKind> productKinds = const <HuaweiProductKind>{
@@ -187,15 +187,20 @@ final class HuaweiIapStack {
           continuationToken: continuationToken,
         );
         for (final purchase in page.purchases) {
+          final submission = _restoreSubmission(
+            externalCustomerId: externalCustomerId,
+            purchase: purchase,
+            productKind: productKind,
+          );
+          if (submission == null) {
+            continue;
+          }
           final key =
               '${productKind.name}\u0000${purchase.signature}\u0000${purchase.purchaseData}';
           if (!evidenceKeys.add(key)) {
             continue;
           }
-          final evidence =
-              HuaweiPurchaseEvidence.fromSignedPurchase(purchase, productKind);
-          submissions.add(
-              evidence.toSubmission(externalCustomerId: externalCustomerId));
+          submissions.add(submission);
         }
         continuationToken = page.continuationToken;
         if (continuationToken != null &&
@@ -229,6 +234,29 @@ final class HuaweiIapStack {
     String? requestId,
   }) =>
       _client.getEntitlements(externalCustomerId, requestId: requestId);
+
+  /// Returns null when a history row cannot be safely attached to the customer.
+  PurchaseSubmission? _restoreSubmission({
+    required String externalCustomerId,
+    required HuaweiSignedPurchase purchase,
+    required HuaweiProductKind productKind,
+  }) {
+    if (purchase.purchaseData.trim().isEmpty ||
+        purchase.signature.trim().isEmpty) {
+      return null;
+    }
+    try {
+      final evidence =
+          HuaweiPurchaseEvidence.fromSignedPurchase(purchase, productKind);
+      if (_productKinds[evidence.productId] != productKind ||
+          evidence.developerPayload != externalCustomerId) {
+        return null;
+      }
+      return evidence.toSubmission(externalCustomerId: externalCustomerId);
+    } on HuaweiIapStackException {
+      return null;
+    }
+  }
 }
 
 String? _batchRequestId(String? requestId, int batchIndex) {

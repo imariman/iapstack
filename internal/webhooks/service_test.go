@@ -1,6 +1,7 @@
 package webhooks
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -17,17 +18,26 @@ import (
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
+	"github.com/imariman/iapstack/internal/validation"
+)
+
+const (
+	// testSigningSecretBytes matches the production HMAC key length boundary.
+	testSigningSecretBytes = 32
 )
 
 // fakeOperationsStore exposes one webhook endpoint to delivery tests.
 type fakeOperationsStore struct {
+	application   core.Application
 	endpoint      persistence.WebhookEndpointRecord
 	endpointError error
+	operateCalls  int
 }
 
 // fakeOperationsTransaction embeds unused operations and overrides webhook lookup.
 type fakeOperationsTransaction struct {
 	persistence.OperationsTransaction
+	store         *fakeOperationsStore
 	endpoint      persistence.WebhookEndpointRecord
 	endpointError error
 }
@@ -89,6 +99,65 @@ func TestDeliverClassifiesDependencyFailures(t *testing.T) {
 				t.Fatalf("Deliver() error = %#v, want code %q retryable %t", err, test.wantCode, test.wantRetry)
 			}
 		})
+	}
+}
+
+// TestConfigureRejectsShortSigningSecret verifies weak HMAC keys fail before protection or persistence.
+func TestConfigureRejectsShortSigningSecret(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeOperationsStore{}
+	service := &Service{
+		store: store, protection: fakeProtection{}, allowPrivateNetworks: false,
+	}
+	secret := bytes.Repeat([]byte("s"), minimumSigningSecretBytes-1)
+	_, err := service.Configure(
+		context.Background(), webhookApplication(), "https://example.com/hooks", secret, 0,
+	)
+	if !errors.Is(err, validation.ErrInvalid) {
+		t.Fatalf("Configure() error = %v, want ErrInvalid", err)
+	}
+	if bytes.Contains([]byte(err.Error()), secret) {
+		t.Fatalf("Configure() error exposed signing secret: %v", err)
+	}
+	if store.operateCalls != 0 {
+		t.Fatalf("Configure() store calls = %d, want 0", store.operateCalls)
+	}
+}
+
+// TestConfigureAcceptsMinimumSigningSecretAndRotates verifies the byte boundary preserves optimistic updates.
+func TestConfigureAcceptsMinimumSigningSecretAndRotates(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeOperationsStore{application: webhookApplication()}
+	service := &Service{
+		store: store, protection: fakeProtection{}, allowPrivateNetworks: false,
+	}
+	minimumSecret := bytes.Repeat([]byte("m"), testSigningSecretBytes)
+	created, err := service.Configure(
+		context.Background(), store.application, "https://example.com/hooks", minimumSecret, 0,
+	)
+	if err != nil {
+		t.Fatalf("Configure() minimum-length create error = %v", err)
+	}
+	if created.Revision != 1 {
+		t.Fatalf("Configure() create revision = %d, want 1", created.Revision)
+	}
+
+	longerSecret := bytes.Repeat([]byte("r"), testSigningSecretBytes+16)
+	rotated, err := service.Configure(
+		context.Background(), store.application, "https://example.com/rotated", longerSecret, created.Revision,
+	)
+	if err != nil {
+		t.Fatalf("Configure() longer rotation error = %v", err)
+	}
+	if rotated.Revision != 2 || rotated.URL != "https://example.com/rotated" {
+		t.Fatalf("Configure() rotated record = %#v, want revision 2 and rotated URL", rotated)
+	}
+	if _, err := service.Configure(
+		context.Background(), store.application, "https://example.com/stale", minimumSecret, created.Revision,
+	); !errors.Is(err, persistence.ErrConflict) {
+		t.Fatalf("Configure() stale rotation error = %v, want ErrConflict", err)
 	}
 }
 
@@ -213,7 +282,57 @@ func TestWebhookDestinationPrivateNetworkOptIn(t *testing.T) {
 
 // Operate executes one fake atomic operations callback.
 func (store *fakeOperationsStore) Operate(ctx context.Context, operation persistence.OperationsFunc) error {
-	return operation(&fakeOperationsTransaction{endpoint: store.endpoint, endpointError: store.endpointError})
+	store.operateCalls++
+	transaction := &fakeOperationsTransaction{
+		store: store, endpoint: store.endpoint, endpointError: store.endpointError,
+	}
+	if err := operation(transaction); err != nil {
+		return err
+	}
+	store.endpoint = transaction.endpoint
+	return nil
+}
+
+// Application returns the authoritative application configured in the fake store.
+func (transaction *fakeOperationsTransaction) Application(
+	_ context.Context,
+	projectID core.ProjectID,
+	applicationID core.ApplicationID,
+) (core.Application, error) {
+	if transaction.store == nil || transaction.store.application.ProjectID != projectID ||
+		transaction.store.application.ID != applicationID {
+		return core.Application{}, persistence.ErrNotFound
+	}
+	return transaction.store.application, nil
+}
+
+// PutWebhookEndpoint creates or rotates the fake endpoint with optimistic revision checks.
+func (transaction *fakeOperationsTransaction) PutWebhookEndpoint(
+	_ context.Context,
+	write persistence.WebhookEndpointWrite,
+) (persistence.WebhookEndpointRecord, error) {
+	if err := write.Validate(); err != nil {
+		return persistence.WebhookEndpointRecord{}, err
+	}
+	now := time.Date(2026, time.September, 5, 12, 0, 0, 0, time.UTC)
+	if transaction.endpoint.Revision == 0 {
+		if write.ExpectedRevision != 0 {
+			return persistence.WebhookEndpointRecord{}, persistence.ErrConflict
+		}
+		transaction.endpoint = persistence.WebhookEndpointRecord{
+			ProjectID: write.ProjectID, ApplicationID: write.ApplicationID, URL: write.URL,
+			Secret: write.Secret.Clone(), Revision: 1, CreatedAt: now, UpdatedAt: now,
+		}
+		return transaction.endpoint, nil
+	}
+	if write.ExpectedRevision != transaction.endpoint.Revision {
+		return persistence.WebhookEndpointRecord{}, persistence.ErrConflict
+	}
+	transaction.endpoint.URL = write.URL
+	transaction.endpoint.Secret = write.Secret.Clone()
+	transaction.endpoint.Revision++
+	transaction.endpoint.UpdatedAt = now.Add(time.Second)
+	return transaction.endpoint, nil
 }
 
 // WebhookEndpoint returns the configured application endpoint.
@@ -258,4 +377,15 @@ func (dialer *recordingConnectionDialer) DialContext(
 ) (net.Conn, error) {
 	dialer.calls++
 	return nil, errors.New("test dial failure")
+}
+
+// webhookApplication returns one valid application scope for configuration tests.
+func webhookApplication() core.Application {
+	return core.Application{
+		ID: "application-1", ProjectID: "project-1",
+		Store: core.StoreApplication{
+			Provider: core.ProviderGooglePlay, Environment: core.EnvironmentTest,
+			ID: "com.example.iapstack",
+		},
+	}
 }
