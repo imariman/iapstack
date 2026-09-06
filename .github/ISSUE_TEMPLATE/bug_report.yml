@@ -1,0 +1,86 @@
+name: Bug report
+description: Report a reproducible problem in IAPStack
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Remove credentials, purchase evidence, customer data, and database URLs before submitting. Report security vulnerabilities through a [private security advisory](https://github.com/imariman/iapstack/security/advisories/new) instead.
+  - type: input
+    id: version
+    attributes:
+      label: IAPStack version or commit
+      description: Provide a release tag or full commit SHA.
+      placeholder: v0.1.0-rc.1 or 0123456789abcdef...
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Store provider
+      options:
+        - Not provider-specific
+        - Apple App Store
+        - Google Play
+        - Huawei AppGallery
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Store environment
+      options:
+        - Not applicable
+        - Sandbox or test
+        - Production
+    validations:
+      required: true
+  - type: input
+    id: deployment
+    attributes:
+      label: Deployment method
+      description: For example, local Go process, Docker Compose, Render, or Fly.io.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: List the smallest sequence that consistently reproduces the problem.
+      placeholder: |
+        1. Configure ...
+        2. Send ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Add minimal logs, request IDs, or configuration details. Do not include secrets or personal data.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched open and closed issues for this problem.
+          required: true
+        - label: I removed credentials, purchase evidence, customer data, and other sensitive information.
+          required: true
+        - label: This is not an undisclosed security vulnerability.
+          required: true

@@ -1,0 +1,38 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /deploy/e2e
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: pub
+    directories:
+      - /sdk/flutter/iapstack
+      - /sdk/flutter/iapstack_apple
+      - /sdk/flutter/iapstack_apple/example
+      - /sdk/flutter/iapstack_google_play
+      - /sdk/flutter/iapstack_google_play/example
+      - /sdk/flutter/iapstack_huawei
+      - /sdk/flutter/iapstack_huawei/example
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: docker-compose
+    directories:
+      - /deploy
+      - /deploy/coolify
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

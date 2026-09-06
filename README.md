@@ -17,7 +17,54 @@
 </p>
 
 > [!IMPORTANT]
-> IAPStack is in early development and is not ready for production use yet.
+> IAPStack is prerelease software. The existing `v0.1.0-rc1` and `v0.1.0-rc2`
+> releases are legacy previews that predate the current release gate and security
+> fixes; they are not supported for production use. The default branch remains in
+> development, and its three real-store lifecycle gates are still open.
+
+IAPStack is a self-hosted control plane for validating in-app purchases and turning
+store transactions into durable application entitlements. It gives teams one
+backend-owned model across mobile stores while keeping credentials, purchase data,
+and access decisions in infrastructure they control.
+
+## Current scope
+
+- Server-side verification for subscriptions and non-consumable lifetime purchases
+  from Apple App Store, Google Play, and Huawei AppGallery
+- A store-neutral transaction and entitlement model backed by PostgreSQL
+- Durable notification ingestion, lifecycle reconciliation, and signed outbound webhooks
+- An authenticated operations dashboard and versioned HTTP/OpenAPI contracts
+- Provider-neutral and store-specific Flutter packages for all three current providers
+- Compact or split API/worker deployment with Docker and documented cloud targets
+
+Consumable fulfillment, customer migration and alias consolidation, hosted operation,
+and stores beyond the three above are outside the v0.1 scope. See the
+[v0.1 scope](docs/v0.1-scope.md) for the complete boundary.
+
+## Quick start
+
+You need Docker with Compose and OpenSSL. From a clone of this repository, generate
+local-only secrets and start the complete stack:
+
+```sh
+export IAPSTACK_POSTGRES_PASSWORD="$(openssl rand -base64 32)"
+export IAPSTACK_PROTECTION_ACTIVE_KEY_ID="local-1"
+export IAPSTACK_PROTECTION_KEYS="{\"local-1\":\"$(openssl rand -base64 32)\"}"
+export IAPSTACK_PROTECTION_FINGERPRINT_KEY="$(openssl rand -base64 32)"
+export IAPSTACK_BOOTSTRAP_ADMIN_KEY="$(openssl rand -base64 48)"
+export IAPSTACK_METRICS_BEARER_TOKEN="$(openssl rand -base64 48)"
+docker compose -f deploy/compose.yaml up --build -d --wait
+curl --fail http://127.0.0.1:8080/readyz
+```
+
+Save the generated values securely and reuse them with this Compose volume.
+Regenerating them does not rotate the existing database password or protection keys.
+
+Then open `http://127.0.0.1:8080/dashboard/` and connect with the bootstrap
+administrator key. Create and store a durable administrator key, remove
+`IAPSTACK_BOOTSTRAP_ADMIN_KEY` from the environment, and recreate the API container.
+The [operations guide](docs/operations.md) explains bootstrap, key rotation, shutdown,
+backups, upgrades, and the production security baseline.
 
 ## Deploy
 
@@ -61,19 +108,6 @@ migrations, HTTPS API routing, and a private worker. Self-hosted Coolify is free
 you provide an always-on Linux server; Coolify Cloud and the deployment server are
 separately billed.
 
-IAPStack is a self-hosted control plane for validating in-app purchases and turning store transactions into durable application entitlements. It is designed for teams that want one backend-owned model across mobile stores without handing their purchase data or access rules to a hosted subscription platform.
-
-## What IAPStack aims to provide
-
-- Server-side verification for subscriptions, consumables, non-consumables, and lifetime purchases
-- A store-neutral transaction and entitlement model
-- Customer identity, aliases, restore flows, and migration support
-- Store notification ingestion and lifecycle reconciliation
-- Signed outbound webhooks for application backends
-- An operational dashboard for customers, products, transactions, and entitlements
-- First-party SDKs, beginning with Flutter
-- Docker-first deployment backed by PostgreSQL
-
 ## Design principles
 
 **Self-hosted by default.** You own the infrastructure, credentials, purchase data, and access decisions.
@@ -94,6 +128,9 @@ IAPStack is a self-hosted control plane for validating in-app purchases and turn
 - [Machine-readable OpenAPI v1 contract](contracts/openapi/v1.yaml)
 - [Operations and dashboard guide](docs/operations.md)
 - [v0.1 threat model and security release checklist](docs/security.md)
+- [Security policy and vulnerability reporting](SECURITY.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Support guide](SUPPORT.md)
 - [v0.1.0-rc.1 three-provider release gate](docs/releases/v0.1.0-rc.1.md)
 - [Provider-neutral Flutter SDK](sdk/flutter/iapstack/README.md)
 - [Huawei Flutter SDK and sandbox example](sdk/flutter/iapstack_huawei/README.md)
@@ -112,7 +149,9 @@ fulfillment remains outside v0.1.
 
 ## Development
 
-IAPStack currently requires Go 1.25 or newer. Run the compact API and worker locally with:
+Use the Go toolchain declared in `go.mod`. After starting PostgreSQL, applying the
+migrations, and configuring the required secrets described below, run the compact API
+and worker locally with:
 
 ```sh
 go run ./cmd/iapstack server
@@ -188,7 +227,7 @@ exposure behind authenticated TLS ingress and network policy.
 Run the local quality checks with:
 
 ```sh
-gofmt -w .
+go fmt ./...
 go vet ./...
 go test -race -count=1 ./...
 ```
@@ -275,7 +314,7 @@ in [the operations guide](docs/operations.md). The authenticated v1 endpoints, p
 credential/evidence and notification contracts, and webhook verification rules are documented in
 [the HTTP API guide](docs/api-v1.md).
 
-## Planned architecture
+## Repository layout
 
 ```text
 .
@@ -283,13 +322,13 @@ credential/evidence and notification contracts, and webhook verification rules a
 ├── internal/
 │   ├── core/              # Customers, transactions, products, and entitlements
 │   ├── credentials/       # Protected application credential orchestration
-│   ├── stores/            # Apple, Google, Huawei, Amazon, and future adapters
+│   ├── stores/            # Apple, Google Play, and Huawei adapters
 │   ├── persistence/       # Durable ports and PostgreSQL repositories
 │   ├── protection/        # Provider-neutral sensitive-data protection port
 │   ├── platform/          # Concrete configuration, logging, and protection implementations
 │   └── verification/      # Provider-neutral purchase verification orchestration
 ├── dashboard/             # Self-hosted web dashboard
-├── sdk/flutter/           # Provider-neutral, Huawei, and Google Play Flutter SDKs
+├── sdk/flutter/           # Provider-neutral and provider-specific Flutter SDKs
 ├── contracts/             # Public API and webhook contracts
 └── deploy/                # Docker and deployment templates
 ```
@@ -297,9 +336,9 @@ credential/evidence and notification contracts, and webhook verification rules a
 ## Roadmap
 
 - [x] Define the core domain, public API contracts, and persistence model
-- [x] Implement the Huawei AppGallery adapter from official specifications
-- [x] Add PostgreSQL migrations and a production-ready Docker setup
-- [x] Build the initial provider-neutral, Huawei, and Google Play Flutter SDKs
+- [x] Implement the initial Apple App Store, Google Play, and Huawei AppGallery adapters
+- [x] Add PostgreSQL migrations and a production-shaped Docker setup
+- [x] Build the initial provider-neutral and three provider-specific Flutter SDKs
 - [x] Build the initial dashboard
 - [x] Support lifecycle reconciliation and signed outbound webhooks
 - [x] Publish a machine-readable v1 API contract with client compatibility checks
@@ -313,3 +352,7 @@ The order above describes the initial implementation sequence, not a limitation 
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
+
+By participating in this project, you agree to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md). For contribution and support paths, see
+[CONTRIBUTING.md](CONTRIBUTING.md) and [SUPPORT.md](SUPPORT.md).
