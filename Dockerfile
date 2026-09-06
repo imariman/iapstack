@@ -8,7 +8,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/iapstack ./cmd/iapstack \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/iapstack-webhook-receiver ./cmd/iapstack-webhook-receiver
 
-FROM alpine:3.22
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates wget \
     && addgroup -S -g 65532 iapstack \
