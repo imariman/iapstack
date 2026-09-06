@@ -57,6 +57,9 @@ docker compose -f deploy/compose.yaml up --build -d --wait
 curl --fail http://127.0.0.1:8080/readyz
 ```
 
+Save the generated values securely and reuse them with this Compose volume.
+Regenerating them does not rotate the existing database password or protection keys.
+
 Then open `http://127.0.0.1:8080/dashboard/` and connect with the bootstrap
 administrator key. Create and store a durable administrator key, remove
 `IAPSTACK_BOOTSTRAP_ADMIN_KEY` from the environment, and recreate the API container.

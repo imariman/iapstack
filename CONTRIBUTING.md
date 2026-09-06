@@ -13,8 +13,9 @@ Search the [existing issues](https://github.com/imariman/iapstack/issues) before
 a new one. For a substantial feature or architectural change, open a feature request
 first so scope and compatibility can be discussed before implementation.
 
-Never commit store credentials, purchase evidence, API keys, customer data, generated
-release evidence from a real account, or local environment files.
+Never commit store credentials, raw purchase evidence, API keys, customer data, raw
+provider exports, or local environment files. Release records must contain only the
+secret-free summaries required by the release runbook.
 
 ## Development setup
 
