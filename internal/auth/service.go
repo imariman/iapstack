@@ -176,7 +176,10 @@ func (service *Service) Authenticate(ctx context.Context, bearer string) (Princi
 		return loadErr
 	})
 	if err != nil {
-		return Principal{}, ErrUnauthorized
+		if errors.Is(err, persistence.ErrNotFound) {
+			return Principal{}, ErrUnauthorized
+		}
+		return Principal{}, fmt.Errorf("load API key for authentication: %w", err)
 	}
 	hash, err := service.deriveVerifier(ctx, secret, record.SecretSalt)
 	if err != nil {

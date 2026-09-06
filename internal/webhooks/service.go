@@ -133,7 +133,10 @@ func (service *Service) Deliver(ctx context.Context, message persistence.QueueMe
 		return loadErr
 	})
 	if err != nil {
-		return &DeliveryError{Code: "webhook_not_configured", CanRetry: false}
+		if errors.Is(err, persistence.ErrNotFound) {
+			return &DeliveryError{Code: "webhook_not_configured", CanRetry: false}
+		}
+		return &DeliveryError{Code: "webhook_endpoint_unavailable", CanRetry: true}
 	}
 	if err := validateWebhookDestination(endpoint.URL, service.allowPrivateNetworks); err != nil {
 		return &DeliveryError{Code: "webhook_destination_invalid", CanRetry: false}
@@ -151,7 +154,10 @@ func (service *Service) Deliver(ctx context.Context, message persistence.QueueMe
 	}
 	secret, err := service.protection.Open(ctx, openRequest)
 	if err != nil {
-		return &DeliveryError{Code: "webhook_secret_unavailable", CanRetry: false}
+		if errors.Is(err, protection.ErrOpenFailed) {
+			return &DeliveryError{Code: "webhook_secret_invalid", CanRetry: false}
+		}
+		return &DeliveryError{Code: "webhook_secret_unavailable", CanRetry: true}
 	}
 	defer zero(secret)
 	timestamp := service.clock().UTC().Truncate(time.Second)

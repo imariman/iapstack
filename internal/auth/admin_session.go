@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -143,7 +144,13 @@ func (service *AdminSessions) Authenticate(ctx context.Context, token string) (A
 			issuer, loadErr = repository.APIKey(ctx, claims.IssuerKeyID)
 			return loadErr
 		})
-		if err != nil || issuer.ID != claims.IssuerKeyID || issuer.Role != persistence.APIKeyRoleAdmin || issuer.Validate() != nil {
+		if err != nil {
+			if errors.Is(err, persistence.ErrNotFound) {
+				return AdminPrincipal{}, ErrUnauthorized
+			}
+			return AdminPrincipal{}, fmt.Errorf("load administrator session issuer: %w", err)
+		}
+		if issuer.ID != claims.IssuerKeyID || issuer.Role != persistence.APIKeyRoleAdmin || issuer.Validate() != nil {
 			return AdminPrincipal{}, ErrUnauthorized
 		}
 		principal.KeyID = issuer.ID
