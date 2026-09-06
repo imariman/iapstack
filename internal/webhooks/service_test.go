@@ -28,21 +28,24 @@ const (
 
 // fakeOperationsStore exposes one webhook endpoint to delivery tests.
 type fakeOperationsStore struct {
-	application  core.Application
-	endpoint     persistence.WebhookEndpointRecord
-	operateCalls int
+	application   core.Application
+	endpoint      persistence.WebhookEndpointRecord
+	endpointError error
+	operateCalls  int
 }
 
 // fakeOperationsTransaction embeds unused operations and overrides webhook lookup.
 type fakeOperationsTransaction struct {
 	persistence.OperationsTransaction
-	store    *fakeOperationsStore
-	endpoint persistence.WebhookEndpointRecord
+	store         *fakeOperationsStore
+	endpoint      persistence.WebhookEndpointRecord
+	endpointError error
 }
 
 // fakeProtection opens one configured webhook signing secret.
 type fakeProtection struct {
-	secret []byte
+	secret    []byte
+	openError error
 }
 
 // fakeAddressResolver returns deterministic DNS answers to network policy tests.
@@ -53,6 +56,50 @@ type fakeAddressResolver struct {
 // recordingConnectionDialer records whether an address passed policy enforcement.
 type recordingConnectionDialer struct {
 	calls int
+}
+
+// TestDeliverClassifiesDependencyFailures verifies only durable absence and invalid ciphertext are permanent.
+func TestDeliverClassifiesDependencyFailures(t *testing.T) {
+	protected := protection.Value{Ciphertext: []byte("ciphertext"), KeyID: "key-1"}
+	protected.Fingerprint = sha256.Sum256([]byte("secret"))
+	endpoint := persistence.WebhookEndpointRecord{
+		ProjectID: "project-1", ApplicationID: "application-1", URL: "https://hooks.example.com/iapstack",
+		Secret: protected, Revision: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}
+	message := persistence.QueueMessage{
+		Queue: persistence.QueueOutbox, ID: "event-1", ProjectID: "project-1",
+		ApplicationID: "application-1", JSONPayload: []byte(`{"event":"changed"}`),
+	}
+	tests := []struct {
+		name          string
+		endpointError error
+		openError     error
+		wantCode      string
+		wantRetry     bool
+	}{
+		{name: "missing endpoint", endpointError: persistence.ErrNotFound, wantCode: "webhook_not_configured"},
+		{name: "unavailable endpoint", endpointError: persistence.ErrUnavailable, wantCode: "webhook_endpoint_unavailable", wantRetry: true},
+		{name: "unexpected endpoint load failure", endpointError: errors.New("load failed"), wantCode: "webhook_endpoint_unavailable", wantRetry: true},
+		{name: "unavailable secret key", openError: protection.ErrKeyUnavailable, wantCode: "webhook_secret_unavailable", wantRetry: true},
+		{name: "invalid secret ciphertext", openError: protection.ErrOpenFailed, wantCode: "webhook_secret_invalid"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			service := &Service{
+				store:                &fakeOperationsStore{endpoint: endpoint, endpointError: test.endpointError},
+				protection:           fakeProtection{secret: []byte("signing-secret"), openError: test.openError},
+				allowPrivateNetworks: false,
+			}
+			err := service.Deliver(context.Background(), message)
+			failure, ok := err.(*DeliveryError)
+			if !ok || failure.CodeValue() != test.wantCode || failure.Retryable() != test.wantRetry {
+				t.Fatalf("Deliver() error = %#v, want code %q retryable %t", err, test.wantCode, test.wantRetry)
+			}
+		})
+	}
 }
 
 // TestConfigureRejectsShortSigningSecret verifies weak HMAC keys fail before protection or persistence.
@@ -236,7 +283,9 @@ func TestWebhookDestinationPrivateNetworkOptIn(t *testing.T) {
 // Operate executes one fake atomic operations callback.
 func (store *fakeOperationsStore) Operate(ctx context.Context, operation persistence.OperationsFunc) error {
 	store.operateCalls++
-	transaction := &fakeOperationsTransaction{store: store, endpoint: store.endpoint}
+	transaction := &fakeOperationsTransaction{
+		store: store, endpoint: store.endpoint, endpointError: store.endpointError,
+	}
 	if err := operation(transaction); err != nil {
 		return err
 	}
@@ -292,6 +341,9 @@ func (transaction *fakeOperationsTransaction) WebhookEndpoint(
 	_ core.ProjectID,
 	_ core.ApplicationID,
 ) (persistence.WebhookEndpointRecord, error) {
+	if transaction.endpointError != nil {
+		return persistence.WebhookEndpointRecord{}, transaction.endpointError
+	}
 	return transaction.endpoint, nil
 }
 
@@ -304,6 +356,9 @@ func (service fakeProtection) Protect(_ context.Context, _ protection.Request) (
 
 // Open returns one defensive copy of the configured signing secret.
 func (service fakeProtection) Open(_ context.Context, _ protection.OpenRequest) ([]byte, error) {
+	if service.openError != nil {
+		return nil, service.openError
+	}
 	return append([]byte(nil), service.secret...), nil
 }
 

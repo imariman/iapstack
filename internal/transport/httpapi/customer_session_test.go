@@ -66,6 +66,15 @@ func TestCustomerSessionEndpointBindsApplicationAndCustomer(t *testing.T) {
 	if !ok || principal.ExternalCustomerID != "customer-external" {
 		t.Fatalf("customer principal = %#v, ok = %t: %s", principal, ok, dataRecorder.Body.String())
 	}
+	store.operateError = persistence.ErrUnavailable
+	unavailableRecorder := httptest.NewRecorder()
+	if _, ok := api.requireCustomerSession(unavailableRecorder, dataRequest); ok || unavailableRecorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unavailable session status = %d, ok = %t", unavailableRecorder.Code, ok)
+	}
+	if !strings.Contains(unavailableRecorder.Body.String(), `"code":"authentication_unavailable"`) {
+		t.Fatalf("unavailable session response = %s", unavailableRecorder.Body.String())
+	}
+	store.operateError = nil
 
 	wrongApplication := httptest.NewRequest(http.MethodGet, "/v1/applications/application-2/purchases:verify", nil)
 	wrongApplication.SetPathValue("application_id", "application-2")
