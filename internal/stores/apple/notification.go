@@ -94,10 +94,7 @@ func (adapter *Adapter) ValidateNotification(
 		Subtype: decoded.Subtype, SignedAt: milliseconds(decoded.SignedDate),
 	}
 	if decoded.Data == nil {
-		if err := envelope.Validate(); err != nil {
-			return NotificationEnvelope{}, ErrNotificationInvalid
-		}
-		return envelope, nil
+		return NotificationEnvelope{}, ErrNotificationInvalid
 	}
 	if err := validateNotificationDataScope(application, configuration, *decoded.Data); err != nil {
 		return NotificationEnvelope{}, ErrNotificationInvalid

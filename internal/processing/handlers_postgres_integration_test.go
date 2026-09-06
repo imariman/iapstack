@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/imariman/iapstack/internal/core"
+	"github.com/imariman/iapstack/internal/jobs"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/persistence/postgres"
 	"github.com/imariman/iapstack/internal/protection"
@@ -156,6 +158,23 @@ func TestGooglePlayInboxPersistsReconciliationWithPostgreSQL(t *testing.T) {
 		"application/json",
 		[]byte(`{"purchase_token":"processing-purchase-token-1"}`),
 	)
+	processingService, err := New(database.store, protector, verificationService)
+	if err != nil {
+		t.Fatalf("New() processing error = %v", err)
+	}
+	notificationAt := now.Add(3 * time.Minute)
+	message := saveProcessingIntegrationInbox(
+		t, database, protector, application, notificationAt, notificationAt,
+	)
+	lookupErr := processingService.HandleInbox(database.ctx, message)
+	var lookupFailure *stores.Failure
+	if !errors.As(lookupErr, &lookupFailure) || lookupFailure.Operation != "notification_lookup" ||
+		lookupFailure.Kind != stores.FailureTemporary {
+		t.Fatalf("HandleInbox() pre-verification error = %v, want temporary notification lookup", lookupErr)
+	}
+	markProcessingIntegrationInboxFailed(t, database, message.ID, now.Add(4*time.Minute))
+	assertProcessingIntegrationInboxJobCount(t, database, 1)
+
 	initial, err := verificationService.Verify(database.ctx, verification.Command{
 		ProjectID: processingIntegrationProjectID, ApplicationID: processingIntegrationApplicationID,
 		ExternalCustomerID: processingIntegrationExternalCustomerID,
@@ -173,18 +192,18 @@ func TestGooglePlayInboxPersistsReconciliationWithPostgreSQL(t *testing.T) {
 		t.Fatalf("Verify() bootstrap entitlements = %#v", initial.Entitlements)
 	}
 
-	message := saveProcessingIntegrationInbox(t, database, protector, application, now.Add(3*time.Minute))
-	processingService, err := New(database.store, protector, verificationService)
-	if err != nil {
-		t.Fatalf("New() processing error = %v", err)
+	redelivery := saveProcessingIntegrationInbox(
+		t, database, protector, application, notificationAt, now.Add(5*time.Minute),
+	)
+	if redelivery.Completed || redelivery.Failed {
+		t.Fatalf("redelivered inbox state = %#v, want active", redelivery)
 	}
-	for attempt := 1; attempt <= 2; attempt++ {
-		if err := processingService.HandleInbox(database.ctx, message); err != nil {
-			t.Fatalf("HandleInbox() attempt %d error = %v", attempt, err)
-		}
+	assertProcessingIntegrationInboxJobCount(t, database, 2)
+	if err := processingService.HandleInbox(database.ctx, redelivery); err != nil {
+		t.Fatalf("HandleInbox() redelivery error = %v", err)
 	}
 
-	if adapter.verifyCalls != 1 || adapter.reconcileCalls != 2 || adapter.postCommitCalls != 3 {
+	if adapter.verifyCalls != 1 || adapter.reconcileCalls != 1 || adapter.postCommitCalls != 2 {
 		t.Fatalf(
 			"adapter calls = verify %d, reconcile %d, post-commit %d",
 			adapter.verifyCalls,
@@ -219,6 +238,31 @@ func TestGooglePlayInboxPersistsReconciliationWithPostgreSQL(t *testing.T) {
 	}
 	if notificationEvidence != 1 {
 		t.Fatalf("notification evidence count = %d, want 1", notificationEvidence)
+	}
+}
+
+// markProcessingIntegrationInboxFailed records an exhausted attempt and finalizes its original River job.
+func markProcessingIntegrationInboxFailed(
+	t *testing.T,
+	database *processingIntegrationDatabase,
+	messageID string,
+	failedAt time.Time,
+) {
+	t.Helper()
+	if err := database.store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		return repository.FailQueue(database.ctx, persistence.QueueFailure{
+			Queue: persistence.QueueInbox, ID: messageID,
+			FailedAt: failedAt, ErrorCode: "provider_temporary",
+		})
+	}); err != nil {
+		t.Fatalf("FailQueue() inbox error = %v", err)
+	}
+	if _, err := database.conn.Exec(database.ctx, `
+		UPDATE river_job
+		SET state = 'discarded', finalized_at = $1
+		WHERE id = (SELECT river_job_id FROM inbox_messages WHERE id = $2)
+	`, failedAt, messageID); err != nil {
+		t.Fatalf("finalize failed inbox River job: %v", err)
 	}
 }
 
@@ -415,12 +459,13 @@ func saveProcessingIntegrationInbox(
 	database *processingIntegrationDatabase,
 	protector protection.Service,
 	application core.Application,
+	eventTime time.Time,
 	receivedAt time.Time,
 ) persistence.QueueMessage {
 	t.Helper()
 	payload, err := json.Marshal(googleplay.NotificationEnvelope{
 		MessageID: "pubsub-message-processing-1", Kind: googleplay.NotificationKindOneTimeProduct,
-		NotificationType: 1, EventTime: receivedAt,
+		NotificationType: 1, EventTime: eventTime,
 		PurchaseToken: processingIntegrationPurchaseToken,
 		ProductKind:   core.ProductKindNonConsumable, ProviderProductID: processingIntegrationProviderProductID,
 	})
@@ -541,5 +586,22 @@ func assertProcessingIntegrationCount(
 	}
 	if got != want {
 		t.Fatalf("%s count = %d, want %d", table, got, want)
+	}
+}
+
+// assertProcessingIntegrationInboxJobCount verifies the number of River attempts for the logical notification.
+func assertProcessingIntegrationInboxJobCount(
+	t *testing.T,
+	database *processingIntegrationDatabase,
+	want int,
+) {
+	t.Helper()
+	var got int
+	if err := database.conn.QueryRow(database.ctx,
+		`SELECT count(*) FROM river_job WHERE kind = $1`, jobs.KindInbox).Scan(&got); err != nil {
+		t.Fatalf("count processing inbox River jobs: %v", err)
+	}
+	if got != want {
+		t.Fatalf("processing inbox River jobs = %d, want %d", got, want)
 	}
 }

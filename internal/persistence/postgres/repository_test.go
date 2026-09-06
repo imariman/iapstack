@@ -795,6 +795,122 @@ func TestOperationalQueueEnqueueAndCompletion(t *testing.T) {
 	}
 }
 
+// TestInboxRedeliveryRequeuesOnlyTerminalFailures verifies provider retries revive failed work without duplicating active or completed jobs.
+func TestInboxRedeliveryRequeuesOnlyTerminalFailures(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	now := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	payload := protection.Value{
+		Ciphertext:  []byte("protected-notification"),
+		Fingerprint: sha256.Sum256([]byte("provider-notification")),
+		KeyID:       repositoryEncryptionKeyID,
+	}
+	message := persistence.InboxMessage{
+		ID: "inbox-redelivery-original", ProjectID: core.ProjectID(fixture.projectID),
+		ApplicationID: core.ApplicationID(fixture.applicationID), Provider: core.ProviderHuaweiAppGallery,
+		Kind: "subscription_event", ContentType: repositoryContentType, Payload: payload,
+		ReceivedAt: now, AvailableAt: now,
+	}
+	save := func(candidate persistence.InboxMessage) string {
+		t.Helper()
+		var id string
+		if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+			var saveErr error
+			id, saveErr = repository.SaveInboxMessage(database.ctx, candidate)
+			return saveErr
+		}); err != nil {
+			t.Fatalf("SaveInboxMessage() error = %v", err)
+		}
+		return id
+	}
+
+	messageID := save(message)
+	var firstRiverJobID int64
+	if err := database.conn.QueryRow(database.ctx,
+		`SELECT river_job_id FROM inbox_messages WHERE id = $1`, messageID).Scan(&firstRiverJobID); err != nil {
+		t.Fatalf("load initial inbox River job: %v", err)
+	}
+
+	inFlightDuplicate := message
+	inFlightDuplicate.ID = "inbox-redelivery-in-flight"
+	inFlightDuplicate.ReceivedAt = now.Add(time.Second)
+	inFlightDuplicate.AvailableAt = inFlightDuplicate.ReceivedAt
+	if duplicateID := save(inFlightDuplicate); duplicateID != messageID {
+		t.Fatalf("in-flight duplicate ID = %q, want %q", duplicateID, messageID)
+	}
+	assertInboxRiverLink(t, database, messageID, firstRiverJobID, 1)
+
+	failedAt := now.Add(2 * time.Second)
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		return repository.FailQueue(database.ctx, persistence.QueueFailure{
+			Queue: persistence.QueueInbox, ID: messageID,
+			FailedAt: failedAt, ErrorCode: "provider_temporary",
+		})
+	}); err != nil {
+		t.Fatalf("FailQueue() error = %v", err)
+	}
+	if _, err := database.conn.Exec(database.ctx, `
+		UPDATE river_job SET state = 'discarded', finalized_at = $1 WHERE id = $2
+	`, failedAt, firstRiverJobID); err != nil {
+		t.Fatalf("finalize initial River job: %v", err)
+	}
+
+	redelivery := message
+	redelivery.ID = "inbox-redelivery-after-failure"
+	redelivery.ReceivedAt = now.Add(3 * time.Second)
+	redelivery.AvailableAt = redelivery.ReceivedAt
+	if redeliveryID := save(redelivery); redeliveryID != messageID {
+		t.Fatalf("failed redelivery ID = %q, want %q", redeliveryID, messageID)
+	}
+	var secondRiverJobID int64
+	var availableAt time.Time
+	var failed *time.Time
+	var lastError *string
+	if err := database.conn.QueryRow(database.ctx, `
+		SELECT river_job_id, available_at, failed_at, last_error_code
+		FROM inbox_messages WHERE id = $1
+	`, messageID).Scan(&secondRiverJobID, &availableAt, &failed, &lastError); err != nil {
+		t.Fatalf("load requeued inbox state: %v", err)
+	}
+	if secondRiverJobID == firstRiverJobID || failed != nil || lastError != nil ||
+		!availableAt.Equal(redelivery.AvailableAt) {
+		t.Fatalf(
+			"requeued inbox = (job %d, available %v, failed %v, error %v), want fresh active job at %v",
+			secondRiverJobID, availableAt, failed, lastError, redelivery.AvailableAt,
+		)
+	}
+	assertInboxRiverLink(t, database, messageID, secondRiverJobID, 2)
+
+	completedAt := now.Add(4 * time.Second)
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		return repository.CompleteQueue(database.ctx, persistence.QueueCompletion{
+			Queue: persistence.QueueInbox, ID: messageID, CompletedAt: completedAt,
+		})
+	}); err != nil {
+		t.Fatalf("CompleteQueue() error = %v", err)
+	}
+	completedDuplicate := message
+	completedDuplicate.ID = "inbox-redelivery-after-completion"
+	completedDuplicate.ReceivedAt = now.Add(5 * time.Second)
+	completedDuplicate.AvailableAt = completedDuplicate.ReceivedAt
+	if completedID := save(completedDuplicate); completedID != messageID {
+		t.Fatalf("completed duplicate ID = %q, want %q", completedID, messageID)
+	}
+	assertInboxRiverLink(t, database, messageID, secondRiverJobID, 2)
+	var completedMessage persistence.QueueMessage
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var loadErr error
+		completedMessage, loadErr = repository.QueueMessage(database.ctx, persistence.QueueInbox, messageID)
+		return loadErr
+	}); err != nil {
+		t.Fatalf("QueueMessage() completed inbox error = %v", err)
+	}
+	if !completedMessage.Completed || completedMessage.Failed {
+		t.Fatalf("completed duplicate state = %#v, want completed only", completedMessage)
+	}
+}
+
 // TestOperationalQueueRetentionPreservesRunnableJobs verifies cleanup cannot remove work River may still execute.
 func TestOperationalQueueRetentionPreservesRunnableJobs(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)
@@ -1095,5 +1211,32 @@ func assertTableCount(t *testing.T, database *testDatabase, table string, expect
 	}
 	if actual != expected {
 		t.Fatalf("%s count = %d, want %d", table, actual, expected)
+	}
+}
+
+// assertInboxRiverLink verifies one durable inbox link and the total number of River attempts.
+func assertInboxRiverLink(
+	t *testing.T,
+	database *testDatabase,
+	messageID string,
+	expectedJobID int64,
+	expectedJobs int,
+) {
+	t.Helper()
+	var linkedJobID int64
+	if err := database.conn.QueryRow(database.ctx,
+		`SELECT river_job_id FROM inbox_messages WHERE id = $1`, messageID).Scan(&linkedJobID); err != nil {
+		t.Fatalf("load linked inbox River job: %v", err)
+	}
+	if linkedJobID != expectedJobID {
+		t.Fatalf("linked River job = %d, want %d", linkedJobID, expectedJobID)
+	}
+	var jobs int
+	if err := database.conn.QueryRow(database.ctx,
+		`SELECT count(*) FROM river_job WHERE kind = 'iapstack_inbox'`).Scan(&jobs); err != nil {
+		t.Fatalf("count inbox River jobs: %v", err)
+	}
+	if jobs != expectedJobs {
+		t.Fatalf("inbox River jobs = %d, want %d", jobs, expectedJobs)
 	}
 }
