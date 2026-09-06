@@ -532,6 +532,9 @@ func (service *Service) persist(
 ) (Result, error) {
 	verificationResult := Result{VerifiedAt: providerResult.VerifiedAt, Customer: customer}
 	err := service.store.Transact(ctx, func(repository persistence.Transaction) error {
+		if err := repository.LockCustomer(ctx, command.ProjectID, customer.ID); err != nil {
+			return err
+		}
 		currentApplication, err := repository.Application(ctx, command.ProjectID, command.ApplicationID)
 		if err != nil {
 			return err
@@ -570,7 +573,6 @@ func (service *Service) persist(
 			}
 		}
 
-		candidates := make([]ProjectionCandidate, 0)
 		for _, preparedObservation := range prepared.observations {
 			observation := preparedObservation.write.Observation
 			catalogProduct := catalogByProviderID[observation.ProductID]
@@ -580,22 +582,19 @@ func (service *Service) persist(
 			if err := repository.SaveObservation(ctx, observationWrite); err != nil {
 				return err
 			}
-			for _, entitlement := range catalogProduct.Entitlements {
-				candidates = append(candidates, ProjectionCandidate{
-					Projection: persistence.EntitlementProjection{
-						ProjectID:           command.ProjectID,
-						CustomerID:          customer.ID,
-						EntitlementID:       entitlement.ID,
-						SourceObservationID: observation.ID,
-						SourceProductID:     catalogProduct.Product.ID,
-						Access:              observation.Access,
-						AccessReason:        observation.AccessReason,
-						EffectivePeriod:     observation.EffectivePeriod,
-					},
-					SourceApplicationID: observation.ApplicationID,
-					ObservedAt:          observation.ObservedAt,
-				})
-			}
+		}
+
+		sources, err := repository.CustomerEntitlementSources(ctx, command.ProjectID, customer.ID)
+		if err != nil {
+			return err
+		}
+		candidates := make([]ProjectionCandidate, 0, len(sources))
+		for _, source := range sources {
+			candidates = append(candidates, ProjectionCandidate{
+				Projection:          source.Projection,
+				SourceApplicationID: source.SourceApplicationID,
+				ObservedAt:          source.ObservedAt,
+			})
 		}
 
 		currentEntitlements, err := repository.CustomerEntitlements(ctx, command.ProjectID, customer.ID)

@@ -28,6 +28,43 @@ type entitlementRow struct {
 	version             int64
 }
 
+// entitlementSourceRow contains one latest source observation mapped to an entitlement.
+type entitlementSourceRow struct {
+	projectID           string
+	customerID          string
+	entitlementID       string
+	sourceObservationID string
+	sourceApplicationID string
+	sourceProductID     string
+	access              string
+	accessReason        string
+	effectiveStartsAt   pgtype.Timestamptz
+	effectiveEndsAt     pgtype.Timestamptz
+	observedAt          time.Time
+}
+
+// LockCustomer establishes a write barrier so concurrent serializable projections retry with a fresh snapshot.
+func (repository *transaction) LockCustomer(
+	ctx context.Context,
+	projectID core.ProjectID,
+	customerID core.CustomerID,
+) error {
+	if err := errors.Join(projectID.Validate(), customerID.Validate()); err != nil {
+		return err
+	}
+	var lockedID string
+	err := repository.tx.QueryRow(ctx, `
+		UPDATE customers
+		SET updated_at = updated_at
+		WHERE project_id = $1 AND id = $2
+		RETURNING id
+	`, projectID, customerID).Scan(&lockedID)
+	if err != nil {
+		return classifyError("lock customer entitlement projection", err)
+	}
+	return nil
+}
+
 // PutEntitlement creates or replaces one current projection with optimistic versioning.
 func (repository *transaction) PutEntitlement(
 	ctx context.Context,
@@ -120,7 +157,7 @@ func (repository *transaction) PutEntitlement(
 		if errors.Is(err, pgx.ErrNoRows) {
 			return persistence.EntitlementWriteResult{}, fmt.Errorf(
 				"replace entitlement projection: %w",
-				persistence.ErrConflict,
+				errRetryableTransaction,
 			)
 		}
 		return persistence.EntitlementWriteResult{}, classifyError("replace entitlement projection", err)
@@ -132,6 +169,59 @@ func (repository *transaction) PutEntitlement(
 		projection.EntitlementID,
 	)
 	return persistence.EntitlementWriteResult{Entitlement: entitlement, Changed: true}, err
+}
+
+// CustomerEntitlementSources returns the latest observation for every application-product source mapped to access.
+func (repository *transaction) CustomerEntitlementSources(
+	ctx context.Context,
+	projectID core.ProjectID,
+	customerID core.CustomerID,
+) ([]persistence.EntitlementSource, error) {
+	if err := errors.Join(projectID.Validate(), customerID.Validate()); err != nil {
+		return nil, err
+	}
+
+	rows, err := repository.tx.Query(ctx, `
+		SELECT DISTINCT ON (pe.entitlement_id, po.application_id, po.product_id)
+			po.project_id,
+			po.customer_id,
+			pe.entitlement_id,
+			po.id,
+			po.application_id,
+			po.product_id,
+			po.access_status,
+			po.access_reason,
+			po.effective_starts_at,
+			po.effective_ends_at,
+			po.observed_at
+		FROM purchase_observations AS po
+		JOIN product_entitlements AS pe
+			ON pe.project_id = po.project_id AND pe.product_id = po.product_id
+		WHERE po.project_id = $1 AND po.customer_id = $2
+		ORDER BY pe.entitlement_id, po.application_id, po.product_id,
+			po.observed_at DESC, po.id ASC
+	`, projectID, customerID)
+	if err != nil {
+		return nil, classifyError("load customer entitlement sources", err)
+	}
+	defer rows.Close()
+
+	sources := make([]persistence.EntitlementSource, 0)
+	for rows.Next() {
+		row, err := scanEntitlementSourceRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		source, err := row.entitlementSource()
+		if err != nil {
+			return nil, err
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, classifyError("iterate customer entitlement sources", err)
+	}
+	return sources, nil
 }
 
 // CustomerEntitlements returns the current project-scoped entitlement snapshot.
@@ -263,6 +353,27 @@ func scanEntitlementRow(rows pgx.Rows) (entitlementRow, error) {
 	return row, nil
 }
 
+// scanEntitlementSourceRow scans one latest source projection from a PostgreSQL result set.
+func scanEntitlementSourceRow(rows pgx.Rows) (entitlementSourceRow, error) {
+	row := entitlementSourceRow{}
+	if err := rows.Scan(
+		&row.projectID,
+		&row.customerID,
+		&row.entitlementID,
+		&row.sourceObservationID,
+		&row.sourceApplicationID,
+		&row.sourceProductID,
+		&row.access,
+		&row.accessReason,
+		&row.effectiveStartsAt,
+		&row.effectiveEndsAt,
+		&row.observedAt,
+	); err != nil {
+		return entitlementSourceRow{}, classifyError("scan entitlement source", err)
+	}
+	return row, nil
+}
+
 // entitlement converts one database row into a validated persistence projection.
 func (row entitlementRow) entitlement() (persistence.CustomerEntitlement, error) {
 	projection := persistence.EntitlementProjection{
@@ -294,6 +405,31 @@ func (row entitlementRow) entitlement() (persistence.CustomerEntitlement, error)
 		Key:                 row.entitlementKey,
 		Version:             row.version,
 	}, nil
+}
+
+// entitlementSource converts one source row into a validated persistence candidate.
+func (row entitlementSourceRow) entitlementSource() (persistence.EntitlementSource, error) {
+	source := persistence.EntitlementSource{
+		Projection: persistence.EntitlementProjection{
+			ProjectID:           core.ProjectID(row.projectID),
+			CustomerID:          core.CustomerID(row.customerID),
+			EntitlementID:       core.EntitlementID(row.entitlementID),
+			SourceObservationID: core.ObservationID(row.sourceObservationID),
+			SourceProductID:     core.ProductID(row.sourceProductID),
+			Access:              core.AccessStatus(row.access),
+			AccessReason:        core.AccessReason(row.accessReason),
+			EffectivePeriod: core.EffectivePeriod{
+				StartsAt: timestampValue(row.effectiveStartsAt),
+				EndsAt:   timestampPointer(row.effectiveEndsAt),
+			},
+		},
+		SourceApplicationID: core.ApplicationID(row.sourceApplicationID),
+		ObservedAt:          row.observedAt,
+	}
+	if err := source.Validate(); err != nil {
+		return persistence.EntitlementSource{}, fmt.Errorf("validate stored entitlement source: %w", err)
+	}
+	return source, nil
 }
 
 // projectionsEqual reports whether two logical projections have identical persisted fields.
