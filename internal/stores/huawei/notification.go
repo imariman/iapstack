@@ -71,6 +71,11 @@ type subscriptionStatusUpdate struct {
 	ProductID        string `json:"productId"`
 }
 
+// RequiresReferenceAuthentication reports whether this unsigned callback must prove a previously verified token.
+func (envelope NotificationEnvelope) RequiresReferenceAuthentication() bool {
+	return envelope.EventType == orderEventType
+}
+
 // ValidateNotification validates a native Huawei IAP V2 callback before durable acknowledgement.
 func (adapter *Adapter) ValidateNotification(
 	ctx context.Context,

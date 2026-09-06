@@ -32,6 +32,8 @@ import (
 const (
 	// inboxProtectionPurpose authenticates protected provider notification bytes.
 	inboxProtectionPurpose = "inbox_notification"
+	// providerReferencePurpose scopes protected identifiers exactly like verification persistence.
+	providerReferencePurpose = "provider_reference"
 	// reconciliationProtectionPurpose authenticates protected periodic verification requests.
 	reconciliationProtectionPurpose = "reconciliation_request"
 	// defaultReconciliationDelay schedules a conservative daily authoritative refresh.
@@ -619,7 +621,7 @@ func (api *API) customerEntitlements(writer http.ResponseWriter, request *http.R
 	})
 }
 
-// huaweiNotification verifies local signature and scope before durable protected inbox insertion.
+// huaweiNotification verifies a provider signature or known ORDER reference before durable inbox insertion.
 func (api *API) huaweiNotification(writer http.ResponseWriter, request *http.Request) {
 	payload, ok := api.readBody(writer, request)
 	if !ok {
@@ -640,6 +642,27 @@ func (api *API) huaweiNotification(writer http.ResponseWriter, request *http.Req
 		api.writeError(writer, request, err)
 		return
 	}
+	var orderLookup *persistence.ProviderReferenceLookup
+	if notification.RequiresReferenceAuthentication() {
+		token := []byte(notification.PurchaseToken)
+		protectedReference, protectErr := api.protect(
+			request.Context(),
+			application,
+			providerReferencePurpose+":"+string(core.ReferenceQuery)+":purchase_token",
+			token,
+		)
+		zero(token)
+		if protectErr != nil {
+			api.writeError(writer, request, protectErr)
+			return
+		}
+		defer zero(protectedReference.Ciphertext)
+		lookup := persistence.ProviderReferenceLookup{
+			ProjectID: application.ProjectID, ApplicationID: application.ID,
+			Role: core.ReferenceQuery, Kind: "purchase_token", Fingerprint: protectedReference.Fingerprint,
+		}
+		orderLookup = &lookup
+	}
 	validatedPayload, err := json.Marshal(notification)
 	if err != nil {
 		api.writeError(writer, request, err)
@@ -654,6 +677,31 @@ func (api *API) huaweiNotification(writer http.ResponseWriter, request *http.Req
 	now := api.clock().UTC()
 	id := deterministicID("inbox", protected.Fingerprint)
 	err = api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
+		if orderLookup != nil {
+			purchase, lookupErr := repository.PurchaseContextByReference(request.Context(), *orderLookup)
+			if errors.Is(lookupErr, persistence.ErrNotFound) {
+				return stores.NewFailure(
+					core.ProviderHuaweiAppGallery,
+					"notification_authentication",
+					stores.FailureInvalidEvidence,
+					0,
+					nil,
+				)
+			}
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if purchase.ProviderProductID != notification.ProviderProductID ||
+				purchase.ProductKind != notification.ProductKind {
+				return stores.NewFailure(
+					core.ProviderHuaweiAppGallery,
+					"notification_authentication",
+					stores.FailureInvalidEvidence,
+					0,
+					nil,
+				)
+			}
+		}
 		_, saveErr := repository.SaveInboxMessage(request.Context(), persistence.InboxMessage{
 			ID: id, ProjectID: application.ProjectID, ApplicationID: application.ID,
 			Provider: application.Store.Provider, Kind: "huawei_iap_notification_v2",

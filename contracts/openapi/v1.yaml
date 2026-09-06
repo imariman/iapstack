@@ -644,6 +644,11 @@ paths:
       tags: [Huawei notifications]
       operationId: acceptHuaweiNotification
       summary: Validate and durably accept one Huawei lifecycle notification
+      description: >-
+        Verifies signed subscription status. Before acknowledging an unsigned
+        ORDER callback, atomically requires its protected purchase token to
+        resolve to a previously verified matching application product and
+        inserts the protected inbox message.
       parameters:
         - $ref: '#/components/parameters/ProjectId'
         - $ref: '#/components/parameters/ApplicationId'

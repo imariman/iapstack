@@ -114,7 +114,7 @@ type PurchaseRepository interface {
 	SaveEvidence(context.Context, EvidenceWrite) (int64, error)
 	// SaveArtifact stores one encrypted provider artifact idempotently.
 	SaveArtifact(context.Context, ArtifactWrite) error
-	// SaveObservation stores one immutable observation and its protected references idempotently.
+	// SaveObservation stores one immutable logical observation, its latest sighting, and protected references idempotently.
 	SaveObservation(context.Context, ObservationWrite) error
 }
 
@@ -126,8 +126,12 @@ type ProviderReferenceRepository interface {
 
 // EntitlementRepository stores and reads current customer entitlement projections.
 type EntitlementRepository interface {
+	// LockCustomer serializes entitlement projection work for one customer.
+	LockCustomer(context.Context, core.ProjectID, core.CustomerID) error
 	// PutEntitlement creates or replaces one current projection with optimistic versioning.
 	PutEntitlement(context.Context, EntitlementProjection) (EntitlementWriteResult, error)
+	// CustomerEntitlementSources returns the latest observed projection for every customer access source.
+	CustomerEntitlementSources(context.Context, core.ProjectID, core.CustomerID) ([]EntitlementSource, error)
 	// CustomerEntitlements returns the current project-scoped entitlement snapshot.
 	CustomerEntitlements(context.Context, core.ProjectID, core.CustomerID) ([]CustomerEntitlement, error)
 }
@@ -250,6 +254,13 @@ type EntitlementProjection struct {
 	Access              core.AccessStatus
 	AccessReason        core.AccessReason
 	EffectivePeriod     core.EffectivePeriod
+}
+
+// EntitlementSource is the latest observed projection for one application-product access source.
+type EntitlementSource struct {
+	Projection          EntitlementProjection
+	SourceApplicationID core.ApplicationID
+	ObservedAt          time.Time
 }
 
 // CustomerEntitlement is a versioned current projection returned to application use cases.
@@ -690,6 +701,15 @@ func (projection EntitlementProjection) Validate() error {
 		projection.Access.Validate(),
 		projection.AccessReason.Validate(),
 		projection.EffectivePeriod.Validate(),
+	)
+}
+
+// Validate checks a source projection and its observation identity and time.
+func (source EntitlementSource) Validate() error {
+	return errors.Join(
+		source.Projection.Validate(),
+		source.SourceApplicationID.Validate(),
+		validateTime("entitlement source observation time", source.ObservedAt),
 	)
 }
 

@@ -170,8 +170,8 @@ func (source processingCredentialSource) Credential(
 	return source.credential, nil
 }
 
-// TestHuaweiReconciliationCommandRetriesUnknownPurchaseAndRejectsMismatch verifies safe classification.
-func TestHuaweiReconciliationCommandRetriesUnknownPurchaseAndRejectsMismatch(t *testing.T) {
+// TestHuaweiReconciliationCommandClassifiesLookupFailures verifies unknown evidence is terminal but storage outages retry.
+func TestHuaweiReconciliationCommandClassifiesLookupFailures(t *testing.T) {
 	t.Parallel()
 
 	message := persistence.QueueMessage{ProjectID: "project-1", ApplicationID: "application-1"}
@@ -183,8 +183,14 @@ func TestHuaweiReconciliationCommandRetriesUnknownPurchaseAndRejectsMismatch(t *
 	service := &Service{store: &googleLookupStore{err: persistence.ErrNotFound}, protection: &processingProtection{}}
 	_, err := service.huaweiReconciliationCommand(context.Background(), message, notification, payload)
 	var failure *stores.Failure
-	if !errors.As(err, &failure) || !failure.Retryable() {
-		t.Fatalf("unknown purchase error = %#v", err)
+	if !errors.As(err, &failure) || failure.Kind != stores.FailureInvalidEvidence || failure.Retryable() {
+		t.Fatalf("unknown purchase error = %#v, want permanent invalid evidence", err)
+	}
+
+	service = &Service{store: &googleLookupStore{err: persistence.ErrUnavailable}, protection: &processingProtection{}}
+	_, err = service.huaweiReconciliationCommand(context.Background(), message, notification, payload)
+	if !errors.As(err, &failure) || failure.Kind != stores.FailureTemporary || !failure.Retryable() {
+		t.Fatalf("unavailable storage error = %#v, want retryable temporary failure", err)
 	}
 
 	store := &googleLookupStore{purchase: persistence.PurchaseReferenceContext{

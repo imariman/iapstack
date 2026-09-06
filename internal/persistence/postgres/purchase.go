@@ -180,7 +180,7 @@ func (repository *transaction) SaveArtifact(ctx context.Context, write persisten
 	return nil
 }
 
-// SaveObservation stores one immutable observation and its protected references idempotently.
+// SaveObservation stores one immutable logical observation, its latest sighting, and protected references idempotently.
 func (repository *transaction) SaveObservation(
 	ctx context.Context,
 	write persistence.ObservationWrite,
@@ -204,6 +204,9 @@ func (repository *transaction) SaveObservation(
 		if !matches {
 			return fmt.Errorf("save purchase observation: %w", persistence.ErrConflict)
 		}
+		if err := repository.refreshObservationTime(ctx, write); err != nil {
+			return err
+		}
 		return repository.verifyObservationReferences(ctx, write)
 	}
 
@@ -220,6 +223,25 @@ func (repository *transaction) SaveObservation(
 		if err != nil {
 			return classifyError("link observation reference", err)
 		}
+	}
+	return nil
+}
+
+// refreshObservationTime records the freshest authoritative sighting of an identical logical snapshot.
+func (repository *transaction) refreshObservationTime(
+	ctx context.Context,
+	write persistence.ObservationWrite,
+) error {
+	command, err := repository.tx.Exec(ctx, `
+		UPDATE purchase_observations
+		SET observed_at = GREATEST(observed_at, $2)
+		WHERE id = $1
+	`, write.Observation.ID, normalizeTime(write.Observation.ObservedAt))
+	if err != nil {
+		return classifyError("refresh purchase observation time", err)
+	}
+	if command.RowsAffected() != 1 {
+		return fmt.Errorf("refresh purchase observation time: %w", persistence.ErrConflict)
 	}
 	return nil
 }
