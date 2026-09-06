@@ -1,0 +1,2 @@
+# Default reviewer for repository changes. Branch protection determines whether review is required.
+* @imariman
