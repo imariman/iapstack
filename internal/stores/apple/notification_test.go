@@ -150,6 +150,9 @@ func TestValidateNotificationAcceptsAuditOnlySignal(t *testing.T) {
 	payload := notificationRequestFixture(t, fixture, notificationPayload{
 		NotificationType: "TEST", NotificationUUID: fixtureNotificationUUID,
 		Version: notificationVersion, SignedDate: now.UnixMilli(),
+		Data: &notificationData{
+			BundleID: fixtureBundleID, Environment: "Sandbox",
+		},
 	})
 	notification, err := adapter.ValidateNotification(
 		context.Background(), appleApplication(core.EnvironmentSandbox), payload,
@@ -160,6 +163,33 @@ func TestValidateNotificationAcceptsAuditOnlySignal(t *testing.T) {
 	evidence, process, err := notification.VerificationEvidence()
 	if err != nil || process || evidence != nil {
 		t.Fatalf("VerificationEvidence() = (%s, %t, %v)", evidence, process, err)
+	}
+}
+
+// TestValidateNotificationRejectsUnscopedSignal verifies signed payloads still belong to the configured application.
+func TestValidateNotificationRejectsUnscopedSignal(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 26, 15, 0, 0, 0, time.UTC)
+	fixture := newSigningFixture(t, now)
+	adapter, err := New(
+		fakeCredentialSource{credential: credentialFixture(t, fixture, core.EnvironmentSandbox)},
+		time.Second,
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	adapter.clock = func() time.Time { return now }
+	payload := notificationRequestFixture(t, fixture, notificationPayload{
+		NotificationType: "TEST", NotificationUUID: fixtureNotificationUUID,
+		Version: notificationVersion, SignedDate: now.UnixMilli(),
+	})
+	if _, err := adapter.ValidateNotification(
+		context.Background(),
+		appleApplication(core.EnvironmentSandbox),
+		payload,
+	); !errors.Is(err, ErrNotificationInvalid) {
+		t.Fatalf("ValidateNotification() error = %v, want ErrNotificationInvalid", err)
 	}
 }
 
