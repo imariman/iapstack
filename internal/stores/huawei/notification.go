@@ -68,6 +68,7 @@ type subscriptionStatusUpdate struct {
 	NotificationType int    `json:"notificationType"`
 	SubscriptionID   string `json:"subscriptionId"`
 	PurchaseToken    string `json:"purchaseToken"`
+	ProductID        string `json:"productId"`
 }
 
 // RequiresReferenceAuthentication reports whether this unsigned callback must prove a previously verified token.
@@ -138,12 +139,12 @@ func (adapter *Adapter) ValidateNotification(
 			return NotificationEnvelope{}, invalid("notification", err)
 		}
 		if update.NotificationType <= 0 || strings.TrimSpace(update.SubscriptionID) == "" ||
-			strings.TrimSpace(update.PurchaseToken) == "" {
+			strings.TrimSpace(update.PurchaseToken) == "" || strings.TrimSpace(update.ProductID) == "" {
 			return NotificationEnvelope{}, invalid("notification", errors.New("invalid Huawei subscription status update"))
 		}
 		envelope.NotificationType = update.NotificationType
 		envelope.PurchaseToken = update.PurchaseToken
-		envelope.ProviderProductID = core.ProviderProductID(update.SubscriptionID)
+		envelope.ProviderProductID = core.ProviderProductID(update.ProductID)
 		envelope.ProductKind = core.ProductKindSubscription
 	default:
 		return NotificationEnvelope{}, invalid("notification", errors.New("unsupported Huawei notification event type"))

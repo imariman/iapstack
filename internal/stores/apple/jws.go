@@ -18,6 +18,8 @@ import (
 var (
 	// appleWWDRIntermediateOID identifies Apple Worldwide Developer Relations intermediate certificates.
 	appleWWDRIntermediateOID = []int{1, 2, 840, 113635, 100, 6, 2, 1}
+	// appleAppStoreLeafOID identifies Apple certificates authorized to sign App Store server data.
+	appleAppStoreLeafOID = []int{1, 2, 840, 113635, 100, 6, 11, 1}
 )
 
 // jwsHeader contains the protected Apple certificate chain and signing algorithm.
@@ -92,8 +94,12 @@ func verifyAppleJWS(signed string, roots trustedRoots, destination any) error {
 	if !hasExtension(certificates[1], appleWWDRIntermediateOID) {
 		return errors.New("apple JWS intermediate certificate is not a WWDR certificate")
 	}
+	if !hasExtension(certificates[0], appleAppStoreLeafOID) {
+		return errors.New("apple JWS leaf certificate is not an App Store certificate")
+	}
 	intermediates := x509.NewCertPool()
 	intermediates.AddCert(certificates[1])
+	// Apple authorizes App Store signing through its private leaf extension rather than a standard EKU.
 	if _, err := certificates[0].Verify(x509.VerifyOptions{
 		Roots:         roots.pool,
 		Intermediates: intermediates,

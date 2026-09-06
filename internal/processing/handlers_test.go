@@ -2,8 +2,14 @@ package processing
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"testing"
 	"time"
@@ -49,7 +55,12 @@ type reconciliationTransaction struct {
 	store *reconciliationStore
 }
 
-// TestHuaweiReconciliationCommandResolvesProtectedPurchaseScope verifies native V2 token binding.
+// processingCredentialSource returns one opaque provider credential for integration fixtures.
+type processingCredentialSource struct {
+	credential stores.Credential
+}
+
+// TestHuaweiReconciliationCommandResolvesProtectedPurchaseScope verifies native V2 catalog and token binding.
 func TestHuaweiReconciliationCommandResolvesProtectedPurchaseScope(t *testing.T) {
 	t.Parallel()
 
@@ -63,12 +74,7 @@ func TestHuaweiReconciliationCommandResolvesProtectedPurchaseScope(t *testing.T)
 		Queue: persistence.QueueInbox, ProjectID: "project-1", ApplicationID: "application-1",
 		Provider: core.ProviderHuaweiAppGallery,
 	}
-	notification := huawei.NotificationEnvelope{
-		Version: "v2", EventType: "SUBSCRIPTION", NotifyTime: time.Now().UTC(),
-		ApplicationID: "provider-app-1", NotificationType: 2,
-		PurchaseToken: "purchase-token-1", ProviderProductID: "premium_monthly",
-		ProductKind: core.ProductKindSubscription,
-	}
+	notification := validatedHuaweiSubscriptionNotification(t)
 	payload, err := json.Marshal(notification)
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
@@ -86,6 +92,82 @@ func TestHuaweiReconciliationCommandResolvesProtectedPurchaseScope(t *testing.T)
 	if protector.scope.Purpose != "provider_reference:query:purchase_token" || store.lookup.Fingerprint == ([32]byte{}) {
 		t.Fatalf("lookup protection = (%#v, %#v)", protector.scope, store.lookup)
 	}
+}
+
+// validatedHuaweiSubscriptionNotification parses a signed V2 status whose instance ID differs from its catalog SKU.
+func validatedHuaweiSubscriptionNotification(t *testing.T) huawei.NotificationEnvelope {
+	t.Helper()
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	encodedKey, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		t.Fatalf("MarshalPKIXPublicKey() error = %v", err)
+	}
+	credentialPayload, err := json.Marshal(map[string]string{
+		"client_id": "client", "client_secret": "secret",
+		"public_key":       string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: encodedKey})),
+		"token_url":        "https://provider.example/token",
+		"order_url":        "https://provider.example/order",
+		"subscription_url": "https://provider.example/subscription",
+	})
+	if err != nil {
+		t.Fatalf("Marshal() credential error = %v", err)
+	}
+	credential, err := stores.NewCredential(
+		huawei.CredentialKind,
+		huawei.CredentialContentType,
+		huawei.CredentialSchemaVersion,
+		credentialPayload,
+	)
+	if err != nil {
+		t.Fatalf("NewCredential() error = %v", err)
+	}
+	adapter, err := huawei.New(processingCredentialSource{credential: credential}, time.Second, false)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	status := `{"notificationType":2,"subscriptionId":"1665732615152.08082DFB.3006","purchaseToken":"purchase-token-1","productId":"premium_monthly"}`
+	digest := sha256.Sum256([]byte(status))
+	signature, err := rsa.SignPSS(rand.Reader, privateKey, crypto.SHA256, digest[:], &rsa.PSSOptions{
+		SaltLength: rsa.PSSSaltLengthEqualsHash,
+		Hash:       crypto.SHA256,
+	})
+	if err != nil {
+		t.Fatalf("SignPSS() error = %v", err)
+	}
+	nativePayload, err := json.Marshal(map[string]any{
+		"version": "v2", "eventType": "SUBSCRIPTION", "notifyTime": time.Now().UTC().UnixMilli(),
+		"applicationId": "provider-app-1",
+		"subNotification": map[string]any{
+			"version": "v2", "statusUpdateNotification": status,
+			"notificationSignature": base64.StdEncoding.EncodeToString(signature),
+			"signatureAlgorithm":    "SHA256withRSA/PSS",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() native notification error = %v", err)
+	}
+	notification, err := adapter.ValidateNotification(context.Background(), core.Application{
+		ID: "application-1", ProjectID: "project-1", Store: core.StoreApplication{
+			Provider: core.ProviderHuaweiAppGallery, Environment: core.EnvironmentSandbox, ID: "provider-app-1",
+		},
+	}, nativePayload)
+	if err != nil {
+		t.Fatalf("ValidateNotification() error = %v", err)
+	}
+	return notification
+}
+
+// Credential returns the configured opaque provider credential.
+func (source processingCredentialSource) Credential(
+	_ context.Context,
+	_ core.Application,
+	_ stores.CredentialKind,
+) (stores.Credential, error) {
+	return source.credential, nil
 }
 
 // TestHuaweiReconciliationCommandClassifiesLookupFailures verifies unknown evidence is terminal but storage outages retry.

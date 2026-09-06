@@ -97,6 +97,84 @@ func TestAdapterVerifiesAuthoritativeNonConsumable(t *testing.T) {
 	}
 }
 
+// TestObservationIdentityIgnoresAcknowledgementState verifies provider completion does not mint a new logical snapshot.
+func TestObservationIdentityIgnoresAcknowledgementState(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentProduction)
+	t.Run("non-consumable", func(t *testing.T) {
+		purchase := productPurchase{
+			ProductLineItems: []productLineItem{{
+				ProductID: fixtureProductID,
+				ProductOfferDetails: productOfferDetails{
+					Quantity: 1, RefundableQuantity: 1,
+					ConsumptionState: "CONSUMPTION_STATE_YET_TO_BE_CONSUMED", PurchaseOptionID: "buy",
+				},
+			}},
+			PurchaseStateContext:        purchaseStateContext{PurchaseState: productStatePurchased},
+			OrderID:                     "GPA.1234-5678-9012-34567",
+			ObfuscatedExternalAccountID: fixtureAccountID,
+			PurchaseCompletionTime:      fixture.now.Add(-time.Hour),
+			AcknowledgementState:        acknowledgementStatePending,
+		}
+		pending, err := fixture.adapter.productObservations(
+			verificationRequest(t, core.EnvironmentProduction, core.ProductKindNonConsumable).Application,
+			fixturePurchaseToken,
+			purchase,
+		)
+		if err != nil {
+			t.Fatalf("productObservations() pending error = %v", err)
+		}
+		purchase.AcknowledgementState = acknowledgementStateAcknowledged
+		acknowledged, err := fixture.adapter.productObservations(
+			verificationRequest(t, core.EnvironmentProduction, core.ProductKindNonConsumable).Application,
+			fixturePurchaseToken,
+			purchase,
+		)
+		if err != nil {
+			t.Fatalf("productObservations() acknowledged error = %v", err)
+		}
+		if pending[0].ID != acknowledged[0].ID {
+			t.Fatalf("acknowledgement changed product observation ID from %q to %q", pending[0].ID, acknowledged[0].ID)
+		}
+	})
+
+	t.Run("subscription", func(t *testing.T) {
+		purchase := subscriptionPurchase{
+			LineItems: []subscriptionLineItem{{
+				ProductID: fixtureProductID, ExpiryTime: fixture.now.Add(24 * time.Hour),
+				LatestSuccessfulOrderID: "GPA.2234-5678-9012-34567",
+				AutoRenewingPlan:        &autoRenewingPlan{AutoRenewEnabled: true},
+			}},
+			StartTime: fixture.now.Add(-24 * time.Hour), SubscriptionState: subscriptionStateActive,
+			LatestOrderID: "GPA.2234-5678-9012-34567", AcknowledgementState: acknowledgementStatePending,
+			ExternalAccountIdentifiers: externalAccountIdentifiers{
+				ObfuscatedExternalAccountID: fixtureAccountID,
+			},
+		}
+		pending, err := fixture.adapter.subscriptionObservations(
+			verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription).Application,
+			fixturePurchaseToken,
+			purchase,
+		)
+		if err != nil {
+			t.Fatalf("subscriptionObservations() pending error = %v", err)
+		}
+		purchase.AcknowledgementState = acknowledgementStateAcknowledged
+		acknowledged, err := fixture.adapter.subscriptionObservations(
+			verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription).Application,
+			fixturePurchaseToken,
+			purchase,
+		)
+		if err != nil {
+			t.Fatalf("subscriptionObservations() acknowledged error = %v", err)
+		}
+		if pending[0].ID != acknowledged[0].ID {
+			t.Fatalf("acknowledgement changed subscription observation ID from %q to %q", pending[0].ID, acknowledged[0].ID)
+		}
+	})
+}
+
 // TestAdapterPostsProductAndSubscriptionAcknowledgements verifies both documented Android Publisher paths and request shape.
 func TestAdapterPostsProductAndSubscriptionAcknowledgements(t *testing.T) {
 	t.Parallel()
