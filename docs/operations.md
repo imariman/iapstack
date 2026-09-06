@@ -266,6 +266,14 @@ Validate table counts, application configuration, entitlement snapshots, and que
 3. Roll API processes, then workers. Confirm readiness and queue depth metrics.
 4. For an application rollback, deploy the recorded image digest. For a schema rollback, stop API and workers first, run the migration tool to the explicitly tested prior version, then restore the prior image.
 
+Application migrations do not upgrade the PostgreSQL server itself. PostgreSQL 18
+stores its versioned cluster beneath `/var/lib/postgresql`, so the Compose definitions
+mount the named volume at that parent directory. A PostgreSQL 17 volume cannot be
+attached to the PostgreSQL 18 service and upgraded in place. Before changing an
+existing installation, stop application writes and perform a tested logical
+dump/restore or `pg_upgrade` procedure that retains the PostgreSQL 17 volume for
+rollback. Fresh installations initialize the PostgreSQL 18 layout automatically.
+
 Never remove an encryption key until all rows written with that key ID have been re-encrypted or expired.
 
 ## Queue incident response
@@ -287,7 +295,7 @@ Run the same clean-volume release gate required by GitHub CI:
 ./deploy/e2e/run.sh
 ```
 
-The harness creates an isolated Compose project and temporary TLS certificate, then removes its containers and volume on exit. It exercises the production `migrate`, `api`, and `worker` modes with PostgreSQL 17 and a separate TLS fixture service.
+The harness creates an isolated Compose project and temporary TLS certificate, then removes its containers and volume on exit. It exercises the production `migrate`, `api`, and `worker` modes with PostgreSQL 18 and a separate TLS fixture service.
 
 The gate verifies:
 

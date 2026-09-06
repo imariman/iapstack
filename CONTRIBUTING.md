@@ -19,7 +19,7 @@ secret-free summaries required by the release runbook.
 
 ## Development setup
 
-Use the Go toolchain declared in `go.mod`, PostgreSQL 17, and the protection settings listed
+Use the Go toolchain declared in `go.mod`, PostgreSQL 18, and the protection settings listed
 in the [operations guide](docs/operations.md). The repository README contains a
 [Compose quick start](README.md#quick-start).
 
