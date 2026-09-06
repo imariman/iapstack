@@ -7,7 +7,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/iapstack-e2e-fixture ./cmd/iapstack-e2e-fixture
 
-FROM alpine:3.22
+FROM alpine:3.24
 
 RUN addgroup -S -g 65532 iapstack \
     && adduser -S -D -H -u 65532 -G iapstack iapstack
