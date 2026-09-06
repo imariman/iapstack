@@ -182,14 +182,11 @@ void main() {
             <HuaweiOwnedPurchasesPage>[
               HuaweiOwnedPurchasesPage(
                 purchases: <HuaweiSignedPurchase>[
-                  _signedPurchase('legacy_product',
-                      customerId: 'customer-1'),
+                  _signedPurchase('legacy_product', customerId: 'customer-1'),
                   _signedPurchase('premium_lifetime',
                       customerId: 'another-customer'),
-                  const HuaweiSignedPurchase(
-                      purchaseData: '', signature: ''),
-                  _signedPurchase('premium_lifetime',
-                      customerId: 'customer-1'),
+                  const HuaweiSignedPurchase(purchaseData: '', signature: ''),
+                  _signedPurchase('premium_lifetime', customerId: 'customer-1'),
                 ],
               ),
             ],
@@ -222,8 +219,7 @@ void main() {
       final submission =
           (submittedPurchases.single as Map).cast<String, Object?>();
       expect(submission['claimed_products'], <String>['premium_lifetime']);
-      expect(
-          (submission['evidence']! as Map)['purchase_data'],
+      expect((submission['evidence']! as Map)['purchase_data'],
           _purchaseData('premium_lifetime', customerId: 'customer-1'));
       expect(result.results, hasLength(1));
     });
