@@ -168,6 +168,7 @@ Configuration is supplied through environment variables:
 | --- | --- | --- |
 | `IAPSTACK_HTTP_ADDRESS` | `:$PORT` or `:8080` | API listen address in `host:port` form; takes precedence over a platform-provided `PORT` |
 | `IAPSTACK_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline |
+| `IAPSTACK_READINESS_TIMEOUT` | `2s` | Deadline for one dependency readiness probe |
 | `IAPSTACK_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `IAPSTACK_DATABASE_URL` | none | PostgreSQL connection string required by database-backed modes |
 | `IAPSTACK_AUTO_MIGRATE` | `false` | Apply migrations at compact `server` startup; use only for one-instance disposable environments that cannot run a pre-deploy command |
@@ -180,10 +181,15 @@ Configuration is supplied through environment variables:
 | `IAPSTACK_PROTECTION_FINGERPRINT_KEY` | none | Base64-encoded or 64-character hexadecimal 32-byte stable fingerprint root key |
 | `IAPSTACK_WORKER_ID` | automatic | Optional River client identity; leave empty unless the deployment guarantees uniqueness |
 | `IAPSTACK_WORKER_HTTP_ADDRESS` | `:8081` | Worker health, readiness, and metrics listen address |
+| `IAPSTACK_WORKER_POLL_INTERVAL` | `1s` | Interval between idle durable-queue polls |
+| `IAPSTACK_WORKER_JOB_TIMEOUT` | `30s` | Deadline for one durable job attempt |
 | `IAPSTACK_WORKER_CONCURRENCY` | `4` | Maximum concurrent River jobs per queue and worker process |
 | `IAPSTACK_WORKER_MAX_ATTEMPTS` | `12` | Attempts before River discards a retryable job |
 | `IAPSTACK_QUEUE_RETENTION` | `720h` | Retention period for terminal River jobs and durable queue audit records |
+| `IAPSTACK_HTTP_BODY_LIMIT` | `1048576` | Maximum request body size in bytes for JSON and provider notifications |
+| `IAPSTACK_PROVIDER_TIMEOUT` | `15s` | Deadline for one outbound store-provider request |
 | `IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS` | `false` | Explicitly permit Huawei provider endpoints on private, loopback, link-local, CGNAT, or benchmark addresses |
+| `IAPSTACK_WEBHOOK_TIMEOUT` | `10s` | Deadline for one outbound application webhook request |
 | `IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS` | `false` | Explicitly permit webhook delivery to private, loopback, link-local, CGNAT, or benchmark addresses |
 | `IAPSTACK_ENVIRONMENT` | `development` | Bounded deployment label exported with metrics |
 | `IAPSTACK_GRAFANA_OTLP_ENDPOINT` | none | Grafana Cloud HTTPS OTLP base URL; all three Grafana settings are optional together |
@@ -240,6 +246,8 @@ Run the Flutter SDK checks with:
 (cd sdk/flutter/iapstack_huawei/example && flutter pub get && flutter analyze && flutter test)
 (cd sdk/flutter/iapstack_google_play && flutter pub get && flutter analyze && flutter test)
 (cd sdk/flutter/iapstack_google_play/example && flutter pub get && flutter analyze && flutter test)
+(cd sdk/flutter/iapstack_apple && flutter pub get && flutter analyze && flutter test)
+(cd sdk/flutter/iapstack_apple/example && flutter pub get && flutter analyze && flutter test)
 ```
 
 The provider-neutral package owns `/v1` transport, timeout/retry behavior,
@@ -299,10 +307,8 @@ provider configuration. Shared configuration never acquires Huawei-, Apple-, or
 Google-shaped credential fields. Credential payload rotation uses optimistic durable
 revisions; encryption-key rotation remains independent and preserves fingerprints.
 
-Go source files place constants first, type and struct declarations second, and
-executable code last. Related constants stay together; unrelated constant groups are
-separated by a blank line. Every constant, function, and method has an English
-explanatory comment.
+Implementation and source-layout conventions for contributors are documented in the
+[contributing guide](CONTRIBUTING.md).
 
 The compact `server` mode runs the API and worker in one process. The split `api` and
 `worker` modes remain available for independent scaling. The worker handles the protected Huawei and Google Play notification inbox,

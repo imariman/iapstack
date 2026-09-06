@@ -32,8 +32,32 @@ go test -race -count=1 ./...
 ```
 
 Run PostgreSQL integration tests with `go test -race -tags=integration -count=1 ./...`
-while `IAPSTACK_TEST_DATABASE_URL` points to a disposable test database. Changes to a Flutter package should run `dart analyze` or `flutter analyze`
-and that package's tests. See each package README under `sdk/flutter/` for its setup.
+while `IAPSTACK_TEST_DATABASE_URL` points to a disposable test database.
+
+For every affected Flutter package, fetch dependencies, check formatting, run the
+appropriate analyzer, and run its tests with coverage. For example:
+
+```sh
+(cd sdk/flutter/iapstack && dart pub get && dart format --output=none --set-exit-if-changed . && dart analyze && flutter test --coverage)
+(cd sdk/flutter/iapstack_huawei && flutter pub get && dart format --output=none --set-exit-if-changed . && flutter analyze && flutter test --coverage)
+(cd sdk/flutter/iapstack_google_play && flutter pub get && dart format --output=none --set-exit-if-changed . && flutter analyze && flutter test --coverage)
+(cd sdk/flutter/iapstack_apple && flutter pub get && dart format --output=none --set-exit-if-changed . && flutter analyze && flutter test --coverage)
+```
+
+Apply the same checks to an affected example, formatting its `lib` and `test`
+directories. Huawei and Google Play example changes should also build an Android
+ARM64 debug APK. Apple example changes should build the iOS simulator harness on
+macOS. CI enforces package-specific coverage thresholds; see the authoritative
+[CI workflow](.github/workflows/ci.yml) and each package README under `sdk/flutter/`
+for the complete commands and setup.
+
+For runtime, container, migration, worker, or deployment changes, also build the
+production image and run the clean Compose release gate:
+
+```sh
+docker build --tag iapstack:local .
+./deploy/e2e/run.sh
+```
 
 ## Make a change
 
@@ -44,6 +68,10 @@ and that package's tests. See each package README under `sdk/flutter/` for its s
 - Preserve application and project scoping, idempotency, and the protected-data
   boundary described in the [architecture decisions](docs/adr/README.md).
 - Keep provider-specific types and behavior inside the relevant store adapter.
+- In Go source files, place constants first, type and struct declarations second,
+  and executable code last. Keep related constants together, separate unrelated
+  constant groups with a blank line, and give every constant, function, and method
+  an English explanatory comment.
 - Document operator-visible configuration, migrations, compatibility changes, and
   security consequences.
 - Use fixtures or sandbox data in tests; redact secrets and customer information from
