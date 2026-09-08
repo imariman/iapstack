@@ -21,7 +21,7 @@ class ConfigurationPage extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           const Text(
-            'Supply these values with --dart-define. The customer session remains in process memory and is never displayed or persisted.',
+            'Supply non-secret values with --dart-define and launch with the Apple sandbox helper. The customer session remains in process memory and is never displayed or persisted.',
           ),
           const SizedBox(height: 16),
           for (final value in missingValues) ...<Widget>[

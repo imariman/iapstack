@@ -1,10 +1,36 @@
+import Darwin
 import Flutter
 import StoreKit
 import UIKit
 
+final class RuntimeCustomerToken {
+  static let environmentKey = "IAPSTACK_CUSTOMER_TOKEN"
+
+  private var token: String?
+
+  private init(token: String?) {
+    self.token = token
+  }
+
+  static func capture(
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    clearEnvironment: (String) -> Void = { name in _ = unsetenv(name) }
+  ) -> RuntimeCustomerToken {
+    let token = environment[environmentKey]
+    clearEnvironment(environmentKey)
+    return RuntimeCustomerToken(token: token)
+  }
+
+  func take() -> String? {
+    defer { token = nil }
+    return token
+  }
+}
+
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var sandboxToolsChannel: FlutterMethodChannel?
+  private let runtimeCustomerToken = RuntimeCustomerToken.capture()
 
   override func application(
     _ application: UIApplication,
@@ -29,6 +55,11 @@ import UIKit
   }
 
   private func handleSandboxTools(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    if call.method == "takeCustomerToken" {
+      result(runtimeCustomerToken.take())
+      return
+    }
+
     Task { @MainActor in
       guard #available(iOS 15.0, *) else {
         result(FlutterError(

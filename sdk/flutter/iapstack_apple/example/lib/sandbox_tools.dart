@@ -1,6 +1,6 @@
 import 'package:flutter/services.dart';
 
-/// Real-device StoreKit controls used only by the Apple sandbox harness.
+/// Native host bridge used only by the Apple sandbox harness.
 final class SandboxTools {
   /// Creates the method-channel bridge to the iOS test host.
   const SandboxTools();
@@ -8,6 +8,11 @@ final class SandboxTools {
   static const MethodChannel _channel = MethodChannel(
     'com.imariman.iapstack/apple-sandbox-tools',
   );
+
+  /// Takes the launch-time customer bearer from the iOS host exactly once.
+  Future<String> takeCustomerToken() async {
+    return await _channel.invokeMethod<String>('takeCustomerToken') ?? '';
+  }
 
   /// Opens Apple's subscription management sheet so auto-renew can be disabled.
   Future<void> showManageSubscriptions() async {

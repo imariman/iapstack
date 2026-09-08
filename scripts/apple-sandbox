@@ -140,6 +140,7 @@ validate_mobile_config() {
   require_value IAPSTACK_EXTERNAL_CUSTOMER_ID
   require_value IAPSTACK_APPLE_SUBSCRIPTION_ID
   require_value IAPSTACK_APPLE_NON_CONSUMABLE_ID
+  require_value IAPSTACK_APPLE_BUNDLE_ID
   [[ "${IAPSTACK_EXTERNAL_CUSTOMER_ID}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || \
     fail "IAPSTACK_EXTERNAL_CUSTOMER_ID must be a canonical lowercase UUID"
   keychain_has "$(application_key_account)" || fail "application key is missing; run the keychain set-application-key command"
@@ -184,6 +185,7 @@ run_app() {
   shift
   [[ "${1:-}" != "--" ]] || shift
   validate_mobile_config
+  unset IAPSTACK_CUSTOMER_TOKEN DEVICECTL_CHILD_IAPSTACK_CUSTOMER_TOKEN
   command -v jq >/dev/null || fail "jq is required"
   command -v curl >/dev/null || fail "curl is required"
   command -v flutter >/dev/null || fail "flutter is required"
@@ -193,7 +195,7 @@ run_app() {
   runtime_file="$(mktemp "${TMPDIR:-/tmp}/iapstack-flutter-defines.XXXXXX")"
   chmod 600 "${response_file}"
   chmod 600 "${runtime_file}"
-  trap 'rm -f "${response_file}" "${runtime_file}"' EXIT
+  trap 'unset DEVICECTL_CHILD_IAPSTACK_CUSTOMER_TOKEN customer_token; rm -f "${response_file}" "${runtime_file}"' EXIT
 
   local application_key
   application_key="$(keychain_read "$(application_key_account)")"
@@ -209,7 +211,6 @@ run_app() {
   jq -n \
     --arg base_url "${IAPSTACK_BASE_URL}" \
     --arg application_id "${IAPSTACK_APPLICATION_ID}" \
-    --arg customer_token "${customer_token}" \
     --arg external_customer_id "${IAPSTACK_EXTERNAL_CUSTOMER_ID}" \
     --arg subscription_id "${IAPSTACK_APPLE_SUBSCRIPTION_ID}" \
     --arg non_consumable_id "${IAPSTACK_APPLE_NON_CONSUMABLE_ID}" \
@@ -217,21 +218,32 @@ run_app() {
     '{
       IAPSTACK_BASE_URL: $base_url,
       IAPSTACK_APPLICATION_ID: $application_id,
-      IAPSTACK_CUSTOMER_TOKEN: $customer_token,
       IAPSTACK_EXTERNAL_CUSTOMER_ID: $external_customer_id,
       IAPSTACK_APPLE_SUBSCRIPTION_ID: $subscription_id,
       IAPSTACK_APPLE_NON_CONSUMABLE_ID: $non_consumable_id,
       IAPSTACK_APPLE_AUTO_DOUBLE_RESTORE: $auto_double_restore
     }' >"${runtime_file}"
-  unset customer_token
 
-  echo "Fresh customer session minted (expires ${expires_at}); launching device ${device}."
+  command -v xcrun >/dev/null || fail "xcrun is required"
+  xcrun --find devicectl >/dev/null 2>&1 || fail "Xcode devicectl is required"
+
+  echo "Fresh customer session minted (expires ${expires_at}); building for device ${device}."
   cd "${REPOSITORY_DIR}/sdk/flutter/iapstack_apple/example"
   flutter run \
     -d "${device}" \
+    --no-resident \
     --dart-define-from-file="${runtime_file}" \
     "$@"
   rm -f "${runtime_file}"
+
+  echo "Relaunching through the paired-device runtime channel."
+  export DEVICECTL_CHILD_IAPSTACK_CUSTOMER_TOKEN="${customer_token}"
+  unset customer_token
+  xcrun devicectl device process launch \
+    --device "${device}" \
+    --terminate-existing \
+    "${IAPSTACK_APPLE_BUNDLE_ID}"
+  unset DEVICECTL_CHILD_IAPSTACK_CUSTOMER_TOKEN
   trap - EXIT
 }
 

@@ -1,12 +1,19 @@
 import Flutter
 import UIKit
 import XCTest
+@testable import Runner
 
 class RunnerTests: XCTestCase {
 
-  func testExample() {
-    // If you add code to the Runner application, consider adding tests here.
-    // See https://developer.apple.com/documentation/xctest for more information about using XCTest.
+  func testRuntimeCustomerTokenClearsEnvironmentAndCanOnlyBeTakenOnce() {
+    var clearedNames: [String] = []
+    let token = RuntimeCustomerToken.capture(
+      environment: [RuntimeCustomerToken.environmentKey: "runtime-token"],
+      clearEnvironment: { clearedNames.append($0) })
+
+    XCTAssertEqual(clearedNames, [RuntimeCustomerToken.environmentKey])
+    XCTAssertEqual(token.take(), "runtime-token")
+    XCTAssertNil(token.take())
   }
 
 }

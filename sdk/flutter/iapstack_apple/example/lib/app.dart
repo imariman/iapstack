@@ -16,7 +16,7 @@ class ExampleApp extends StatefulWidget {
   /// Creates the configured example application.
   const ExampleApp({required this.config, super.key});
 
-  /// Runtime-only example configuration.
+  /// In-memory example configuration.
   final ExampleConfig config;
 
   @override
