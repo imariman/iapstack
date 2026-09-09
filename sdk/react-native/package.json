@@ -21,6 +21,7 @@
     "react-native": ">=0.71"
   },
   "scripts": {
+    "test": "bun test",
     "typecheck": "node --input-type=module -e \"import('./src/index.ts')\""
   },
   "author": "IAPStack Contributors"
