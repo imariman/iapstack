@@ -1,6 +1,6 @@
 import 'package:iapstack_apple/iapstack_apple.dart';
 
-/// Non-persistent runtime configuration for the StoreKit 2 harness.
+/// In-memory configuration for the StoreKit 2 harness.
 final class ExampleConfig {
   /// Creates immutable example configuration.
   const ExampleConfig({
@@ -13,24 +13,27 @@ final class ExampleConfig {
     this.autoDoubleRestore = false,
   });
 
-  /// Loads values supplied through Flutter `--dart-define` flags.
-  factory ExampleConfig.fromEnvironment() => const ExampleConfig(
-    baseUrl: String.fromEnvironment('IAPSTACK_BASE_URL'),
-    applicationId: String.fromEnvironment('IAPSTACK_APPLICATION_ID'),
-    customerToken: String.fromEnvironment('IAPSTACK_CUSTOMER_TOKEN'),
-    externalCustomerId: String.fromEnvironment('IAPSTACK_EXTERNAL_CUSTOMER_ID'),
-    subscriptionProductId: String.fromEnvironment(
-      'IAPSTACK_APPLE_SUBSCRIPTION_ID',
-      defaultValue: 'premium_monthly',
-    ),
-    nonConsumableProductId: String.fromEnvironment(
-      'IAPSTACK_APPLE_NON_CONSUMABLE_ID',
-      defaultValue: 'premium_lifetime',
-    ),
-    autoDoubleRestore: bool.fromEnvironment(
-      'IAPSTACK_APPLE_AUTO_DOUBLE_RESTORE',
-    ),
-  );
+  /// Loads non-secret values from build defines and accepts the runtime bearer.
+  factory ExampleConfig.fromEnvironment({required String customerToken}) =>
+      ExampleConfig(
+        baseUrl: String.fromEnvironment('IAPSTACK_BASE_URL'),
+        applicationId: String.fromEnvironment('IAPSTACK_APPLICATION_ID'),
+        customerToken: customerToken,
+        externalCustomerId: String.fromEnvironment(
+          'IAPSTACK_EXTERNAL_CUSTOMER_ID',
+        ),
+        subscriptionProductId: String.fromEnvironment(
+          'IAPSTACK_APPLE_SUBSCRIPTION_ID',
+          defaultValue: 'premium_monthly',
+        ),
+        nonConsumableProductId: String.fromEnvironment(
+          'IAPSTACK_APPLE_NON_CONSUMABLE_ID',
+          defaultValue: 'premium_lifetime',
+        ),
+        autoDoubleRestore: bool.fromEnvironment(
+          'IAPSTACK_APPLE_AUTO_DOUBLE_RESTORE',
+        ),
+      );
 
   /// IAPStack API origin.
   final String baseUrl;
@@ -38,7 +41,7 @@ final class ExampleConfig {
   /// IAPStack application scope.
   final String applicationId;
 
-  /// Runtime-only customer session that is never rendered or persisted.
+  /// Launch-time customer session that is never rendered or persisted.
   final String customerToken;
 
   /// Canonical UUID used as StoreKit `appAccountToken` and IAPStack customer ID.

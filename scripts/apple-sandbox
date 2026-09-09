@@ -17,8 +17,8 @@ Usage:
   ./scripts/apple-sandbox keychain set-application-key
   ./scripts/apple-sandbox keychain set-app-store-key /absolute/path/AuthKey_XXXXXXXXXX.p8
   ./scripts/apple-sandbox keychain status
-  ./scripts/apple-sandbox run [-- <extra flutter run arguments>]
-  ./scripts/apple-sandbox restore-idempotency [-- <extra flutter run arguments>]
+  ./scripts/apple-sandbox run [-- <extra flutter build arguments>]
+  ./scripts/apple-sandbox restore-idempotency [-- <extra flutter build arguments>]
   ./scripts/apple-sandbox notification-test
 
 One-time setup:
@@ -140,6 +140,7 @@ validate_mobile_config() {
   require_value IAPSTACK_EXTERNAL_CUSTOMER_ID
   require_value IAPSTACK_APPLE_SUBSCRIPTION_ID
   require_value IAPSTACK_APPLE_NON_CONSUMABLE_ID
+  require_value IAPSTACK_APPLE_BUNDLE_ID
   [[ "${IAPSTACK_EXTERNAL_CUSTOMER_ID}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || \
     fail "IAPSTACK_EXTERNAL_CUSTOMER_ID must be a canonical lowercase UUID"
   keychain_has "$(application_key_account)" || fail "application key is missing; run the keychain set-application-key command"
@@ -179,11 +180,25 @@ select_ios_device() {
   printf '%s' "${device}"
 }
 
+built_runner_app() {
+  printf '%s/sdk/flutter/iapstack_apple/example/build/ios/iphoneos/Runner.app' "${REPOSITORY_DIR}"
+}
+
+read_bundle_id() {
+  local app_bundle="$1"
+  local bundle_id
+  [[ -d "${app_bundle}" ]] || fail "debug Runner.app was not produced at ${app_bundle}"
+  bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app_bundle}/Info.plist")"
+  [[ -n "${bundle_id}" ]] || fail "could not read CFBundleIdentifier from ${app_bundle}"
+  printf '%s' "${bundle_id}"
+}
+
 run_app() {
   local automatic_double_restore="$1"
   shift
   [[ "${1:-}" != "--" ]] || shift
   validate_mobile_config
+  unset IAPSTACK_CUSTOMER_TOKEN DEVICECTL_CHILD_IAPSTACK_CUSTOMER_TOKEN
   command -v jq >/dev/null || fail "jq is required"
   command -v curl >/dev/null || fail "curl is required"
   command -v flutter >/dev/null || fail "flutter is required"
@@ -193,7 +208,7 @@ run_app() {
   runtime_file="$(mktemp "${TMPDIR:-/tmp}/iapstack-flutter-defines.XXXXXX")"
   chmod 600 "${response_file}"
   chmod 600 "${runtime_file}"
-  trap 'rm -f "${response_file}" "${runtime_file}"' EXIT
+  trap 'unset DEVICECTL_CHILD_IAPSTACK_CUSTOMER_TOKEN customer_token; rm -f "${response_file}" "${runtime_file}"' EXIT
 
   local application_key
   application_key="$(keychain_read "$(application_key_account)")"
@@ -209,7 +224,6 @@ run_app() {
   jq -n \
     --arg base_url "${IAPSTACK_BASE_URL}" \
     --arg application_id "${IAPSTACK_APPLICATION_ID}" \
-    --arg customer_token "${customer_token}" \
     --arg external_customer_id "${IAPSTACK_EXTERNAL_CUSTOMER_ID}" \
     --arg subscription_id "${IAPSTACK_APPLE_SUBSCRIPTION_ID}" \
     --arg non_consumable_id "${IAPSTACK_APPLE_NON_CONSUMABLE_ID}" \
@@ -217,22 +231,44 @@ run_app() {
     '{
       IAPSTACK_BASE_URL: $base_url,
       IAPSTACK_APPLICATION_ID: $application_id,
-      IAPSTACK_CUSTOMER_TOKEN: $customer_token,
       IAPSTACK_EXTERNAL_CUSTOMER_ID: $external_customer_id,
       IAPSTACK_APPLE_SUBSCRIPTION_ID: $subscription_id,
       IAPSTACK_APPLE_NON_CONSUMABLE_ID: $non_consumable_id,
       IAPSTACK_APPLE_AUTO_DOUBLE_RESTORE: $auto_double_restore
     }' >"${runtime_file}"
-  unset customer_token
 
-  echo "Fresh customer session minted (expires ${expires_at}); launching device ${device}."
+  command -v xcrun >/dev/null || fail "xcrun is required"
+  xcrun --find devicectl >/dev/null 2>&1 || fail "Xcode devicectl is required"
+
+  echo "Fresh customer session minted (expires ${expires_at}); building for device ${device}."
   cd "${REPOSITORY_DIR}/sdk/flutter/iapstack_apple/example"
-  flutter run \
+  flutter build ios \
+    --debug \
     -d "${device}" \
     --dart-define-from-file="${runtime_file}" \
     "$@"
   rm -f "${runtime_file}"
+
+  local app_bundle bundle_id
+  app_bundle="$(built_runner_app)"
+  bundle_id="$(read_bundle_id "${app_bundle}")"
+  if [[ "${IAPSTACK_APPLE_BUNDLE_ID}" != "${bundle_id}" ]]; then
+    fail "IAPSTACK_APPLE_BUNDLE_ID (${IAPSTACK_APPLE_BUNDLE_ID}) does not match the built Runner (${bundle_id})"
+  fi
+
+  echo "Installing without launching, then starting through the paired-device runtime channel."
+  xcrun devicectl device install app \
+    --device "${device}" \
+    "${app_bundle}"
+  export DEVICECTL_CHILD_IAPSTACK_CUSTOMER_TOKEN="${customer_token}"
+  unset customer_token
+  xcrun devicectl device process launch \
+    --device "${device}" \
+    --terminate-existing \
+    "${bundle_id}"
+  unset DEVICECTL_CHILD_IAPSTACK_CUSTOMER_TOKEN
   trap - EXIT
+  echo "App launched with the runtime customer session; it is ready for interaction."
 }
 
 notification_test() {

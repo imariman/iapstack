@@ -43,9 +43,14 @@ PKCS#8 `.p8` key once:
 ```
 
 The helper never prints either private value. The durable application bearer is used
-only on the Mac to mint a fresh 15-minute customer session. That session is passed to
-the development build through a mode-`0600` temporary Flutter define file and removed
-when `flutter run` exits.
+only on the Mac to mint a fresh 15-minute customer session. The temporary Flutter
+define file contains only non-secret configuration. The helper then builds and
+installs the app without launching it, starts it once through Xcode's authenticated
+paired-device channel, and supplies the customer session only to that process. This
+is not a Flutter tool session: there is no hot reload or `flutter run` log stream.
+Wait until the helper reports that the app has launched before interacting. The
+native host removes the value from its environment immediately and allows Dart to
+consume it once; it is not embedded in the application artifact.
 
 ## Run on a physical iPhone
 
@@ -56,11 +61,15 @@ Use one command for a normal manual session:
 ```
 
 The runner selects the first connected physical iOS device, or the explicit
-`IAPSTACK_IOS_DEVICE_ID` in `scripts/apple-sandbox.env`. A new customer session is
-created on every run, so no application bearer is embedded in the iPhone build.
+`IAPSTACK_IOS_DEVICE_ID` in `scripts/apple-sandbox.env`. `IAPSTACK_APPLE_BUNDLE_ID`
+must match the installed Runner (`com.imariman.iapstack.example` in this example).
+A new customer session is created on every run. Neither the application bearer nor
+the short-lived customer session is embedded in the iPhone build. The customer
+session necessarily remains in app memory while the harness makes authenticated
+requests, so treat a running development process as sensitive until it expires.
 
-To launch and automatically perform two consecutive restore submissions with distinct
-request IDs:
+To install and automatically perform two consecutive restore submissions with
+distinct request IDs on that first launch:
 
 ```sh
 ./scripts/apple-sandbox restore-idempotency
