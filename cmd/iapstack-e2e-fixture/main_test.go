@@ -95,7 +95,7 @@ func TestFixtureHandlersServeSignedPurchaseAndWebhookJourney(t *testing.T) {
 	webhookRequest := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(string(webhookBody)))
 	webhookRequest.Header.Set("IAPStack-Event-ID", "fixture-event-1")
 	webhookRequest.Header.Set("IAPStack-Timestamp", strconv.FormatInt(timestamp, 10))
-	webhookRequest.Header.Set("IAPStack-Signature", "v1="+webhookSignature([]byte(fixtureTestWebhookSecret), timestamp, webhookBody))
+	webhookRequest.Header.Set("IAPStack-Signature", "v2="+webhookSignature([]byte(fixtureTestWebhookSecret), "fixture-event-1", timestamp, webhookBody))
 	webhookRecorder := httptest.NewRecorder()
 	provider.ServeHTTP(webhookRecorder, webhookRequest)
 	if webhookRecorder.Code != http.StatusOK {

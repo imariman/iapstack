@@ -25,8 +25,12 @@ const (
 	// ReadinessPath verifies that the durable deduplication store is reachable.
 	ReadinessPath = "/readyz"
 
+	// signatureVersion identifies the authenticated IAPStack signing contract.
+	signatureVersion = "v2"
 	// signaturePrefix identifies the supported IAPStack signing contract.
-	signaturePrefix = "v1="
+	signaturePrefix = signatureVersion + "="
+	// signatureMACSeparator unambiguously delimits versioned MAC fields.
+	signatureMACSeparator = "\n"
 	// signatureBytes is the byte length of one HMAC-SHA-256 signature.
 	signatureBytes = sha256.Size
 	// maximumIdentityLength bounds event-controlled metadata retained by the receiver.
@@ -194,7 +198,7 @@ func (receiver *Receiver) serveWebhook(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusBadRequest, "invalid_body")
 		return
 	}
-	if !receiver.validSignature(timestampText, body, request.Header.Get("IAPStack-Signature")) {
+	if !receiver.validSignature(eventID, timestampText, body, request.Header.Get("IAPStack-Signature")) {
 		writeError(writer, http.StatusUnauthorized, "invalid_signature")
 		return
 	}
@@ -243,7 +247,7 @@ func (receiver *Receiver) validTimestamp(value string) (time.Time, string, bool)
 }
 
 // validSignature compares the provided HMAC-SHA-256 value in constant time.
-func (receiver *Receiver) validSignature(timestamp string, body []byte, value string) bool {
+func (receiver *Receiver) validSignature(eventID, timestamp string, body []byte, value string) bool {
 	if !strings.HasPrefix(value, signaturePrefix) || len(value) != len(signaturePrefix)+(signatureBytes*2) {
 		return false
 	}
@@ -252,8 +256,12 @@ func (receiver *Receiver) validSignature(timestamp string, body []byte, value st
 		return false
 	}
 	mac := hmac.New(sha256.New, receiver.secret)
+	_, _ = io.WriteString(mac, signatureVersion)
+	_, _ = io.WriteString(mac, signatureMACSeparator)
+	_, _ = io.WriteString(mac, eventID)
+	_, _ = io.WriteString(mac, signatureMACSeparator)
 	_, _ = io.WriteString(mac, timestamp)
-	_, _ = io.WriteString(mac, ".")
+	_, _ = io.WriteString(mac, signatureMACSeparator)
 	_, _ = mac.Write(body)
 	return hmac.Equal(provided, mac.Sum(nil))
 }

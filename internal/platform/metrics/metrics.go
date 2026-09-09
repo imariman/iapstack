@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +20,8 @@ import (
 const (
 	// contentType is the Prometheus text exposition media type.
 	contentType = "text/plain; version=0.0.4; charset=utf-8"
+	// otherHTTPMethod is the single retained label for methods outside the allow-list.
+	otherHTTPMethod = "OTHER"
 )
 
 // Registry stores bounded-cardinality process metrics.
@@ -118,9 +121,9 @@ func (registry *Registry) AttachOpenTelemetry(meter otelmetric.Meter) error {
 	return nil
 }
 
-// ObserveHTTP records one HTTP request using a normalized route and status class.
+// ObserveHTTP records one HTTP request using a normalized method, route, and status class.
 func (registry *Registry) ObserveHTTP(method, route string, status int, elapsed time.Duration) {
-	key := labels(method, route, fmt.Sprintf("%d", status))
+	key := labels(normalizeHTTPMethod(method), route, fmt.Sprintf("%d", status))
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	registry.httpRequests[key]++
@@ -334,6 +337,16 @@ func metricAttributes(names []string, key string) []attribute.KeyValue {
 		attributes = append(attributes, attribute.String(name, value))
 	}
 	return attributes
+}
+
+// normalizeHTTPMethod maps client-controlled methods onto a fixed allow-list.
+func normalizeHTTPMethod(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions:
+		return method
+	default:
+		return otherHTTPMethod
+	}
 }
 
 // labels encodes already-bounded label values without exposing arbitrary user input.

@@ -343,9 +343,10 @@ func (service *fixture) webhook(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	timestamp, timestampErr := strconv.ParseInt(request.Header.Get("IAPStack-Timestamp"), 10, 64)
-	signature := strings.TrimPrefix(request.Header.Get("IAPStack-Signature"), "v1=")
-	expected := webhookSignature(service.webhookSecret, timestamp, body)
-	valid := timestampErr == nil && request.Header.Get("IAPStack-Signature") == "v1="+signature &&
+	eventID := request.Header.Get("IAPStack-Event-ID")
+	signature := strings.TrimPrefix(request.Header.Get("IAPStack-Signature"), "v2=")
+	expected := webhookSignature(service.webhookSecret, eventID, timestamp, body)
+	valid := timestampErr == nil && eventID != "" && request.Header.Get("IAPStack-Signature") == "v2="+signature &&
 		hmac.Equal([]byte(signature), []byte(expected))
 	service.mu.Lock()
 	service.deliveries = append(service.deliveries, delivery{
@@ -404,11 +405,14 @@ func readJSON(writer http.ResponseWriter, request *http.Request, destination any
 	return true
 }
 
-// webhookSignature computes the production-compatible HMAC over timestamp dot exact body.
-func webhookSignature(secret []byte, timestamp int64, body []byte) string {
+// webhookSignature computes the production-compatible HMAC over the versioned webhook MAC input.
+func webhookSignature(secret []byte, eventID string, timestamp int64, body []byte) string {
 	mac := hmac.New(sha256.New, secret)
+	_, _ = io.WriteString(mac, "v2\n")
+	_, _ = io.WriteString(mac, eventID)
+	_, _ = io.WriteString(mac, "\n")
 	_, _ = io.WriteString(mac, strconv.FormatInt(timestamp, 10))
-	_, _ = io.WriteString(mac, ".")
+	_, _ = io.WriteString(mac, "\n")
 	_, _ = mac.Write(body)
 	return hex.EncodeToString(mac.Sum(nil))
 }
