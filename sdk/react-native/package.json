@@ -1,7 +1,7 @@
 {
   "name": "@iapstack/react-native",
   "version": "0.1.0-dev.1",
-  "description": "React Native wrapper scaffold for IAPStack client integrations.",
+  "description": "React Native client for the IAPStack v1 API and purchase evidence helpers.",
   "license": "Apache-2.0",
   "private": true,
   "homepage": "https://github.com/imariman/iapstack",
@@ -9,16 +9,19 @@
     "iapstack",
     "react-native",
     "in-app-purchases",
-    "purchases",
-    "purchaseserver"
+    "purchase-verification",
+    "entitlements"
   ],
   "repository": {
     "type": "git",
     "url": "https://github.com/imariman/iapstack.git",
     "directory": "sdk/react-native"
   },
+  "peerDependencies": {
+    "react-native": ">=0.71"
+  },
   "scripts": {
-    "typecheck": "node -e \"console.log('Type check placeholder: implementation pending in issue #88')\""
+    "typecheck": "node --input-type=module -e \"import('./src/index.ts')\""
   },
   "author": "IAPStack Contributors"
 }

@@ -1,31 +1,78 @@
-# IAPStack React Native SDK (WIP)
+# IAPStack React Native SDK
 
-This package is the starting point for the React Native wrapper work requested in
-[#88](https://github.com/imariman/iapstack/issues/88).
+The React Native SDK implements the IAPStack v1 API client and provides structured
+helpers for wrapping purchase evidence emitted by native store integrations.
 
-Issue context in the repository roadmap:
+## Scope
 
-- Add a React Native wrapper over the native SDKs
+- API methods for customer-bound verification and entitlement lookup.
+- Retry, timeout, and response-size limits aligned with the provider-neutral Flutter
+  client.
+- Evidence helpers for Apple StoreKit 2, Google Play Billing, and Huawei IAP payloads.
 
-## Planned behavior
+## Install
 
-- Keep the durable application bearer on a trusted backend and only use short-lived
-  customer sessions in mobile apps.
-- Reuse the existing native SDK shape where possible while exposing a common JS API.
-- Support Apple App Store, Google Play, and Huawei AppGallery flows.
-- Map store evidence into the IAPStack entitlement and transaction model used by the
-  server API.
+```sh
+npm install @iapstack/react-native
+```
 
-## Progress
+## Usage
 
-- [ ] Native bridge bootstrapping (iOS)
-- [ ] Native bridge bootstrapping (Android)
-- [ ] JS API shape and TypeScript types
-- [ ] Example app integration documentation
-- [ ] E2E smoke verification against the IAPStack API contracts
+```ts
+import {
+  IapStackClient,
+  IapStackConfig,
+  PurchaseSubmission,
+  ProductKind,
+  googlePlayEvidence,
+} from '@iapstack/react-native';
 
-## Local note
+const config = new IapStackConfig({
+  baseUri: 'https://iapstack.example.com',
+  applicationId: 'my-application',
+  customerToken: 'short-lived-customer-session-token',
+  timeoutMs: 10_000,
+});
 
-Implementation work for this SDK is intentionally incomplete in this
-branch. The source file exports a placeholder API to make early integration and API
-shape exploration possible while the bridge implementation is finalized.
+const client = new IapStackClient(config);
+const payload: PurchaseSubmission = {
+  externalCustomerId: 'customer-123',
+  claimedProducts: ['premium_annual'],
+  evidence: googlePlayEvidence({
+    purchaseToken: 'purchase-token-from-your-google-play-module',
+    productKind: 'subscription',
+  }),
+};
+
+const result = await client.verifyPurchase(payload);
+const currentEntitlements = await client.getEntitlements('customer-123');
+```
+
+## Evidence helpers
+
+```ts
+import { appleEvidence, googlePlayEvidence, huaweiEvidence } from '@iapstack/react-native';
+
+const apple = appleEvidence({
+  signedTransaction: '<StoreKit signed transaction>',
+  productKind: 'non_consumable',
+});
+
+const play = googlePlayEvidence({
+  purchaseToken: '<Google Play purchase token>',
+  productKind: 'subscription',
+});
+
+const huawei = huaweiEvidence({
+  purchaseData: '<Huawei purchase JSON string>',
+  signature: '<Huawei signature>',
+  productKind: 'subscription',
+});
+```
+
+## Roadmap
+
+- Add a thin native bridge layer around the app's selected store SDK for automatic
+  evidence extraction.
+- Add React Native examples and end-to-end verification flows.
+- Publish package metadata and release artifacts for consumption via npm.

@@ -341,7 +341,7 @@ credential/evidence and notification contracts, and webhook verification rules a
 │   └── verification/      # Provider-neutral purchase verification orchestration
 ├── dashboard/             # Self-hosted web dashboard
 ├── sdk/flutter/           # Provider-neutral and provider-specific Flutter SDKs
-├── sdk/react-native/       # WIP React Native wrapper over the native SDKs
+├── sdk/react-native/       # React Native client and evidence wrappers
 ├── contracts/             # Public API and webhook contracts
 └── deploy/                # Docker and deployment templates
 ```
