@@ -17,8 +17,8 @@ Usage:
   ./scripts/apple-sandbox keychain set-application-key
   ./scripts/apple-sandbox keychain set-app-store-key /absolute/path/AuthKey_XXXXXXXXXX.p8
   ./scripts/apple-sandbox keychain status
-  ./scripts/apple-sandbox run [-- <extra flutter run arguments>]
-  ./scripts/apple-sandbox restore-idempotency [-- <extra flutter run arguments>]
+  ./scripts/apple-sandbox run [-- <extra flutter build arguments>]
+  ./scripts/apple-sandbox restore-idempotency [-- <extra flutter build arguments>]
   ./scripts/apple-sandbox notification-test
 
 One-time setup:
@@ -180,6 +180,19 @@ select_ios_device() {
   printf '%s' "${device}"
 }
 
+built_runner_app() {
+  printf '%s/sdk/flutter/iapstack_apple/example/build/ios/iphoneos/Runner.app' "${REPOSITORY_DIR}"
+}
+
+read_bundle_id() {
+  local app_bundle="$1"
+  local bundle_id
+  [[ -d "${app_bundle}" ]] || fail "debug Runner.app was not produced at ${app_bundle}"
+  bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app_bundle}/Info.plist")"
+  [[ -n "${bundle_id}" ]] || fail "could not read CFBundleIdentifier from ${app_bundle}"
+  printf '%s' "${bundle_id}"
+}
+
 run_app() {
   local automatic_double_restore="$1"
   shift
@@ -229,22 +242,33 @@ run_app() {
 
   echo "Fresh customer session minted (expires ${expires_at}); building for device ${device}."
   cd "${REPOSITORY_DIR}/sdk/flutter/iapstack_apple/example"
-  flutter run \
+  flutter build ios \
+    --debug \
     -d "${device}" \
-    --no-resident \
     --dart-define-from-file="${runtime_file}" \
     "$@"
   rm -f "${runtime_file}"
 
-  echo "Relaunching through the paired-device runtime channel."
+  local app_bundle bundle_id
+  app_bundle="$(built_runner_app)"
+  bundle_id="$(read_bundle_id "${app_bundle}")"
+  if [[ "${IAPSTACK_APPLE_BUNDLE_ID}" != "${bundle_id}" ]]; then
+    fail "IAPSTACK_APPLE_BUNDLE_ID (${IAPSTACK_APPLE_BUNDLE_ID}) does not match the built Runner (${bundle_id})"
+  fi
+
+  echo "Installing without launching, then starting through the paired-device runtime channel."
+  xcrun devicectl device install app \
+    --device "${device}" \
+    "${app_bundle}"
   export DEVICECTL_CHILD_IAPSTACK_CUSTOMER_TOKEN="${customer_token}"
   unset customer_token
   xcrun devicectl device process launch \
     --device "${device}" \
     --terminate-existing \
-    "${IAPSTACK_APPLE_BUNDLE_ID}"
+    "${bundle_id}"
   unset DEVICECTL_CHILD_IAPSTACK_CUSTOMER_TOKEN
   trap - EXIT
+  echo "App launched with the runtime customer session; it is ready for interaction."
 }
 
 notification_test() {
