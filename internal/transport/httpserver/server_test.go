@@ -1,7 +1,9 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -166,6 +168,49 @@ func TestServerAppliesConnectionAndBrowserHardening(t *testing.T) {
 		recorder.Header().Get("X-Frame-Options") != "DENY" ||
 		recorder.Header().Get("Referrer-Policy") != "no-referrer" {
 		t.Fatalf("security headers = %#v", recorder.Header())
+	}
+}
+
+// TestObserveCollapsesUnsupportedHTTPMethods verifies unauthenticated method noise stays one series.
+func TestObserveCollapsesUnsupportedHTTPMethods(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer()
+	for index := 0; index < 32; index++ {
+		request := httptest.NewRequest(fmt.Sprintf("AUDIT%d", index), "/healthz", nil)
+		recorder := httptest.NewRecorder()
+		server.server.Handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+		}
+	}
+	longMethod := strings.Repeat("Z", 1024)
+	request := httptest.NewRequest(longMethod, "/healthz", nil)
+	recorder := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("long method status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+	}
+
+	var output bytes.Buffer
+	if err := server.metrics.WritePrometheus(&output); err != nil {
+		t.Fatalf("WritePrometheus() error = %v", err)
+	}
+	metricsOutput := output.String()
+	if !strings.Contains(metricsOutput, `iapstack_http_requests_total{method="OTHER"`) {
+		t.Fatalf("metrics output omitted OTHER method series\n%s", metricsOutput)
+	}
+	if strings.Contains(metricsOutput, `method="AUDIT`) || strings.Contains(metricsOutput, `method="ZZ`) {
+		t.Fatalf("metrics output retained an unsupported method label\n%s", metricsOutput)
+	}
+	series := 0
+	for _, line := range strings.Split(metricsOutput, "\n") {
+		if strings.HasPrefix(line, "iapstack_http_requests_total{") {
+			series++
+		}
+	}
+	if series != 1 {
+		t.Fatalf("request series count = %d, want 1\n%s", series, metricsOutput)
 	}
 }
 

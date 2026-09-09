@@ -292,13 +292,16 @@ projection/outbox writes remain idempotent.
 
 ## Webhook verification
 
-Outbound requests include `IAPStack-Event-ID`, `IAPStack-Timestamp`, and `IAPStack-Signature`. Verify `v1=<hex>` as HMAC-SHA-256 over:
+Outbound requests include `IAPStack-Event-ID`, `IAPStack-Timestamp`, and `IAPStack-Signature`. Verify `v2=<hex>` as HMAC-SHA-256 over the unambiguous newline-delimited input:
 
 ```text
-<unix_timestamp>.<exact_raw_body>
+v2
+<event_id>
+<unix_timestamp>
+<exact_raw_body>
 ```
 
-Reject timestamps outside the application's replay window and deduplicate by event ID.
+The event ID is authenticated. Reject `v1` signatures, timestamps outside the application's replay window, and any delivery whose `IAPStack-Event-ID` does not match the MAC. Deduplicate by that authenticated event ID.
 
 ## Flutter SDK
 

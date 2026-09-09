@@ -53,8 +53,9 @@ Grafana, Prometheus, or Alloy service is deployed on Render.
 9. Import the repository Grafana dashboard and confirm the `sandbox` environment
    reports queue metrics after approximately two minutes.
 
-The receiver verifies `v1` HMAC-SHA-256 over the exact timestamp and raw body, rejects
-deliveries outside a five-minute window, and deduplicates event IDs durably. A sleeping
+The receiver verifies `v2` HMAC-SHA-256 over the event ID, timestamp, and raw body,
+rejects deliveries outside a five-minute window, and deduplicates authenticated event
+IDs durably. A sleeping
 free receiver may exceed the first ten-second delivery attempt while it wakes; the
 IAPStack worker retries the durable outbox message. The receiver is a sandbox fixture,
 not a replacement for the application's production backend.

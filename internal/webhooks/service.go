@@ -27,8 +27,10 @@ const (
 	minimumSigningSecretBytes = 32
 	// maximumResponseBytes bounds discarded application response data.
 	maximumResponseBytes int64 = 64 << 10
-	// signatureVersion identifies the initial webhook signing contract.
-	signatureVersion = "v1"
+	// signatureVersion identifies the authenticated webhook signing contract.
+	signatureVersion = "v2"
+	// signatureMACSeparator unambiguously delimits versioned MAC fields.
+	signatureMACSeparator = "\n"
 )
 
 // Service configures and delivers application webhooks.
@@ -161,7 +163,7 @@ func (service *Service) Deliver(ctx context.Context, message persistence.QueueMe
 	}
 	defer zero(secret)
 	timestamp := service.clock().UTC().Truncate(time.Second)
-	signature := Sign(secret, timestamp, message.JSONPayload)
+	signature := Sign(secret, message.ID, timestamp, message.JSONPayload)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.URL, bytes.NewReader(message.JSONPayload))
 	if err != nil {
 		return &DeliveryError{Code: "webhook_request_invalid", CanRetry: false}
@@ -212,13 +214,22 @@ func (failure *DeliveryError) CodeValue() string {
 	return failure.Code
 }
 
-// Sign returns a lowercase HMAC-SHA-256 signature over timestamp dot raw body.
-func Sign(secret []byte, timestamp time.Time, body []byte) string {
+// Sign returns a lowercase HMAC-SHA-256 signature over the versioned webhook MAC input.
+func Sign(secret []byte, eventID string, timestamp time.Time, body []byte) string {
 	mac := hmac.New(sha256.New, secret)
-	_, _ = io.WriteString(mac, strconv.FormatInt(timestamp.Unix(), 10))
-	_, _ = io.WriteString(mac, ".")
-	_, _ = mac.Write(body)
+	writeSignatureMAC(mac, eventID, timestamp, body)
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// writeSignatureMAC writes the unambiguous v2 webhook MAC input.
+func writeSignatureMAC(mac io.Writer, eventID string, timestamp time.Time, body []byte) {
+	_, _ = io.WriteString(mac, signatureVersion)
+	_, _ = io.WriteString(mac, signatureMACSeparator)
+	_, _ = io.WriteString(mac, eventID)
+	_, _ = io.WriteString(mac, signatureMACSeparator)
+	_, _ = io.WriteString(mac, strconv.FormatInt(timestamp.Unix(), 10))
+	_, _ = io.WriteString(mac, signatureMACSeparator)
+	_, _ = mac.Write(body)
 }
 
 // webhookScope binds one signing secret to its exact application identity.

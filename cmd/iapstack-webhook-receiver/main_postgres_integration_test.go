@@ -167,14 +167,17 @@ func waitForReceiverReady(t *testing.T, client *http.Client, url string, result 
 func signedReceiverHeaders(body []byte, timestamp time.Time) http.Header {
 	timestampText := strconv.FormatInt(timestamp.Unix(), 10)
 	mac := hmac.New(sha256.New, []byte(processTestSecret))
+	_, _ = io.WriteString(mac, "v2\n")
+	_, _ = io.WriteString(mac, processTestEventID)
+	_, _ = io.WriteString(mac, "\n")
 	_, _ = io.WriteString(mac, timestampText)
-	_, _ = io.WriteString(mac, ".")
+	_, _ = io.WriteString(mac, "\n")
 	_, _ = mac.Write(body)
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
 	headers.Set("IAPStack-Event-ID", processTestEventID)
 	headers.Set("IAPStack-Timestamp", timestampText)
-	headers.Set("IAPStack-Signature", "v1="+hex.EncodeToString(mac.Sum(nil)))
+	headers.Set("IAPStack-Signature", "v2="+hex.EncodeToString(mac.Sum(nil)))
 	return headers
 }
 

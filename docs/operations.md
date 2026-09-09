@@ -48,9 +48,10 @@ the database because IAPStack returns it only once.
   an approved private provider fixture or gateway requires it, set the value to `true`
   for API and worker together and enforce the exact destination with an egress firewall
   or service-mesh policy.
-- Configure webhook receivers to verify `IAPStack-Signature` over
-  `<unix_timestamp>.<raw_body>`, reject stale timestamps, and deduplicate the stable
-  `IAPStack-Event-ID` before applying an event.
+- Configure webhook receivers to verify `v2` `IAPStack-Signature` over
+  `v2\\n<event_id>\\n<unix_timestamp>\\n<raw_body>`, reject `v1` signatures and stale
+  timestamps, and deduplicate the authenticated `IAPStack-Event-ID` before applying an
+  event.
 
 Use `GET /v1/admin/api-keys` to inspect secret-free lifecycle metadata and
 `DELETE /v1/admin/api-keys/{key_id}` to revoke a stored key. Revocation is idempotent,

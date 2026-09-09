@@ -161,21 +161,34 @@ func TestConfigureAcceptsMinimumSigningSecretAndRotates(t *testing.T) {
 	}
 }
 
-// TestSignUsesTimestampDotRawBody verifies the stable v1 webhook signature contract.
-func TestSignUsesTimestampDotRawBody(t *testing.T) {
+// TestSignAuthenticatesEventIDAndRawBody verifies the stable v2 webhook signature contract.
+func TestSignAuthenticatesEventIDAndRawBody(t *testing.T) {
+	t.Parallel()
+
 	secret := []byte("application-signing-secret")
 	timestamp := time.Unix(1_700_000_000, 0).UTC()
 	body := []byte(`{"event":"entitlement.changed"}`)
+	eventID := "outbox-event-1"
 
 	mac := hmac.New(sha256.New, secret)
-	_, _ = mac.Write([]byte(strconv.FormatInt(timestamp.Unix(), 10) + "."))
+	_, _ = mac.Write([]byte("v2\n" + eventID + "\n" + strconv.FormatInt(timestamp.Unix(), 10) + "\n"))
 	_, _ = mac.Write(body)
 	want := hex.EncodeToString(mac.Sum(nil))
-	if got := Sign(secret, timestamp, body); got != want {
+	if got := Sign(secret, eventID, timestamp, body); got != want {
 		t.Fatalf("Sign() = %q, want %q", got, want)
 	}
-	if got := Sign(secret, timestamp, append(body, ' ')); got == want {
+	if got := Sign(secret, "outbox-event-2", timestamp, body); got == want {
+		t.Fatal("Sign() ignored an event ID change")
+	}
+	if got := Sign(secret, eventID, timestamp, append(body, ' ')); got == want {
 		t.Fatal("Sign() ignored a raw body change")
+	}
+
+	legacy := hmac.New(sha256.New, secret)
+	_, _ = legacy.Write([]byte(strconv.FormatInt(timestamp.Unix(), 10) + "."))
+	_, _ = legacy.Write(body)
+	if got := Sign(secret, eventID, timestamp, body); got == hex.EncodeToString(legacy.Sum(nil)) {
+		t.Fatal("Sign() accepted the legacy unsigned-event-ID MAC input")
 	}
 }
 
@@ -208,8 +221,13 @@ func TestDeliverSignsAndClassifiesResponses(t *testing.T) {
 	if err := service.Deliver(context.Background(), message); err != nil {
 		t.Fatalf("Deliver() error = %v", err)
 	}
-	if receivedEventID != message.ID || receivedSignature == "" {
-		t.Fatalf("delivery headers = (%q, %q)", receivedEventID, receivedSignature)
+	wantSignature := signatureVersion + "=" + Sign([]byte("signing-secret"), message.ID, time.Unix(1_700_000_000, 0).UTC(), message.JSONPayload)
+	if receivedEventID != message.ID || receivedSignature != wantSignature {
+		t.Fatalf("delivery headers = (%q, %q), want (%q, %q)", receivedEventID, receivedSignature, message.ID, wantSignature)
+	}
+	substituted := signatureVersion + "=" + Sign([]byte("signing-secret"), "attacker-new-event", time.Unix(1_700_000_000, 0).UTC(), message.JSONPayload)
+	if receivedSignature == substituted {
+		t.Fatal("delivery signature ignored the authenticated event ID")
 	}
 	status = http.StatusServiceUnavailable
 	err := service.Deliver(context.Background(), message)

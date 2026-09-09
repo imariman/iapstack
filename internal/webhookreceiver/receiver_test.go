@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/imariman/iapstack/internal/webhooks"
 )
 
 const (
@@ -32,6 +34,12 @@ type fakeStore struct {
 	closed     bool
 }
 
+// recordingStore persists authenticated identities with production duplicate semantics.
+type recordingStore struct {
+	events   map[string]Event
+	inserted int
+}
+
 // Ping returns the configured readiness result.
 func (store *fakeStore) Ping(context.Context) error {
 	return store.pingError
@@ -47,6 +55,27 @@ func (store *fakeStore) Save(_ context.Context, event Event) (SaveResult, error)
 func (store *fakeStore) Close() {
 	store.closed = true
 }
+
+// Ping reports that the recording store is available.
+func (store *recordingStore) Ping(context.Context) error {
+	return nil
+}
+
+// Save inserts or compares one authenticated event identity.
+func (store *recordingStore) Save(_ context.Context, event Event) (SaveResult, error) {
+	if existing, ok := store.events[event.ID]; ok {
+		if existing.BodyFingerprint == event.BodyFingerprint {
+			return SaveDuplicate, nil
+		}
+		return SaveConflict, nil
+	}
+	store.events[event.ID] = event
+	store.inserted++
+	return SaveInserted, nil
+}
+
+// Close is unused by the recording store fixture.
+func (store *recordingStore) Close() {}
 
 // TestReceiverAcceptsAuthenticatedEvent verifies exact signature validation and safe persistence.
 func TestReceiverAcceptsAuthenticatedEvent(t *testing.T) {
@@ -131,6 +160,95 @@ func TestReceiverBoundsWebhookBody(t *testing.T) {
 	}
 }
 
+// TestReceiverAcceptsWebhooksSignContract verifies sender and receiver share the v2 MAC.
+func TestReceiverAcceptsWebhooksSignContract(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC)
+	store := &fakeStore{saveResult: SaveInserted}
+	receiver := newTestReceiver(t, store, now, defaultTestBodyLimit)
+	body := []byte(`{"schema_version":1,"application_id":"ios-sandbox","event_type":"entitlement.changed"}`)
+	eventID := "event-1"
+	request := httptest.NewRequest(http.MethodPost, WebhookPath, bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("IAPStack-Event-ID", eventID)
+	request.Header.Set("IAPStack-Timestamp", strconv.FormatInt(now.Unix(), 10))
+	request.Header.Set("IAPStack-Signature", "v2="+webhooks.Sign([]byte(testSecret), eventID, now, body))
+	recorder := httptest.NewRecorder()
+
+	receiver.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNoContent || len(store.events) != 1 {
+		t.Fatalf("status/events = %d/%d, want %d/1", recorder.Code, len(store.events), http.StatusNoContent)
+	}
+}
+
+// TestReceiverRejectsEventIDSubstitution verifies the event ID is inside the MAC.
+func TestReceiverRejectsEventIDSubstitution(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC)
+	store := &fakeStore{saveResult: SaveInserted}
+	receiver := newTestReceiver(t, store, now, defaultTestBodyLimit)
+	body := []byte(`{"schema_version":1,"application_id":"ios-sandbox","event_type":"entitlement.changed"}`)
+	request := signedRequest(t, now, body, "event-1")
+	request.Header.Set("IAPStack-Event-ID", "attacker-new-event")
+	recorder := httptest.NewRecorder()
+
+	receiver.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized || len(store.events) != 0 {
+		t.Fatalf("status/events = %d/%d, want %d/0", recorder.Code, len(store.events), http.StatusUnauthorized)
+	}
+}
+
+// TestReceiverRejectsLegacyUnsignedEventIDSignature verifies v1 signatures cannot authenticate a new ID.
+func TestReceiverRejectsLegacyUnsignedEventIDSignature(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC)
+	store := &fakeStore{saveResult: SaveInserted}
+	receiver := newTestReceiver(t, store, now, defaultTestBodyLimit)
+	body := []byte(`{"schema_version":1,"application_id":"ios-sandbox","event_type":"entitlement.changed"}`)
+	timestampText := strconv.FormatInt(now.Unix(), 10)
+	mac := hmac.New(sha256.New, []byte(testSecret))
+	_, _ = mac.Write([]byte(timestampText + "."))
+	_, _ = mac.Write(body)
+	request := httptest.NewRequest(http.MethodPost, WebhookPath, bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("IAPStack-Event-ID", "attacker-new-event")
+	request.Header.Set("IAPStack-Timestamp", timestampText)
+	request.Header.Set("IAPStack-Signature", "v1="+hex.EncodeToString(mac.Sum(nil)))
+	recorder := httptest.NewRecorder()
+
+	receiver.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized || len(store.events) != 0 {
+		t.Fatalf("status/events = %d/%d, want %d/0", recorder.Code, len(store.events), http.StatusUnauthorized)
+	}
+}
+
+// TestReceiverDeduplicatesExactAuthenticatedReplay verifies an exact replay stays one event.
+func TestReceiverDeduplicatesExactAuthenticatedReplay(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC)
+	store := &recordingStore{events: make(map[string]Event)}
+	receiver := newTestReceiver(t, store, now, defaultTestBodyLimit)
+	body := []byte(`{"schema_version":1,"application_id":"ios-sandbox","event_type":"entitlement.changed"}`)
+	for range 2 {
+		request := signedRequest(t, now, body, "event-1")
+		recorder := httptest.NewRecorder()
+		receiver.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusNoContent {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
+		}
+	}
+	if store.inserted != 1 || len(store.events) != 1 {
+		t.Fatalf("store state = inserted %d events %d, want 1/1", store.inserted, len(store.events))
+	}
+}
+
 // TestReceiverReportsIdentityConflict verifies altered replays are visible and rejected.
 func TestReceiverReportsIdentityConflict(t *testing.T) {
 	t.Parallel()
@@ -194,7 +312,12 @@ func signedRequest(t *testing.T, timestamp time.Time, body []byte, eventID strin
 	t.Helper()
 	timestampText := strconv.FormatInt(timestamp.Unix(), 10)
 	mac := hmac.New(sha256.New, []byte(testSecret))
-	_, _ = mac.Write([]byte(timestampText + "."))
+	_, _ = io.WriteString(mac, signatureVersion)
+	_, _ = io.WriteString(mac, signatureMACSeparator)
+	_, _ = io.WriteString(mac, eventID)
+	_, _ = io.WriteString(mac, signatureMACSeparator)
+	_, _ = io.WriteString(mac, timestampText)
+	_, _ = io.WriteString(mac, signatureMACSeparator)
 	_, _ = mac.Write(body)
 	request := httptest.NewRequest(http.MethodPost, WebhookPath, bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
