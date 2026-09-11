@@ -2,21 +2,31 @@ package com.iapstack.core
 
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.RequestBody
+import okio.BufferedSink
+import okhttp3.Response
 import okhttp3.ResponseBody
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InterruptedIOException
-import java.util.concurrent.TimeUnit
 import java.net.SocketTimeoutException
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlin.math.abs
 import kotlin.random.Random
+import kotlin.time.Duration
 
 private const val SDK_VERSION = "0.1.0-dev.1"
 private val JSON_MEDIA_TYPE = "application/json".toMediaType()
@@ -26,7 +36,7 @@ private val JSON_MEDIA_TYPE = "application/json".toMediaType()
  */
 class IapStackClient(
   private val config: IapStackConfig,
-  private val httpClient: OkHttpClient? = null,
+  httpClient: OkHttpClient? = null,
 ) {
   private val gson = Gson()
   private val random = Random(System.nanoTime())
@@ -37,7 +47,13 @@ class IapStackClient(
   init {
     config.validate()
     closeClient = httpClient == null
-    client = httpClient ?: OkHttpClient()
+    val timeoutMillis = config.timeout.inWholeMilliseconds
+    client = (httpClient ?: OkHttpClient()).newBuilder()
+      .callTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
+      .connectTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
+      .readTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
+      .writeTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
+      .build()
   }
 
   /**
@@ -54,7 +70,7 @@ class IapStackClient(
       body = purchase.toJson(),
       requestId = requestId,
     )
-    return VerificationResult.fromJson(json)
+    return decode { VerificationResult.fromJson(json) }
   }
 
   /**
@@ -74,7 +90,7 @@ class IapStackClient(
       body = mapOf("purchases" to purchases.map(PurchaseSubmission::toJson)),
       requestId = requestId,
     )
-    return RestoreResult.fromJson(json)
+    return decode { RestoreResult.fromJson(json) }
   }
 
   /**
@@ -99,7 +115,7 @@ class IapStackClient(
       ),
       requestId = requestId,
     )
-    return EntitlementSnapshot.fromJson(json)
+    return decode { EntitlementSnapshot.fromJson(json) }
   }
 
   /**
@@ -112,6 +128,15 @@ class IapStackClient(
     }
   }
 
+  private fun <T> decode(block: () -> T): T =
+    try {
+      block()
+    } catch (error: IapStackProtocolException) {
+      throw error
+    } catch (error: RuntimeException) {
+      throw IapStackProtocolException("IAPStack response did not match the v1 contract", error)
+    }
+
   private suspend fun request(
     method: String,
     path: List<String>,
@@ -119,8 +144,7 @@ class IapStackClient(
     requestId: String? = null,
   ): Map<String, Any?> {
     val normalizedRequestId = requestId?.trim()?.ifEmpty { null }
-    val normalizedTimeoutMillis = config.timeout.inWholeMilliseconds
-    if (normalizedTimeoutMillis <= 0L) {
+    if (config.timeout <= Duration.ZERO) {
       throw IllegalArgumentException("timeout must be positive")
     }
     if (body != null && body.isEmpty()) {
@@ -129,24 +153,9 @@ class IapStackClient(
 
     for (attempt in 1..config.retryPolicy.maxAttempts) {
       val request = buildRequest(method, path, body, normalizedRequestId)
-      val timeoutClient = client.newBuilder()
-        .callTimeout(normalizedTimeoutMillis, TimeUnit.MILLISECONDS)
-        .connectTimeout(normalizedTimeoutMillis, TimeUnit.MILLISECONDS)
-        .readTimeout(normalizedTimeoutMillis, TimeUnit.MILLISECONDS)
-        .writeTimeout(normalizedTimeoutMillis, TimeUnit.MILLISECONDS)
-        .build()
-
       try {
-        val bodyText = withContext(Dispatchers.IO) {
-          timeoutClient.newCall(request).execute().use { response ->
-            val responseBody = response.body ?: throw IapStackProtocolException("IAPStack response was empty")
-            val rawBody = collectResponseBody(responseBody)
-            if (response.isSuccessful) {
-              return@use rawBody
-            }
-            val statusCode = response.code
-            throw apiErrorFromResponse(statusCode, rawBody)
-          }
+        val bodyText = withTimeout(config.timeout) {
+          execute(request)
         }
         return decodeObject(bodyText)
       } catch (error: IapStackApiException) {
@@ -154,6 +163,13 @@ class IapStackClient(
           throw error
         }
         delay(config.retryPolicy.delayAfter(attempt, jitter()))
+      } catch (error: TimeoutCancellationException) {
+        if (attempt >= config.retryPolicy.maxAttempts) {
+          throw IapStackTimeoutException("IAPStack request timed out", error)
+        }
+        delay(config.retryPolicy.delayAfter(attempt, jitter()))
+      } catch (error: CancellationException) {
+        throw error
       } catch (error: SocketTimeoutException) {
         if (attempt >= config.retryPolicy.maxAttempts) {
           throw IapStackTimeoutException("IAPStack request timed out", error)
@@ -179,6 +195,38 @@ class IapStackClient(
     throw IapStackTransportException("IAPStack request exhausted the retry policy")
   }
 
+  private suspend fun execute(request: Request): String {
+    val call = client.newCall(request)
+    val response = suspendCancellableCoroutine<Response> { cont ->
+      cont.invokeOnCancellation { call.cancel() }
+      call.enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+          if (cont.isActive) {
+            cont.resumeWithException(e)
+          }
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+          if (!cont.isActive) {
+            response.close()
+            return
+          }
+          cont.resume(response)
+        }
+      })
+    }
+    return response.use { resp ->
+      val responseBody = resp.body
+        ?: throw IapStackProtocolException("IAPStack response was empty")
+      val rawBody = collectResponseBody(responseBody)
+      if (resp.isSuccessful) {
+        rawBody
+      } else {
+        throw apiErrorFromResponse(resp.code, rawBody)
+      }
+    }
+  }
+
   private fun jitter(): Double = abs(random.nextDouble())
 
   private fun buildRequest(
@@ -187,7 +235,7 @@ class IapStackClient(
     body: Map<String, Any?>?,
     requestId: String?,
   ): Request {
-    val urlBuilder = config.baseUrl.newBuilder()
+    val urlBuilder = config.baseUri.toString().toHttpUrl().newBuilder()
     for (segment in path) {
       urlBuilder.addPathSegment(segment)
     }
@@ -207,13 +255,24 @@ class IapStackClient(
     val requestBody = body?.let {
       val rawBody = gson.toJson(it)
       requestBuilder.addHeader("Content-Type", "application/json")
-      rawBody.toRequestBody(JSON_MEDIA_TYPE)
+      jsonRequestBody(rawBody)
     }
 
     return requestBuilder
       .method(method, requestBody)
       .build()
   }
+
+  private fun jsonRequestBody(rawBody: String): RequestBody =
+    object : RequestBody() {
+      override fun contentType() = JSON_MEDIA_TYPE
+
+      override fun contentLength() = rawBody.toByteArray(Charsets.UTF_8).size.toLong()
+
+      override fun writeTo(sink: BufferedSink) {
+        sink.writeString(rawBody, Charsets.UTF_8)
+      }
+    }
 
   private fun collectResponseBody(responseBody: ResponseBody): String {
     val raw = ByteArrayOutputStream()
@@ -237,13 +296,11 @@ class IapStackClient(
 
   private fun decodeObject(value: String): Map<String, Any?> =
     try {
-      gson.fromJson(value, mapType) as? Map<String, Any?> ?: throw IapStackProtocolException(
-        "IAPStack response was not a JSON object",
-      )
-    } catch (error: Exception) {
-      if (error is IapStackProtocolException) {
-        throw error
-      }
+      asObjectMap(gson.fromJson(value, mapType))
+        ?: throw IapStackProtocolException("IAPStack response was not a JSON object")
+    } catch (error: IapStackProtocolException) {
+      throw error
+    } catch (error: RuntimeException) {
       throw IapStackProtocolException("IAPStack returned an invalid JSON object", error)
     }
 
@@ -253,7 +310,7 @@ class IapStackClient(
   ): IapStackApiException {
     val parsed = try {
       decodeObject(responseBody)
-    } catch (error: Exception) {
+    } catch (_: Exception) {
       return IapStackApiException(
         statusCode = statusCode,
         code = "http_error",

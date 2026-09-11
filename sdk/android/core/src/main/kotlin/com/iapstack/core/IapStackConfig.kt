@@ -1,7 +1,5 @@
 package com.iapstack.core
 
-import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import java.net.URI
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -18,11 +16,6 @@ data class IapStackConfig(
   val maxResponseBytes: Int = 1024 * 1024,
   val allowInsecureHttp: Boolean = false,
 ) {
-  /**
-   * Parsed destination URL used by the transport layer.
-   */
-  val baseUrl: HttpUrl = baseUri.toString().toHttpUrl()
-
   init {
     validate()
   }
@@ -35,13 +28,13 @@ data class IapStackConfig(
     if (host.isNullOrBlank() ||
       baseUri.query != null ||
       baseUri.fragment != null ||
-      baseUri.userInfo.isNotEmpty()
+      !baseUri.userInfo.isNullOrEmpty()
     ) {
       throw IllegalArgumentException(
         "baseUri must be an origin or API path prefix without query, fragment, or user info",
       )
     }
-    val scheme = baseUri.scheme.lowercase()
+    val scheme = baseUri.scheme?.lowercase()
     if (scheme != "https" && !(allowInsecureHttp && scheme == "http")) {
       throw IllegalArgumentException("baseUri must use HTTPS")
     }

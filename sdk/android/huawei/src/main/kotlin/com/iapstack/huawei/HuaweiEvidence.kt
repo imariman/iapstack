@@ -1,10 +1,10 @@
 package com.iapstack.huawei
 
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
+import com.google.gson.JsonParser
+import com.google.gson.JsonSyntaxException
 import com.iapstack.core.PurchaseSubmission
 
-private val huaweiPurchaseMapType = object : TypeToken<Map<String, Any?>>() {}.type
 private val huaweiGson = Gson()
 
 /**
@@ -100,22 +100,23 @@ private fun decodePurchaseData(value: String): Map<String, Any?> {
     )
   }
   val parsed = try {
-    huaweiGson.fromJson(value, huaweiPurchaseMapType)
-  } catch (error: Exception) {
+    JsonParser.parseString(value)
+  } catch (error: JsonSyntaxException) {
     throw HuaweiIapStackException(
       code = "invalid_purchase_data",
       message = "Huawei purchase data is not a valid JSON object",
       cause = error,
     )
   }
-  if (parsed == null || parsed !is Map<*, *>) {
+  if (!parsed.isJsonObject) {
     throw HuaweiIapStackException(
       code = "invalid_purchase_data",
       message = "Huawei purchase data must be a JSON object",
     )
   }
-  @Suppress("UNCHECKED_CAST")
-  return parsed as Map<String, Any?>
+  return parsed.asJsonObject.entrySet().associate { (key, jsonValue) ->
+    key to huaweiGson.fromJson(jsonValue, Any::class.java)
+  }
 }
 
 private fun requiredString(values: Map<String, Any?>, key: String): String {

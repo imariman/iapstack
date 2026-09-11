@@ -5,34 +5,34 @@ sealed class IapStackException(message: String, cause: Throwable? = null) : Exce
 /**
  * Structured v1 API error returned by IAPStack.
  */
-data class IapStackApiException(
+class IapStackApiException(
   val statusCode: Int,
   val code: String,
   val requestId: String? = null,
   val retryable: Boolean,
-  val message: String,
+  message: String,
 ) : IapStackException(message)
 
 /**
  * Network-level transport error before a full API response exists.
  */
-data class IapStackTransportException(
-  val messageText: String,
-  val causeError: Throwable? = null,
-) : IapStackException(messageText, causeError)
+class IapStackTransportException(
+  message: String,
+  cause: Throwable? = null,
+) : IapStackException(message, cause)
 
 /**
- * Abortable or oversized request-response mismatch.
+ * One bounded HTTP attempt exceeded its deadline or was aborted.
  */
-data class IapStackTimeoutException(
-  val messageText: String,
-  val causeError: Throwable? = null,
-) : IapStackException(messageText, causeError)
+class IapStackTimeoutException(
+  message: String,
+  cause: Throwable? = null,
+) : IapStackException(message, cause)
 
 /**
  * Response did not match the contract shape.
  */
-data class IapStackProtocolException(
-  val messageText: String,
-  val causeError: Throwable? = null,
-) : IapStackException(messageText, causeError)
+class IapStackProtocolException(
+  message: String,
+  cause: Throwable? = null,
+) : IapStackException(message, cause)

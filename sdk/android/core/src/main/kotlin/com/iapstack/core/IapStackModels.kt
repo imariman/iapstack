@@ -1,6 +1,7 @@
 package com.iapstack.core
 
 import java.time.Instant
+import java.time.format.DateTimeParseException
 
 /**
  * Optional external customer binding used by some providers.
@@ -45,7 +46,8 @@ data class Entitlement(
   val effectiveStartsAt: Instant? = null,
   val effectiveEndsAt: Instant? = null,
 ) {
-  fun grantsAccess(): Boolean = grantsAccessAt(Instant.now())
+  val grantsAccess: Boolean
+    get() = grantsAccessAt(Instant.now())
 
   fun grantsAccessAt(instant: Instant): Boolean {
     if (access != "allowed") return false
@@ -86,7 +88,13 @@ data class VerificationResult(
  */
 data class RestoreResult(
   val results: List<VerificationResult>,
-)
+) {
+  companion object {
+    fun fromJson(json: Map<String, Any?>): RestoreResult = RestoreResult(
+      results = requiredObjectList(json, "results").map { VerificationResult.fromJson(it) },
+    )
+  }
+}
 
 /**
  * Current entitlement snapshot for one external customer.
@@ -124,7 +132,11 @@ internal fun requiredInt(json: Map<String, Any?>, key: String): Int {
 
 internal fun requiredDateTime(json: Map<String, Any?>, key: String): Instant {
   val value = requiredString(json, key)
-  return Instant.parse(value)
+  return try {
+    Instant.parse(value)
+  } catch (error: DateTimeParseException) {
+    throw IapStackProtocolException("$key must be an ISO-8601 timestamp", error)
+  }
 }
 
 internal fun optionalDateTime(json: Map<String, Any?>, key: String): Instant? {
@@ -133,7 +145,11 @@ internal fun optionalDateTime(json: Map<String, Any?>, key: String): Instant? {
   if (value !is String || value.isBlank()) {
     throw IapStackProtocolException("$key must be an ISO-8601 timestamp")
   }
-  return Instant.parse(value)
+  return try {
+    Instant.parse(value)
+  } catch (error: DateTimeParseException) {
+    throw IapStackProtocolException("$key must be an ISO-8601 timestamp", error)
+  }
 }
 
 internal fun requiredObjectList(json: Map<String, Any?>, key: String): List<Map<String, Any?>> {
@@ -142,6 +158,14 @@ internal fun requiredObjectList(json: Map<String, Any?>, key: String): List<Map<
     throw IapStackProtocolException("$key must be an array")
   }
   return value.map { item ->
-    item as? Map<String, Any?> ?: throw IapStackProtocolException("$key entries must be objects")
+    asObjectMap(item) ?: throw IapStackProtocolException("$key entries must be objects")
+  }
+}
+
+internal fun asObjectMap(value: Any?): Map<String, Any?>? {
+  val map = value as? Map<*, *> ?: return null
+  return map.entries.associate { (key, entry) ->
+    val name = key as? String ?: throw IapStackProtocolException("JSON object keys must be strings")
+    name to entry
   }
 }
