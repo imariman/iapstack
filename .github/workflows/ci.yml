@@ -273,6 +273,39 @@ jobs:
           bun run typecheck
           bun test
 
+  go-sdk:
+    name: Go host SDK checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: sdk/go/go.mod
+          cache: true
+
+      - name: Check formatting
+        working-directory: sdk/go
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            echo "The following files are not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet and test
+        working-directory: sdk/go
+        run: |
+          go vet ./...
+          go test -race -count=1 -coverprofile="$RUNNER_TEMP/go-sdk-coverage.out" ./...
+          "$GITHUB_WORKSPACE/.github/scripts/check-coverage.sh" go "$RUNNER_TEMP/go-sdk-coverage.out" 84 "Go host SDK statements"
+
   typescript-sdk:
     name: TypeScript host SDK checks
     runs-on: ubuntu-latest

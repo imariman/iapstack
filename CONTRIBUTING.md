@@ -31,6 +31,12 @@ go vet ./...
 go test -race -count=1 ./...
 ```
 
+For the trusted-host Go SDK, run the nested module checks from `sdk/go`:
+
+```sh
+(cd sdk/go && gofmt -l . && go vet ./... && go test -race -count=1 ./...)
+```
+
 For the trusted-host TypeScript SDK, run the nested package checks from `sdk/typescript`:
 
 ```sh

@@ -29,6 +29,12 @@ dart pub get
 dart test test/openapi_contract_test.dart
 ```
 
+Run the trusted-host Go SDK compatibility check from `sdk/go`:
+
+```sh
+go test -count=1 -run TestOpenAPIDeclaresHostOperations ./...
+```
+
 Run the trusted-host TypeScript SDK compatibility check from `sdk/typescript`:
 
 ```sh
