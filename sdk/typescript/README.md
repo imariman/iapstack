@@ -25,10 +25,15 @@ path `sdk/typescript`.
 
 The public OpenAPI contract does **not** allow the application bearer on
 entitlement GET. The supported host lookup path is: mint a customer session,
-then call `getEntitlements` with that token, or consume signed
+then call `getEntitlements` with that session, or consume signed
 `entitlement.changed` webhooks. Do not send the application bearer on the GET.
 
 ## Usage
+
+Construct the HTTP client and webhook verifier once at process start. IAPStack
+retries webhook delivery only for 408, 429, and 5xx. Mapping every verification
+failure to 401 marks the event `webhook_rejected` permanently. Building a new
+memory store inside the handler also makes `duplicate` false on every retry.
 
 ```ts
 import {
@@ -36,7 +41,6 @@ import {
   MemoryEventStore,
   WebhookVerifier,
 } from '@iapstack/host';
-import type { IncomingMessage, ServerResponse } from 'node:http';
 
 const client = new Client({
   baseUrl: 'https://iap.example.com',
@@ -44,9 +48,14 @@ const client = new Client({
   applicationToken: process.env.IAPSTACK_APPLICATION_KEY ?? '',
 });
 
+const verifier = new WebhookVerifier({
+  secret: process.env.IAPSTACK_WEBHOOK_SECRET ?? '',
+  store: new MemoryEventStore(),
+});
+
 async function mintSession(externalCustomerId: string): Promise<string> {
   const session = await client.createCustomerSession(externalCustomerId);
-  const snapshot = await client.getEntitlements(externalCustomerId, session.token);
+  const snapshot = await client.getEntitlements(session);
   const hasPremium = snapshot.entitlements.some(
     (item) => item.key === 'premium' && item.grantsAccess(),
   );
@@ -56,55 +65,27 @@ async function mintSession(externalCustomerId: string): Promise<string> {
   return session.token;
 }
 
-const verifier = new WebhookVerifier({
-  secret: process.env.IAPSTACK_WEBHOOK_SECRET ?? '',
-  store: new MemoryEventStore(),
+const handleWebhook = verifier.handler(async (event) => {
+  console.log(`entitlement ${event.change.entitlementKey} access=${event.change.access}`);
 });
 
-async function webhook(request: IncomingMessage, response: ServerResponse): Promise<void> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.from(chunk));
-  }
-  try {
-    const event = await verifier.verifyRequest({
-      method: request.method,
-      headers: request.headers,
-      body: Buffer.concat(chunks),
-    });
-    if (event.duplicate) {
-      response.statusCode = 204;
-      response.end();
-      return;
-    }
-    console.log(`entitlement ${event.change.entitlementKey} access=${event.change.access}`);
-    response.statusCode = 204;
-    response.end();
-  } catch {
-    response.statusCode = 401;
-    response.end();
-  }
+export async function POST(request: Request): Promise<Response> {
+  return handleWebhook(request);
 }
 
 void mintSession;
-void webhook;
 ```
 
-Next.js App Router handlers can pass the Fetch `Request` directly. Pass the
-exact raw webhook body; do not re-serialize parsed JSON.
-
-```ts
-export async function POST(request: Request): Promise<Response> {
-  const event = await verifier.verifyRequest(request);
-  if (event.duplicate) {
-    return new Response(null, { status: 204 });
-  }
-  return new Response(null, { status: 204 });
-}
-```
+Next.js App Router handlers can pass the Fetch `Request` directly. Node `http`
+and Express hosts can pass the exact raw body as a `WebhookRequest` into the
+same `handler`. Pass the exact raw webhook body; do not re-serialize parsed JSON.
+`handler` maps signature and timestamp failures to 401, identity conflict to
+409, and store or host-callback errors to 503.
 
 Replace `MemoryEventStore` with a durable store in production so retries
-across processes still dedupe by the authenticated `IAPStack-Event-ID`.
+across processes still dedupe by the authenticated `IAPStack-Event-ID`. The
+handler hashes the raw body and passes an opaque fingerprint into `remember`;
+do not recompute SHA-256 in the store.
 
 ## Webhook verification
 
@@ -119,7 +100,8 @@ v2
 
 The verifier rejects `v1` signatures, timestamps outside the five-minute replay
 window, event IDs that do not match the MAC, and conflicting bodies for a reused
-event ID.
+event ID. `handler` maps those failures to 401, identity conflict to 409, and
+store or host-callback errors to 503.
 
 ## Testing
 

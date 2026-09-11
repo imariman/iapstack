@@ -1,10 +1,12 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
+import { webhookStatus } from '../src/errors';
 import {
   MemoryEventStore,
   WebhookError,
   WebhookVerifier,
+  type EventStore,
   type WebhookRequest,
 } from '../src/index';
 
@@ -27,8 +29,16 @@ const testWebhookBody =
 
 const defaultWebhookBodyLimit = 1 << 20;
 
+class FailingStore implements EventStore {
+  constructor(private readonly error: unknown) {}
+
+  remember(): never {
+    throw this.error;
+  }
+}
+
 function webhookCode(error: unknown, code: string): boolean {
-  return error instanceof WebhookError && error.code === code;
+  return error instanceof WebhookError && error.code === code && error.statusCode === webhookStatus(code);
 }
 
 function signWebhook(eventId: string, timestamp: Date, body: Uint8Array | string): string {
@@ -294,5 +304,96 @@ test('webhook verifier accepts a Fetch Request', async () => {
   });
   const event = await verifier.verifyRequest(request);
   assert.equal(event.id, 'event-fetch');
+  verifier.close();
+});
+
+test('webhook verifier wraps store failures as unavailable', async () => {
+  const now = new Date('2026-08-31T10:00:00.000Z');
+  const cause = new Error('disk full');
+  const verifier = newTestVerifier(now, defaultWebhookBodyLimit, new FailingStore(cause));
+  await assert.rejects(
+    () => verifier.verifyRequest(signedWebhookRequest(now, testWebhookBody, 'event-1')),
+    (error: unknown) => {
+      assert.equal(webhookCode(error, 'receiver_unavailable'), true);
+      assert(error instanceof WebhookError);
+      assert.equal(error.cause, cause);
+      return true;
+    },
+  );
+  verifier.close();
+
+  const conflictVerifier = newTestVerifier(
+    now,
+    defaultWebhookBodyLimit,
+    new FailingStore(new WebhookError('event_identity_conflict')),
+  );
+  await assert.rejects(
+    () => conflictVerifier.verifyRequest(signedWebhookRequest(now, testWebhookBody, 'event-2')),
+    (error) => webhookCode(error, 'event_identity_conflict'),
+  );
+  conflictVerifier.close();
+});
+
+test('webhook handler owns IAPStack retry statuses', async () => {
+  const now = new Date('2026-08-31T10:00:00.000Z');
+  const verifier = newTestVerifier(now);
+  const handle = verifier.handler(async () => undefined);
+
+  const accepted = await handle(signedWebhookRequest(now, testWebhookBody, 'event-1'));
+  assert.equal(accepted.status, 204);
+
+  const duplicate = await handle(signedWebhookRequest(now, testWebhookBody, 'event-1'));
+  assert.equal(duplicate.status, 204);
+
+  const badSignature = signedWebhookRequest(now, testWebhookBody, 'event-2');
+  badSignature.headers = {
+    ...badSignature.headers,
+    'IAPStack-Signature': `v2=${'00'.repeat(32)}`,
+  };
+  const unauthorized = await handle(badSignature);
+  assert.equal(unauthorized.status, 401);
+  assert.deepEqual(await unauthorized.json(), { code: 'invalid_signature' });
+
+  const conflictVerifier = newTestVerifier(now);
+  await conflictVerifier.verifyRequest(signedWebhookRequest(now, testWebhookBody, 'event-3'));
+  const altered = testWebhookBody.replace('"version":1', '"version":2');
+  const conflict = await conflictVerifier.handler(async () => undefined)(
+    signedWebhookRequest(now, altered, 'event-3'),
+  );
+  assert.equal(conflict.status, 409);
+  assert.deepEqual(await conflict.json(), { code: 'event_identity_conflict' });
+  conflictVerifier.close();
+
+  const unavailableVerifier = newTestVerifier(
+    now,
+    defaultWebhookBodyLimit,
+    new FailingStore(new Error('disk full')),
+  );
+  const unavailable = await unavailableVerifier.handler(async () => undefined)(
+    signedWebhookRequest(now, testWebhookBody, 'event-4'),
+  );
+  assert.equal(unavailable.status, 503);
+  assert.deepEqual(await unavailable.json(), { code: 'receiver_unavailable' });
+  unavailableVerifier.close();
+
+  const callbackVerifier = newTestVerifier(now);
+  const callbackFailed = await callbackVerifier.handler(async () => {
+    throw new Error('host side effect failed');
+  })(signedWebhookRequest(now, testWebhookBody, 'event-5'));
+  assert.equal(callbackFailed.status, 503);
+  assert.deepEqual(await callbackFailed.json(), { code: 'receiver_unavailable' });
+  callbackVerifier.close();
+
+  const method = await handle({
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+    body: testWebhookBody,
+  });
+  assert.equal(method.status, 405);
+  assert.equal(method.headers.get('Allow'), 'POST');
+
+  const noop = await verifier.handler()(signedWebhookRequest(now, testWebhookBody, 'event-6'));
+  assert.equal(noop.status, 204);
+
   verifier.close();
 });

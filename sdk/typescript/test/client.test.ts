@@ -9,6 +9,7 @@ import {
   TimeoutError,
   TransportError,
   type Config,
+  type CustomerSession,
 } from '../src/index';
 
 const testApplicationToken = 'application-token';
@@ -21,6 +22,14 @@ type CapturedRequest = {
   headers: Headers;
   body: string;
 };
+
+function customerSession(externalCustomerId: string, token = testCustomerToken): CustomerSession {
+  return {
+    token,
+    expiresAt: new Date('2026-08-24T20:15:00.000Z'),
+    externalCustomerId,
+  };
+}
 
 function entitlementSnapshotJSON() {
   return {
@@ -102,6 +111,7 @@ test('createCustomerSession sends the application bearer', async () => {
   });
 
   assert.equal(session.token, 'iaps_customer');
+  assert.equal(session.externalCustomerId, 'customer-external');
   assert.equal(session.expiresAt.toISOString(), '2026-08-24T20:15:00.000Z');
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.method, 'POST');
@@ -115,7 +125,7 @@ test('createCustomerSession sends the application bearer', async () => {
 test('getEntitlements uses the customer session bearer', async () => {
   const { client, calls } = newTestClient(async () => jsonResponse(200, entitlementSnapshotJSON()));
 
-  const snapshot = await client.getEntitlements('customer-external', testCustomerToken);
+  const snapshot = await client.getEntitlements(customerSession('customer-external'));
 
   assert.equal(snapshot.customerId, 'customer-internal');
   assert.equal(snapshot.entitlements.length, 1);
@@ -135,7 +145,7 @@ test('getEntitlements uses the customer session bearer', async () => {
 test('getEntitlements escapes customer identifiers as one path segment', async () => {
   const { client, calls } = newTestClient(async () => jsonResponse(200, entitlementSnapshotJSON()));
 
-  await client.getEntitlements('customer/with space', testCustomerToken);
+  await client.getEntitlements(customerSession('customer/with space'));
   assert.equal(calls[0]?.url.includes('customer%2Fwith%20space'), true);
 });
 
@@ -309,9 +319,9 @@ test('getEntitlements rejects empty identities without leaking secrets', async (
   const { client, calls } = newTestClient(async () => {
     throw new Error('HTTP should not run for invalid inputs');
   });
-  await assert.rejects(() => client.getEntitlements('', testCustomerToken));
+  await assert.rejects(() => client.getEntitlements(customerSession('')));
   await assert.rejects(
-    () => client.getEntitlements('customer-external', testSecretBearer),
+    () => client.getEntitlements(customerSession('customer-external', testSecretBearer)),
     (error: unknown) => {
       assert(error instanceof Error);
       assert.equal(error.message.includes(testSecretBearer), false);

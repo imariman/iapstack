@@ -20,6 +20,8 @@ export {
   type EventStore,
   type WebhookConfig,
   type WebhookEvent,
+  type WebhookHandler,
   type WebhookHeaders,
+  type WebhookOnEvent,
   type WebhookRequest,
 } from './webhook';

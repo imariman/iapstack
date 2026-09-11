@@ -67,10 +67,36 @@ export class ProtocolError extends Error {
 /** Fail-closed webhook authentication or replay failure. */
 export class WebhookError extends Error {
   readonly code: string;
+  readonly statusCode: number;
 
-  constructor(code = 'webhook verification failed') {
+  constructor(code = 'webhook verification failed', options?: { statusCode?: number; cause?: unknown }) {
     super(code || 'webhook verification failed');
     this.name = 'WebhookError';
     this.code = code;
+    this.statusCode = options?.statusCode ?? webhookStatus(code);
+    if (options && 'cause' in options) {
+      (this as Error & { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
+
+/** Maps verifier failure codes onto IAPStack outbound delivery statuses. */
+export function webhookStatus(code: string): number {
+  switch (code) {
+    case 'invalid_timestamp':
+    case 'invalid_signature':
+      return 401;
+    case 'method_not_allowed':
+      return 405;
+    case 'content_type_required':
+      return 415;
+    case 'body_too_large':
+      return 413;
+    case 'event_identity_conflict':
+      return 409;
+    case 'receiver_unavailable':
+      return 503;
+    default:
+      return 400;
   }
 }

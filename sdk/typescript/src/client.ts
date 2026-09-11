@@ -56,7 +56,7 @@ export class Client {
     return this.decode(() => {
       const token = requiredString(body, 'token');
       const expiresAt = requiredDate(body, 'expires_at');
-      return { token, expiresAt };
+      return { token, expiresAt, externalCustomerId };
     });
   }
 
@@ -71,21 +71,20 @@ export class Client {
    * webhooks instead of polling.
    */
   async getEntitlements(
-    externalCustomerId: string,
-    customerToken: string,
+    session: CustomerSession,
     options: RequestOptions = {},
   ): Promise<EntitlementSnapshot> {
-    validateExternalCustomerId(externalCustomerId);
-    validateBearer('customer token', customerToken);
+    validateExternalCustomerId(session.externalCustomerId);
+    validateBearer('customer token', session.token);
     const body = await this.request(
       'GET',
-      customerToken,
+      session.token,
       [
         'v1',
         'applications',
         this.config.applicationId,
         'customers',
-        externalCustomerId,
+        session.externalCustomerId,
         'entitlements',
       ],
       undefined,

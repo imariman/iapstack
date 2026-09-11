@@ -1,5 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import { WebhookError } from './errors';
+import { WebhookError, webhookStatus } from './errors';
 import {
   EntitlementChange,
   optionalDate,
@@ -23,9 +23,10 @@ const HEADER_SIGNATURE = 'IAPStack-Signature';
 /** Atomically deduplicates authenticated webhook event identities. */
 export interface EventStore {
   /**
-   * Records one authenticated event ID and body fingerprint.
-   * Returns true when the same identity was stored before.
-   * A conflicting fingerprint for an existing ID throws a WebhookError.
+   * Records one authenticated event ID and opaque body fingerprint.
+   * The verifier hashes the raw body; hosts persist the fingerprint as-is and
+   * must not recompute SHA-256. Returns true when the same identity was stored
+   * before. A conflicting fingerprint for an existing ID throws a WebhookError.
    */
   remember(eventId: string, fingerprint: Uint8Array): Promise<boolean> | boolean;
 }
@@ -59,6 +60,12 @@ export interface WebhookEvent {
   duplicate: boolean;
   change: EntitlementChange;
 }
+
+/** Host callback invoked for authenticated, non-duplicate entitlement changes. */
+export type WebhookOnEvent = (event: WebhookEvent) => Promise<void> | void;
+
+/** Fetch-compatible webhook receiver that owns IAPStack retry-status mapping. */
+export type WebhookHandler = (request: Request | WebhookRequest) => Promise<Response>;
 
 /** Process-local EventStore for tests and single-instance hosts. */
 export class MemoryEventStore implements EventStore {
@@ -111,8 +118,42 @@ export class WebhookVerifier {
   }
 
   /**
+   * Returns a long-lived Fetch handler for IAPStack webhook deliveries.
+   *
+   * Construct the verifier once at process start. The handler maps signature and
+   * timestamp failures to 401, identity conflict to 409, and store or callback
+   * errors to 503. IAPStack retries only 408, 429, and 5xx; 401 is a permanent
+   * webhook_rejected failure.
+   */
+  handler(onEvent?: WebhookOnEvent | null): WebhookHandler {
+    const callback: WebhookOnEvent = onEvent ?? (() => undefined);
+    return async (request) => {
+      let event: WebhookEvent;
+      try {
+        event = await this.verifyRequest(request);
+      } catch (error) {
+        return webhookErrorResponse(error);
+      }
+      if (event.duplicate) {
+        return new Response(null, { status: 204 });
+      }
+      try {
+        await callback(event);
+      } catch (error) {
+        return webhookErrorResponse(
+          new WebhookError('receiver_unavailable', { cause: error }),
+        );
+      }
+      return new Response(null, { status: 204 });
+    };
+  }
+
+  /**
    * Authenticates one HTTP delivery, parses the payload, and deduplicates it.
    * Pass the exact raw body; do not re-serialize parsed JSON.
+   *
+   * Prefer handler so hosts do not reconstruct HTTP status mapping. Thrown
+   * WebhookError values include the status IAPStack's outbound delivery expects.
    */
   async verifyRequest(request: WebhookRequest | Request | null | undefined): Promise<WebhookEvent> {
     if (!request) {
@@ -143,7 +184,12 @@ export class WebhookVerifier {
     }
     const change = decodeEntitlementChange(body);
     const fingerprint = createHash('sha256').update(body).digest();
-    const duplicate = await this.store.remember(eventId, fingerprint);
+    let duplicate: boolean;
+    try {
+      duplicate = await this.store.remember(eventId, fingerprint);
+    } catch (error) {
+      throw wrapStoreError(error);
+    }
     return {
       id: eventId,
       timestamp,
@@ -334,6 +380,33 @@ function validWebhookIdentity(value: string): boolean {
     }
   }
   return true;
+}
+
+/** Preserves WebhookError values and maps other store failures to 503. */
+function wrapStoreError(error: unknown): WebhookError {
+  if (error instanceof WebhookError) {
+    if (error.statusCode !== 0) {
+      return error;
+    }
+    return new WebhookError(error.code, {
+      statusCode: webhookStatus(error.code),
+      cause: error.cause,
+    });
+  }
+  return new WebhookError('receiver_unavailable', { cause: error });
+}
+
+/** Writes the JSON error envelope hosts must return to IAPStack. */
+function webhookErrorResponse(error: unknown): Response {
+  const webhookErr = wrapStoreError(error);
+  const headers = new Headers({ 'Content-Type': JSON_CONTENT_TYPE });
+  if (webhookErr.code === 'method_not_allowed') {
+    headers.set('Allow', 'POST');
+  }
+  return new Response(JSON.stringify({ code: webhookErr.code }), {
+    status: webhookErr.statusCode,
+    headers,
+  });
 }
 
 function decodeEntitlementChange(body: Buffer): EntitlementChange {

@@ -4,6 +4,8 @@ const ACCESS_ALLOWED = 'allowed';
 export interface CustomerSession {
   token: string;
   expiresAt: Date;
+  /** Host identity bound to this session at mint time. Not part of the JSON contract. */
+  externalCustomerId: string;
 }
 
 /** One current application-scoped projection. */
