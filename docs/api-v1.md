@@ -2,8 +2,8 @@
 
 The canonical machine-readable contract is [`contracts/openapi/v1.yaml`](../contracts/openapi/v1.yaml).
 CI validates the document, checks it against every registered Go route, validates representative
-server responses, and verifies that the Flutter SDK and embedded dashboard only depend on declared
-operations and fields. Public v1 changes must update the contract and affected compatibility tests
+server responses, and verifies that the Flutter SDK, Go host SDK, and embedded dashboard only depend
+on declared operations and fields. Public v1 changes must update the contract and affected compatibility tests
 in the same pull request.
 
 All request and response bodies are JSON. Error responses use:
@@ -302,6 +302,17 @@ v2
 ```
 
 The event ID is authenticated. Reject `v1` signatures, timestamps outside the application's replay window, and any delivery whose `IAPStack-Event-ID` does not match the MAC. Deduplicate by that authenticated event ID.
+
+## Go host SDK
+
+The trusted-host Go package is in `sdk/go`. It uses the durable application bearer
+to mint customer sessions, looks up entitlements with a minted customer session
+because the public GET contract does not accept the application bearer, and
+verifies `v2` webhook signatures with a replay window and event-ID dedupe. The
+webhook handler maps signature failures to 401, identity conflict to 409, and
+store failures to 503 so IAPStack retries only when delivery may succeed later.
+It does not import `internal/` or talk to PostgreSQL. Never log or persist the
+application bearer, and never ship it in a mobile binary.
 
 ## Flutter SDK
 

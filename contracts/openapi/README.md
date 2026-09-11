@@ -29,5 +29,11 @@ dart pub get
 dart test test/openapi_contract_test.dart
 ```
 
-The full CI pipeline executes both checks and rejects undocumented routes or incompatible client
+Run the trusted-host Go SDK compatibility check from `sdk/go`:
+
+```sh
+go test -count=1 -run TestOpenAPIDeclaresHostOperations ./...
+```
+
+The full CI pipeline executes these checks and rejects undocumented routes or incompatible client
 schema changes.
