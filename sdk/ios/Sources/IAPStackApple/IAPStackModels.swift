@@ -75,7 +75,7 @@ public struct PurchaseSubmission: Sendable {
       "evidence": evidence,
     ]
     if !customerBindings.isEmpty {
-      value["customer_bindings"] = customerBindings.map(\.toDictionary)
+      value["customer_bindings"] = customerBindings.map { $0.toDictionary() }
     }
     return value
   }
@@ -125,8 +125,8 @@ public struct Entitlement: Sendable {
       access: try requiredString(dictionary, key: "access"),
       reason: try requiredString(dictionary, key: "reason"),
       version: try requiredInt(dictionary, key: "version"),
-      effectiveStartsAt: optionalDate(dictionary, key: "effective_starts_at"),
-      effectiveEndsAt: optionalDate(dictionary, key: "effective_ends_at"),
+      effectiveStartsAt: try optionalDate(dictionary, key: "effective_starts_at"),
+      effectiveEndsAt: try optionalDate(dictionary, key: "effective_ends_at"),
     )
   }
 
@@ -248,14 +248,17 @@ private func requiredDate(_ dictionary: [String: Any], key: String) throws -> Da
   return value
 }
 
-private func optionalDate(_ dictionary: [String: Any], key: String) -> Date? {
-  guard let raw = dictionary[key] else {
+private func optionalDate(_ dictionary: [String: Any], key: String) throws -> Date? {
+  guard let raw = dictionary[key], !(raw is NSNull) else {
     return nil
   }
   guard let timestamp = raw as? String, !timestamp.isEmpty else {
-    return nil
+    throw IAPStackSDKError.protocolError(message: "\(key) must be an ISO-8601 timestamp")
   }
-  return IAPStackDateFormatter.shared.date(from: timestamp)
+  guard let value = IAPStackDateFormatter.shared.date(from: timestamp) else {
+    throw IAPStackSDKError.protocolError(message: "\(key) must be an ISO-8601 timestamp")
+  }
+  return value
 }
 
 private func requiredObjectList(_ dictionary: [String: Any], key: String) throws -> [[String: Any]] {

@@ -148,9 +148,9 @@ public final class AppleIAPStack {
   }
 
   private func validateExternalCustomerId(_ externalCustomerId: String) throws {
-    let normalized = externalCustomerId.lowercased()
-    let pattern = #/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/#
-    guard pattern.wholeMatch(in: normalized) != nil else {
+    guard let parsed = UUID(uuidString: externalCustomerId),
+      parsed.uuidString.lowercased() == externalCustomerId
+    else {
       throw AppleIAPStackError(
         code: "invalid_external_customer_id",
         message: "externalCustomerId must be lowercase UUID",

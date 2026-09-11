@@ -33,46 +33,29 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
 
   public var purchaseUpdates: AsyncStream<ApplePurchase> {
     AsyncStream { continuation in
-      Task.detached {
-        for await result in Transaction.updates {
-          switch result {
-          case .verified(let transaction):
-            let mapped = await self.makeApplePurchase(from: transaction, status: .purchased)
+      let unfinished = Task.detached { [state] in
+        for await result in Transaction.unfinished {
+          if let mapped = await Self.mapUpdate(result, status: .purchased, state: state) {
             continuation.yield(mapped)
-            await self.state.setPending(transaction, id: mapped.transactionId)
-          case .unverified(_, let error):
-            continuation.yield(
-              ApplePurchase(
-                transactionId: "",
-                productId: "",
-                signedTransaction: "",
-                status: .failed,
-                pendingCompletion: false,
-                appAccountToken: nil,
-                errorCode: "\(error)",
-              ),
-            )
-          default:
-            continuation.yield(
-              ApplePurchase(
-                transactionId: "",
-                productId: "",
-                signedTransaction: "",
-                status: .failed,
-                pendingCompletion: false,
-                appAccountToken: nil,
-                errorCode: "unknown_update",
-              ),
-            )
           }
         }
-        continuation.finish()
+      }
+      let updates = Task.detached { [state] in
+        for await result in Transaction.updates {
+          if let mapped = await Self.mapUpdate(result, status: .purchased, state: state) {
+            continuation.yield(mapped)
+          }
+        }
+      }
+      continuation.onTermination = { _ in
+        unfinished.cancel()
+        updates.cancel()
       }
     }
   }
 
   public func isAvailable() async throws -> Bool {
-    return true
+    true
   }
 
   public func queryProducts(productIds: Set<String>) async throws -> AppleProductQuery {
@@ -95,7 +78,7 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
           code: "unsupported_product_kind",
           message: "IAPStack does not support non-renewable products",
         )
-      @unknown default:
+      default:
         throw AppleIAPStackError(
           code: "unsupported_product_kind",
           message: "IAPStack does not support this StoreKit product kind",
@@ -111,7 +94,7 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
           description: product.description,
           price: product.displayPrice,
           rawPrice: Double(truncating: product.price as NSDecimalNumber),
-          currencyCode: "USD",
+          currencyCode: currencyCode(for: product),
         ),
       )
     }
@@ -135,14 +118,17 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
       )
     }
 
-    let options = [Product.PurchaseOption.appAccountToken(appAccountUUID)]
+    let options: Set<Product.PurchaseOption> = [.appAccountToken(appAccountUUID)]
     let result = try await storeProduct.purchase(options: options)
     switch result {
     case .success(let verification):
-      let transaction = try await mapVerification(verification, status: .purchased)
-      await state.setPending(transaction, id: transaction.transactionId)
+      _ = try await mapVerification(verification, status: .purchased)
     case .userCancelled:
-      throw AppleIAPStackError(code: "purchase_cancelled", message: "The purchase was cancelled")
+      throw AppleIAPStackError(
+        code: "purchase_cancelled",
+        message: "The purchase was cancelled",
+        userCancelled: true,
+      )
     case .pending:
       return
     default:
@@ -154,10 +140,17 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
   }
 
   public func restorePurchases() async throws -> [ApplePurchase] {
+    try await AppStore.sync()
     var purchases: [ApplePurchase] = []
-    for await result in Transaction.currentEntitlements {
-      let purchase = try await mapTransactionResult(result, status: .restored)
-      purchases.append(purchase)
+    var seen = Set<String>()
+    for await result in Transaction.all {
+      guard case .verified = result else {
+        continue
+      }
+      let purchase = try await mapVerification(result, status: .restored)
+      if seen.insert(purchase.transactionId).inserted {
+        purchases.append(purchase)
+      }
     }
     return purchases
   }
@@ -169,63 +162,85 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
     guard let transaction = await state.consumePending(id: purchase.transactionId) else {
       return
     }
-    try await transaction.finish()
-  }
-
-  private func mapTransactionResult(_ result: VerificationResult<Transaction>, status: ApplePurchaseStatus) async throws
-    -> ApplePurchase {
-    switch result {
-    case .verified(let transaction):
-      return await makeApplePurchase(from: transaction, status: status)
-    case .unverified(_, let error):
-      throw AppleIAPStackError(
-        code: "storekit_verification_failed",
-        message: "StoreKit could not verify the transaction",
-        cause: error,
-      )
-    @unknown default:
-      throw AppleIAPStackError(
-        code: "storekit_update_failed",
-        message: "StoreKit returned an unknown transaction state",
-      )
-    }
+    await transaction.finish()
   }
 
   private func mapVerification(
-    _ verification: VerificationResult<Transaction>,
+    _ verification: StoreKit.VerificationResult<Transaction>,
     status: ApplePurchaseStatus,
   ) async throws -> ApplePurchase {
     switch verification {
     case .verified(let transaction):
-      return await makeApplePurchase(from: transaction, status: status)
+      let purchase = makeApplePurchase(
+        from: transaction,
+        signedTransaction: verification.jwsRepresentation,
+        status: status,
+      )
+      await state.setPending(transaction, id: purchase.transactionId)
+      return purchase
     case .unverified(_, let error):
       throw AppleIAPStackError(
         code: "storekit_verification_failed",
         message: "StoreKit could not verify the transaction",
         cause: error,
-      )
-    @unknown default:
-      throw AppleIAPStackError(
-        code: "storekit_update_failed",
-        message: "StoreKit returned an unknown transaction state",
       )
     }
   }
 
   private func makeApplePurchase(
     from transaction: Transaction,
+    signedTransaction: String,
     status: ApplePurchaseStatus,
-  ) async -> ApplePurchase {
-    let appAccountToken = transaction.appAccountToken?.uuidString.lowercased()
-    return ApplePurchase(
+  ) -> ApplePurchase {
+    ApplePurchase(
       transactionId: String(describing: transaction.id),
       productId: transaction.productID,
-      signedTransaction: transaction.jwsRepresentation,
+      signedTransaction: signedTransaction,
       status: status,
       pendingCompletion: true,
-      appAccountToken: appAccountToken,
+      appAccountToken: transaction.appAccountToken?.uuidString.lowercased(),
       errorCode: nil,
     )
+  }
+
+  private static func mapUpdate(
+    _ result: StoreKit.VerificationResult<Transaction>,
+    status: ApplePurchaseStatus,
+    state: State,
+  ) async -> ApplePurchase? {
+    switch result {
+    case .verified(let transaction):
+      let purchase = ApplePurchase(
+        transactionId: String(describing: transaction.id),
+        productId: transaction.productID,
+        signedTransaction: result.jwsRepresentation,
+        status: status,
+        pendingCompletion: true,
+        appAccountToken: transaction.appAccountToken?.uuidString.lowercased(),
+        errorCode: nil,
+      )
+      await state.setPending(transaction, id: purchase.transactionId)
+      return purchase
+    case .unverified(_, let error):
+      return ApplePurchase(
+        transactionId: "",
+        productId: "",
+        signedTransaction: "",
+        status: .failed,
+        pendingCompletion: false,
+        appAccountToken: nil,
+        errorCode: "\(error)",
+      )
+    }
+  }
+
+  private func currencyCode(for product: Product) -> String {
+    if #available(iOS 16.0, macOS 13.0, *) {
+      return product.priceFormatStyle.locale.currency?.identifier
+        ?? Locale.current.currency?.identifier
+        ?? "USD"
+    }
+    return Locale.current.currencyCode ?? "USD"
   }
 }
 

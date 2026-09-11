@@ -1,14 +1,23 @@
 # IAPStack Apple SDK (Swift)
 
-This package provides:
+Provider-neutral Swift client plus a StoreKit 2 companion. The package follows
+the Flutter split:
 
-- Provider-neutral `IAPStackClient` for the IAPStack v1 API:
-  - `verifyPurchase`
-  - `restorePurchases`
-  - `getEntitlements`
-- `AppleIAPStack` companion flow for StoreKit 2 catalog and checkout orchestration.
-- Strong retry/backoff, per-attempt timeouts, and contract-safe JSON decoding.
-- SPM distribution with dedicated unit tests under `Tests/IAPStackAppleTests`.
+- `IAPStackClient` — verify, restore, entitlements, abortable timeouts, retries, request IDs
+- `AppleIAPStack` — StoreKit 2 catalog, `appAccountToken` binding, compact JWS evidence,
+  finish-after-verify, unfinished-transaction listening, restore batching
+
+Authenticate the user in your trusted host backend, then mint a short-lived
+customer session there with the durable application bearer. Return only that
+customer token to the mobile app. Never ship the durable application bearer in
+a mobile binary, and never persist or log the customer bearer.
+
+Finish StoreKit transactions only after IAPStack verification succeeds. Keep
+signed JWS strings in memory; do not write them to disk, logs, or analytics.
+
+This drop is the HTTP client and StoreKit companion. A full sample app with a
+StoreKit Configuration file is follow-up work; this package does not yet close
+issue #91.
 
 ```swift
 import IAPStackApple
@@ -19,13 +28,16 @@ let config = IAPStackConfig(
   customerToken: "short-lived-customer-token",
 )
 
-let client = IAPStackClient(config: config)
+let client = try IAPStackClient(config: config)
 let snapshot = try await client.getEntitlements("customer-uuid")
+let hasPremium = snapshot.entitlements.contains { $0.key == "premium" && $0.grantsAccess() }
 ```
 
 ## StoreKit companion
 
-`AppleIAPStack` couples StoreKit 2 updates with provider-neutral verification:
+`AppleIAPStack` couples StoreKit 2 updates with provider-neutral verification.
+`externalCustomerId` must be a lowercase UUID; it is sent as StoreKit's
+`appAccountToken`.
 
 ```swift
 let stack = AppleIAPStack(

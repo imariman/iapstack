@@ -5,11 +5,11 @@ private let sdkVersion = "0.1.0-dev.1"
 /// Provider-neutral HTTP client for the IAPStack v1 API.
 public final class IAPStackClient {
   /// Creates a client with optional custom URLSession for testing.
-  public init(config: IAPStackConfig, session: URLSession = .shared) {
+  public init(config: IAPStackConfig, session: URLSession = .shared) throws {
+    try config.validate()
     self.config = config
     self.session = session
-    self.ownsSession = session === URLSession.shared ? false : true
-    try! config.validate()
+    self.ownsSession = session !== URLSession.shared
   }
 
   private let config: IAPStackConfig
@@ -41,7 +41,7 @@ public final class IAPStackClient {
     let json = try await request(
       method: "POST",
       path: ["v1", "applications", config.applicationId, "purchases:restore"],
-      body: ["purchases": purchases.map(\.toDictionary)],
+      body: ["purchases": purchases.map { $0.toDictionary() }],
       requestId: requestId,
     )
     return try RestoreResult.from(json)
@@ -65,6 +65,7 @@ public final class IAPStackClient {
         externalCustomerId,
         "entitlements",
       ],
+      body: nil,
       requestId: requestId,
     )
     return try EntitlementSnapshot.from(json)
@@ -121,7 +122,9 @@ public final class IAPStackClient {
     body: [String: Any]?,
     requestId: String?,
   ) async throws -> [String: Any] {
-    let (data, response) = try await withTimeout { try await send(method: method, path: path, body: body, requestId: requestId) }
+    let (data, response) = try await withTimeout {
+      try await self.send(method: method, path: path, body: body, requestId: requestId)
+    }
     if data.count > config.maxResponseBytes {
       throw IAPStackSDKError.protocolError(message: "IAPStack response exceeded maxResponseBytes")
     }
@@ -143,7 +146,7 @@ public final class IAPStackClient {
     request.httpMethod = method
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     request.setValue("Bearer \(config.customerToken)", forHTTPHeaderField: "Authorization")
-    request.setValue("swift/\(sdkVersion)", forHTTPHeaderField: "X-IAPStack-SDK")
+    request.setValue("ios-swift/\(sdkVersion)", forHTTPHeaderField: "X-IAPStack-SDK")
     if let requestId {
       request.setValue(requestId, forHTTPHeaderField: "X-Request-ID")
     }
@@ -166,26 +169,40 @@ public final class IAPStackClient {
   private func withTimeout<T>(_ operation: @escaping () async throws -> T) async throws -> T {
     let timeout = max(1, UInt64(config.timeout * 1_000_000_000))
     do {
-      return try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask { try await operation() }
+      return try await withThrowingTaskGroup(of: TimeoutRace<T>.self) { group in
+        group.addTask { .value(try await operation()) }
         group.addTask {
           try await Task.sleep(nanoseconds: timeout)
-          throw IAPStackSDKError.timeoutError(message: "IAPStack request timed out")
+          return .timeout
         }
-        guard let value = try await group.next() else {
+        defer { group.cancelAll() }
+        switch try await group.next() {
+        case .value(let value):
+          return value
+        case .timeout:
+          throw IAPStackSDKError.timeoutError(message: "IAPStack request timed out")
+        case nil:
           throw IAPStackSDKError.transportError(message: "IAPStack request did not execute")
         }
-        group.cancelAll()
-        return value
       }
+    } catch is CancellationError {
+      throw IAPStackSDKError.timeoutError(message: "IAPStack request timed out")
     } catch {
       if case IAPStackSDKError.timeoutError = error {
         throw error
       }
-      if case URLError.networkConnectionLost = (error as? URLError) {
+      if let urlError = error as? URLError,
+        urlError.code == .timedOut || urlError.code == .cancelled
+      {
         throw IAPStackSDKError.timeoutError(
           message: "IAPStack request timed out",
           cause: error,
+        )
+      }
+      if let urlError = error as? URLError {
+        throw IAPStackSDKError.transportError(
+          message: "IAPStack request failed before a response was received",
+          cause: urlError,
         )
       }
       throw error
@@ -196,8 +213,11 @@ public final class IAPStackClient {
     guard attempt < config.retryPolicy.maxAttempts else {
       return false
     }
+    if error is CancellationError {
+      return false
+    }
     guard let sdkError = error as? IAPStackSDKError else {
-      return true
+      return error is URLError
     }
     return sdkError.isRetryable
   }
@@ -248,10 +268,27 @@ public final class IAPStackClient {
   }
 
   private func append(path segments: [String]) -> URL {
-    var value = config.baseUri
-    for segment in segments {
-      value = value.appendingPathComponent(segment)
+    var components = URLComponents(url: config.baseUri, resolvingAgainstBaseURL: false)
+      ?? URLComponents()
+    var path = components.percentEncodedPath
+    if path.isEmpty {
+      path = "/"
     }
-    return value
+    if !path.hasSuffix("/") {
+      path += "/"
+    }
+    var allowed = CharacterSet.urlPathAllowed
+    allowed.remove(charactersIn: "/")
+    let encoded = segments.map { segment in
+      segment.addingPercentEncoding(withAllowedCharacters: allowed) ?? segment
+    }
+    path += encoded.joined(separator: "/")
+    components.percentEncodedPath = path
+    return components.url ?? config.baseUri
   }
+}
+
+private enum TimeoutRace<Value> {
+  case value(Value)
+  case timeout
 }

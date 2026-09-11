@@ -19,7 +19,12 @@ final class URLStubProtocol: URLProtocol {
   }
 
   override class func canonicalRequest(for request: URLRequest) -> URLRequest {
-    request
+    var copy = request
+    if copy.httpBody == nil, let stream = copy.httpBodyStream {
+      copy.httpBodyStream = nil
+      copy.httpBody = Data(reading: stream)
+    }
+    return copy
   }
 
   override func startLoading() {
@@ -40,6 +45,24 @@ final class URLStubProtocol: URLProtocol {
   }
 
   override func stopLoading() {}
+}
+
+private extension Data {
+  init(reading stream: InputStream) {
+    self.init()
+    stream.open()
+    defer { stream.close() }
+    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 1024)
+    defer { buffer.deallocate() }
+    while stream.hasBytesAvailable {
+      let read = stream.read(buffer, maxLength: 1024)
+      if read > 0 {
+        append(buffer, count: read)
+      } else {
+        break
+      }
+    }
+  }
 }
 
 final class IAPStackAppleTests: XCTestCase {
@@ -80,7 +103,7 @@ final class IAPStackAppleTests: XCTestCase {
       customerToken: "customer-token",
     )
     let session = makeSession()
-    let client = IAPStackClient(config: config, session: session)
+    let client = try IAPStackClient(config: config, session: session)
     let purchase = try PurchaseSubmission(
       externalCustomerId: "customer-external",
       claimedProducts: ["premium_lifetime"],
@@ -97,7 +120,7 @@ final class IAPStackAppleTests: XCTestCase {
     XCTAssertEqual(request.url?.path, "/proxy/v1/applications/application-1/purchases:verify")
     XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer customer-token")
     XCTAssertEqual(request.value(forHTTPHeaderField: "X-Request-ID"), "request-client-1")
-    XCTAssertEqual(request.value(forHTTPHeaderField: "X-IAPStack-SDK"), "swift/0.1.0-dev.1")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "X-IAPStack-SDK"), "ios-swift/0.1.0-dev.1")
 
     let decoded = try XCTUnwrap(
       request.httpBody.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] },
@@ -136,6 +159,7 @@ final class IAPStackAppleTests: XCTestCase {
       return (response, Data(responseBody.utf8))
     }
     URLStubProtocol.enqueue { request in
+      attempts += 1
       let responseBody = """
       {
         "results": [
@@ -163,7 +187,7 @@ final class IAPStackAppleTests: XCTestCase {
       timeout: 1,
       retryPolicy: .init(maxAttempts: 2),
     )
-    let client = IAPStackClient(config: config, session: makeSession())
+    let client = try IAPStackClient(config: config, session: makeSession())
     let submission = try PurchaseSubmission(
       externalCustomerId: "customer-external",
       claimedProducts: ["sku-1"],
@@ -180,7 +204,7 @@ final class IAPStackAppleTests: XCTestCase {
     URLStubProtocol.reset()
     var capturedPath: String?
     URLStubProtocol.enqueue { request in
-      capturedPath = request.url?.path
+      capturedPath = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.percentEncodedPath
       let responseBody = """
       {
         "customer_id": "customer-internal",
@@ -201,10 +225,13 @@ final class IAPStackAppleTests: XCTestCase {
       applicationId: "application-1",
       customerToken: "customer-token",
     )
-    let client = IAPStackClient(config: config, session: makeSession())
+    let client = try IAPStackClient(config: config, session: makeSession())
     _ = try await client.getEntitlements("customer/with space")
 
-    XCTAssertEqual(capturedPath, "/proxy/v1/applications/application-1/customers/customer%2Fwith%20space/entitlements")
+    XCTAssertEqual(
+      capturedPath,
+      "/proxy/v1/applications/application-1/customers/customer%2Fwith%20space/entitlements",
+    )
   }
 
   func testTimeoutTurnsIntoTimeoutError() async throws {
@@ -228,14 +255,65 @@ final class IAPStackAppleTests: XCTestCase {
       applicationId: "application-1",
       customerToken: "customer-token",
       timeout: 0.001,
+      retryPolicy: .init(maxAttempts: 1),
     )
-    let client = IAPStackClient(config: config, session: makeSession())
+    let client = try IAPStackClient(config: config, session: makeSession())
     do {
       _ = try await client.getEntitlements("customer-id")
       XCTFail("expected timeout error")
     } catch {
       guard case IAPStackSDKError.timeoutError = error else {
         XCTFail("expected timeout, got \(error)")
+        return
+      }
+    }
+  }
+
+  func testInvalidOptionalDatesBecomeProtocolErrors() async throws {
+    URLStubProtocol.reset()
+    URLStubProtocol.enqueue { request in
+      let responseBody = """
+      {
+        "verified_at": "2026-09-10T12:00:00Z",
+        "customer_id": "customer-internal",
+        "entitlements": [
+          {
+            "key": "premium",
+            "access": "allowed",
+            "reason": "verified",
+            "version": 1,
+            "effective_starts_at": "not-a-timestamp",
+            "effective_ends_at": null
+          }
+        ]
+      }
+      """
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"],
+      )!
+      return (response, Data(responseBody.utf8))
+    }
+
+    let config = IAPStackConfig(
+      baseUri: URL(string: "https://example.local")!,
+      applicationId: "application-1",
+      customerToken: "customer-token",
+    )
+    let client = try IAPStackClient(config: config, session: makeSession())
+    let submission = try PurchaseSubmission(
+      externalCustomerId: "customer",
+      claimedProducts: ["sku-1"],
+      evidence: ["signed_transaction": "a.b.c", "product_kind": "non_consumable"],
+    )
+    do {
+      _ = try await client.verifyPurchase(submission)
+      XCTFail("expected protocol error")
+    } catch {
+      guard case IAPStackSDKError.protocolError = error else {
+        XCTFail("expected protocolError, got \(error)")
         return
       }
     }
@@ -267,7 +345,7 @@ final class IAPStackAppleTests: XCTestCase {
       customerToken: "customer-token",
       maxResponseBytes: 5,
     )
-    let client = IAPStackClient(config: config, session: makeSession())
+    let client = try IAPStackClient(config: config, session: makeSession())
     let submission = try PurchaseSubmission(
       externalCustomerId: "customer",
       claimedProducts: ["sku-1"],

@@ -8,6 +8,13 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-sdk-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   swift-ios-sdk:
     name: Swift SDK checks
