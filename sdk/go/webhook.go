@@ -44,10 +44,12 @@ const (
 
 // EventStore atomically deduplicates authenticated webhook event identities.
 type EventStore interface {
-	// Remember records one authenticated event ID and body fingerprint.
-	// It returns duplicate=true when the same identity was stored before.
-	// A conflicting fingerprint for an existing ID returns a WebhookError.
-	Remember(ctx context.Context, eventID string, fingerprint [sha256.Size]byte) (duplicate bool, err error)
+	// Remember records one authenticated event ID and opaque body fingerprint.
+	// The verifier hashes the raw body; hosts persist the fingerprint as-is and
+	// must not import crypto/sha256 to recompute it. It returns duplicate=true
+	// when the same identity was stored before. A conflicting fingerprint for
+	// an existing ID returns a WebhookError.
+	Remember(ctx context.Context, eventID string, fingerprint []byte) (duplicate bool, err error)
 }
 
 // WebhookConfig controls signature verification, replay window, and dedupe storage.
@@ -60,8 +62,6 @@ type WebhookConfig struct {
 	TimestampTolerance time.Duration
 	// Store atomically deduplicates authenticated event IDs.
 	Store EventStore
-	// Clock supplies the current time for replay-window checks; nil uses time.Now.
-	Clock func() time.Time
 }
 
 // WebhookVerifier authenticates v2 IAPStack deliveries and deduplicates event IDs.
@@ -95,43 +95,20 @@ type MemoryEventStore struct {
 	// mu serializes identity inserts and conflict checks.
 	mu sync.Mutex
 	// events maps authenticated event IDs to the accepted body fingerprint.
-	events map[string][sha256.Size]byte
+	events map[string]string
 }
 
-type entitlementChangePayload struct {
-	// SchemaVersion is the outbox payload contract version.
-	SchemaVersion int `json:"schema_version"`
-	// ProjectID is the project that owns the changed projection.
-	ProjectID string `json:"project_id"`
-	// ApplicationID is the application that emitted the event.
-	ApplicationID string `json:"application_id"`
-	// CustomerID is the internal stable customer identifier.
-	CustomerID string `json:"customer_id"`
-	// EntitlementID is the durable entitlement definition identifier.
-	EntitlementID string `json:"entitlement_id"`
-	// EntitlementKey is the public entitlement key configured by the application.
-	EntitlementKey string `json:"entitlement_key"`
-	// Access is the forward-compatible access value after the change.
-	Access string `json:"access"`
-	// AccessReason is the forward-compatible normalized access reason.
-	AccessReason string `json:"access_reason"`
-	// SourceObservationID is the observation that produced this projection.
-	SourceObservationID string `json:"source_observation_id"`
-	// SourceApplicationID is the application that sourced the observation.
-	SourceApplicationID string `json:"source_application_id"`
-	// SourceProductID is the product that sourced the observation.
-	SourceProductID string `json:"source_product_id"`
-	// EffectiveStartsAt is the inclusive access period start, when applicable.
-	EffectiveStartsAt *time.Time `json:"effective_starts_at"`
-	// EffectiveEndsAt is the exclusive access period end, when applicable.
-	EffectiveEndsAt *time.Time `json:"effective_ends_at"`
-	// Version is the projection generation incremented only for logical changes.
-	Version int64 `json:"version"`
+// webhookHandler maps VerifyRequest onto IAPStack's outbound retry policy.
+type webhookHandler struct {
+	// verifier authenticates and deduplicates each delivery.
+	verifier *WebhookVerifier
+	// onEvent handles authenticated, non-duplicate entitlement changes.
+	onEvent func(context.Context, WebhookEvent) error
 }
 
 // NewMemoryEventStore constructs an in-memory dedupe store.
 func NewMemoryEventStore() *MemoryEventStore {
-	return &MemoryEventStore{events: make(map[string][sha256.Size]byte)}
+	return &MemoryEventStore{events: make(map[string]string)}
 }
 
 // NewWebhookVerifier validates dependencies and constructs a fail-closed verifier.
@@ -154,58 +131,94 @@ func NewWebhookVerifier(config WebhookConfig) (*WebhookVerifier, error) {
 	if config.TimestampTolerance <= 0 {
 		return nil, errors.New("webhook timestamp tolerance must be positive")
 	}
-	if config.Clock == nil {
-		config.Clock = time.Now
-	}
 	return &WebhookVerifier{
 		secret:             append([]byte(nil), config.Secret...),
 		bodyLimit:          config.BodyLimit,
 		timestampTolerance: config.TimestampTolerance,
 		store:              config.Store,
-		clock:              config.Clock,
+		clock:              time.Now,
 	}, nil
 }
 
+// Handler returns a long-lived HTTP handler for IAPStack webhook deliveries.
+//
+// Construct the verifier once at process start. The handler maps signature and
+// timestamp failures to 401, identity conflict to 409, and store or callback
+// errors to 503. IAPStack retries only 408, 429, and 5xx; 401 is a permanent
+// webhook_rejected failure.
+func (verifier *WebhookVerifier) Handler(onEvent func(context.Context, WebhookEvent) error) http.Handler {
+	if onEvent == nil {
+		onEvent = func(context.Context, WebhookEvent) error { return nil }
+	}
+	return &webhookHandler{verifier: verifier, onEvent: onEvent}
+}
+
+// ServeHTTP authenticates one delivery and invokes onEvent for new events.
+func (handler *webhookHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	event, err := handler.verifier.VerifyRequest(request)
+	if err != nil {
+		writeWebhookError(writer, err)
+		return
+	}
+	if event.Duplicate {
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := handler.onEvent(request.Context(), event); err != nil {
+		writeWebhookError(writer, &WebhookError{
+			Code:       "receiver_unavailable",
+			StatusCode: http.StatusServiceUnavailable,
+			Cause:      err,
+		})
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
 // VerifyRequest authenticates one HTTP delivery, parses the payload, and deduplicates it.
+//
+// Prefer Handler so hosts do not reconstruct HTTP status mapping. Returned
+// WebhookError values include the status IAPStack's outbound delivery expects.
 func (verifier *WebhookVerifier) VerifyRequest(request *http.Request) (WebhookEvent, error) {
 	if request == nil {
-		return WebhookEvent{}, &WebhookError{Code: "invalid_body"}
+		return WebhookEvent{}, webhookFailure("invalid_body")
 	}
 	if request.Method != http.MethodPost {
-		return WebhookEvent{}, &WebhookError{Code: "method_not_allowed"}
+		return WebhookEvent{}, webhookFailure("method_not_allowed")
 	}
 	if !isJSONContentType(request.Header.Get("Content-Type")) {
-		return WebhookEvent{}, &WebhookError{Code: "content_type_required"}
+		return WebhookEvent{}, webhookFailure("content_type_required")
 	}
 	eventID := request.Header.Get(headerEventID)
 	if !validWebhookIdentity(eventID) {
-		return WebhookEvent{}, &WebhookError{Code: "invalid_event_id"}
+		return WebhookEvent{}, webhookFailure("invalid_event_id")
 	}
 	timestamp, timestampText, ok := verifier.validTimestamp(request.Header.Get(headerTimestamp))
 	if !ok {
-		return WebhookEvent{}, &WebhookError{Code: "invalid_timestamp"}
+		return WebhookEvent{}, webhookFailure("invalid_timestamp")
 	}
 	if request.Body == nil {
-		return WebhookEvent{}, &WebhookError{Code: "invalid_body"}
+		return WebhookEvent{}, webhookFailure("invalid_body")
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(nil, request.Body, verifier.bodyLimit))
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			return WebhookEvent{}, &WebhookError{Code: "body_too_large"}
+			return WebhookEvent{}, webhookFailure("body_too_large")
 		}
-		return WebhookEvent{}, &WebhookError{Code: "invalid_body"}
+		return WebhookEvent{}, webhookFailure("invalid_body")
 	}
 	if !verifier.validSignature(eventID, timestampText, body, request.Header.Get(headerSignature)) {
-		return WebhookEvent{}, &WebhookError{Code: "invalid_signature"}
+		return WebhookEvent{}, webhookFailure("invalid_signature")
 	}
 	change, err := decodeEntitlementChange(body)
 	if err != nil {
-		return WebhookEvent{}, &WebhookError{Code: "invalid_event"}
+		return WebhookEvent{}, webhookFailure("invalid_event")
 	}
-	duplicate, err := verifier.store.Remember(request.Context(), eventID, sha256.Sum256(body))
+	fingerprint := sha256.Sum256(body)
+	duplicate, err := verifier.store.Remember(request.Context(), eventID, fingerprint[:])
 	if err != nil {
-		return WebhookEvent{}, err
+		return WebhookEvent{}, wrapStoreError(err)
 	}
 	return WebhookEvent{ID: eventID, Timestamp: timestamp, Duplicate: duplicate, Change: change}, nil
 }
@@ -221,21 +234,22 @@ func (verifier *WebhookVerifier) Close() {
 }
 
 // Remember inserts or compares one authenticated event identity.
-func (store *MemoryEventStore) Remember(_ context.Context, eventID string, fingerprint [sha256.Size]byte) (bool, error) {
+func (store *MemoryEventStore) Remember(_ context.Context, eventID string, fingerprint []byte) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.events == nil {
-		store.events = make(map[string][sha256.Size]byte)
+		store.events = make(map[string]string)
 	}
+	copied := string(fingerprint)
 	existing, ok := store.events[eventID]
 	if !ok {
-		store.events[eventID] = fingerprint
+		store.events[eventID] = copied
 		return false, nil
 	}
-	if existing == fingerprint {
+	if existing == copied {
 		return true, nil
 	}
-	return false, &WebhookError{Code: "event_identity_conflict"}
+	return false, webhookFailure("event_identity_conflict")
 }
 
 // validTimestamp parses a canonical Unix timestamp inside the configured replay window.
@@ -280,33 +294,15 @@ func (verifier *WebhookVerifier) validSignature(eventID, timestamp string, body 
 
 // decodeEntitlementChange validates the production entitlement.changed payload.
 func decodeEntitlementChange(body []byte) (EntitlementChange, error) {
-	var payload entitlementChangePayload
-	if err := json.Unmarshal(body, &payload); err != nil {
+	var change EntitlementChange
+	if err := json.Unmarshal(body, &change); err != nil {
 		return EntitlementChange{}, err
 	}
-	if payload.SchemaVersion <= 0 || payload.Version < 1 ||
-		payload.ProjectID == "" || payload.ApplicationID == "" || payload.CustomerID == "" ||
-		payload.EntitlementID == "" || payload.EntitlementKey == "" || payload.Access == "" ||
-		payload.AccessReason == "" || payload.SourceObservationID == "" ||
-		payload.SourceApplicationID == "" || payload.SourceProductID == "" {
-		return EntitlementChange{}, errors.New("webhook event metadata is invalid")
+	if err := change.validate(); err != nil {
+		return EntitlementChange{}, err
 	}
-	return EntitlementChange{
-		SchemaVersion:       payload.SchemaVersion,
-		ProjectID:           payload.ProjectID,
-		ApplicationID:       payload.ApplicationID,
-		CustomerID:          payload.CustomerID,
-		EntitlementID:       payload.EntitlementID,
-		EntitlementKey:      payload.EntitlementKey,
-		Access:              payload.Access,
-		AccessReason:        payload.AccessReason,
-		SourceObservationID: payload.SourceObservationID,
-		SourceApplicationID: payload.SourceApplicationID,
-		SourceProductID:     payload.SourceProductID,
-		EffectiveStartsAt:   utcTime(payload.EffectiveStartsAt),
-		EffectiveEndsAt:     utcTime(payload.EffectiveEndsAt),
-		Version:             payload.Version,
-	}, nil
+	change.normalize()
+	return change, nil
 }
 
 // isJSONContentType accepts JSON content types with optional parameters.
@@ -326,4 +322,58 @@ func validWebhookIdentity(value string) bool {
 		}
 	}
 	return true
+}
+
+// webhookFailure constructs a WebhookError with the IAPStack retry-policy status.
+func webhookFailure(code string) *WebhookError {
+	return &WebhookError{Code: code, StatusCode: webhookStatus(code)}
+}
+
+// webhookStatus maps verifier failure codes onto IAPStack outbound delivery statuses.
+func webhookStatus(code string) int {
+	switch code {
+	case "invalid_timestamp", "invalid_signature":
+		return http.StatusUnauthorized
+	case "method_not_allowed":
+		return http.StatusMethodNotAllowed
+	case "content_type_required":
+		return http.StatusUnsupportedMediaType
+	case "body_too_large":
+		return http.StatusRequestEntityTooLarge
+	case "event_identity_conflict":
+		return http.StatusConflict
+	case "receiver_unavailable":
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusBadRequest
+	}
+}
+
+// wrapStoreError preserves WebhookError values and maps other store failures to 503.
+func wrapStoreError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var webhookErr *WebhookError
+	if errors.As(err, &webhookErr) {
+		if webhookErr.StatusCode != 0 {
+			return webhookErr
+		}
+		return &WebhookError{Code: webhookErr.Code, StatusCode: webhookStatus(webhookErr.Code), Cause: webhookErr.Cause}
+	}
+	return &WebhookError{Code: "receiver_unavailable", StatusCode: http.StatusServiceUnavailable, Cause: err}
+}
+
+// writeWebhookError writes the JSON error envelope hosts must return to IAPStack.
+func writeWebhookError(writer http.ResponseWriter, err error) {
+	webhookErr, ok := wrapStoreError(err).(*WebhookError)
+	if !ok {
+		webhookErr = webhookFailure("receiver_unavailable")
+	}
+	if webhookErr.Code == "method_not_allowed" {
+		writer.Header().Set("Allow", http.MethodPost)
+	}
+	writer.Header().Set("Content-Type", jsonContentType)
+	writer.WriteHeader(webhookErr.StatusCode)
+	_ = json.NewEncoder(writer).Encode(map[string]string{"code": webhookErr.Code})
 }

@@ -2,6 +2,7 @@ package iapstack
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -34,6 +35,11 @@ const (
 		`"version":1` +
 		`}`
 )
+
+type failingStore struct {
+	// err is returned from every Remember call.
+	err error
+}
 
 // TestWebhookVerifierAcceptsAuthenticatedEvent verifies exact v2 signature validation.
 func TestWebhookVerifierAcceptsAuthenticatedEvent(t *testing.T) {
@@ -69,7 +75,8 @@ func TestWebhookVerifierRejectsInvalidSignature(t *testing.T) {
 	if _, err := verifier.VerifyRequest(request); !webhookCode(err, "invalid_signature") {
 		t.Fatalf("error = %v, want invalid_signature", err)
 	}
-	if duplicate, err := store.Remember(request.Context(), "event-1", sha256.Sum256([]byte(testWebhookBody))); err != nil || duplicate {
+	fingerprint := sha256.Sum256([]byte(testWebhookBody))
+	if duplicate, err := store.Remember(request.Context(), "event-1", fingerprint[:]); err != nil || duplicate {
 		t.Fatalf("store remembered a rejected delivery: duplicate=%t err=%v", duplicate, err)
 	}
 }
@@ -244,12 +251,12 @@ func TestWebhookVerifierAppliesDefaultBounds(t *testing.T) {
 	verifier, err := NewWebhookVerifier(WebhookConfig{
 		Secret: []byte(testWebhookSecret),
 		Store:  NewMemoryEventStore(),
-		Clock:  func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookVerifier() error = %v", err)
 	}
 	defer verifier.Close()
+	verifier.clock = func() time.Time { return now }
 	if _, err := verifier.VerifyRequest(signedWebhookRequest(t, now, []byte(testWebhookBody), "event-1")); err != nil {
 		t.Fatalf("VerifyRequest() error = %v", err)
 	}
@@ -264,6 +271,117 @@ func TestWebhookVerifierRejectsNilRequest(t *testing.T) {
 	if _, err := verifier.VerifyRequest(nil); !webhookCode(err, "invalid_body") {
 		t.Fatalf("error = %v, want invalid_body", err)
 	}
+}
+
+// TestWebhookVerifierWrapsStoreFailuresAsUnavailable maps durable-store outages to 503.
+func TestWebhookVerifierWrapsStoreFailuresAsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC)
+	cause := errors.New("disk full")
+	verifier := newTestVerifierWithStore(t, now, defaultWebhookBodyLimit, failingStore{err: cause})
+	defer verifier.Close()
+
+	_, err := verifier.VerifyRequest(signedWebhookRequest(t, now, []byte(testWebhookBody), "event-1"))
+	if !webhookCode(err, "receiver_unavailable") {
+		t.Fatalf("error = %v, want receiver_unavailable", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("store cause was dropped: %v", err)
+	}
+
+	conflictVerifier := newTestVerifierWithStore(t, now, defaultWebhookBodyLimit, failingStore{
+		err: &WebhookError{Code: "event_identity_conflict"},
+	})
+	defer conflictVerifier.Close()
+	_, err = conflictVerifier.VerifyRequest(signedWebhookRequest(t, now, []byte(testWebhookBody), "event-2"))
+	if !webhookCode(err, "event_identity_conflict") {
+		t.Fatalf("error = %v, want event_identity_conflict with status 409", err)
+	}
+}
+
+// TestWebhookHandlerOwnsIAPStackRetryStatuses verifies delivery status mapping.
+func TestWebhookHandlerOwnsIAPStackRetryStatuses(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC)
+	verifier := newTestVerifier(t, now, defaultWebhookBodyLimit)
+	defer verifier.Close()
+
+	handler := verifier.Handler(func(context.Context, WebhookEvent) error { return nil })
+
+	accepted := httptest.NewRecorder()
+	handler.ServeHTTP(accepted, signedWebhookRequest(t, now, []byte(testWebhookBody), "event-1"))
+	if accepted.Code != http.StatusNoContent {
+		t.Fatalf("accepted status = %d", accepted.Code)
+	}
+
+	duplicate := httptest.NewRecorder()
+	handler.ServeHTTP(duplicate, signedWebhookRequest(t, now, []byte(testWebhookBody), "event-1"))
+	if duplicate.Code != http.StatusNoContent {
+		t.Fatalf("duplicate status = %d", duplicate.Code)
+	}
+
+	unauthorized := httptest.NewRecorder()
+	badSignature := signedWebhookRequest(t, now, []byte(testWebhookBody), "event-2")
+	badSignature.Header.Set(headerSignature, signaturePrefix+hex.EncodeToString(make([]byte, sha256.Size)))
+	handler.ServeHTTP(unauthorized, badSignature)
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid signature status = %d, want 401", unauthorized.Code)
+	}
+
+	conflictVerifier := newTestVerifier(t, now, defaultWebhookBodyLimit)
+	defer conflictVerifier.Close()
+	if _, err := conflictVerifier.VerifyRequest(signedWebhookRequest(t, now, []byte(testWebhookBody), "event-3")); err != nil {
+		t.Fatalf("seed delivery error = %v", err)
+	}
+	conflict := httptest.NewRecorder()
+	altered := []byte(strings.Replace(testWebhookBody, `"version":1`, `"version":2`, 1))
+	conflictVerifier.Handler(func(context.Context, WebhookEvent) error { return nil }).ServeHTTP(
+		conflict,
+		signedWebhookRequest(t, now, altered, "event-3"),
+	)
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("identity conflict status = %d, want 409", conflict.Code)
+	}
+
+	unavailableVerifier := newTestVerifierWithStore(t, now, defaultWebhookBodyLimit, failingStore{err: errors.New("disk full")})
+	defer unavailableVerifier.Close()
+	unavailable := httptest.NewRecorder()
+	unavailableVerifier.Handler(func(context.Context, WebhookEvent) error { return nil }).ServeHTTP(
+		unavailable,
+		signedWebhookRequest(t, now, []byte(testWebhookBody), "event-4"),
+	)
+	if unavailable.Code != http.StatusServiceUnavailable {
+		t.Fatalf("store failure status = %d, want 503", unavailable.Code)
+	}
+
+	callbackVerifier := newTestVerifier(t, now, defaultWebhookBodyLimit)
+	defer callbackVerifier.Close()
+	callbackFailed := httptest.NewRecorder()
+	callbackVerifier.Handler(func(context.Context, WebhookEvent) error {
+		return errors.New("host side effect failed")
+	}).ServeHTTP(callbackFailed, signedWebhookRequest(t, now, []byte(testWebhookBody), "event-5"))
+	if callbackFailed.Code != http.StatusServiceUnavailable {
+		t.Fatalf("callback failure status = %d, want 503", callbackFailed.Code)
+	}
+
+	method := httptest.NewRecorder()
+	handler.ServeHTTP(method, httptest.NewRequest(http.MethodGet, "/webhooks/iapstack", nil))
+	if method.Code != http.StatusMethodNotAllowed || method.Header().Get("Allow") != http.MethodPost {
+		t.Fatalf("GET status = %d allow = %q", method.Code, method.Header().Get("Allow"))
+	}
+
+	noop := httptest.NewRecorder()
+	verifier.Handler(nil).ServeHTTP(noop, signedWebhookRequest(t, now, []byte(testWebhookBody), "event-6"))
+	if noop.Code != http.StatusNoContent {
+		t.Fatalf("nil callback status = %d", noop.Code)
+	}
+}
+
+// Remember returns the injected store failure without recording the event.
+func (store failingStore) Remember(context.Context, string, []byte) (bool, error) {
+	return false, store.err
 }
 
 // newTestVerifier constructs a verifier with an isolated memory store.
@@ -281,11 +399,11 @@ func newTestVerifierWithStore(t *testing.T, now time.Time, bodyLimit int64, stor
 		BodyLimit:          bodyLimit,
 		TimestampTolerance: 5 * time.Minute,
 		Store:              store,
-		Clock:              func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatalf("NewWebhookVerifier() error = %v", err)
 	}
+	verifier.clock = func() time.Time { return now }
 	return verifier
 }
 
@@ -314,8 +432,8 @@ func signWebhook(eventID string, timestamp time.Time, body []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// webhookCode reports whether err is a WebhookError with the expected code.
+// webhookCode reports whether err is a WebhookError with the expected code and status.
 func webhookCode(err error, code string) bool {
 	var webhookErr *WebhookError
-	return errors.As(err, &webhookErr) && webhookErr.Code == code
+	return errors.As(err, &webhookErr) && webhookErr.Code == code && webhookErr.StatusCode == webhookStatus(code)
 }

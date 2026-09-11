@@ -55,7 +55,8 @@ func TestCreateCustomerSessionSendsApplicationBearer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCustomerSession() error = %v", err)
 	}
-	if session.Token != "iaps_customer" || !session.ExpiresAt.Equal(time.Date(2026, 8, 24, 20, 15, 0, 0, time.UTC)) {
+	if session.Token != "iaps_customer" || session.ExternalCustomerID != "customer-external" ||
+		!session.ExpiresAt.Equal(time.Date(2026, 8, 24, 20, 15, 0, 0, time.UTC)) {
 		t.Fatalf("session = %#v", session)
 	}
 	if captured.Method != http.MethodPost || captured.Path != "/proxy/v1/applications/application-1/customer-sessions" {
@@ -89,7 +90,10 @@ func TestGetEntitlementsUsesCustomerSessionBearer(t *testing.T) {
 		writeJSON(writer, http.StatusOK, entitlementSnapshotJSON())
 	}))
 
-	snapshot, err := client.GetEntitlements(context.Background(), "customer-external", testCustomerToken)
+	snapshot, err := client.GetEntitlements(context.Background(), CustomerSession{
+		Token:              testCustomerToken,
+		ExternalCustomerID: "customer-external",
+	})
 	if err != nil {
 		t.Fatalf("GetEntitlements() error = %v", err)
 	}
@@ -123,7 +127,10 @@ func TestGetEntitlementsEscapesCustomerIdentifiersAsOnePathSegment(t *testing.T)
 		writeJSON(writer, http.StatusOK, entitlementSnapshotJSON())
 	}))
 
-	if _, err := client.GetEntitlements(context.Background(), "customer/with space", testCustomerToken); err != nil {
+	if _, err := client.GetEntitlements(context.Background(), CustomerSession{
+		Token:              testCustomerToken,
+		ExternalCustomerID: "customer/with space",
+	}); err != nil {
 		t.Fatalf("GetEntitlements() error = %v", err)
 	}
 	if !strings.Contains(captured.URI, "customer%2Fwith%20space") {
@@ -367,10 +374,13 @@ func TestGetEntitlementsRejectsEmptyIdentities(t *testing.T) {
 	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		t.Fatal("HTTP should not run for invalid inputs")
 	}))
-	if _, err := client.GetEntitlements(context.Background(), "", testCustomerToken); err == nil {
+	if _, err := client.GetEntitlements(context.Background(), CustomerSession{Token: testCustomerToken}); err == nil {
 		t.Fatal("GetEntitlements() accepted an empty customer ID")
 	}
-	_, err := client.GetEntitlements(context.Background(), "customer-external", testSecretBearer)
+	_, err := client.GetEntitlements(context.Background(), CustomerSession{
+		Token:              testSecretBearer,
+		ExternalCustomerID: "customer-external",
+	})
 	if err == nil {
 		t.Fatal("GetEntitlements() accepted a whitespace customer token")
 	}
@@ -460,6 +470,10 @@ func TestErrorMethodsKeepMessagesFreeOfSecrets(t *testing.T) {
 	}
 	if (&WebhookError{}).Error() == "" || (*TransportError)(nil).Error() == "" {
 		t.Fatal("nil-safe Error() methods returned empty strings")
+	}
+	webhookErr := &WebhookError{Code: "receiver_unavailable", StatusCode: http.StatusServiceUnavailable, Cause: errors.New("disk full")}
+	if webhookErr.Error() != "receiver_unavailable" || !errors.Is(webhookErr, webhookErr.Cause) {
+		t.Fatalf("WebhookError = %v", webhookErr)
 	}
 }
 

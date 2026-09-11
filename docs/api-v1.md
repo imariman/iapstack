@@ -308,8 +308,10 @@ The event ID is authenticated. Reject `v1` signatures, timestamps outside the ap
 The trusted-host Go package is in `sdk/go`. It uses the durable application bearer
 to mint customer sessions, looks up entitlements with a minted customer session
 because the public GET contract does not accept the application bearer, and
-verifies `v2` webhook signatures with a replay window and event-ID dedupe. It
-does not import `internal/` or talk to PostgreSQL. Never log or persist the
+verifies `v2` webhook signatures with a replay window and event-ID dedupe. The
+webhook handler maps signature failures to 401, identity conflict to 409, and
+store failures to 503 so IAPStack retries only when delivery may succeed later.
+It does not import `internal/` or talk to PostgreSQL. Never log or persist the
 application bearer, and never ship it in a mobile binary.
 
 ## Flutter SDK

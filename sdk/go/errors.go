@@ -44,6 +44,10 @@ type ProtocolError struct {
 type WebhookError struct {
 	// Code is the stable webhook failure code.
 	Code string
+	// StatusCode is the HTTP status IAPStack outbound delivery should observe.
+	StatusCode int
+	// Cause is the optional underlying store or callback error.
+	Cause error
 }
 
 // Error returns a safe API failure without response payloads or credentials.
@@ -114,4 +118,12 @@ func (err *WebhookError) Error() string {
 		return "webhook verification failed"
 	}
 	return err.Code
+}
+
+// Unwrap returns the underlying store or callback cause without exposing it in Error.
+func (err *WebhookError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Cause
 }

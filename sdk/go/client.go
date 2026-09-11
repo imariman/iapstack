@@ -59,36 +59,7 @@ type customerSessionRequest struct {
 	ExternalCustomerID string `json:"external_customer_id"`
 }
 
-type customerSessionResponse struct {
-	// Token is the opaque customer bearer returned exactly once.
-	Token string `json:"token"`
-	// ExpiresAt is the UTC expiry of the minted session.
-	ExpiresAt time.Time `json:"expires_at"`
-}
-
-type entitlementResponse struct {
-	// Key is the public entitlement key configured by the application.
-	Key string `json:"key"`
-	// Access is the forward-compatible access value.
-	Access string `json:"access"`
-	// Reason is the forward-compatible normalized access reason.
-	Reason string `json:"reason"`
-	// Version is the projection generation incremented only for logical changes.
-	Version int64 `json:"version"`
-	// EffectiveStartsAt is the inclusive access period start, when applicable.
-	EffectiveStartsAt *time.Time `json:"effective_starts_at"`
-	// EffectiveEndsAt is the exclusive access period end, when applicable.
-	EffectiveEndsAt *time.Time `json:"effective_ends_at"`
-}
-
 type contextKey struct{}
-
-type entitlementSnapshotResponse struct {
-	// CustomerID is the internal stable customer identifier.
-	CustomerID string `json:"customer_id"`
-	// Entitlements are all current application-scoped projections for the customer.
-	Entitlements []entitlementResponse `json:"entitlements"`
-}
 
 type apiErrorEnvelope struct {
 	// Error is the nested v1 failure object.
@@ -149,24 +120,25 @@ func (client *Client) CreateCustomerSession(ctx context.Context, externalCustome
 	if err := validateExternalCustomerID(externalCustomerID); err != nil {
 		return CustomerSession{}, err
 	}
-	body, err := client.request(
+	body, err := client.applicationRequest(
 		ctx,
 		http.MethodPost,
-		client.applicationToken,
 		[]string{"v1", "applications", client.applicationID, "customer-sessions"},
 		customerSessionRequest{ExternalCustomerID: externalCustomerID},
 	)
 	if err != nil {
 		return CustomerSession{}, err
 	}
-	var payload customerSessionResponse
-	if err := decodeJSON(body, &payload); err != nil {
+	var session CustomerSession
+	if err := decodeJSON(body, &session); err != nil {
 		return CustomerSession{}, err
 	}
-	if payload.Token == "" || payload.ExpiresAt.IsZero() {
-		return CustomerSession{}, &ProtocolError{Message: "IAPStack response did not match the v1 contract"}
+	if err := session.validate(); err != nil {
+		return CustomerSession{}, err
 	}
-	return CustomerSession{Token: payload.Token, ExpiresAt: payload.ExpiresAt.UTC()}, nil
+	session.ExpiresAt = session.ExpiresAt.UTC()
+	session.ExternalCustomerID = externalCustomerID
+	return session, nil
 }
 
 // GetEntitlements loads the current projection using a customer session bearer.
@@ -177,45 +149,32 @@ func (client *Client) CreateCustomerSession(ctx context.Context, externalCustome
 // with CreateCustomerSession, then either return that token to a mobile client
 // or use it here. Hosts that only need push updates should verify signed
 // webhooks instead of polling.
-func (client *Client) GetEntitlements(ctx context.Context, externalCustomerID, customerToken string) (EntitlementSnapshot, error) {
-	if err := validateExternalCustomerID(externalCustomerID); err != nil {
+func (client *Client) GetEntitlements(ctx context.Context, session CustomerSession) (EntitlementSnapshot, error) {
+	if err := validateExternalCustomerID(session.ExternalCustomerID); err != nil {
 		return EntitlementSnapshot{}, err
 	}
-	if err := validateBearer("customer token", customerToken); err != nil {
+	if err := validateBearer("customer token", session.Token); err != nil {
 		return EntitlementSnapshot{}, err
 	}
-	body, err := client.request(
+	body, err := client.customerRequest(
 		ctx,
+		session.Token,
 		http.MethodGet,
-		customerToken,
-		[]string{"v1", "applications", client.applicationID, "customers", externalCustomerID, "entitlements"},
+		[]string{"v1", "applications", client.applicationID, "customers", session.ExternalCustomerID, "entitlements"},
 		nil,
 	)
 	if err != nil {
 		return EntitlementSnapshot{}, err
 	}
-	var payload entitlementSnapshotResponse
-	if err := decodeJSON(body, &payload); err != nil {
+	var snapshot EntitlementSnapshot
+	if err := decodeJSON(body, &snapshot); err != nil {
 		return EntitlementSnapshot{}, err
 	}
-	if payload.CustomerID == "" || payload.Entitlements == nil {
-		return EntitlementSnapshot{}, &ProtocolError{Message: "IAPStack response did not match the v1 contract"}
+	if err := snapshot.validate(); err != nil {
+		return EntitlementSnapshot{}, err
 	}
-	entitlements := make([]Entitlement, 0, len(payload.Entitlements))
-	for _, item := range payload.Entitlements {
-		if item.Key == "" || item.Access == "" || item.Reason == "" || item.Version < 1 {
-			return EntitlementSnapshot{}, &ProtocolError{Message: "IAPStack response did not match the v1 contract"}
-		}
-		entitlements = append(entitlements, Entitlement{
-			Key:               item.Key,
-			Access:            item.Access,
-			Reason:            item.Reason,
-			Version:           item.Version,
-			EffectiveStartsAt: utcTime(item.EffectiveStartsAt),
-			EffectiveEndsAt:   utcTime(item.EffectiveEndsAt),
-		})
-	}
-	return EntitlementSnapshot{CustomerID: payload.CustomerID, Entitlements: entitlements}, nil
+	snapshot.normalize()
+	return snapshot, nil
 }
 
 // Close releases idle connections for a client-owned HTTP transport.
@@ -224,6 +183,16 @@ func (client *Client) Close() {
 		return
 	}
 	client.httpClient.CloseIdleConnections()
+}
+
+// applicationRequest sends one JSON round trip authenticated with the durable host bearer.
+func (client *Client) applicationRequest(ctx context.Context, method string, path []string, body any) (json.RawMessage, error) {
+	return client.request(ctx, method, client.applicationToken, path, body)
+}
+
+// customerRequest sends one JSON round trip authenticated with a customer session bearer.
+func (client *Client) customerRequest(ctx context.Context, customerToken, method string, path []string, body any) (json.RawMessage, error) {
+	return client.request(ctx, method, customerToken, path, body)
 }
 
 // request performs one abortable, retrying JSON round trip without logging credentials.
