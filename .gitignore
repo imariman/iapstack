@@ -22,6 +22,7 @@ profile.cov
 node_modules/
 .gradle/
 sdk/android/**/build/
+sdk/ios/.build/
 
 # Go workspace file
 go.work
