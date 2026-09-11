@@ -4,33 +4,45 @@ import "fmt"
 
 // APIError is a stable non-success v1 envelope.
 type APIError struct {
+	// StatusCode is the HTTP response status.
 	StatusCode int
-	Code       string
-	Message    string
-	RequestID  string
-	Retryable  bool
+	// Code is the stable v1 machine-readable error code.
+	Code string
+	// Message is a safe human-readable summary without payloads or credentials.
+	Message string
+	// RequestID is the request ID operators can correlate with server logs.
+	RequestID string
+	// Retryable reports whether a later idempotent retry may succeed.
+	Retryable bool
 }
 
 // TransportError is a network failure before a complete HTTP response.
 type TransportError struct {
+	// Message is a redacted transport failure summary.
 	Message string
-	Cause   error
+	// Cause is the optional underlying non-secret error.
+	Cause error
 }
 
 // TimeoutError is a bounded HTTP attempt that exceeded its deadline.
 type TimeoutError struct {
+	// Message is a redacted timeout failure summary.
 	Message string
-	Cause   error
+	// Cause is the optional underlying non-secret error.
+	Cause error
 }
 
 // ProtocolError is a response that did not match the versioned JSON contract.
 type ProtocolError struct {
+	// Message is a redacted protocol failure summary.
 	Message string
-	Cause   error
+	// Cause is the optional underlying decode error.
+	Cause error
 }
 
 // WebhookError is a fail-closed webhook authentication or replay failure.
 type WebhookError struct {
+	// Code is the stable webhook failure code.
 	Code string
 }
 

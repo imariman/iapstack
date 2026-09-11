@@ -52,51 +52,81 @@ type EventStore interface {
 
 // WebhookConfig controls signature verification, replay window, and dedupe storage.
 type WebhookConfig struct {
-	Secret             []byte
-	BodyLimit          int64
+	// Secret is the webhook signing secret; it must contain at least 32 bytes.
+	Secret []byte
+	// BodyLimit is the maximum accepted raw webhook body size.
+	BodyLimit int64
+	// TimestampTolerance is the allowed clock skew around IAPStack-Timestamp.
 	TimestampTolerance time.Duration
-	Store              EventStore
-	Clock              func() time.Time
+	// Store atomically deduplicates authenticated event IDs.
+	Store EventStore
+	// Clock supplies the current time for replay-window checks; nil uses time.Now.
+	Clock func() time.Time
 }
 
 // WebhookVerifier authenticates v2 IAPStack deliveries and deduplicates event IDs.
 type WebhookVerifier struct {
-	secret             []byte
-	bodyLimit          int64
+	// secret is the copied HMAC key used for constant-time signature comparison.
+	secret []byte
+	// bodyLimit is the maximum accepted raw webhook body size.
+	bodyLimit int64
+	// timestampTolerance is the allowed clock skew around IAPStack-Timestamp.
 	timestampTolerance time.Duration
-	store              EventStore
-	clock              func() time.Time
+	// store atomically deduplicates authenticated event IDs.
+	store EventStore
+	// clock supplies the current time for replay-window checks.
+	clock func() time.Time
 }
 
 // WebhookEvent is one authenticated, optionally duplicate, entitlement change.
 type WebhookEvent struct {
-	ID        string
+	// ID is the authenticated IAPStack-Event-ID value.
+	ID string
+	// Timestamp is the authenticated IAPStack-Timestamp value.
 	Timestamp time.Time
+	// Duplicate reports whether this event ID was already stored with the same body.
 	Duplicate bool
-	Change    EntitlementChange
+	// Change is the parsed entitlement.changed payload.
+	Change EntitlementChange
 }
 
 // MemoryEventStore is a process-local EventStore for tests and single-instance hosts.
 type MemoryEventStore struct {
-	mu     sync.Mutex
+	// mu serializes identity inserts and conflict checks.
+	mu sync.Mutex
+	// events maps authenticated event IDs to the accepted body fingerprint.
 	events map[string][sha256.Size]byte
 }
 
 type entitlementChangePayload struct {
-	SchemaVersion       int        `json:"schema_version"`
-	ProjectID           string     `json:"project_id"`
-	ApplicationID       string     `json:"application_id"`
-	CustomerID          string     `json:"customer_id"`
-	EntitlementID       string     `json:"entitlement_id"`
-	EntitlementKey      string     `json:"entitlement_key"`
-	Access              string     `json:"access"`
-	AccessReason        string     `json:"access_reason"`
-	SourceObservationID string     `json:"source_observation_id"`
-	SourceApplicationID string     `json:"source_application_id"`
-	SourceProductID     string     `json:"source_product_id"`
-	EffectiveStartsAt   *time.Time `json:"effective_starts_at"`
-	EffectiveEndsAt     *time.Time `json:"effective_ends_at"`
-	Version             int64      `json:"version"`
+	// SchemaVersion is the outbox payload contract version.
+	SchemaVersion int `json:"schema_version"`
+	// ProjectID is the project that owns the changed projection.
+	ProjectID string `json:"project_id"`
+	// ApplicationID is the application that emitted the event.
+	ApplicationID string `json:"application_id"`
+	// CustomerID is the internal stable customer identifier.
+	CustomerID string `json:"customer_id"`
+	// EntitlementID is the durable entitlement definition identifier.
+	EntitlementID string `json:"entitlement_id"`
+	// EntitlementKey is the public entitlement key configured by the application.
+	EntitlementKey string `json:"entitlement_key"`
+	// Access is the forward-compatible access value after the change.
+	Access string `json:"access"`
+	// AccessReason is the forward-compatible normalized access reason.
+	AccessReason string `json:"access_reason"`
+	// SourceObservationID is the observation that produced this projection.
+	SourceObservationID string `json:"source_observation_id"`
+	// SourceApplicationID is the application that sourced the observation.
+	SourceApplicationID string `json:"source_application_id"`
+	// SourceProductID is the product that sourced the observation.
+	SourceProductID string `json:"source_product_id"`
+	// EffectiveStartsAt is the inclusive access period start, when applicable.
+	EffectiveStartsAt *time.Time `json:"effective_starts_at"`
+	// EffectiveEndsAt is the exclusive access period end, when applicable.
+	EffectiveEndsAt *time.Time `json:"effective_ends_at"`
+	// Version is the projection generation incremented only for logical changes.
+	Version int64 `json:"version"`
 }
 
 // NewMemoryEventStore constructs an in-memory dedupe store.

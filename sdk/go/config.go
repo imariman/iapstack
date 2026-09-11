@@ -18,14 +18,22 @@ const (
 
 // Config is runtime-only trusted-host configuration for one application.
 type Config struct {
-	BaseURL           string
-	ApplicationID     string
-	ApplicationToken  string
-	Timeout           time.Duration
-	RetryPolicy       RetryPolicy
-	MaxResponseBytes  int64
+	// BaseURL is the IAPStack origin, optionally including a reverse-proxy path prefix.
+	BaseURL string
+	// ApplicationID is the application scope encoded in every public API path.
+	ApplicationID string
+	// ApplicationToken is the durable host bearer retained only in memory by this SDK.
+	ApplicationToken string
+	// Timeout is the maximum duration of one HTTP attempt, including response streaming.
+	Timeout time.Duration
+	// RetryPolicy is the bounded retry policy for idempotent IAPStack operations.
+	RetryPolicy RetryPolicy
+	// MaxResponseBytes is the maximum accepted JSON response size.
+	MaxResponseBytes int64
+	// AllowInsecureHTTP allows plain HTTP for explicit local development environments.
 	AllowInsecureHTTP bool
-	HTTPClient        *http.Client
+	// HTTPClient is an optional injected transport; when nil the SDK owns a default client.
+	HTTPClient *http.Client
 }
 
 // Validate reports whether the host configuration is complete and safe.

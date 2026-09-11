@@ -18,9 +18,12 @@ const (
 
 // RetryPolicy is a bounded full-jitter exponential backoff policy.
 type RetryPolicy struct {
+	// MaxAttempts is the total attempts, including the initial request.
 	MaxAttempts int
-	BaseDelay   time.Duration
-	MaxDelay    time.Duration
+	// BaseDelay is the upper delay bound before the second attempt.
+	BaseDelay time.Duration
+	// MaxDelay is the upper delay bound for later attempts.
+	MaxDelay time.Duration
 }
 
 // DefaultRetryPolicy returns the Flutter-aligned host retry defaults.

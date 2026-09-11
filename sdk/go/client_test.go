@@ -23,11 +23,16 @@ const (
 )
 
 type capturedRequest struct {
-	Method  string
-	Path    string
-	URI     string
+	// Method is the HTTP method received by the test origin.
+	Method string
+	// Path is the decoded URL path received by the test origin.
+	Path string
+	// URI is the raw request URI, including encoded path segments.
+	URI string
+	// Headers are the inbound request headers.
 	Headers http.Header
-	Body    []byte
+	// Body is the exact JSON request body.
+	Body []byte
 }
 
 // TestCreateCustomerSessionSendsApplicationBearer verifies the host minting contract.

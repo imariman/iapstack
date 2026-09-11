@@ -23,56 +23,84 @@ const (
 
 // Client is an application-bearer HTTP client for trusted host backends.
 type Client struct {
-	baseURL          *url.URL
-	applicationID    string
+	// baseURL is the IAPStack origin, optionally including a reverse-proxy path prefix.
+	baseURL *url.URL
+	// applicationID is the application scope encoded in every public API path.
+	applicationID string
+	// applicationToken is the durable host bearer retained only in memory.
 	applicationToken string
-	timeout          time.Duration
-	retryPolicy      RetryPolicy
+	// timeout is the maximum duration of one HTTP attempt, including response streaming.
+	timeout time.Duration
+	// retryPolicy is the bounded retry policy for idempotent IAPStack operations.
+	retryPolicy RetryPolicy
+	// maxResponseBytes is the maximum accepted JSON response size.
 	maxResponseBytes int64
-	httpClient       *http.Client
-	ownsClient       bool
-	delay            func(context.Context, time.Duration) error
-	jitter           func() float64
+	// httpClient is the transport used for abortable JSON requests.
+	httpClient *http.Client
+	// ownsClient reports whether Close should release idle connections.
+	ownsClient bool
+	// delay waits between retry attempts unless the parent context is done.
+	delay func(context.Context, time.Duration) error
+	// jitter returns a full-jitter value in [0, 1].
+	jitter func() float64
 }
 
 type rawResponse struct {
+	// StatusCode is the HTTP status returned by one attempt.
 	StatusCode int
-	Header     http.Header
-	Body       []byte
+	// Header contains response headers used for request-ID correlation.
+	Header http.Header
+	// Body is the size-limited response payload.
+	Body []byte
 }
 
 type customerSessionRequest struct {
+	// ExternalCustomerID is the host-authenticated customer bound to the session.
 	ExternalCustomerID string `json:"external_customer_id"`
 }
 
 type customerSessionResponse struct {
-	Token     string    `json:"token"`
+	// Token is the opaque customer bearer returned exactly once.
+	Token string `json:"token"`
+	// ExpiresAt is the UTC expiry of the minted session.
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
 type entitlementResponse struct {
-	Key               string     `json:"key"`
-	Access            string     `json:"access"`
-	Reason            string     `json:"reason"`
-	Version           int64      `json:"version"`
+	// Key is the public entitlement key configured by the application.
+	Key string `json:"key"`
+	// Access is the forward-compatible access value.
+	Access string `json:"access"`
+	// Reason is the forward-compatible normalized access reason.
+	Reason string `json:"reason"`
+	// Version is the projection generation incremented only for logical changes.
+	Version int64 `json:"version"`
+	// EffectiveStartsAt is the inclusive access period start, when applicable.
 	EffectiveStartsAt *time.Time `json:"effective_starts_at"`
-	EffectiveEndsAt   *time.Time `json:"effective_ends_at"`
+	// EffectiveEndsAt is the exclusive access period end, when applicable.
+	EffectiveEndsAt *time.Time `json:"effective_ends_at"`
 }
 
 type contextKey struct{}
 
 type entitlementSnapshotResponse struct {
-	CustomerID   string                `json:"customer_id"`
+	// CustomerID is the internal stable customer identifier.
+	CustomerID string `json:"customer_id"`
+	// Entitlements are all current application-scoped projections for the customer.
 	Entitlements []entitlementResponse `json:"entitlements"`
 }
 
 type apiErrorEnvelope struct {
+	// Error is the nested v1 failure object.
 	Error apiErrorEnvelopeError `json:"error"`
 }
 
 type apiErrorEnvelopeError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
+	// Code is the stable v1 machine-readable error code.
+	Code string `json:"code"`
+	// Message is a safe human-readable summary.
+	Message string `json:"message"`
+	// RequestID is the request ID operators can correlate with server logs.
 	RequestID string `json:"request_id"`
 }
 

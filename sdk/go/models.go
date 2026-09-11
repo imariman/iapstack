@@ -9,42 +9,66 @@ const (
 
 // CustomerSession is one short-lived opaque bearer returned exactly once.
 type CustomerSession struct {
-	Token     string
+	// Token is the opaque customer bearer returned exactly once.
+	Token string
+	// ExpiresAt is the UTC expiry of the minted session.
 	ExpiresAt time.Time
 }
 
 // Entitlement is one current application-scoped projection.
 type Entitlement struct {
-	Key               string
-	Access            string
-	Reason            string
-	Version           int64
+	// Key is the public entitlement key configured by the application.
+	Key string
+	// Access is the forward-compatible access value, currently allowed, denied, or unresolved.
+	Access string
+	// Reason is the forward-compatible normalized access reason.
+	Reason string
+	// Version is the projection generation incremented only for logical changes.
+	Version int64
+	// EffectiveStartsAt is the inclusive access period start, when applicable.
 	EffectiveStartsAt *time.Time
-	EffectiveEndsAt   *time.Time
+	// EffectiveEndsAt is the exclusive access period end, when applicable.
+	EffectiveEndsAt *time.Time
 }
 
 // EntitlementSnapshot is the current projection set for one customer.
 type EntitlementSnapshot struct {
-	CustomerID   string
+	// CustomerID is the internal stable customer identifier.
+	CustomerID string
+	// Entitlements are all current application-scoped projections for the customer.
 	Entitlements []Entitlement
 }
 
 // EntitlementChange is the authenticated v1 entitlement.changed webhook payload.
 type EntitlementChange struct {
-	SchemaVersion       int
-	ProjectID           string
-	ApplicationID       string
-	CustomerID          string
-	EntitlementID       string
-	EntitlementKey      string
-	Access              string
-	AccessReason        string
+	// SchemaVersion is the outbox payload contract version.
+	SchemaVersion int
+	// ProjectID is the project that owns the changed projection.
+	ProjectID string
+	// ApplicationID is the application that emitted the event.
+	ApplicationID string
+	// CustomerID is the internal stable customer identifier.
+	CustomerID string
+	// EntitlementID is the durable entitlement definition identifier.
+	EntitlementID string
+	// EntitlementKey is the public entitlement key configured by the application.
+	EntitlementKey string
+	// Access is the forward-compatible access value after the change.
+	Access string
+	// AccessReason is the forward-compatible normalized access reason.
+	AccessReason string
+	// SourceObservationID is the observation that produced this projection.
 	SourceObservationID string
+	// SourceApplicationID is the application that sourced the observation.
 	SourceApplicationID string
-	SourceProductID     string
-	EffectiveStartsAt   *time.Time
-	EffectiveEndsAt     *time.Time
-	Version             int64
+	// SourceProductID is the product that sourced the observation.
+	SourceProductID string
+	// EffectiveStartsAt is the inclusive access period start, when applicable.
+	EffectiveStartsAt *time.Time
+	// EffectiveEndsAt is the exclusive access period end, when applicable.
+	EffectiveEndsAt *time.Time
+	// Version is the projection generation incremented only for logical changes.
+	Version int64
 }
 
 // GrantsAccess reports whether the projection permits access at the current time.
