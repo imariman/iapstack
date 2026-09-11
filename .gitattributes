@@ -1,0 +1,2 @@
+# Store batch files as LF in git; check out CRLF on Windows.
+*.bat text eol=crlf
