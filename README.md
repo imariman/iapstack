@@ -137,6 +137,7 @@ separately billed.
 - [Google Play Flutter SDK and internal-testing example](sdk/flutter/iapstack_google_play/README.md)
 - [Apple StoreKit 2 Flutter SDK and iOS testing example](sdk/flutter/iapstack_apple/README.md)
 - [Native iOS Swift SDK and StoreKit companion](sdk/ios/README.md)
+- [TypeScript trusted-host SDK](sdk/typescript/README.md)
 
 The server has production-shaped Huawei, Apple App Store, and Google Play server
 slices. Apple includes StoreKit 2 signed-transaction verification,
@@ -250,6 +251,7 @@ Run the Flutter SDK checks with:
 (cd sdk/flutter/iapstack_apple && flutter pub get && flutter analyze && flutter test)
 (cd sdk/flutter/iapstack_apple/example && flutter pub get && flutter analyze && flutter test)
 (cd sdk/ios && swift test)
+(cd sdk/typescript && bun install --frozen-lockfile && bun run typecheck && bun test)
 ```
 
 The provider-neutral package owns `/v1` transport, timeout/retry behavior,
@@ -346,6 +348,7 @@ credential/evidence and notification contracts, and webhook verification rules a
 ├── sdk/android/            # Provider-neutral Kotlin HTTP client and Play/Huawei companions
 ├── sdk/ios/                # Provider-neutral Swift HTTP client and StoreKit 2 companion
 ├── sdk/react-native/       # Provider-neutral React Native HTTP client
+├── sdk/typescript/         # Trusted-host TypeScript SDK for sessions, entitlements, and webhooks
 ├── contracts/             # Public API and webhook contracts
 └── deploy/                # Docker and deployment templates
 ```

@@ -31,6 +31,12 @@ go vet ./...
 go test -race -count=1 ./...
 ```
 
+For the trusted-host TypeScript SDK, run the nested package checks from `sdk/typescript`:
+
+```sh
+(cd sdk/typescript && bun install --frozen-lockfile && bun run typecheck && bun test)
+```
+
 Run PostgreSQL integration tests with `go test -race -tags=integration -count=1 ./...`
 while `IAPSTACK_TEST_DATABASE_URL` points to a disposable test database.
 

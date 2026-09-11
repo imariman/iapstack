@@ -303,6 +303,15 @@ v2
 
 The event ID is authenticated. Reject `v1` signatures, timestamps outside the application's replay window, and any delivery whose `IAPStack-Event-ID` does not match the MAC. Deduplicate by that authenticated event ID.
 
+## TypeScript host SDK
+
+The trusted-host TypeScript package is in `sdk/typescript`. It uses the durable
+application bearer to mint customer sessions, looks up entitlements with a
+minted customer session because the public GET contract does not accept the
+application bearer, and verifies `v2` webhook signatures with a replay window
+and event-ID dedupe. It is for Node backends only. Never log or persist the
+application bearer, and never ship it in a mobile or browser bundle.
+
 ## Flutter SDK
 
 The provider-neutral Dart/Flutter package is in `sdk/flutter/iapstack`. It
