@@ -31,6 +31,12 @@ go vet ./...
 go test -race -count=1 ./...
 ```
 
+For the trusted-host Go SDK, run the nested module checks from `sdk/go`:
+
+```sh
+(cd sdk/go && gofmt -l . && go vet ./... && go test -race -count=1 ./...)
+```
+
 Run PostgreSQL integration tests with `go test -race -tags=integration -count=1 ./...`
 while `IAPSTACK_TEST_DATABASE_URL` points to a disposable test database.
 
