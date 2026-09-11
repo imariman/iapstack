@@ -1,20 +1,5 @@
 export type ProductKind = 'subscription' | 'non_consumable';
 
-const ENTITLEMENT_ACCESS_VALUES = ['allowed', 'denied', 'unresolved'] as const;
-const ENTITLEMENT_REASON_VALUES = [
-  'purchase_valid',
-  'grace_period',
-  'pending_payment',
-  'canceled_at_period_end',
-  'expired',
-  'billing_issue',
-  'paused',
-  'refunded',
-  'revoked',
-  'provider_decision',
-  'unresolved',
-] as const;
-
 export interface CustomerBinding {
   kind: string;
   value: string;
@@ -36,10 +21,7 @@ export interface HuaweiEvidence {
   product_kind: ProductKind;
 }
 
-export type PurchaseEvidence =
-  | AppleEvidence
-  | GooglePlayEvidence
-  | HuaweiEvidence;
+export type PurchaseEvidence = Record<string, unknown>;
 
 export interface PurchaseSubmission {
   externalCustomerId: string;
@@ -48,13 +30,41 @@ export interface PurchaseSubmission {
   customerBindings?: CustomerBinding[];
 }
 
-export interface Entitlement {
-  key: string;
-  access: (typeof ENTITLEMENT_ACCESS_VALUES)[number];
-  reason: (typeof ENTITLEMENT_REASON_VALUES)[number];
-  version: number;
-  effectiveStartsAt: Date | null;
-  effectiveEndsAt: Date | null;
+export class Entitlement {
+  readonly key: string;
+  readonly access: string;
+  readonly reason: string;
+  readonly version: number;
+  readonly effectiveStartsAt: Date | null;
+  readonly effectiveEndsAt: Date | null;
+
+  constructor(init: {
+    key: string;
+    access: string;
+    reason: string;
+    version: number;
+    effectiveStartsAt?: Date | null;
+    effectiveEndsAt?: Date | null;
+  }) {
+    this.key = init.key;
+    this.access = init.access;
+    this.reason = init.reason;
+    this.version = init.version;
+    this.effectiveStartsAt = init.effectiveStartsAt ?? null;
+    this.effectiveEndsAt = init.effectiveEndsAt ?? null;
+  }
+
+  get grantsAccess(): boolean {
+    return this.grantsAccessAt(new Date());
+  }
+
+  grantsAccessAt(instant: Date): boolean {
+    if (this.access !== 'allowed') {
+      return false;
+    }
+    const endsAt = this.effectiveEndsAt;
+    return endsAt === null || instant.getTime() < endsAt.getTime();
+  }
 }
 
 export interface VerificationResult {
@@ -72,57 +82,50 @@ export interface EntitlementSnapshot {
   entitlements: Entitlement[];
 }
 
-export interface CustomerSession {
-  token: string;
-  expiresAt: Date;
-}
-
 export function parsePurchaseSubmission(
   submission: PurchaseSubmission,
 ): Record<string, unknown> {
-  const payload = {
+  const payload: Record<string, unknown> = {
     external_customer_id: submission.externalCustomerId,
     claimed_products: [...submission.claimedProducts],
-    evidence: submission.evidence as Record<string, unknown>,
-    ...(submission.customerBindings && submission.customerBindings.length > 0
-      ? {
-          customer_bindings: submission.customerBindings.map((binding) => ({
-            kind: binding.kind,
-            value: binding.value,
-          })),
-        }
-      : {}),
+    evidence: { ...submission.evidence },
   };
-  if (!payload.claimed_products.length) {
+  if (submission.customerBindings && submission.customerBindings.length > 0) {
+    payload.customer_bindings = submission.customerBindings.map((binding) => ({
+      kind: binding.kind,
+      value: binding.value,
+    }));
+  }
+  if (!(payload.claimed_products as string[]).length) {
     throw new Error('claimed_products must not be empty');
   }
   return payload;
 }
 
 export function decodeEntitlement(json: Record<string, unknown>): Entitlement {
-  return {
-    key: _requiredString(json, 'key'),
-    access: _requiredString(json, 'access') as Entitlement['access'],
-    reason: _requiredString(json, 'reason') as Entitlement['reason'],
-    version: _requiredInt(json, 'version'),
-    effectiveStartsAt: _optionalDate(json, 'effective_starts_at'),
-    effectiveEndsAt: _optionalDate(json, 'effective_ends_at'),
-  };
+  return new Entitlement({
+    key: requiredString(json, 'key'),
+    access: requiredString(json, 'access'),
+    reason: requiredString(json, 'reason'),
+    version: requiredInt(json, 'version'),
+    effectiveStartsAt: optionalDate(json, 'effective_starts_at'),
+    effectiveEndsAt: optionalDate(json, 'effective_ends_at'),
+  });
 }
 
 export function decodeVerificationResult(
   json: Record<string, unknown>,
 ): VerificationResult {
   return {
-    verifiedAt: _requiredDate(json, 'verified_at'),
-    customerId: _requiredString(json, 'customer_id'),
-    entitlements: _objectList(json, 'entitlements').map(decodeEntitlement),
+    verifiedAt: requiredDate(json, 'verified_at'),
+    customerId: requiredString(json, 'customer_id'),
+    entitlements: objectList(json, 'entitlements').map(decodeEntitlement),
   };
 }
 
 export function decodeRestoreResult(json: Record<string, unknown>): RestoreResult {
   return {
-    results: _objectList(json, 'results').map((entry) =>
+    results: objectList(json, 'results').map((entry) =>
       decodeVerificationResult(entry),
     ),
   };
@@ -132,12 +135,12 @@ export function decodeEntitlementSnapshot(
   json: Record<string, unknown>,
 ): EntitlementSnapshot {
   return {
-    customerId: _requiredString(json, 'customer_id'),
-    entitlements: _objectList(json, 'entitlements').map(decodeEntitlement),
+    customerId: requiredString(json, 'customer_id'),
+    entitlements: objectList(json, 'entitlements').map(decodeEntitlement),
   };
 }
 
-function _requiredString(json: Record<string, unknown>, key: string): string {
+function requiredString(json: Record<string, unknown>, key: string): string {
   const value = json[key];
   if (typeof value !== 'string' || value.length === 0) {
     throw new Error(`${key} must be a non-empty string`);
@@ -145,7 +148,7 @@ function _requiredString(json: Record<string, unknown>, key: string): string {
   return value;
 }
 
-function _requiredInt(json: Record<string, unknown>, key: string): number {
+function requiredInt(json: Record<string, unknown>, key: string): number {
   const value = json[key];
   if (typeof value !== 'number' || !Number.isInteger(value)) {
     throw new Error(`${key} must be an integer`);
@@ -153,8 +156,8 @@ function _requiredInt(json: Record<string, unknown>, key: string): number {
   return value;
 }
 
-function _requiredDate(json: Record<string, unknown>, key: string): Date {
-  const raw = _requiredString(json, key);
+function requiredDate(json: Record<string, unknown>, key: string): Date {
+  const raw = requiredString(json, key);
   const value = new Date(raw);
   if (Number.isNaN(value.getTime())) {
     throw new Error(`${key} must be an ISO-8601 timestamp`);
@@ -162,7 +165,7 @@ function _requiredDate(json: Record<string, unknown>, key: string): Date {
   return value;
 }
 
-function _optionalDate(json: Record<string, unknown>, key: string): Date | null {
+function optionalDate(json: Record<string, unknown>, key: string): Date | null {
   const raw = json[key];
   if (raw === null || raw === undefined) {
     return null;
@@ -177,13 +180,13 @@ function _optionalDate(json: Record<string, unknown>, key: string): Date | null 
   return value;
 }
 
-function _objectList(json: Record<string, unknown>, key: string): Record<string, unknown>[] {
+function objectList(json: Record<string, unknown>, key: string): Record<string, unknown>[] {
   const list = json[key];
   if (!Array.isArray(list)) {
     throw new Error(`${key} must be an array`);
   }
   return list.map((item, index) => {
-    if (!item || typeof item !== 'object') {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
       throw new Error(`${key}[${index}] must be an object`);
     }
     return item as Record<string, unknown>;

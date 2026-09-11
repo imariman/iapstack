@@ -1,20 +1,25 @@
 # IAPStack React Native SDK
 
-The React Native SDK implements the IAPStack v1 API client and provides structured
-helpers for wrapping purchase evidence emitted by native store integrations.
+Provider-neutral HTTP client for the application-facing IAPStack v1 API. This
+package mirrors the Flutter `iapstack` split: verify, restore, entitlements,
+retries, timeouts, and request IDs. StoreKit, Play Billing, and HMS evidence
+collection stay in the native iOS and Android SDKs; a thin native bridge is
+follow-up work once those packages land.
+
+Authenticate the user in your trusted host backend, then mint a short-lived
+customer session there with the durable application bearer. Return only that
+customer token to the mobile app. Never ship the durable application bearer in
+a mobile binary, and never persist the customer bearer.
+
+This package is not published to npm yet. Depend on the repository path
+`sdk/react-native`.
 
 ## Scope
 
 - API methods for customer-bound verification and entitlement lookup.
-- Retry, timeout, and response-size limits aligned with the provider-neutral Flutter
-  client.
-- Evidence helpers for Apple StoreKit 2, Google Play Billing, and Huawei IAP payloads.
-
-## Install
-
-```sh
-npm install @iapstack/react-native
-```
+- Retry, timeout, and streamed response-size limits aligned with the Flutter client.
+- Optional helpers that wrap native-signed strings into the v1 evidence object
+  without rewriting the signed payload.
 
 ## Usage
 
@@ -23,7 +28,6 @@ import {
   IapStackClient,
   IapStackConfig,
   PurchaseSubmission,
-  ProductKind,
   googlePlayEvidence,
 } from '@iapstack/react-native';
 
@@ -46,15 +50,23 @@ const payload: PurchaseSubmission = {
 
 const result = await client.verifyPurchase(payload);
 const currentEntitlements = await client.getEntitlements('customer-123');
+const hasPremium = currentEntitlements.entitlements.some(
+  (item) => item.key === 'premium' && item.grantsAccess,
+);
 ```
 
 ## Evidence helpers
+
+These helpers only assemble the v1 evidence envelope. Pass the exact native
+string or token; do not rebuild StoreKit JWS, Play tokens, or Huawei
+`InAppPurchaseData` in JavaScript. `productKind` is required because it selects
+the server verification route.
 
 ```ts
 import { appleEvidence, googlePlayEvidence, huaweiEvidence } from '@iapstack/react-native';
 
 const apple = appleEvidence({
-  signedTransaction: '<StoreKit signed transaction>',
+  signedTransaction: '<StoreKit compact JWS>',
   productKind: 'non_consumable',
 });
 
@@ -70,9 +82,12 @@ const huawei = huaweiEvidence({
 });
 ```
 
+Huawei remains Android-only. Fail closed on iOS rather than sending HMS
+payloads from an iOS binary.
+
 ## Roadmap
 
-- Add a thin native bridge layer around the app's selected store SDK for automatic
-  evidence extraction.
+- Add a thin native module around the iOS and Android SDKs so signed payloads
+  cross the bridge unaltered.
 - Add React Native examples and end-to-end verification flows.
 - Publish package metadata and release artifacts for consumption via npm.

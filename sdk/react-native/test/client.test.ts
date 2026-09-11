@@ -2,11 +2,13 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import {
   appleEvidence,
+  Entitlement,
   googlePlayEvidence,
   huaweiEvidence,
   IapStackApiError,
   IapStackClient,
   IapStackConfig,
+  IapStackProtocolError,
   IapStackRetryPolicy,
   IapStackTimeoutError,
 } from '../src/index';
@@ -66,13 +68,6 @@ function restorePayload() {
   };
 }
 
-function entitlementPayload() {
-  return {
-    customer_id: 'customer-123',
-    entitlements: [],
-  };
-}
-
 function clientConfig(overrides: Partial<ConstructorParameters<typeof IapStackConfig>[0]> = {}) {
   return new IapStackConfig({
     baseUri: 'https://iapstack.test/api',
@@ -91,7 +86,6 @@ const samplePurchase = {
   }),
 };
 
-
 test('verifyPurchase sends correct method, path, headers, and payload', async () => {
   const { calls, restore } = withMockFetch(async (_input, _init) => {
     return new Response(JSON.stringify(verificationPayload()), {
@@ -105,6 +99,7 @@ test('verifyPurchase sends correct method, path, headers, and payload', async ()
     const result = await client.verifyPurchase(samplePurchase, 'request-123');
 
     assert.equal(result.customerId, 'customer-123');
+    assert.equal(result.entitlements[0]?.grantsAccess, true);
     assert.equal(calls.length, 1);
     assert.equal(
       calls[0].url,
@@ -279,12 +274,141 @@ test('duplicate claimed products are rejected before making requests', async () 
   }
 });
 
-test('evidence helper builders validate required input', () => {
-  const apple = appleEvidence({ signedTransaction: 'txn', productKind: 'subscription' });
-  assert.equal(apple.product_kind, 'subscription');
-  assert.equal(apple.signed_transaction, 'txn');
+test('empty and non-object evidence is rejected before making requests', async () => {
+  const { calls, restore } = withMockFetch(async () => {
+    throw new Error('should not be hit');
+  });
 
-  const google = googlePlayEvidence({ purchaseToken: 'play-token', productKind: 'non_consumable' });
+  try {
+    const client = new IapStackClient(clientConfig());
+    await assert.rejects(
+      () => client.verifyPurchase({ ...samplePurchase, evidence: {} }),
+      (error) => {
+        assert.match((error as Error).message, /evidence is required/);
+        return true;
+      },
+    );
+    await assert.rejects(
+      () =>
+        client.verifyPurchase({
+          ...samplePurchase,
+          evidence: [] as unknown as Record<string, unknown>,
+        }),
+      (error) => {
+        assert.match((error as Error).message, /evidence is required/);
+        return true;
+      },
+    );
+    assert.equal(calls.length, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('rejects oversized responses as protocol errors', async () => {
+  const { restore } = withMockFetch(async () => {
+    return new Response('{"value":"too-large"}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+
+  try {
+    const client = new IapStackClient(clientConfig({ maxResponseBytes: 8 }));
+    await assert.rejects(
+      () => client.verifyPurchase(samplePurchase),
+      (error) => error instanceof IapStackProtocolError,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('aborts when Content-Length exceeds maxResponseBytes', async () => {
+  const { restore } = withMockFetch(async () => {
+    return new Response('{"ok":true}', {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': '999999',
+      },
+    });
+  });
+
+  try {
+    const client = new IapStackClient(clientConfig({ maxResponseBytes: 32 }));
+    await assert.rejects(
+      () => client.verifyPurchase(samplePurchase),
+      (error) => error instanceof IapStackProtocolError,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('wraps contract mismatches as IapStackProtocolError', async () => {
+  const { restore } = withMockFetch(async () => {
+    return new Response(
+      JSON.stringify({
+        verified_at: '2026-09-09T00:00:00.000Z',
+        customer_id: '',
+        entitlements: [],
+      }),
+      {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      },
+    );
+  });
+
+  try {
+    const client = new IapStackClient(clientConfig());
+    await assert.rejects(
+      () => client.verifyPurchase(samplePurchase),
+      (error) => error instanceof IapStackProtocolError,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('fails closed when an allowed entitlement reaches its effective end', () => {
+  const endsAt = new Date('2026-08-26T12:00:00.000Z');
+  const entitlement = new Entitlement({
+    key: 'premium',
+    access: 'allowed',
+    reason: 'canceled_at_period_end',
+    version: 7,
+    effectiveStartsAt: new Date('2026-07-27T12:00:00.000Z'),
+    effectiveEndsAt: endsAt,
+  });
+
+  assert.equal(entitlement.grantsAccessAt(new Date(endsAt.getTime() - 1)), true);
+  assert.equal(entitlement.grantsAccessAt(endsAt), false);
+  assert.equal(entitlement.grantsAccessAt(new Date(endsAt.getTime() + 3600_000)), false);
+  assert.equal(
+    new Entitlement({
+      key: 'premium',
+      access: 'denied',
+      reason: 'expired',
+      version: 1,
+    }).grantsAccess,
+    false,
+  );
+});
+
+test('evidence helper builders validate required input', () => {
+  const apple = appleEvidence({
+    signedTransaction: 'aaa.bbb.ccc',
+    productKind: 'subscription',
+  });
+  assert.equal(apple.product_kind, 'subscription');
+  assert.equal(apple.signed_transaction, 'aaa.bbb.ccc');
+
+  const google = googlePlayEvidence({
+    purchaseToken: 'play-token',
+    productKind: 'non_consumable',
+  });
   assert.equal(google.product_kind, 'non_consumable');
 
   const huawei = huaweiEvidence({
@@ -293,8 +417,22 @@ test('evidence helper builders validate required input', () => {
     productKind: 'subscription',
   });
   assert.equal(huawei.signature, 'sig');
+  assert.equal(huawei.purchase_data, '{"ok":true}');
 
   assert.throws(() => {
-    googlePlayEvidence({} as never);
+    googlePlayEvidence({ purchaseToken: 'x' } as never);
+  });
+  assert.throws(() => {
+    appleEvidence({ signedTransaction: 'txn', productKind: 'subscription' });
+  });
+  assert.throws(() => {
+    appleEvidence({ signedTransaction: '   ', productKind: 'subscription' });
+  });
+  assert.throws(() => {
+    huaweiEvidence({
+      purchaseData: 'not-json',
+      signature: 'sig',
+      productKind: 'subscription',
+    });
   });
 });

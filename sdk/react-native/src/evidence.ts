@@ -1,6 +1,9 @@
-import { AppleEvidence, GooglePlayEvidence, HuaweiEvidence, ProductKind } from './models';
-
-const VALID_PRODUCT_KINDS = ['subscription', 'non_consumable'] as const;
+import {
+  AppleEvidence,
+  GooglePlayEvidence,
+  HuaweiEvidence,
+  ProductKind,
+} from './models';
 
 interface AppleInput {
   signedTransaction?: string;
@@ -24,62 +27,66 @@ interface HuaweiInput {
   product_kind?: ProductKind;
 }
 
-function readProductKind(kind?: string): ProductKind {
+function readProductKind(kind: unknown): ProductKind {
   if (kind === 'subscription' || kind === 'non_consumable') {
     return kind;
   }
   throw new Error('product kind must be subscription or non_consumable');
 }
 
-export function appleEvidence(input: AppleInput): AppleEvidence {
-  const signedTransaction = input.signedTransaction ?? input.signed_transaction;
-  if (!signedTransaction) {
-    throw new Error('apple evidence requires signed_transaction');
+function requireNonEmpty(value: unknown, message: string): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(message);
   }
-  const productKind = readProductKind(
-    input.productKind ?? input.product_kind ?? 'non_consumable',
+  return value;
+}
+
+export function appleEvidence(input: AppleInput): AppleEvidence {
+  const signedTransaction = requireNonEmpty(
+    input.signedTransaction ?? input.signed_transaction,
+    'apple evidence requires signed_transaction',
   );
-  if (!VALID_PRODUCT_KINDS.includes(productKind)) {
-    throw new Error('unsupported product kind');
+  if (signedTransaction.split('.').length !== 3) {
+    throw new Error('apple evidence requires a compact JWS signed_transaction');
   }
   return {
     signed_transaction: signedTransaction,
-    product_kind: productKind,
+    product_kind: readProductKind(input.productKind ?? input.product_kind),
   };
 }
 
 export function googlePlayEvidence(input: GooglePlayInput): GooglePlayEvidence {
-  const purchaseToken = input.purchaseToken ?? input.purchase_token;
-  if (!purchaseToken) {
-    throw new Error('google play evidence requires purchase_token');
-  }
-  const productKind = readProductKind(
-    input.productKind ?? input.product_kind ?? 'non_consumable',
+  const purchaseToken = requireNonEmpty(
+    input.purchaseToken ?? input.purchase_token,
+    'google play evidence requires purchase_token',
   );
-  if (!VALID_PRODUCT_KINDS.includes(productKind)) {
-    throw new Error('unsupported product kind');
-  }
   return {
     purchase_token: purchaseToken,
-    product_kind: productKind,
+    product_kind: readProductKind(input.productKind ?? input.product_kind),
   };
 }
 
 export function huaweiEvidence(input: HuaweiInput): HuaweiEvidence {
-  const purchaseData = input.purchaseData ?? input.purchase_data;
-  const signature = input.signature;
-  if (!purchaseData || !signature) {
-    throw new Error('huawei evidence requires purchase_data and signature');
-  }
-  const productKind = readProductKind(
-    input.productKind ?? input.product_kind ?? 'non_consumable',
+  const purchaseData = requireNonEmpty(
+    input.purchaseData ?? input.purchase_data,
+    'huawei evidence requires purchase_data and signature',
   );
-  if (!VALID_PRODUCT_KINDS.includes(productKind)) {
-    throw new Error('unsupported product kind');
+  const signature = requireNonEmpty(
+    input.signature,
+    'huawei evidence requires purchase_data and signature',
+  );
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(purchaseData);
+  } catch {
+    throw new Error('huawei purchase data is not a valid JSON object');
+  }
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+    throw new Error('huawei purchase data is not a valid JSON object');
   }
   return {
     purchase_data: purchaseData,
     signature,
-    product_kind: productKind,
+    product_kind: readProductKind(input.productKind ?? input.product_kind),
   };
 }

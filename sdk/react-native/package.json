@@ -1,7 +1,7 @@
 {
   "name": "@iapstack/react-native",
   "version": "0.1.0-dev.1",
-  "description": "React Native client for the IAPStack v1 API and purchase evidence helpers.",
+  "description": "Provider-neutral React Native client for the IAPStack v1 API.",
   "license": "Apache-2.0",
   "private": true,
   "homepage": "https://github.com/imariman/iapstack",
@@ -17,12 +17,17 @@
     "url": "https://github.com/imariman/iapstack.git",
     "directory": "sdk/react-native"
   },
-  "peerDependencies": {
-    "react-native": ">=0.71"
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
   },
   "scripts": {
     "test": "bun test",
-    "typecheck": "node --input-type=module -e \"import('./src/index.ts')\""
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2"
   },
   "author": "IAPStack Contributors"
 }
