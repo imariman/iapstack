@@ -155,6 +155,7 @@ separately billed.
 - [Huawei Flutter SDK and sandbox example](sdk/flutter/iapstack_huawei/README.md)
 - [Google Play Flutter SDK and internal-testing example](sdk/flutter/iapstack_google_play/README.md)
 - [Apple StoreKit 2 Flutter SDK and iOS testing example](sdk/flutter/iapstack_apple/README.md)
+- [Native iOS Swift SDK and StoreKit companion](sdk/ios/README.md)
 
 The server has production-shaped Huawei, Apple App Store, and Google Play server
 slices. Apple includes StoreKit 2 signed-transaction verification,
@@ -267,6 +268,7 @@ Run the Flutter SDK checks with:
 (cd sdk/flutter/iapstack_google_play/example && flutter pub get && flutter analyze && flutter test)
 (cd sdk/flutter/iapstack_apple && flutter pub get && flutter analyze && flutter test)
 (cd sdk/flutter/iapstack_apple/example && flutter pub get && flutter analyze && flutter test)
+(cd sdk/ios && swift test)
 ```
 
 The provider-neutral package owns `/v1` transport, timeout/retry behavior,
@@ -360,6 +362,9 @@ credential/evidence and notification contracts, and webhook verification rules a
 │   └── verification/      # Provider-neutral purchase verification orchestration
 ├── dashboard/             # Self-hosted web dashboard
 ├── sdk/flutter/           # Provider-neutral and provider-specific Flutter SDKs
+├── sdk/android/            # Provider-neutral Kotlin HTTP client and Play/Huawei companions
+├── sdk/ios/                # Provider-neutral Swift HTTP client and StoreKit 2 companion
+├── sdk/react-native/       # Provider-neutral React Native HTTP client
 ├── contracts/             # Public API and webhook contracts
 └── deploy/                # Docker and deployment templates
 ```
