@@ -5,7 +5,7 @@ go 1.25.13
 require (
 	cloud.google.com/go/auth v0.23.2
 	github.com/getkin/kin-openapi v0.149.0
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/jackc/tern/v2 v2.4.3
 	github.com/riverqueue/river v0.30.2
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.30.2
