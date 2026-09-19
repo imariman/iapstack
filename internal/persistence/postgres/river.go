@@ -61,7 +61,7 @@ func validateRiverSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	if err != nil {
 		return err
 	}
-	result, err := migrator.Validate(ctx)
+	result, err := migrator.Validate(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("validate River schema: %w", err)
 	}
