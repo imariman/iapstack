@@ -41,6 +41,25 @@ Consumable fulfillment, customer migration and alias consolidation, hosted opera
 and stores beyond the three above are outside the v0.1 scope. See the
 [v0.1 scope](docs/v0.1-scope.md) for the complete boundary.
 
+## SDK roadmap
+
+v0.1 ships Flutter only: a provider-neutral HTTP client plus Apple, Google Play, and
+Huawei companions. Later first-party SDKs keep that split and the same public
+contracts. The durable application bearer stays on a trusted host backend and must
+never ship in a mobile binary.
+
+Post-v0.1 sequence, tracked in [#85](https://github.com/imariman/iapstack/issues/85):
+
+1. [Go trusted-host SDK](https://github.com/imariman/iapstack/issues/87) for customer sessions, webhook verification, and server-side entitlement lookup
+2. [TypeScript trusted-host SDK](https://github.com/imariman/iapstack/issues/86) for Node backends
+3. [Native iOS (Swift)](https://github.com/imariman/iapstack/issues/91)
+4. [Native Android (Kotlin)](https://github.com/imariman/iapstack/issues/92), including Huawei
+5. [React Native](https://github.com/imariman/iapstack/issues/88) as a wrapper over the native SDKs
+
+Unity waits on consumable fulfillment. Kotlin Multiplatform, Capacitor, Cordova, MAUI,
+web/Stripe billing, and Amazon or Samsung store companions are deferred until that
+sequence lands.
+
 ## Quick start
 
 You need Docker with Compose and OpenSSL. From a clone of this repository, generate
@@ -364,10 +383,14 @@ credential/evidence and notification contracts, and webhook verification rules a
 - [x] Publish a machine-readable v1 API contract with client compatibility checks
 - [ ] Complete Apple App Store, Google Play, and Huawei lifecycle release gates and publish `v0.1.0-rc.1`
 - [ ] Resolve candidate feedback and publish stable `v0.1.0`
+- [ ] Add a Go trusted-host SDK ([#87](https://github.com/imariman/iapstack/issues/87))
+- [ ] Add a TypeScript trusted-host SDK ([#86](https://github.com/imariman/iapstack/issues/86))
+- [ ] Add native iOS and Android client SDKs ([#91](https://github.com/imariman/iapstack/issues/91), [#92](https://github.com/imariman/iapstack/issues/92))
+- [ ] Add a React Native wrapper over the native SDKs ([#88](https://github.com/imariman/iapstack/issues/88))
 - [ ] Add Amazon Appstore and additional store adapters
 - [ ] Support customer migration and alias consolidation
 
-The order above describes the initial implementation sequence, not a limitation of the architecture. IAPStack is intended to treat every store as a first-class adapter.
+The order above describes the initial implementation sequence, not a limitation of the architecture. IAPStack is intended to treat every store as a first-class adapter. Client package order and deferrals are in the [SDK roadmap](#sdk-roadmap).
 
 ## License
 
