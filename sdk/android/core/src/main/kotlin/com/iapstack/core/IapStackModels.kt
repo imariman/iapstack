@@ -121,13 +121,16 @@ internal fun requiredString(json: Map<String, Any?>, key: String): String {
 
 internal fun requiredInt(json: Map<String, Any?>, key: String): Int {
   val value = json[key]
-  return when (value) {
-    is Int -> value
-    is Long -> value.toInt()
-    is Double -> value.toInt()
-    is Float -> value.toInt()
-    else -> throw IapStackProtocolException("$key must be an integer")
+  // Gson decodes JSON numbers in untyped maps as Double; reject fractions and
+  // out-of-range values instead of truncating them.
+  val whole = when (value) {
+    is Int -> return value
+    is Long -> value.takeIf { it in Int.MIN_VALUE..Int.MAX_VALUE }?.toInt()
+    is Double -> value.takeIf { it % 1.0 == 0.0 && it >= Int.MIN_VALUE && it <= Int.MAX_VALUE }?.toInt()
+    is Float -> value.takeIf { it % 1f == 0f && it >= Int.MIN_VALUE && it <= Int.MAX_VALUE }?.toInt()
+    else -> null
   }
+  return whole ?: throw IapStackProtocolException("$key must be an integer")
 }
 
 internal fun requiredDateTime(json: Map<String, Any?>, key: String): Instant {
