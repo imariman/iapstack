@@ -74,7 +74,7 @@ function signedWebhookRequest(
 function newTestVerifier(
   now: Date,
   bodyLimit = defaultWebhookBodyLimit,
-  store = new MemoryEventStore(),
+  store: EventStore = new MemoryEventStore(),
 ): WebhookVerifier {
   return new WebhookVerifier({
     secret: testWebhookSecret,
