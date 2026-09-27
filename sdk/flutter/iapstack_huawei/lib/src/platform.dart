@@ -1,3 +1,4 @@
+import 'package:iapstack_huawei/src/errors.dart';
 import 'package:iapstack_huawei/src/product.dart';
 import 'package:iapstack_huawei/src/product_kind.dart';
 
@@ -58,6 +59,10 @@ final class HuaweiOwnedPurchasesPage {
 /// Testable boundary around the official Huawei Flutter IAP plugin.
 abstract interface class HuaweiIapPlatform {
   /// Checks whether Huawei IAP is available for the current account region.
+  ///
+  /// Returns false when IAP is not offered in the account's region, and throws
+  /// [HuaweiIapStackException] for actionable failures such as a signed-out
+  /// HMS account.
   Future<bool> isAvailable();
 
   /// Checks whether the current Huawei account and APK can use the sandbox.

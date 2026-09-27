@@ -1,5 +1,3 @@
-import 'dart:collection';
-
 import 'package:iapstack/iapstack.dart';
 import 'package:iapstack_huawei/src/errors.dart';
 import 'package:iapstack_huawei/src/evidence.dart';
@@ -50,6 +48,10 @@ final class HuaweiIapStack {
   final int maxRestorePagesPerKind;
 
   /// Checks whether Huawei IAP is available for the current account region.
+  ///
+  /// Returns false when IAP is not offered in the account's region, and throws
+  /// [HuaweiIapStackException] for actionable failures such as a signed-out
+  /// HMS account.
   Future<bool> isAvailable() => _platform.isAvailable();
 
   /// Checks whether the current Huawei account and APK can use sandbox IAP.
@@ -73,6 +75,9 @@ final class HuaweiIapStack {
       );
     }
 
+    // Drop cached choices for re-queried IDs so a product missing from this
+    // response can no longer pass the product_not_queried guard.
+    _queriedProducts.removeWhere((id, _) => normalized.contains(id));
     final found = <String, HuaweiProduct>{};
     for (final kind in HuaweiProductKind.values) {
       final ids = normalized
@@ -212,20 +217,10 @@ final class HuaweiIapStack {
         }
       } while (continuationToken != null);
     }
-    if (submissions.isEmpty) {
-      return RestoreResult(results: const <VerificationResult>[]);
-    }
-    final results = <VerificationResult>[];
-    for (var start = 0; start < submissions.length; start += 100) {
-      final end = (start + 100).clamp(0, submissions.length);
-      final batch = await _client.restorePurchases(
-        submissions.sublist(start, end),
-        requestId: _batchRequestId(requestId, start ~/ 100),
-      );
-      results.addAll(batch.results);
-    }
-    return RestoreResult(
-        results: UnmodifiableListView<VerificationResult>(results));
+    return _client.restorePurchasesInBatches(
+      submissions,
+      requestId: requestId,
+    );
   }
 
   /// Loads the current IAPStack projection without contacting Huawei.
@@ -257,12 +252,4 @@ final class HuaweiIapStack {
       return null;
     }
   }
-}
-
-String? _batchRequestId(String? requestId, int batchIndex) {
-  if (requestId == null || requestId.trim().isEmpty) {
-    return null;
-  }
-  final normalized = requestId.trim();
-  return batchIndex == 0 ? normalized : '$normalized-${batchIndex + 1}';
 }

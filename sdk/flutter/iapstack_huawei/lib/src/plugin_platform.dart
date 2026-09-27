@@ -16,6 +16,9 @@ final class HuaweiPluginPlatform implements HuaweiIapPlatform {
   Future<bool> isAvailable() async {
     try {
       final result = await IapClient.isEnvReady();
+      if (result.returnCode == _accountAreaNotSupported) {
+        return false;
+      }
       _requireSuccess(
         result.returnCode,
         result.status?.statusMessage,
@@ -23,6 +26,9 @@ final class HuaweiPluginPlatform implements HuaweiIapPlatform {
       );
       return true;
     } on PlatformException catch (error) {
+      if (error.code == _accountAreaNotSupported) {
+        return false;
+      }
       throw _platformException(error, operation: 'environment_check');
     }
   }
@@ -142,6 +148,11 @@ final class HuaweiPluginPlatform implements HuaweiIapPlatform {
     }
   }
 }
+
+/// Huawei `ORDER_ACCOUNT_AREA_NOT_SUPPORTED`: IAP is not offered in the account's
+/// region, which is the only environment failure that means "unavailable" rather
+/// than an actionable error such as a signed-out HMS account.
+const String _accountAreaNotSupported = '60054';
 
 HuaweiProduct _product(
   ProductInfo product, {

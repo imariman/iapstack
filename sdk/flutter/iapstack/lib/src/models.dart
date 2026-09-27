@@ -100,7 +100,7 @@ final class Entitlement {
         key: _requiredString(json, 'key'),
         access: _requiredString(json, 'access'),
         reason: _requiredString(json, 'reason'),
-        version: _requiredInt(json, 'version'),
+        version: _requiredPositiveInt(json, 'version'),
         effectiveStartsAt: _optionalDateTime(json, 'effective_starts_at'),
         effectiveEndsAt: _optionalDateTime(json, 'effective_ends_at'),
       );
@@ -187,6 +187,14 @@ int _requiredInt(Map<String, Object?> json, String key) {
   final value = json[key];
   if (value is! int) {
     throw FormatException('$key must be an integer');
+  }
+  return value;
+}
+
+int _requiredPositiveInt(Map<String, Object?> json, String key) {
+  final value = _requiredInt(json, key);
+  if (value < 1) {
+    throw FormatException('$key must be at least 1');
   }
   return value;
 }

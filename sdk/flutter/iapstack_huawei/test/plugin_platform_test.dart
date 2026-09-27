@@ -23,6 +23,29 @@ void main() {
     expect(await const HuaweiPluginPlatform().isAvailable(), isTrue);
   });
 
+  test('reports unavailable when Huawei IAP is not offered in the region',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      throw PlatformException(code: '60054', message: 'area not supported');
+    });
+
+    expect(await const HuaweiPluginPlatform().isAvailable(), isFalse);
+  });
+
+  test('keeps actionable environment failures as exceptions', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      throw PlatformException(code: '60050', message: 'not signed in');
+    });
+
+    await expectLater(
+      const HuaweiPluginPlatform().isAvailable(),
+      throwsA(isA<HuaweiIapStackException>()
+          .having((error) => error.code, 'code', '60050')),
+    );
+  });
+
   test('maps localized Huawei products without losing price precision',
       () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
