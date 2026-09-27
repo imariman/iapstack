@@ -1,3 +1,8 @@
+// RFC 3339 date-time as emitted by IAPStack; `new Date` alone also accepts
+// forms such as "2026" or "March 1" that are not part of the v1 contract.
+const RFC3339_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/u;
+
 export type ProductKind = 'subscription' | 'non_consumable';
 
 export interface CustomerBinding {
@@ -159,7 +164,7 @@ function requiredInt(json: Record<string, unknown>, key: string): number {
 function requiredDate(json: Record<string, unknown>, key: string): Date {
   const raw = requiredString(json, key);
   const value = new Date(raw);
-  if (Number.isNaN(value.getTime())) {
+  if (!RFC3339_TIMESTAMP.test(raw) || Number.isNaN(value.getTime())) {
     throw new Error(`${key} must be an ISO-8601 timestamp`);
   }
   return value;
@@ -174,7 +179,7 @@ function optionalDate(json: Record<string, unknown>, key: string): Date | null {
     throw new Error(`${key} must be null or an ISO-8601 timestamp`);
   }
   const value = new Date(raw);
-  if (Number.isNaN(value.getTime())) {
+  if (!RFC3339_TIMESTAMP.test(raw) || Number.isNaN(value.getTime())) {
     throw new Error(`${key} must be an ISO-8601 timestamp`);
   }
   return value;

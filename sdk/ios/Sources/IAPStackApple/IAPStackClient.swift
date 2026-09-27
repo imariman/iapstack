@@ -50,11 +50,7 @@ public final class IAPStackClient {
   /// Loads the current entitlement snapshot for one external customer.
   public func getEntitlements(_ externalCustomerId: String, requestId: String? = nil) async throws
     -> EntitlementSnapshot {
-    if externalCustomerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      throw IAPStackSDKError.configurationError(
-        message: "externalCustomerId must not be empty",
-      )
-    }
+    try validateExternalCustomerId(externalCustomerId)
     let json = try await request(
       method: "GET",
       path: [

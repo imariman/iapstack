@@ -436,3 +436,37 @@ test('evidence helper builders validate required input', () => {
     });
   });
 });
+
+test('rejects non-RFC 3339 timestamps', async () => {
+  const { restore } = withMockFetch(async () => {
+    return new Response(
+      JSON.stringify({ ...verificationPayload(), verified_at: 'March 1, 2026' }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  });
+
+  try {
+    const client = new IapStackClient(clientConfig());
+    await assert.rejects(
+      () => client.verifyPurchase(samplePurchase),
+      (error) => error instanceof IapStackProtocolError,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('rejects external customer IDs with surrounding whitespace', async () => {
+  const { calls, restore } = withMockFetch(async () => new Response('{}', { status: 200 }));
+  try {
+    const client = new IapStackClient(clientConfig());
+    await assert.rejects(() => client.getEntitlements(' customer-123 '), TypeError);
+    await assert.rejects(
+      () => client.verifyPurchase({ ...samplePurchase, externalCustomerId: 'customer-123 ' }),
+      TypeError,
+    );
+    assert.equal(calls.length, 0);
+  } finally {
+    restore();
+  }
+});

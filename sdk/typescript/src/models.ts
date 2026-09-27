@@ -1,4 +1,8 @@
 const ACCESS_ALLOWED = 'allowed';
+// RFC 3339 date-time as emitted by IAPStack; `new Date` alone also accepts
+// forms such as "2026" or "March 1" that are not part of the v1 contract.
+const RFC3339_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/u;
 
 /** One short-lived opaque bearer returned exactly once. */
 export interface CustomerSession {
@@ -170,7 +174,7 @@ function parseDate(raw: unknown, key: string): Date | null {
     return null;
   }
   const value = new Date(raw);
-  if (Number.isNaN(value.getTime())) {
+  if (!RFC3339_TIMESTAMP.test(raw) || Number.isNaN(value.getTime())) {
     throw new Error(`${key} must be an ISO-8601 timestamp`);
   }
   return value;

@@ -396,3 +396,28 @@ test('error messages stay free of wrapped secret causes', () => {
   });
   assert.equal(protocol.message.includes('secret'), false);
 });
+
+test('getEntitlements rejects non-RFC 3339 timestamps', async () => {
+  const { client } = newTestClient(async () =>
+    jsonResponse(200, {
+      customer_id: 'customer-internal',
+      entitlements: [
+        {
+          key: 'premium',
+          access: 'allowed',
+          reason: 'purchase_valid',
+          version: 1,
+          effective_ends_at: '2026',
+        },
+      ],
+    }),
+  );
+  await assert.rejects(
+    client.getEntitlements({
+      token: testCustomerToken,
+      expiresAt: new Date('2026-08-24T20:15:00Z'),
+      externalCustomerId: 'customer-external',
+    }),
+    ProtocolError,
+  );
+});

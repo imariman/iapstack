@@ -70,6 +70,10 @@ func (config Config) applyDefaults() Config {
 	}
 	if config.RetryPolicy == (RetryPolicy{}) {
 		config.RetryPolicy = DefaultRetryPolicy()
+	} else if config.RetryPolicy.MaxAttempts == 0 {
+		// A partially configured policy keeps its explicit delays but still gets
+		// the default attempt budget instead of failing validation.
+		config.RetryPolicy.MaxAttempts = defaultMaxAttempts
 	}
 	return config
 }

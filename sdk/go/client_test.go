@@ -576,3 +576,24 @@ func entitlementSnapshotJSON() map[string]any {
 		},
 	}
 }
+
+// TestPartialRetryPolicyKeepsDefaultAttempts verifies MaxAttempts 0 is filled, not rejected.
+func TestPartialRetryPolicyKeepsDefaultAttempts(t *testing.T) {
+	t.Parallel()
+
+	config := Config{
+		BaseURL:          "https://iap.example",
+		ApplicationID:    "application-1",
+		ApplicationToken: "application-token",
+		RetryPolicy:      RetryPolicy{BaseDelay: 100 * time.Millisecond, MaxDelay: time.Second},
+	}.applyDefaults()
+	if config.RetryPolicy.MaxAttempts != defaultMaxAttempts {
+		t.Fatalf("max attempts = %d, want %d", config.RetryPolicy.MaxAttempts, defaultMaxAttempts)
+	}
+	if config.RetryPolicy.BaseDelay != 100*time.Millisecond || config.RetryPolicy.MaxDelay != time.Second {
+		t.Fatalf("explicit delays were overwritten: %+v", config.RetryPolicy)
+	}
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+}

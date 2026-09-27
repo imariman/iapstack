@@ -17,10 +17,15 @@ const (
 )
 
 // RetryPolicy is a bounded full-jitter exponential backoff policy.
+//
+// A zero-value RetryPolicy in Config selects DefaultRetryPolicy. Otherwise the
+// fields are used as given (MaxAttempts 0 becomes the default), so a zero
+// BaseDelay means retries run back-to-back; start from DefaultRetryPolicy()
+// and override fields to keep backoff.
 type RetryPolicy struct {
 	// MaxAttempts is the total attempts, including the initial request.
 	MaxAttempts int
-	// BaseDelay is the upper delay bound before the second attempt.
+	// BaseDelay is the upper delay bound before the second attempt; zero disables backoff.
 	BaseDelay time.Duration
 	// MaxDelay is the upper delay bound for later attempts.
 	MaxDelay time.Duration

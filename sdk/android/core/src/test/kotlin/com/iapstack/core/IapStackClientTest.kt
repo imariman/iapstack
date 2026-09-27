@@ -263,6 +263,21 @@ class IapStackClientTest {
     }
   }
 
+  @Test
+  fun rejectsExternalCustomerIdsWithSurroundingWhitespace() = runBlocking {
+    MockWebServer().use { server ->
+      val client = client(server)
+      assertFailsWith<IllegalArgumentException> {
+        client.getEntitlements(" customer-external")
+      }
+      assertFailsWith<IllegalArgumentException> {
+        client.verifyPurchase(purchase().copy(externalCustomerId = "customer-external "))
+      }
+      assertEquals(0, server.requestCount)
+      client.close()
+    }
+  }
+
   private fun client(
     server: MockWebServer,
     retryPolicy: IapStackRetryPolicy = IapStackRetryPolicy(maxAttempts = 1),

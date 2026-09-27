@@ -81,10 +81,7 @@ final class IapStackClient {
     String externalCustomerId, {
     String? requestId,
   }) async {
-    if (externalCustomerId.trim().isEmpty) {
-      throw ArgumentError.value(
-          externalCustomerId, 'externalCustomerId', 'must not be empty');
-    }
+    _validateExternalCustomerId(externalCustomerId);
     final json = await _request(
       method: 'GET',
       path: <String>[
@@ -282,8 +279,8 @@ final class IapStackClient {
   }
 
   void _validatePurchase(PurchaseSubmission purchase) {
-    if (purchase.externalCustomerId.trim().isEmpty ||
-        purchase.claimedProducts.isEmpty ||
+    _validateExternalCustomerId(purchase.externalCustomerId);
+    if (purchase.claimedProducts.isEmpty ||
         purchase.claimedProducts.any((product) => product.trim().isEmpty) ||
         purchase.evidence.isEmpty) {
       throw ArgumentError.value(
@@ -294,6 +291,15 @@ final class IapStackClient {
       throw ArgumentError.value(purchase.claimedProducts, 'claimedProducts',
           'must not contain duplicates');
     }
+  }
+}
+
+/// Requires one non-empty customer identity without surrounding whitespace; a
+/// padded ID would silently address a different customer server-side.
+void _validateExternalCustomerId(String value) {
+  if (value.isEmpty || value.trim() != value) {
+    throw ArgumentError.value(value, 'externalCustomerId',
+        'must be non-empty without surrounding whitespace');
   }
 }
 

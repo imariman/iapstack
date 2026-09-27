@@ -61,9 +61,7 @@ export class IapStackClient {
     externalCustomerId: string,
     requestId?: string,
   ): Promise<EntitlementSnapshot> {
-    if (!externalCustomerId || !externalCustomerId.trim()) {
-      throw new TypeError('externalCustomerId must be a non-empty string');
-    }
+    validateExternalCustomerId(externalCustomerId);
     const json = await this.request(
       'GET',
       [
@@ -232,13 +230,10 @@ export class IapStackClient {
   }
 
   private validateSubmission(submission: PurchaseSubmission): void {
-    if (
-      !submission ||
-      !submission.externalCustomerId ||
-      !submission.externalCustomerId.trim()
-    ) {
+    if (!submission) {
       throw new Error('submission.externalCustomerId is required');
     }
+    validateExternalCustomerId(submission.externalCustomerId);
     if (!Array.isArray(submission.claimedProducts) || submission.claimedProducts.length === 0) {
       throw new Error('submission.claimedProducts must contain at least one item');
     }
@@ -279,6 +274,13 @@ export class IapStackClient {
       .join('/');
     base.pathname = `${basePath || ''}/${appendedPath}`;
     return base;
+  }
+}
+
+/** Rejects empty or padded customer IDs, which would address a different customer. */
+function validateExternalCustomerId(value: unknown): void {
+  if (typeof value !== 'string' || !value || value.trim() !== value) {
+    throw new TypeError('externalCustomerId must be non-empty without surrounding whitespace');
   }
 }
 
