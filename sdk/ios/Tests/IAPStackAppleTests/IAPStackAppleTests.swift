@@ -395,7 +395,8 @@ final class IAPStackAppleTests: XCTestCase {
       ),
       session: makeSession(),
     )
-    let stack = AppleIAPStack(
+    // `try` keeps this compiling once AppleIAPStack.init becomes throwing (#122).
+    let stack = try AppleIAPStack(
       client: client,
       productKinds: ["premium_lifetime": .nonConsumable],
       platform: platform,
