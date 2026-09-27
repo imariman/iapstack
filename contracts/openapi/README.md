@@ -35,5 +35,12 @@ Run the trusted-host Go SDK compatibility check from `sdk/go`:
 go test -count=1 -run TestOpenAPIDeclaresHostOperations ./...
 ```
 
+Run the trusted-host TypeScript SDK compatibility check from `sdk/typescript`:
+
+```sh
+bun install --frozen-lockfile
+bun test test/contract.test.ts
+```
+
 The full CI pipeline executes these checks and rejects undocumented routes or incompatible client
 schema changes.
