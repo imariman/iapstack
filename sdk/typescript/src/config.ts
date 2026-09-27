@@ -1,4 +1,4 @@
-import { defaultRetryPolicy, RetryPolicy } from './retry';
+import { defaultRetryPolicy, RetryPolicy } from './retry.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 1 << 20;
@@ -56,14 +56,18 @@ export function resolveConfig(config: Config): ResolvedConfig {
   if (parsed.protocol !== 'https:' && !(config.allowInsecureHttp && parsed.protocol === 'http:')) {
     throw new TypeError('base URL must use HTTPS');
   }
-  if (!config.applicationId.trim() || config.applicationId.includes('/')) {
+  if (
+    typeof config.applicationId !== 'string' ||
+    !config.applicationId.trim() ||
+    config.applicationId.includes('/')
+  ) {
     throw new TypeError('application ID must be one non-empty path segment');
   }
   validateBearer('application token', config.applicationToken);
-  if (timeoutMs <= 0) {
+  if (!isPositiveFinite(timeoutMs)) {
     throw new TypeError('timeout must be positive');
   }
-  if (maxResponseBytes <= 0) {
+  if (!isPositiveFinite(maxResponseBytes)) {
     throw new TypeError('max response bytes must be positive');
   }
   retryPolicy.validate();
@@ -78,9 +82,14 @@ export function resolveConfig(config: Config): ResolvedConfig {
   };
 }
 
+/** Reports whether a numeric option is a real, strictly positive number (not NaN/Infinity). */
+export function isPositiveFinite(value: number): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
 /** Rejects empty or whitespace-bearing secrets without echoing them. */
 export function validateBearer(name: string, value: string): void {
-  if (!value || value.trim() !== value || /\s/u.test(value)) {
+  if (typeof value !== 'string' || !value || value.trim() !== value || /\s/u.test(value)) {
     throw new TypeError(`${name} must be a non-empty bearer token`);
   }
 }

@@ -327,6 +327,12 @@ jobs:
           bun run typecheck
           bun test
 
+      - name: Build and import from plain Node
+        working-directory: sdk/typescript
+        run: |
+          bun run build
+          node --input-type=module -e "import { Client } from './dist/index.js'; if (typeof Client !== 'function') process.exit(1);"
+
   flutter-ios:
     name: Flutter iOS build
     runs-on: macos-latest

@@ -1,5 +1,7 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
+import { inspect } from 'node:util';
+import { resolveConfig } from '../src/config';
 import {
   APIError,
   Client,
@@ -15,6 +17,16 @@ import {
 const testApplicationToken = 'application-token';
 const testCustomerToken = 'customer-token';
 const testSecretBearer = 'secret with spaces';
+
+type RetrySeams = {
+  delay: (ms: number, signal?: AbortSignal) => Promise<void>;
+  random: () => number;
+};
+
+/** Reaches the private retry seams that only tests replace. */
+function retrySeams(client: Client): RetrySeams {
+  return client as unknown as RetrySeams;
+}
 
 type CapturedRequest = {
   method: string;
@@ -97,7 +109,7 @@ function newTestClient(
     },
     ...overrides,
   });
-  client.delay = async () => {};
+  retrySeams(client).delay = async () => {};
   return { client, calls };
 }
 
@@ -201,8 +213,8 @@ test('client waits using the retry policy', async () => {
     },
     { retryPolicy: new RetryPolicy({ maxAttempts: 2, baseDelayMs: 40, maxDelayMs: 40 }) },
   );
-  client.random = () => 1;
-  client.delay = async (ms) => {
+  retrySeams(client).random = () => 1;
+  retrySeams(client).delay = async (ms) => {
     waited = ms;
   };
 
@@ -339,17 +351,45 @@ test('createCustomerSession rejects a whitespace customer ID', async () => {
   assert.equal(calls.length, 0);
 });
 
-test('new Client applies operational defaults', () => {
-  const client = new Client({
+test('resolveConfig applies operational defaults', () => {
+  const config = resolveConfig({
     baseUrl: 'https://iap.example',
     applicationId: 'application-1',
     applicationToken: testApplicationToken,
   });
-  assert.equal(client.config.timeoutMs, 10_000);
-  assert.equal(client.config.maxResponseBytes, 1 << 20);
-  assert.equal(client.config.retryPolicy.maxAttempts, 3);
-  assert.equal(client.config.retryPolicy.baseDelayMs, 250);
-  assert.equal(client.config.retryPolicy.maxDelayMs, 2000);
+  assert.equal(config.timeoutMs, 10_000);
+  assert.equal(config.maxResponseBytes, 1 << 20);
+  assert.equal(config.retryPolicy.maxAttempts, 3);
+  assert.equal(config.retryPolicy.baseDelayMs, 250);
+  assert.equal(config.retryPolicy.maxDelayMs, 2000);
+});
+
+test('Client does not expose the application token when logged or serialized', () => {
+  const secret = 'iaps_app_do-not-leak';
+  const client = new Client({
+    baseUrl: 'https://iap.example',
+    applicationId: 'application-1',
+    applicationToken: secret,
+  });
+  assert.equal(JSON.stringify(client).includes(secret), false);
+  assert.equal(inspect(client, { depth: 10, showHidden: true }).includes(secret), false);
+  assert.equal(Object.values(client).some((value) => JSON.stringify(value)?.includes(secret)), false);
+  assert.equal('config' in client, false);
+});
+
+test('Client rejects non-finite numeric options', () => {
+  const base = {
+    baseUrl: 'https://iap.example',
+    applicationId: 'application-1',
+    applicationToken: testApplicationToken,
+  };
+  assert.throws(() => new Client({ ...base, timeoutMs: Number.NaN }), TypeError);
+  assert.throws(() => new Client({ ...base, timeoutMs: Number.POSITIVE_INFINITY }), TypeError);
+  assert.throws(() => new Client({ ...base, maxResponseBytes: Number.NaN }), TypeError);
+  assert.throws(
+    () => new Client({ ...base, retryPolicy: new RetryPolicy({ baseDelayMs: Number.NaN }) }),
+    TypeError,
+  );
 });
 
 test('denied entitlement does not grant access', () => {

@@ -1,19 +1,19 @@
-export { Client, type RequestOptions } from './client';
-export type { Config } from './config';
+export { Client, type RequestOptions } from './client.js';
+export type { Config } from './config.js';
 export {
   APIError,
   ProtocolError,
   TimeoutError,
   TransportError,
   WebhookError,
-} from './errors';
+} from './errors.js';
 export {
   Entitlement,
   EntitlementChange,
   type CustomerSession,
   type EntitlementSnapshot,
-} from './models';
-export { defaultRetryPolicy, RetryPolicy } from './retry';
+} from './models.js';
+export { defaultRetryPolicy, RetryPolicy } from './retry.js';
 export {
   MemoryEventStore,
   WebhookVerifier,
@@ -24,4 +24,4 @@ export {
   type WebhookHeaders,
   type WebhookOnEvent,
   type WebhookRequest,
-} from './webhook';
+} from './webhook.js';

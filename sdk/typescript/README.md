@@ -13,7 +13,8 @@ bundle, and never log or persist either bearer.
 This is a post-v0.1 host SDK for Node backends (Express, Nest, Next.js Route
 Handlers). Flutter remains the only v0.1 mobile client. Browser usage is not
 supported. The package is not published to npm yet; depend on the repository
-path `sdk/typescript`.
+path `sdk/typescript`. Bun resolves the TypeScript sources directly; for plain
+Node (18+), run `bun run build` once so `dist/` exists.
 
 ## Trusted-host boundary
 
