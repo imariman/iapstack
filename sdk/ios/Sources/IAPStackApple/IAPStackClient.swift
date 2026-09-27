@@ -4,12 +4,20 @@ private let sdkVersion = "0.1.0-dev.1"
 
 /// Provider-neutral HTTP client for the IAPStack v1 API.
 public final class IAPStackClient {
-  /// Creates a client with optional custom URLSession for testing.
-  public init(config: IAPStackConfig, session: URLSession = .shared) throws {
+  /// Creates a client, optionally using a caller-owned `URLSession`.
+  ///
+  /// When `session` is nil the client creates and owns an ephemeral session that
+  /// `close()` invalidates. An injected session is never invalidated by the SDK.
+  public init(config: IAPStackConfig, session: URLSession? = nil) throws {
     try config.validate()
     self.config = config
-    self.session = session
-    self.ownsSession = session !== URLSession.shared
+    if let session {
+      self.session = session
+      self.ownsSession = false
+    } else {
+      self.session = URLSession(configuration: .ephemeral)
+      self.ownsSession = true
+    }
   }
 
   private let config: IAPStackConfig
@@ -71,7 +79,7 @@ public final class IAPStackClient {
     return try EntitlementSnapshot.from(json)
   }
 
-  /// Releases the owned `URLSession`.
+  /// Invalidates the `URLSession` this client created; injected sessions are left untouched.
   public func close() {
     if ownsSession {
       session.invalidateAndCancel()
@@ -91,6 +99,7 @@ public final class IAPStackClient {
 
     var attempt = 1
     while attempt <= config.retryPolicy.maxAttempts {
+      try Task.checkCancellation()
       do {
         return try await requestAttempt(
           method: method,
@@ -125,14 +134,13 @@ public final class IAPStackClient {
     let (data, response) = try await withTimeout {
       try await self.send(method: method, path: path, body: body, requestId: requestId)
     }
-    if data.count > config.maxResponseBytes {
-      throw IAPStackSDKError.protocolError(message: "IAPStack response exceeded maxResponseBytes")
-    }
-    let json = try decodeJSONObject(from: data)
     if (200 ... 299).contains(response.statusCode) {
-      return json
+      return try decodeJSONObject(from: data)
     }
-    throw parseApiError(statusCode: response.statusCode, response: response, body: json)
+    // Proxies and load balancers often answer 5xx with HTML or an empty body; keep
+    // the status so retry and error classification still apply.
+    let envelope = (try? decodeJSONObject(from: data)) ?? [:]
+    throw parseApiError(statusCode: response.statusCode, response: response, body: envelope)
   }
 
   private func send(
@@ -159,9 +167,22 @@ public final class IAPStackClient {
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     }
 
-    let (data, response) = try await session.data(for: request)
+    let (bytes, response) = try await session.bytes(for: request)
     guard let httpResponse = response as? HTTPURLResponse else {
+      bytes.task.cancel()
       throw IAPStackSDKError.protocolError(message: "non-HTTP response from server")
+    }
+    if httpResponse.expectedContentLength > Int64(config.maxResponseBytes) {
+      bytes.task.cancel()
+      throw IAPStackSDKError.protocolError(message: "IAPStack response exceeded maxResponseBytes")
+    }
+    var data = Data()
+    for try await byte in bytes {
+      data.append(byte)
+      if data.count > config.maxResponseBytes {
+        bytes.task.cancel()
+        throw IAPStackSDKError.protocolError(message: "IAPStack response exceeded maxResponseBytes")
+      }
     }
     return (data, httpResponse)
   }
@@ -185,11 +206,16 @@ public final class IAPStackClient {
           throw IAPStackSDKError.transportError(message: "IAPStack request did not execute")
         }
       }
-    } catch is CancellationError {
-      throw IAPStackSDKError.timeoutError(message: "IAPStack request timed out")
     } catch {
+      // Caller cancellation is not a timeout: surface it unchanged so it is never retried.
+      if Task.isCancelled {
+        throw CancellationError()
+      }
       if case IAPStackSDKError.timeoutError = error {
         throw error
+      }
+      if error is CancellationError {
+        throw IAPStackSDKError.timeoutError(message: "IAPStack request timed out", cause: error)
       }
       if let urlError = error as? URLError,
         urlError.code == .timedOut || urlError.code == .cancelled

@@ -362,9 +362,119 @@ final class IAPStackAppleTests: XCTestCase {
     }
   }
 
+  func testProxyHtmlErrorIsRetriedAndSurfacesApiError() async throws {
+    URLStubProtocol.reset()
+    let attempts = Counter()
+    for _ in 0 ..< 2 {
+      URLStubProtocol.enqueue { request in
+        attempts.increment()
+        let response = HTTPURLResponse(
+          url: request.url!,
+          statusCode: 503,
+          httpVersion: nil,
+          headerFields: ["Content-Type": "text/html", "X-Request-ID": "edge-1"],
+        )!
+        return (response, Data("<html>Service Unavailable</html>".utf8))
+      }
+    }
+    let config = IAPStackConfig(
+      baseUri: URL(string: "https://example.local")!,
+      applicationId: "application-1",
+      customerToken: "customer-token",
+      retryPolicy: .init(maxAttempts: 2, baseDelay: 0, maxDelay: 0),
+    )
+    let client = try IAPStackClient(config: config, session: makeSession())
+    do {
+      _ = try await client.getEntitlements("customer-id")
+      XCTFail("expected api error")
+    } catch let IAPStackSDKError.apiError(statusCode, code, _, requestId, retryable) {
+      XCTAssertEqual(statusCode, 503)
+      XCTAssertEqual(code, "http_error")
+      XCTAssertEqual(requestId, "edge-1")
+      XCTAssertTrue(retryable)
+    }
+    XCTAssertEqual(attempts.value, 2)
+  }
+
+  func testCloseDoesNotInvalidateInjectedSession() async throws {
+    URLStubProtocol.reset()
+    for _ in 0 ..< 1 {
+      URLStubProtocol.enqueue { request in
+        let response = HTTPURLResponse(
+          url: request.url!,
+          statusCode: 200,
+          httpVersion: nil,
+          headerFields: ["Content-Type": "application/json"],
+        )!
+        return (response, Data(#"{"customer_id":"c","entitlements":[]}"#.utf8))
+      }
+    }
+    let session = makeSession()
+    let config = IAPStackConfig(
+      baseUri: URL(string: "https://example.local")!,
+      applicationId: "application-1",
+      customerToken: "customer-token",
+    )
+    try IAPStackClient(config: config, session: session).close()
+
+    let snapshot = try await IAPStackClient(config: config, session: session).getEntitlements("customer-id")
+    XCTAssertEqual(snapshot.customerId, "c")
+  }
+
+  func testCallerCancellationIsNotRetriedOrReportedAsTimeout() async throws {
+    URLStubProtocol.reset()
+    let attempts = Counter()
+    for _ in 0 ..< 3 {
+      URLStubProtocol.enqueue { request in
+        attempts.increment()
+        Thread.sleep(forTimeInterval: 0.3)
+        let response = HTTPURLResponse(
+          url: request.url!,
+          statusCode: 200,
+          httpVersion: nil,
+          headerFields: ["Content-Type": "application/json"],
+        )!
+        return (response, Data(#"{"customer_id":"c","entitlements":[]}"#.utf8))
+      }
+    }
+    let config = IAPStackConfig(
+      baseUri: URL(string: "https://example.local")!,
+      applicationId: "application-1",
+      customerToken: "customer-token",
+      timeout: 5,
+      retryPolicy: .init(maxAttempts: 3, baseDelay: 0, maxDelay: 0),
+    )
+    let client = try IAPStackClient(config: config, session: makeSession())
+    let task = Task { try await client.getEntitlements("customer-id") }
+    try await Task.sleep(nanoseconds: 50_000_000)
+    task.cancel()
+    do {
+      _ = try await task.value
+      XCTFail("expected cancellation")
+    } catch is CancellationError {
+      // Expected.
+    } catch {
+      XCTFail("expected CancellationError, got \(error)")
+    }
+    XCTAssertEqual(attempts.value, 1)
+  }
+
   private func makeSession() -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [URLStubProtocol.self]
     return URLSession(configuration: configuration)
+  }
+}
+
+final class Counter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var count = 0
+
+  var value: Int {
+    lock.withLock { count }
+  }
+
+  func increment() {
+    lock.withLock { count += 1 }
   }
 }
