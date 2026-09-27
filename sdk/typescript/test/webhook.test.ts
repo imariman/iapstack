@@ -35,6 +35,8 @@ class FailingStore implements EventStore {
   remember(): never {
     throw this.error;
   }
+
+  forget(): void {}
 }
 
 function webhookCode(error: unknown, code: string): boolean {
@@ -395,5 +397,26 @@ test('webhook handler owns IAPStack retry statuses', async () => {
   const noop = await verifier.handler()(signedWebhookRequest(now, testWebhookBody, 'event-6'));
   assert.equal(noop.status, 204);
 
+  verifier.close();
+});
+
+test('webhook handler redelivers an event after the host callback fails', async () => {
+  const now = new Date('2026-08-31T10:00:00.000Z');
+  const verifier = newTestVerifier(now);
+  let calls = 0;
+  const handle = verifier.handler(async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new Error('transient host failure');
+    }
+  });
+
+  const first = await handle(signedWebhookRequest(now, testWebhookBody, 'event-retry'));
+  assert.equal(first.status, 503);
+  const second = await handle(signedWebhookRequest(now, testWebhookBody, 'event-retry'));
+  assert.equal(second.status, 204);
+  const third = await handle(signedWebhookRequest(now, testWebhookBody, 'event-retry'));
+  assert.equal(third.status, 204);
+  assert.equal(calls, 2);
   verifier.close();
 });

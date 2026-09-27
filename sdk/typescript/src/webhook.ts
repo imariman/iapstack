@@ -29,6 +29,12 @@ export interface EventStore {
    * before. A conflicting fingerprint for an existing ID throws a WebhookError.
    */
   remember(eventId: string, fingerprint: Uint8Array): Promise<boolean> | boolean;
+  /**
+   * Removes one event ID recorded by remember when the host callback failed, so
+   * IAPStack's retry of the same delivery is handled again instead of being
+   * acknowledged as a duplicate. Forgetting an unknown ID is a no-op.
+   */
+  forget(eventId: string): Promise<void> | void;
 }
 
 export interface WebhookConfig {
@@ -83,6 +89,10 @@ export class MemoryEventStore implements EventStore {
     }
     throw new WebhookError('event_identity_conflict');
   }
+
+  forget(eventId: string): void {
+    this.events.delete(eventId);
+  }
 }
 
 /** Authenticates v2 IAPStack deliveries and deduplicates event IDs. */
@@ -122,7 +132,8 @@ export class WebhookVerifier {
    *
    * Construct the verifier once at process start. The handler maps signature and
    * timestamp failures to 401, identity conflict to 409, and store or callback
-   * errors to 503. IAPStack retries only 408, 429, and 5xx; 401 is a permanent
+   * errors to 503. When the callback fails the event ID is forgotten so the
+   * retried delivery invokes it again. IAPStack retries only 408, 429, and 5xx; 401 is a permanent
    * webhook_rejected failure.
    */
   handler(onEvent?: WebhookOnEvent | null): WebhookHandler {
@@ -140,9 +151,14 @@ export class WebhookVerifier {
       try {
         await callback(event);
       } catch (error) {
-        return webhookErrorResponse(
-          new WebhookError('receiver_unavailable', { cause: error }),
-        );
+        let cause = error;
+        try {
+          // Release the dedupe record so the retried delivery reaches the callback again.
+          await this.store.forget(event.id);
+        } catch (forgetError) {
+          cause = new AggregateError([error, forgetError], 'webhook callback and forget failed');
+        }
+        return webhookErrorResponse(new WebhookError('receiver_unavailable', { cause }));
       }
       return new Response(null, { status: 204 });
     };

@@ -103,7 +103,9 @@ func main() {
 Replace `NewMemoryEventStore` with a durable store in production so retries
 across processes still dedupe by the authenticated `IAPStack-Event-ID`. The
 handler hashes the raw body and passes an opaque fingerprint into `Remember`;
-do not recompute SHA-256 in the store.
+do not recompute SHA-256 in the store. When your callback returns an error the
+handler calls `Forget` for that event ID and responds 503, so IAPStack's retry
+invokes the callback again instead of being acknowledged as a duplicate.
 
 ## Webhook verification
 

@@ -50,6 +50,10 @@ type EventStore interface {
 	// when the same identity was stored before. A conflicting fingerprint for
 	// an existing ID returns a WebhookError.
 	Remember(ctx context.Context, eventID string, fingerprint []byte) (duplicate bool, err error)
+	// Forget removes one event ID recorded by Remember when the host callback
+	// failed, so IAPStack's retry of the same delivery is handled again instead
+	// of being acknowledged as a duplicate. Forgetting an unknown ID is a no-op.
+	Forget(ctx context.Context, eventID string) error
 }
 
 // WebhookConfig controls signature verification, replay window, and dedupe storage.
@@ -144,7 +148,8 @@ func NewWebhookVerifier(config WebhookConfig) (*WebhookVerifier, error) {
 //
 // Construct the verifier once at process start. The handler maps signature and
 // timestamp failures to 401, identity conflict to 409, and store or callback
-// errors to 503. IAPStack retries only 408, 429, and 5xx; 401 is a permanent
+// errors to 503. When onEvent fails the event ID is forgotten so the retried
+// delivery invokes onEvent again. IAPStack retries only 408, 429, and 5xx; 401 is a permanent
 // webhook_rejected failure.
 func (verifier *WebhookVerifier) Handler(onEvent func(context.Context, WebhookEvent) error) http.Handler {
 	if onEvent == nil {
@@ -165,6 +170,10 @@ func (handler *webhookHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 		return
 	}
 	if err := handler.onEvent(request.Context(), event); err != nil {
+		// Release the dedupe record so the retried delivery reaches onEvent again.
+		if forgetErr := handler.verifier.store.Forget(context.WithoutCancel(request.Context()), event.ID); forgetErr != nil {
+			err = errors.Join(err, forgetErr)
+		}
 		writeWebhookError(writer, &WebhookError{
 			Code:       "receiver_unavailable",
 			StatusCode: http.StatusServiceUnavailable,
@@ -250,6 +259,14 @@ func (store *MemoryEventStore) Remember(_ context.Context, eventID string, finge
 		return true, nil
 	}
 	return false, webhookFailure("event_identity_conflict")
+}
+
+// Forget removes one event identity so a failed delivery can be handled again.
+func (store *MemoryEventStore) Forget(_ context.Context, eventID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	delete(store.events, eventID)
+	return nil
 }
 
 // validTimestamp parses a canonical Unix timestamp inside the configured replay window.

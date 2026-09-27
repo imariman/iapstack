@@ -384,6 +384,11 @@ func (store failingStore) Remember(context.Context, string, []byte) (bool, error
 	return false, store.err
 }
 
+// Forget is a no-op because failingStore never records events.
+func (store failingStore) Forget(context.Context, string) error {
+	return nil
+}
+
 // newTestVerifier constructs a verifier with an isolated memory store.
 func newTestVerifier(t *testing.T, now time.Time, bodyLimit int64) *WebhookVerifier {
 	t.Helper()
@@ -436,4 +441,40 @@ func signWebhook(eventID string, timestamp time.Time, body []byte) string {
 func webhookCode(err error, code string) bool {
 	var webhookErr *WebhookError
 	return errors.As(err, &webhookErr) && webhookErr.Code == code && webhookErr.StatusCode == webhookStatus(code)
+}
+
+// TestWebhookHandlerRedeliversAfterCallbackFailure verifies a 503 retry reaches onEvent again.
+func TestWebhookHandlerRedeliversAfterCallbackFailure(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC)
+	verifier := newTestVerifier(t, now, defaultWebhookBodyLimit)
+	defer verifier.Close()
+	calls := 0
+	handler := verifier.Handler(func(context.Context, WebhookEvent) error {
+		calls++
+		if calls == 1 {
+			return errors.New("transient host failure")
+		}
+		return nil
+	})
+
+	first := httptest.NewRecorder()
+	handler.ServeHTTP(first, signedWebhookRequest(t, now, []byte(testWebhookBody), "event-retry"))
+	if first.Code != http.StatusServiceUnavailable {
+		t.Fatalf("first delivery status = %d, want 503", first.Code)
+	}
+	second := httptest.NewRecorder()
+	handler.ServeHTTP(second, signedWebhookRequest(t, now, []byte(testWebhookBody), "event-retry"))
+	if second.Code != http.StatusNoContent {
+		t.Fatalf("retried delivery status = %d, want 204", second.Code)
+	}
+	third := httptest.NewRecorder()
+	handler.ServeHTTP(third, signedWebhookRequest(t, now, []byte(testWebhookBody), "event-retry"))
+	if third.Code != http.StatusNoContent {
+		t.Fatalf("duplicate delivery status = %d, want 204", third.Code)
+	}
+	if calls != 2 {
+		t.Fatalf("onEvent calls = %d, want 2", calls)
+	}
 }
