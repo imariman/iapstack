@@ -12,7 +12,11 @@ public protocol AppleIAPPlatform: Sendable {
   func queryProducts(productIds: Set<String>) async throws -> AppleProductQuery
 
   /// Launches StoreKit checkout with `appAccountToken`.
-  func launchPurchase(product: AppleProduct, appAccountToken: String) async throws
+  ///
+  /// Returns the completed transaction, or `nil` when StoreKit reports the
+  /// purchase as pending (for example Ask to Buy); pending purchases arrive later
+  /// through `purchaseUpdates`.
+  func launchPurchase(product: AppleProduct, appAccountToken: String) async throws -> ApplePurchase?
 
   /// Restores previously owned StoreKit rows.
   func restorePurchases() async throws -> [ApplePurchase]

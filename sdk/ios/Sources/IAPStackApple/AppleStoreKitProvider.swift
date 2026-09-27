@@ -55,7 +55,7 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
   }
 
   public func isAvailable() async throws -> Bool {
-    true
+    AppStore.canMakePayments
   }
 
   public func queryProducts(productIds: Set<String>) async throws -> AppleProductQuery {
@@ -104,7 +104,7 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
     )
   }
 
-  public func launchPurchase(product: AppleProduct, appAccountToken: String) async throws {
+  public func launchPurchase(product: AppleProduct, appAccountToken: String) async throws -> ApplePurchase? {
     guard let appAccountUUID = UUID(uuidString: appAccountToken) else {
       throw AppleIAPStackError(
         code: "invalid_app_account_token",
@@ -122,7 +122,7 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
     let result = try await storeProduct.purchase(options: options)
     switch result {
     case .success(let verification):
-      _ = try await mapVerification(verification, status: .purchased)
+      return try await mapVerification(verification, status: .purchased)
     case .userCancelled:
       throw AppleIAPStackError(
         code: "purchase_cancelled",
@@ -130,7 +130,7 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
         userCancelled: true,
       )
     case .pending:
-      return
+      return nil
     default:
       throw AppleIAPStackError(
         code: "purchase_not_started",
@@ -147,7 +147,7 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
       guard case .verified = result else {
         continue
       }
-      let purchase = try await mapVerification(result, status: .restored)
+      let purchase = try await mapVerification(result, status: .restored, pendingCompletion: false)
       if seen.insert(purchase.transactionId).inserted {
         purchases.append(purchase)
       }
@@ -168,6 +168,7 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
   private func mapVerification(
     _ verification: StoreKit.VerificationResult<Transaction>,
     status: ApplePurchaseStatus,
+    pendingCompletion: Bool = true,
   ) async throws -> ApplePurchase {
     switch verification {
     case .verified(let transaction):
@@ -175,8 +176,12 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
         from: transaction,
         signedTransaction: verification.jwsRepresentation,
         status: status,
+        pendingCompletion: pendingCompletion,
       )
-      await state.setPending(transaction, id: purchase.transactionId)
+      // History rows are already finished; only live transactions need a finish handle.
+      if pendingCompletion {
+        await state.setPending(transaction, id: purchase.transactionId)
+      }
       return purchase
     case .unverified(_, let error):
       throw AppleIAPStackError(
@@ -191,13 +196,14 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
     from transaction: Transaction,
     signedTransaction: String,
     status: ApplePurchaseStatus,
+    pendingCompletion: Bool,
   ) -> ApplePurchase {
     ApplePurchase(
       transactionId: String(describing: transaction.id),
       productId: transaction.productID,
       signedTransaction: signedTransaction,
       status: status,
-      pendingCompletion: true,
+      pendingCompletion: pendingCompletion,
       appAccountToken: transaction.appAccountToken?.uuidString.lowercased(),
       errorCode: nil,
     )
@@ -264,7 +270,7 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
     throw AppleIAPStackError(code: "storekit_unavailable", message: "StoreKit is not available on this platform")
   }
 
-  public func launchPurchase(product: AppleProduct, appAccountToken: String) async throws {
+  public func launchPurchase(product: AppleProduct, appAccountToken: String) async throws -> ApplePurchase? {
     throw AppleIAPStackError(code: "storekit_unavailable", message: "StoreKit is not available on this platform")
   }
 

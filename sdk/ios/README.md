@@ -49,6 +49,18 @@ let stack = AppleIAPStack(
 )
 
 let productQuery = try await stack.queryProducts(["premium_monthly", "premium_lifetime"])
+
+// Purchases made in this session are returned directly; StoreKit does not
+// re-emit them on `purchaseUpdates`.
+if let purchase = try await stack.launchPurchase(
+  externalCustomerId: "customer-uuid",
+  product: productQuery.products[0],
+) {
+  _ = try await stack.verifyPurchase(externalCustomerId: "customer-uuid", purchase: purchase)
+}
+
+// Renewals, Ask to Buy approvals, other devices, and unfinished transactions
+// from earlier launches arrive here.
 let updates = stack.purchaseUpdates
 
 for await update in updates {

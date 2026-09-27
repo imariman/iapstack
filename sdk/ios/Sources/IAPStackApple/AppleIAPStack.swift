@@ -52,7 +52,12 @@ public final class AppleIAPStack {
   }
 
   /// Launches checkout with `externalCustomerId` as `appAccountToken`.
-  public func launchPurchase(externalCustomerId: String, product: AppleProduct) async throws {
+  ///
+  /// Returns the completed purchase so the caller can pass it to
+  /// `verifyPurchase`. StoreKit does not re-emit purchases made through this call
+  /// on `purchaseUpdates`. Returns `nil` when the purchase is pending approval.
+  @discardableResult
+  public func launchPurchase(externalCustomerId: String, product: AppleProduct) async throws -> ApplePurchase? {
     try validateExternalCustomerId(externalCustomerId)
     let expected = productKinds[product.id]
     guard expected == product.kind else {
@@ -61,7 +66,7 @@ public final class AppleIAPStack {
         message: "Product kind does not match local catalog",
       )
     }
-    try await platform.launchPurchase(product: product, appAccountToken: externalCustomerId)
+    return try await platform.launchPurchase(product: product, appAccountToken: externalCustomerId)
   }
 
   /// Verifies one purchase and finishes it only after successful verification.
