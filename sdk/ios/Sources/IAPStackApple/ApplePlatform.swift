@@ -5,7 +5,12 @@ public protocol AppleIAPPlatform: Sendable {
   /// Emits StoreKit transaction updates.
   var purchaseUpdates: AsyncStream<ApplePurchase> { get }
 
-  /// Reports if StoreKit is available.
+  /// Reports whether this user can make App Store payments
+  /// (`AppStore.canMakePayments`).
+  ///
+  /// `false` means purchases are blocked, for example by Screen Time or an MDM
+  /// profile. It does not mean StoreKit is missing: product queries and restore
+  /// still work.
   func isAvailable() async throws -> Bool
 
   /// Queries catalog metadata for configured product IDs.

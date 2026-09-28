@@ -28,7 +28,11 @@ public final class AppleIAPStack {
     platform.purchaseUpdates
   }
 
-  /// Whether StoreKit is available on the current runtime.
+  /// Whether this user can make App Store payments.
+  ///
+  /// `false` means purchases are blocked (Screen Time or MDM); a runtime without
+  /// StoreKit throws `storekit_unavailable` instead. Gate only the purchase UI on
+  /// it; `queryProducts`, `restorePurchases`, and `getEntitlements` still work.
   public func isAvailable() async throws -> Bool {
     try await platform.isAvailable()
   }
