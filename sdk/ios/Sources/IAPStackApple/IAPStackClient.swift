@@ -84,10 +84,10 @@ public final class IAPStackClient {
     body: [String: Any]?,
     requestId: String?,
   ) async throws -> [String: Any] {
-    let normalizedRequestId = requestId?.trimmingCharacters(in: .whitespacesAndNewlines)
-    if let normalized = normalizedRequestId, normalized.isEmpty {
-      throw IAPStackSDKError.configurationError(message: "requestId cannot be empty")
-    }
+    // Blank request IDs are dropped, matching the other IAPStack SDKs.
+    let normalizedRequestId = requestId?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .nilIfEmpty
 
     var attempt = 1
     while attempt <= config.retryPolicy.maxAttempts {
@@ -291,4 +291,10 @@ public final class IAPStackClient {
 private enum TimeoutRace<Value> {
   case value(Value)
   case timeout
+}
+
+private extension String {
+  var nilIfEmpty: String? {
+    isEmpty ? nil : self
+  }
 }

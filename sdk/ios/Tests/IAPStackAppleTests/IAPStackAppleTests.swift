@@ -362,6 +362,45 @@ final class IAPStackAppleTests: XCTestCase {
     }
   }
 
+  func testEmptyProductIdentifierThrowsInsteadOfTrapping() throws {
+    let client = try IAPStackClient(
+      config: IAPStackConfig(
+        baseUri: URL(string: "https://example.local")!,
+        applicationId: "application-1",
+        customerToken: "customer-token",
+      ),
+      session: makeSession(),
+    )
+    XCTAssertThrowsError(try AppleIAPStack(client: client, productKinds: [" ": .subscription])) { error in
+      XCTAssertEqual((error as? AppleIAPStackError)?.code, "invalid_product_catalog")
+    }
+  }
+
+  func testBlankRequestIdIsOmitted() async throws {
+    URLStubProtocol.reset()
+    var capturedRequest: URLRequest?
+    URLStubProtocol.enqueue { request in
+      capturedRequest = request
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"],
+      )!
+      return (response, Data(#"{"customer_id":"c","entitlements":[]}"#.utf8))
+    }
+    let client = try IAPStackClient(
+      config: IAPStackConfig(
+        baseUri: URL(string: "https://example.local")!,
+        applicationId: "application-1",
+        customerToken: "customer-token",
+      ),
+      session: makeSession(),
+    )
+    _ = try await client.getEntitlements("customer-id", requestId: "   ")
+    XCTAssertNil(try XCTUnwrap(capturedRequest).value(forHTTPHeaderField: "X-Request-ID"))
+  }
+
   private func makeSession() -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [URLStubProtocol.self]
