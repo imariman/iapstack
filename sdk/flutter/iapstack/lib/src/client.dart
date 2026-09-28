@@ -221,20 +221,12 @@ final class IapStackClient {
       request.bodyBytes = utf8.encode(jsonEncode(body));
     }
     final response = await _httpClient.send(request);
-    final bytes = await _collect(response.stream);
-    final String text;
-    try {
-      text = utf8.decode(bytes);
-    } on FormatException catch (error) {
-      // A complete response arrived; malformed bytes are a contract violation,
-      // not a transport failure, and retrying will not fix them.
-      throw IapStackProtocolException('IAPStack response was not valid UTF-8',
-          cause: error);
-    }
+    // Decoding waits until the status is known: a malformed 2xx body is a
+    // protocol error, while a malformed error body must not hide a 429 or 5xx.
     return _RawResponse(
       statusCode: response.statusCode,
       headers: response.headers,
-      body: text,
+      body: await _collect(response.stream),
     );
   }
 
@@ -281,7 +273,8 @@ final class IapStackClient {
         }
       }
     } on IapStackProtocolException {
-      // Preserve the safe generic error when a proxy returns non-JSON content.
+      // Preserve the safe generic error, and the status-based retry decision,
+      // when a proxy returns non-JSON or non-UTF-8 content.
     }
     return IapStackApiException(
       statusCode: response.statusCode,
@@ -292,9 +285,16 @@ final class IapStackClient {
     );
   }
 
-  Map<String, Object?> _decodeObject(String body) {
+  Map<String, Object?> _decodeObject(Uint8List body) {
+    final String text;
     try {
-      final value = jsonDecode(body);
+      text = utf8.decode(body);
+    } on FormatException catch (error) {
+      throw IapStackProtocolException('IAPStack response was not valid UTF-8',
+          cause: error);
+    }
+    try {
+      final value = jsonDecode(text);
       if (value is! Map<String, Object?>) {
         throw const FormatException('root JSON value must be an object');
       }
@@ -347,5 +347,5 @@ final class _RawResponse {
 
   final int statusCode;
   final Map<String, String> headers;
-  final String body;
+  final Uint8List body;
 }
