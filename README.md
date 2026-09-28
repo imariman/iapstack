@@ -51,11 +51,11 @@ the v0.1 release gate or make these packages production releases.
 
 | SDK | Implemented in the repository | Remaining work |
 | --- | --- | --- |
-| [Go trusted host](sdk/go/README.md) | Customer sessions, server-side entitlement lookup, and signed webhook handling | Versioned package release |
-| [TypeScript trusted host](sdk/typescript/README.md) | Customer sessions, entitlement lookup, and signed webhook handling for Node backends | npm publication |
-| [iOS (Swift)](sdk/ios/README.md) | Provider-neutral HTTP client and StoreKit 2 companion | Full sample app with a StoreKit Configuration file |
-| [Android (Kotlin)](sdk/android/README.md) | HTTP client and Google Play/Huawei companion coordinators behind injectable platform interfaces | Production BillingClient/HMS adapters, Android library packaging, and Maven publication |
-| [React Native](sdk/react-native/README.md) | Provider-neutral HTTP client and signed-evidence envelope helpers | Native bridge, end-to-end examples, and npm publication |
+| [Go trusted host](sdk/go/README.md) | Customer sessions, server-side entitlement lookup, and signed webhook handling | Versioned package release ([#141](https://github.com/imariman/iapstack/issues/141)) |
+| [TypeScript trusted host](sdk/typescript/README.md) | Customer sessions, entitlement lookup, and signed webhook handling for Node backends | npm publication ([#141](https://github.com/imariman/iapstack/issues/141)) |
+| [iOS (Swift)](sdk/ios/README.md) | Provider-neutral HTTP client and StoreKit 2 companion | Full sample app with a StoreKit Configuration file ([#139](https://github.com/imariman/iapstack/issues/139)); Swift Package distribution ([#141](https://github.com/imariman/iapstack/issues/141)) |
+| [Android (Kotlin)](sdk/android/README.md) | HTTP client and Google Play/Huawei companion coordinators behind injectable platform interfaces | Production BillingClient/HMS adapters and Android library packaging ([#138](https://github.com/imariman/iapstack/issues/138)); Maven publication ([#141](https://github.com/imariman/iapstack/issues/141)) |
+| [React Native](sdk/react-native/README.md) | Provider-neutral HTTP client and signed-evidence envelope helpers | Native bridge and end-to-end examples ([#140](https://github.com/imariman/iapstack/issues/140)); npm publication ([#141](https://github.com/imariman/iapstack/issues/141)) |
 
 The durable application bearer stays on a trusted host backend and must never ship
 in a mobile binary or browser bundle. Mobile clients use short-lived customer
@@ -397,9 +397,9 @@ credential/evidence and notification contracts, and webhook verification rules a
 - [x] Implement the Swift HTTP client and StoreKit 2 companion
 - [x] Implement the Kotlin HTTP client and Google Play/Huawei companion coordinators
 - [x] Implement the React Native HTTP client and evidence envelope helpers
-- [ ] Complete Android BillingClient/HMS adapters and the React Native native bridge
-- [ ] Add the full Swift sample app and React Native end-to-end examples
-- [ ] Publish versioned host, Android, and React Native packages
+- [ ] Complete Android BillingClient/HMS adapters ([#138](https://github.com/imariman/iapstack/issues/138)) and the React Native native bridge ([#140](https://github.com/imariman/iapstack/issues/140))
+- [ ] Add the full Swift sample app ([#139](https://github.com/imariman/iapstack/issues/139)) and React Native end-to-end examples ([#140](https://github.com/imariman/iapstack/issues/140))
+- [ ] Publish versioned host, Android, iOS, and React Native packages ([#141](https://github.com/imariman/iapstack/issues/141))
 - [ ] Add Amazon Appstore and additional store adapters
 - [ ] Support customer migration and alias consolidation
 

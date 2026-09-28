@@ -19,8 +19,8 @@ Finish StoreKit transactions only after IAPStack verification succeeds. Keep
 signed JWS strings in memory; do not write them to disk, logs, or analytics.
 
 This drop is the HTTP client and StoreKit companion. A full sample app with a
-StoreKit Configuration file is follow-up work; this package does not yet close
-issue #91.
+StoreKit Configuration file is tracked in [#139](https://github.com/imariman/iapstack/issues/139),
+and Swift Package distribution in [#141](https://github.com/imariman/iapstack/issues/141).
 
 ```swift
 import IAPStackApple
