@@ -1,10 +1,10 @@
-import { resolveConfig, type Config, type ResolvedConfig, validateBearer } from './config';
+import { resolveConfig, type Config, type ResolvedConfig, validateBearer } from './config.js';
 import {
   APIError,
   ProtocolError,
   TimeoutError,
   TransportError,
-} from './errors';
+} from './errors.js';
 import {
   Entitlement,
   objectList,
@@ -14,7 +14,7 @@ import {
   requiredString,
   type CustomerSession,
   type EntitlementSnapshot,
-} from './models';
+} from './models.js';
 
 const SDK_VERSION = '0.1.0-dev.1';
 const JSON_CONTENT_TYPE = 'application/json';
@@ -26,16 +26,32 @@ export interface RequestOptions {
 
 type DelayFn = (ms: number, signal?: AbortSignal) => Promise<void>;
 
+/** Retry timing hooks that only tests replace. */
+export interface RetrySeams {
+  delay?: DelayFn;
+  random?: () => number;
+}
+
+let installRetrySeams: (client: Client, seams: RetrySeams) => void;
+
 /** Application-bearer HTTP client for trusted host backends. */
 export class Client {
-  readonly config: ResolvedConfig;
-  delay: DelayFn;
-  random: () => number;
+  // True private fields keep the durable application bearer and the retry
+  // hooks out of console.log, util.inspect, JSON.stringify, and property
+  // enumeration, and make the hooks unwritable from outside the class.
+  readonly #config: ResolvedConfig;
+  #delay: DelayFn = waitForRetry;
+  #random: () => number = Math.random;
+
+  static {
+    installRetrySeams = (client, seams) => {
+      client.#delay = seams.delay ?? client.#delay;
+      client.#random = seams.random ?? client.#random;
+    };
+  }
 
   constructor(config: Config) {
-    this.config = resolveConfig(config);
-    this.delay = waitForRetry;
-    this.random = Math.random;
+    this.#config = resolveConfig(config);
   }
 
   /**
@@ -48,8 +64,8 @@ export class Client {
     validateExternalCustomerId(externalCustomerId);
     const body = await this.request(
       'POST',
-      this.config.applicationToken,
-      ['v1', 'applications', this.config.applicationId, 'customer-sessions'],
+      this.#config.applicationToken,
+      ['v1', 'applications', this.#config.applicationId, 'customer-sessions'],
       { external_customer_id: externalCustomerId },
       options,
     );
@@ -82,7 +98,7 @@ export class Client {
       [
         'v1',
         'applications',
-        this.config.applicationId,
+        this.#config.applicationId,
         'customers',
         session.externalCustomerId,
         'entitlements',
@@ -130,9 +146,9 @@ export class Client {
   ): Promise<Record<string, unknown>> {
     const requestId = options.requestId?.trim() ?? '';
     const encoded = payload === undefined ? undefined : JSON.stringify(payload);
-    const target = resolveUrl(this.config.baseUrl, path);
+    const target = resolveUrl(this.#config.baseUrl, path);
     let last: unknown;
-    for (let attempt = 1; attempt <= this.config.retryPolicy.maxAttempts; attempt += 1) {
+    for (let attempt = 1; attempt <= this.#config.retryPolicy.maxAttempts; attempt += 1) {
       try {
         const response = await this.attempt(
           method,
@@ -162,7 +178,7 @@ export class Client {
         throw decodeCaught(last);
       }
     }
-    throw decodeCaught(last) ?? new TransportError('IAPStack request exhausted its retry policy');
+    throw decodeCaught(last);
   }
 
   private async attempt(
@@ -194,16 +210,16 @@ export class Client {
     }
     const timer = setTimeout(() => {
       abortController.abort();
-    }, this.config.timeoutMs);
+    }, this.#config.timeoutMs);
 
     try {
-      const response = await this.config.fetch(target, {
+      const response = await this.#config.fetch(target, {
         method,
         headers,
         body: payload,
         signal: abortController.signal,
       });
-      const text = await readLimitedBody(response, this.config.maxResponseBytes);
+      const text = await readLimitedBody(response, this.#config.maxResponseBytes);
       return { status: response.status, headers: response.headers, body: text };
     } catch (error) {
       if (error instanceof ProtocolError || error instanceof APIError) {
@@ -227,7 +243,7 @@ export class Client {
   }
 
   private shouldRetry(error: unknown, attempt: number, signal?: AbortSignal): boolean {
-    if (attempt >= this.config.retryPolicy.maxAttempts || signal?.aborted) {
+    if (attempt >= this.#config.retryPolicy.maxAttempts || signal?.aborted) {
       return false;
     }
     if (error instanceof APIError) {
@@ -237,12 +253,20 @@ export class Client {
   }
 
   private async wait(attempt: number, signal?: AbortSignal): Promise<void> {
-    const delay = this.config.retryPolicy.delayAfter(attempt, this.random());
+    const delay = this.#config.retryPolicy.delayAfter(attempt, this.#random());
     if (delay <= 0) {
       return;
     }
-    await this.delay(delay, signal);
+    await this.#delay(delay, signal);
   }
+}
+
+/**
+ * Test-only: replaces retry timing on one client. The package entry point does
+ * not re-export this, so consumers cannot reach it through `@iapstack/host`.
+ */
+export function setRetrySeamsForTesting(client: Client, seams: RetrySeams): void {
+  installRetrySeams(client, seams);
 }
 
 function validateExternalCustomerId(value: string): void {
@@ -317,11 +341,7 @@ function decodeCaught(error: unknown): Error {
     return error;
   }
   if (error instanceof Error) {
-    try {
-      return new ProtocolError('IAPStack response did not match the v1 contract', { cause: error });
-    } catch {
-      return new ProtocolError('IAPStack response did not match the v1 contract');
-    }
+    return new ProtocolError('IAPStack response did not match the v1 contract', { cause: error });
   }
   return new TransportError('IAPStack request failed before a response was received', {
     cause: error,

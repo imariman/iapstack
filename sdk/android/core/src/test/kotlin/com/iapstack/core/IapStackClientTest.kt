@@ -1,11 +1,18 @@
 package com.iapstack.core
 
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody.Companion.asResponseBody
+import okio.Buffer
+import okio.ForwardingSource
+import okio.buffer
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import java.net.URI
 import java.time.Instant
+import java.util.Collections
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -263,26 +270,131 @@ class IapStackClientTest {
     }
   }
 
+  @Test
+  fun readsResponseBodiesOnTheIoDispatcherInsteadOfTheCallerThread() {
+    val readThreads = Collections.synchronizedSet(mutableSetOf<String>())
+    val caller = Executors.newSingleThreadExecutor { Thread(it, "caller-thread") }
+    val io = Executors.newSingleThreadExecutor { Thread(it, "io-thread") }
+    val recordingClient = OkHttpClient.Builder()
+      .addNetworkInterceptor { chain ->
+        val response = chain.proceed(chain.request())
+        val body = response.body!!
+        val source = object : ForwardingSource(body.source()) {
+          override fun read(sink: Buffer, byteCount: Long): Long {
+            readThreads.add(Thread.currentThread().name.substringBefore(" @"))
+            return super.read(sink, byteCount)
+          }
+        }.buffer()
+        response.newBuilder().body(source.asResponseBody(body.contentType(), body.contentLength())).build()
+      }
+      .build()
+    try {
+      MockWebServer().use { server ->
+        server.enqueue(jsonResponse(VERIFICATION_JSON))
+        val client = IapStackClient(
+          config(server),
+          httpClient = recordingClient,
+          ioDispatcher = io.asCoroutineDispatcher(),
+        )
+        try {
+          runBlocking(caller.asCoroutineDispatcher()) {
+            client.verifyPurchase(purchase())
+          }
+
+          assertEquals(setOf("io-thread"), readThreads.toSet())
+        } finally {
+          client.close()
+        }
+      }
+    } finally {
+      // close() leaves injected OkHttp clients alone, and the SDK's copy shares
+      // this dispatcher, whose threads are non-daemon. Release them here.
+      recordingClient.dispatcher.executorService.shutdown()
+      recordingClient.connectionPool.evictAll()
+      caller.shutdownNow()
+      io.shutdownNow()
+    }
+  }
+
+  @Test
+  fun fallsBackToTheRequestIdHeaderForNonJsonErrors() = runBlocking {
+    MockWebServer().use { server ->
+      server.enqueue(
+        MockResponse().setBody("<html>bad gateway</html>").setResponseCode(502).setHeader("X-Request-ID", "edge-1"),
+      )
+      val client = client(server)
+
+      val error = assertFailsWith<IapStackApiException> {
+        client.getEntitlements("customer-external")
+      }
+      assertEquals(502, error.statusCode)
+      assertEquals("http_error", error.code)
+      assertEquals("edge-1", error.requestId)
+      assertTrue(error.retryable)
+      client.close()
+    }
+  }
+
+  @Test
+  fun rejectsFractionalIntegersInsteadOfTruncating() = runBlocking {
+    MockWebServer().use { server ->
+      server.enqueue(
+        jsonResponse("""{"customer_id":"c","entitlements":[{"key":"premium","access":"allowed","reason":"purchase_valid","version":1.9}]}"""),
+      )
+      val client = client(server)
+      assertFailsWith<IapStackProtocolException> {
+        client.getEntitlements("customer-external")
+      }
+      client.close()
+    }
+  }
+
+  @Test
+  fun rejectsOutOfRangeFloatIntegersInsteadOfSaturating() {
+    fun entitlement(version: Any) = mapOf(
+      "key" to "premium",
+      "access" to "allowed",
+      "reason" to "purchase_valid",
+      "version" to version,
+    )
+    // Int.MAX_VALUE is not representable as a Float: it rounds up to 2^31.
+    assertFailsWith<IapStackProtocolException> {
+      Entitlement.fromJson(entitlement(2147483648f))
+    }
+    assertFailsWith<IapStackProtocolException> {
+      Entitlement.fromJson(entitlement(-2147483904f))
+    }
+    assertFailsWith<IapStackProtocolException> {
+      Entitlement.fromJson(entitlement(1.5f))
+    }
+    assertEquals(Int.MIN_VALUE, Entitlement.fromJson(entitlement(-2147483648f)).version)
+    assertEquals(3, Entitlement.fromJson(entitlement(3f)).version)
+  }
+
   private fun client(
     server: MockWebServer,
     retryPolicy: IapStackRetryPolicy = IapStackRetryPolicy(maxAttempts = 1),
     timeout: Duration = 1.seconds,
     maxResponseBytes: Int = 1024 * 1024,
-  ): IapStackClient {
-    val base = server.url("/proxy").toString().trimEnd('/')
-    return IapStackClient(
-      IapStackConfig(
-        baseUri = URI.create(base),
-        applicationId = "application-1",
-        customerToken = "customer-token",
-        timeout = timeout,
-        retryPolicy = retryPolicy,
-        maxResponseBytes = maxResponseBytes,
-        allowInsecureHttp = true,
-      ),
-      httpClient = OkHttpClient(),
-    )
-  }
+  ): IapStackClient = IapStackClient(
+    config(server, retryPolicy, timeout, maxResponseBytes),
+    httpClient = OkHttpClient(),
+  )
+
+  private fun config(
+    server: MockWebServer,
+    retryPolicy: IapStackRetryPolicy = IapStackRetryPolicy(maxAttempts = 1),
+    timeout: Duration = 1.seconds,
+    maxResponseBytes: Int = 1024 * 1024,
+  ): IapStackConfig = IapStackConfig(
+    baseUri = URI.create(server.url("/proxy").toString().trimEnd('/')),
+    applicationId = "application-1",
+    customerToken = "customer-token",
+    timeout = timeout,
+    retryPolicy = retryPolicy,
+    maxResponseBytes = maxResponseBytes,
+    allowInsecureHttp = true,
+  )
 
   private fun purchase(productId: String = "premium_lifetime") = PurchaseSubmission(
     externalCustomerId = "customer-external",

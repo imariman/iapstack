@@ -42,13 +42,20 @@ const (
 	headerSignature = "IAPStack-Signature"
 )
 
-// EventStore atomically deduplicates authenticated webhook event identities.
+// EventStore deduplicates authenticated webhook event identities the host already handled.
+//
+// The verifier hashes the raw body; hosts persist the fingerprint as-is and
+// must not import crypto/sha256 to recompute it. An event ID is recorded only
+// after the host handled it, so a failed, timed-out, or crashed attempt leaves
+// nothing behind and IAPStack's retry reaches the host again.
 type EventStore interface {
-	// Remember records one authenticated event ID and opaque body fingerprint.
-	// The verifier hashes the raw body; hosts persist the fingerprint as-is and
-	// must not import crypto/sha256 to recompute it. It returns duplicate=true
-	// when the same identity was stored before. A conflicting fingerprint for
-	// an existing ID returns a WebhookError.
+	// Seen reports whether Remember already recorded this event ID. It returns
+	// true for the same fingerprint, false for an unknown ID, and a WebhookError
+	// for a conflicting fingerprint. Seen must not record anything.
+	Seen(ctx context.Context, eventID string, fingerprint []byte) (bool, error)
+	// Remember atomically records one handled event ID and fingerprint. It
+	// returns duplicate=true when the same identity was stored before. A
+	// conflicting fingerprint for an existing ID returns a WebhookError.
 	Remember(ctx context.Context, eventID string, fingerprint []byte) (duplicate bool, err error)
 }
 
@@ -84,10 +91,12 @@ type WebhookEvent struct {
 	ID string
 	// Timestamp is the authenticated IAPStack-Timestamp value.
 	Timestamp time.Time
-	// Duplicate reports whether this event ID was already stored with the same body.
+	// Duplicate reports whether this event ID was already handled with the same body.
 	Duplicate bool
 	// Change is the parsed entitlement.changed payload.
 	Change EntitlementChange
+	// fingerprint is the raw-body SHA-256 that MarkHandled records.
+	fingerprint [sha256.Size]byte
 }
 
 // MemoryEventStore is a process-local EventStore for tests and single-instance hosts.
@@ -145,7 +154,9 @@ func NewWebhookVerifier(config WebhookConfig) (*WebhookVerifier, error) {
 // Construct the verifier once at process start. The handler maps signature and
 // timestamp failures to 401, identity conflict to 409, and store or callback
 // errors to 503. IAPStack retries only 408, 429, and 5xx; 401 is a permanent
-// webhook_rejected failure.
+// webhook_rejected failure. The event ID is recorded only after onEvent
+// succeeds, so a retry that overlaps a slow callback runs onEvent again;
+// onEvent must be idempotent.
 func (verifier *WebhookVerifier) Handler(onEvent func(context.Context, WebhookEvent) error) http.Handler {
 	if onEvent == nil {
 		onEvent = func(context.Context, WebhookEvent) error { return nil }
@@ -172,13 +183,20 @@ func (handler *webhookHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 		})
 		return
 	}
+	// Record after success even if IAPStack already disconnected on its timeout.
+	if err := handler.verifier.MarkHandled(context.WithoutCancel(request.Context()), event); err != nil {
+		writeWebhookError(writer, err)
+		return
+	}
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-// VerifyRequest authenticates one HTTP delivery, parses the payload, and deduplicates it.
+// VerifyRequest authenticates one HTTP delivery, parses the payload, and reports duplicates.
 //
-// Prefer Handler so hosts do not reconstruct HTTP status mapping. Returned
-// WebhookError values include the status IAPStack's outbound delivery expects.
+// It does not record the event: call MarkHandled once processing succeeds so
+// later deliveries of the same ID report Duplicate. Prefer Handler so hosts do
+// not reconstruct HTTP status mapping. Returned WebhookError values include the
+// status IAPStack's outbound delivery expects.
 func (verifier *WebhookVerifier) VerifyRequest(request *http.Request) (WebhookEvent, error) {
 	if request == nil {
 		return WebhookEvent{}, webhookFailure("invalid_body")
@@ -216,11 +234,31 @@ func (verifier *WebhookVerifier) VerifyRequest(request *http.Request) (WebhookEv
 		return WebhookEvent{}, webhookFailure("invalid_event")
 	}
 	fingerprint := sha256.Sum256(body)
-	duplicate, err := verifier.store.Remember(request.Context(), eventID, fingerprint[:])
+	duplicate, err := verifier.store.Seen(request.Context(), eventID, fingerprint[:])
 	if err != nil {
 		return WebhookEvent{}, wrapStoreError(err)
 	}
-	return WebhookEvent{ID: eventID, Timestamp: timestamp, Duplicate: duplicate, Change: change}, nil
+	return WebhookEvent{
+		ID:          eventID,
+		Timestamp:   timestamp,
+		Duplicate:   duplicate,
+		Change:      change,
+		fingerprint: fingerprint,
+	}, nil
+}
+
+// MarkHandled records one event returned by VerifyRequest after the host handled it.
+//
+// Recording an already handled event is a no-op. A conflicting body for the
+// same ID returns a 409 WebhookError; other store failures return 503.
+func (verifier *WebhookVerifier) MarkHandled(ctx context.Context, event WebhookEvent) error {
+	if event.fingerprint == ([sha256.Size]byte{}) {
+		return errors.New("webhook event must come from VerifyRequest")
+	}
+	if _, err := verifier.store.Remember(ctx, event.ID, event.fingerprint[:]); err != nil {
+		return wrapStoreError(err)
+	}
+	return nil
 }
 
 // Close overwrites the in-memory signing secret.
@@ -233,20 +271,35 @@ func (verifier *WebhookVerifier) Close() {
 	}
 }
 
-// Remember inserts or compares one authenticated event identity.
+// Seen compares one authenticated event identity without recording it.
+func (store *MemoryEventStore) Seen(_ context.Context, eventID string, fingerprint []byte) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.lookup(eventID, fingerprint)
+}
+
+// Remember inserts or compares one handled event identity.
 func (store *MemoryEventStore) Remember(_ context.Context, eventID string, fingerprint []byte) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	duplicate, err := store.lookup(eventID, fingerprint)
+	if err != nil || duplicate {
+		return duplicate, err
+	}
 	if store.events == nil {
 		store.events = make(map[string]string)
 	}
-	copied := string(fingerprint)
+	store.events[eventID] = string(fingerprint)
+	return false, nil
+}
+
+// lookup compares one identity with the stored fingerprint; callers hold mu.
+func (store *MemoryEventStore) lookup(eventID string, fingerprint []byte) (bool, error) {
 	existing, ok := store.events[eventID]
 	if !ok {
-		store.events[eventID] = copied
 		return false, nil
 	}
-	if existing == copied {
+	if existing == string(fingerprint) {
 		return true, nil
 	}
 	return false, webhookFailure("event_identity_conflict")

@@ -13,7 +13,12 @@ bundle, and never log or persist either bearer.
 This is a post-v0.1 host SDK for Node backends (Express, Nest, Next.js Route
 Handlers). Flutter remains the only v0.1 mobile client. Browser usage is not
 supported. The package is not published to npm yet; depend on the repository
-path `sdk/typescript`.
+path `sdk/typescript` and run `bun run build` there once so `dist/` exists.
+Plain Node (18+) loads `dist/index.js`, and `tsc` in a dependent project reads
+`dist/index.d.ts`, so both need the build. Bun loads the TypeScript sources at
+runtime without it. A Bun project can also typecheck without `dist/` by setting
+`compilerOptions.customConditions` to `["bun"]` (with `moduleResolution`
+`bundler` or `nodenext`), so `tsc` follows the same `src/` entry.
 
 ## Trusted-host boundary
 
@@ -84,8 +89,14 @@ same `handler`. Pass the exact raw webhook body; do not re-serialize parsed JSON
 
 Replace `MemoryEventStore` with a durable store in production so retries
 across processes still dedupe by the authenticated `IAPStack-Event-ID`. The
-handler hashes the raw body and passes an opaque fingerprint into `remember`;
-do not recompute SHA-256 in the store.
+handler hashes the raw body and passes an opaque fingerprint into `seen` and
+`remember`; do not recompute SHA-256 in the store. The handler checks `seen`
+before your callback and calls `remember` only after it resolves. A thrown
+callback, a crash, or IAPStack's delivery timeout leaves nothing recorded, so
+the retry invokes the callback again. That retry can overlap a callback that is
+still running, so make the callback idempotent, for example by applying
+`change.version` monotonically. If you call `verifyRequest` directly, call
+`markHandled` with the returned event after your processing succeeds.
 
 ## Webhook verification
 
