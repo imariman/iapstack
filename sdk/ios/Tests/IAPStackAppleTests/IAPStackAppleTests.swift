@@ -384,6 +384,31 @@ final class IAPStackAppleTests: XCTestCase {
     }
   }
 
+  func testExternalCustomerIdWithSurroundingWhitespaceIsRejected() async throws {
+    URLStubProtocol.reset()
+    let client = try IAPStackClient(
+      config: IAPStackConfig(
+        baseUri: URL(string: "https://example.local")!,
+        applicationId: "application-1",
+        customerToken: "customer-token",
+      ),
+      session: makeSession(),
+    )
+    do {
+      _ = try await client.getEntitlements(" customer-id")
+      XCTFail("expected configuration error")
+    } catch IAPStackSDKError.configurationError {
+      // Expected.
+    }
+    XCTAssertThrowsError(
+      try PurchaseSubmission(
+        externalCustomerId: "customer-id ",
+        claimedProducts: ["sku-1"],
+        evidence: ["signed_transaction": "a.b.c", "product_kind": "subscription"],
+      ),
+    )
+  }
+
   func testProxyHtmlErrorIsRetriedAndSurfacesApiError() async throws {
     URLStubProtocol.reset()
     let attempts = Counter()

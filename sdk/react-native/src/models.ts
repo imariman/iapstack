@@ -1,3 +1,9 @@
+// RFC 3339 date-time as emitted by IAPStack. `new Date` alone also accepts
+// forms such as "2026" or "March 1", and rolls impossible fields such as
+// "2026-02-31" or "T24:00" into a later instant, so parseRfc3339 checks each field.
+const RFC3339_TIMESTAMP =
+  /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-](\d{2}):(\d{2}))$/u;
+
 export type ProductKind = 'subscription' | 'non_consumable';
 
 export interface CustomerBinding {
@@ -160,9 +166,9 @@ function requiredInt(json: Record<string, unknown>, key: string): number {
 
 function requiredDate(json: Record<string, unknown>, key: string): Date {
   const raw = requiredString(json, key);
-  const value = new Date(raw);
-  if (Number.isNaN(value.getTime())) {
-    throw new Error(`${key} must be an ISO-8601 timestamp`);
+  const value = parseRfc3339(raw);
+  if (!value) {
+    throw new Error(`${key} must be an RFC 3339 date-time`);
   }
   return value;
 }
@@ -173,11 +179,11 @@ function optionalDate(json: Record<string, unknown>, key: string): Date | null {
     return null;
   }
   if (typeof raw !== 'string' || raw.length === 0) {
-    throw new Error(`${key} must be null or an ISO-8601 timestamp`);
+    throw new Error(`${key} must be null or an RFC 3339 date-time`);
   }
-  const value = new Date(raw);
-  if (Number.isNaN(value.getTime())) {
-    throw new Error(`${key} must be an ISO-8601 timestamp`);
+  const value = parseRfc3339(raw);
+  if (!value) {
+    throw new Error(`${key} must be an RFC 3339 date-time`);
   }
   return value;
 }
@@ -193,4 +199,37 @@ function objectList(json: Record<string, unknown>, key: string): Record<string, 
     }
     return item as Record<string, unknown>;
   });
+}
+
+/** Parses an RFC 3339 date-time, or returns null for other forms and impossible fields. */
+function parseRfc3339(raw: string): Date | null {
+  const match = RFC3339_TIMESTAMP.exec(raw);
+  if (!match) {
+    return null;
+  }
+  const [year, month, day, hour, minute, second, offsetHour, offsetMinute] = match
+    .slice(1)
+    .map((field) => Number(field ?? '0'));
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth(year, month) ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59
+  ) {
+    return null;
+  }
+  const value = new Date(raw);
+  return Number.isNaN(value.getTime()) ? null : value;
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) {
+    return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
+  }
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
 }

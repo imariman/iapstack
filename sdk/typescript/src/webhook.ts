@@ -83,7 +83,13 @@ export type WebhookOnEvent = (event: WebhookEvent) => Promise<void> | void;
 /** Fetch-compatible webhook receiver that owns IAPStack retry-status mapping. */
 export type WebhookHandler = (request: Request | WebhookRequest) => Promise<Response>;
 
-/** Process-local EventStore for tests and single-instance hosts. */
+/**
+ * Process-local EventStore for tests and local development.
+ *
+ * It keeps every event ID for the life of the process and never evicts, so
+ * memory grows by one entry per delivered event. Production hosts should use a
+ * durable store with a retention policy longer than IAPStack's retry horizon.
+ */
 export class MemoryEventStore implements EventStore {
   private readonly events = new Map<string, Buffer>();
 

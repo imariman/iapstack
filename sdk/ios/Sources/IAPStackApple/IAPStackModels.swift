@@ -29,9 +29,7 @@ public struct PurchaseSubmission: Sendable {
     evidence: [String: Any],
     customerBindings: [CustomerBinding] = [],
   ) throws {
-    if externalCustomerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      throw IAPStackSDKError.configurationError(message: "externalCustomerId must not be empty")
-    }
+    try validateExternalCustomerId(externalCustomerId)
     if claimedProducts.isEmpty {
       throw IAPStackSDKError.configurationError(
         message: "claimedProducts must contain at least one item",
@@ -273,4 +271,14 @@ private func requiredObjectList(_ dictionary: [String: Any], key: String) throws
 
 private enum IAPStackDateFormatter {
   static let shared = ISO8601DateFormatter()
+}
+
+/// Requires one non-empty customer identity without surrounding whitespace; a
+/// padded ID would silently address a different customer server-side.
+func validateExternalCustomerId(_ value: String) throws {
+  if value.isEmpty || value.trimmingCharacters(in: .whitespacesAndNewlines) != value {
+    throw IAPStackSDKError.configurationError(
+      message: "externalCustomerId must be non-empty without surrounding whitespace",
+    )
+  }
 }

@@ -271,6 +271,21 @@ class IapStackClientTest {
   }
 
   @Test
+  fun rejectsExternalCustomerIdsWithSurroundingWhitespace() = runBlocking {
+    MockWebServer().use { server ->
+      val client = client(server)
+      assertFailsWith<IllegalArgumentException> {
+        client.getEntitlements(" customer-external")
+      }
+      assertFailsWith<IllegalArgumentException> {
+        client.verifyPurchase(purchase().copy(externalCustomerId = "customer-external "))
+      }
+      assertEquals(0, server.requestCount)
+      client.close()
+    }
+  }
+
+  @Test
   fun readsResponseBodiesOnTheIoDispatcherInsteadOfTheCallerThread() {
     val readThreads = Collections.synchronizedSet(mutableSetOf<String>())
     val caller = Executors.newSingleThreadExecutor { Thread(it, "caller-thread") }

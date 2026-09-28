@@ -475,3 +475,49 @@ test('error messages stay free of wrapped secret causes', () => {
   });
   assert.equal(protocol.message.includes('secret'), false);
 });
+
+function entitlementWithEndsAt(effectiveEndsAt: string): Record<string, unknown> {
+  return {
+    customer_id: 'customer-internal',
+    entitlements: [
+      {
+        key: 'premium',
+        access: 'allowed',
+        reason: 'purchase_valid',
+        version: 1,
+        effective_ends_at: effectiveEndsAt,
+      },
+    ],
+  };
+}
+
+test('getEntitlements rejects non-RFC 3339 and impossible timestamps', async () => {
+  for (const raw of [
+    '2026',
+    'March 1, 2026',
+    // `new Date` rolls these into a later instant instead of failing.
+    '2026-02-31T00:00:00Z',
+    '2026-01-01T24:00:00Z',
+    '2027-02-29T00:00:00Z',
+    '2026-04-31T10:00:00-05:30',
+    '2026-01-01T00:00:00+23:60',
+  ]) {
+    const { client } = newTestClient(async () => jsonResponse(200, entitlementWithEndsAt(raw)));
+    await assert.rejects(
+      client.getEntitlements(customerSession('customer-external')),
+      ProtocolError,
+      raw,
+    );
+  }
+});
+
+test('getEntitlements accepts leap days and numeric offsets', async () => {
+  for (const [raw, instant] of [
+    ['2028-02-29T00:00:00Z', '2028-02-29T00:00:00.000Z'],
+    ['2026-12-31T23:59:59.5+05:30', '2026-12-31T18:29:59.500Z'],
+  ] as const) {
+    const { client } = newTestClient(async () => jsonResponse(200, entitlementWithEndsAt(raw)));
+    const snapshot = await client.getEntitlements(customerSession('customer-external'));
+    assert.equal(snapshot.entitlements[0]?.effectiveEndsAt?.toISOString(), instant);
+  }
+});

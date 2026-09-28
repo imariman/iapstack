@@ -104,9 +104,7 @@ class IapStackClient(
     externalCustomerId: String,
     requestId: String? = null,
   ): EntitlementSnapshot {
-    if (externalCustomerId.isBlank()) {
-      throw IllegalArgumentException("externalCustomerId must not be empty")
-    }
+    requireExternalCustomerId(externalCustomerId)
     val json = request(
       method = "GET",
       path = listOf(
@@ -332,9 +330,7 @@ class IapStackClient(
   }
 
   private fun validatePurchase(purchase: PurchaseSubmission) {
-    if (purchase.externalCustomerId.isBlank()) {
-      throw IllegalArgumentException("externalCustomerId must not be empty")
-    }
+    requireExternalCustomerId(purchase.externalCustomerId)
     if (purchase.claimedProducts.isEmpty() || purchase.evidence.isEmpty()) {
       throw IllegalArgumentException("purchase must contain claimed products and evidence")
     }
@@ -344,5 +340,15 @@ class IapStackClient(
     if (purchase.claimedProducts.size != purchase.claimedProducts.toSet().size) {
       throw IllegalArgumentException("claimed products must be unique")
     }
+  }
+}
+
+/**
+ * Requires one non-empty customer identity without surrounding whitespace; a
+ * padded ID would silently address a different customer server-side.
+ */
+private fun requireExternalCustomerId(value: String) {
+  if (value.isEmpty() || value.trim() != value) {
+    throw IllegalArgumentException("externalCustomerId must be non-empty without surrounding whitespace")
   }
 }

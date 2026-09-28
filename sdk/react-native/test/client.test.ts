@@ -436,3 +436,87 @@ test('evidence helper builders validate required input', () => {
     });
   });
 });
+
+function verificationWithTimestamps(verifiedAt: string, effectiveEndsAt: string | null) {
+  const payload = verificationPayload();
+  return {
+    ...payload,
+    verified_at: verifiedAt,
+    entitlements: [{ ...payload.entitlements[0], effective_ends_at: effectiveEndsAt }],
+  };
+}
+
+test('rejects non-RFC 3339 and impossible timestamps', async () => {
+  const valid = '2026-09-09T00:00:00.000Z';
+  const invalid = [
+    'March 1, 2026',
+    // `new Date` rolls these into a later instant instead of failing.
+    '2026-02-31T00:00:00Z',
+    '2026-01-01T24:00:00Z',
+    '2027-02-29T00:00:00Z',
+    '2026-04-31T10:00:00-05:30',
+    '2026-01-01T00:00:00+23:60',
+  ];
+  // verified_at uses the required parser and effective_ends_at the optional one.
+  const payloads = invalid.flatMap((raw) => [
+    verificationWithTimestamps(raw, null),
+    verificationWithTimestamps(valid, raw),
+  ]);
+  for (const payload of payloads) {
+    const { restore } = withMockFetch(
+      async () =>
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    try {
+      const client = new IapStackClient(clientConfig());
+      await assert.rejects(
+        () => client.verifyPurchase(samplePurchase),
+        (error) => error instanceof IapStackProtocolError,
+        JSON.stringify(payload),
+      );
+    } finally {
+      restore();
+    }
+  }
+});
+
+test('accepts leap days and numeric offsets', async () => {
+  const { restore } = withMockFetch(
+    async () =>
+      new Response(
+        JSON.stringify(
+          verificationWithTimestamps('2028-02-29T00:00:00Z', '2026-12-31T23:59:59.5+05:30'),
+        ),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+  );
+  try {
+    const client = new IapStackClient(clientConfig());
+    const result = await client.verifyPurchase(samplePurchase);
+    assert.equal(result.verifiedAt.toISOString(), '2028-02-29T00:00:00.000Z');
+    assert.equal(
+      result.entitlements[0]?.effectiveEndsAt?.toISOString(),
+      '2026-12-31T18:29:59.500Z',
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('rejects external customer IDs with surrounding whitespace', async () => {
+  const { calls, restore } = withMockFetch(async () => new Response('{}', { status: 200 }));
+  try {
+    const client = new IapStackClient(clientConfig());
+    await assert.rejects(() => client.getEntitlements(' customer-123 '), TypeError);
+    await assert.rejects(
+      () => client.verifyPurchase({ ...samplePurchase, externalCustomerId: 'customer-123 ' }),
+      TypeError,
+    );
+    assert.equal(calls.length, 0);
+  } finally {
+    restore();
+  }
+});

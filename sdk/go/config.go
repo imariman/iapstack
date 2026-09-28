@@ -68,9 +68,7 @@ func (config Config) applyDefaults() Config {
 	if config.MaxResponseBytes == 0 {
 		config.MaxResponseBytes = defaultMaxResponseBytes
 	}
-	if config.RetryPolicy == (RetryPolicy{}) {
-		config.RetryPolicy = DefaultRetryPolicy()
-	}
+	config.RetryPolicy = config.RetryPolicy.withDefaults()
 	return config
 }
 

@@ -17,6 +17,12 @@ const (
 )
 
 // RetryPolicy is a bounded full-jitter exponential backoff policy.
+//
+// In Config, each zero field takes its DefaultRetryPolicy value, like Timeout,
+// so RetryPolicy{MaxAttempts: 5} keeps the default backoff. This matches the
+// other IAPStack SDKs, which default every omitted retry field. Go cannot tell
+// an omitted field from an explicit zero, so Config cannot disable backoff;
+// set MaxAttempts to 1 to disable retries instead.
 type RetryPolicy struct {
 	// MaxAttempts is the total attempts, including the initial request.
 	MaxAttempts int
@@ -33,6 +39,21 @@ func DefaultRetryPolicy() RetryPolicy {
 		BaseDelay:   defaultBaseDelay,
 		MaxDelay:    defaultMaxDelay,
 	}
+}
+
+// withDefaults fills each zero field from DefaultRetryPolicy.
+func (policy RetryPolicy) withDefaults() RetryPolicy {
+	defaults := DefaultRetryPolicy()
+	if policy.MaxAttempts == 0 {
+		policy.MaxAttempts = defaults.MaxAttempts
+	}
+	if policy.BaseDelay == 0 {
+		policy.BaseDelay = defaults.BaseDelay
+	}
+	if policy.MaxDelay == 0 {
+		policy.MaxDelay = defaults.MaxDelay
+	}
+	return policy
 }
 
 // DelayAfter returns a full-jitter delay after a failed one-based attempt.

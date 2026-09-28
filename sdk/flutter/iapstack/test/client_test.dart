@@ -66,6 +66,29 @@ void main() {
       expect(result.results, hasLength(2));
     });
 
+    test('rejects external customer IDs with surrounding whitespace', () async {
+      var calls = 0;
+      final client = IapStackClient(
+        _config(),
+        httpClient: MockClient((request) async {
+          calls++;
+          return http.Response('{}', 200);
+        }),
+      );
+
+      expect(() => client.getEntitlements(' customer-external'),
+          throwsArgumentError);
+      expect(
+        () => client.verifyPurchase(PurchaseSubmission(
+          externalCustomerId: 'customer-external ',
+          claimedProducts: const <String>['premium_lifetime'],
+          evidence: const <String, Object?>{'signature': 'signed'},
+        )),
+        throwsArgumentError,
+      );
+      expect(calls, 0);
+    });
+
     test('treats invalid UTF-8 as a non-retried protocol error', () async {
       var attempts = 0;
       final client = IapStackClient(
