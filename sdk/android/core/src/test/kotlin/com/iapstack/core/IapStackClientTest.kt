@@ -343,6 +343,28 @@ class IapStackClientTest {
     }
   }
 
+  @Test
+  fun rejectsOutOfRangeFloatIntegersInsteadOfSaturating() {
+    fun entitlement(version: Any) = mapOf(
+      "key" to "premium",
+      "access" to "allowed",
+      "reason" to "purchase_valid",
+      "version" to version,
+    )
+    // Int.MAX_VALUE is not representable as a Float: it rounds up to 2^31.
+    assertFailsWith<IapStackProtocolException> {
+      Entitlement.fromJson(entitlement(2147483648f))
+    }
+    assertFailsWith<IapStackProtocolException> {
+      Entitlement.fromJson(entitlement(-2147483904f))
+    }
+    assertFailsWith<IapStackProtocolException> {
+      Entitlement.fromJson(entitlement(1.5f))
+    }
+    assertEquals(Int.MIN_VALUE, Entitlement.fromJson(entitlement(-2147483648f)).version)
+    assertEquals(3, Entitlement.fromJson(entitlement(3f)).version)
+  }
+
   private fun client(
     server: MockWebServer,
     retryPolicy: IapStackRetryPolicy = IapStackRetryPolicy(maxAttempts = 1),

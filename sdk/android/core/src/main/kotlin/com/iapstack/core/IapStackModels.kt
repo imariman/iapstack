@@ -126,12 +126,17 @@ internal fun requiredInt(json: Map<String, Any?>, key: String): Int {
   val whole = when (value) {
     is Int -> return value
     is Long -> value.takeIf { it in Int.MIN_VALUE..Int.MAX_VALUE }?.toInt()
-    is Double -> value.takeIf { it % 1.0 == 0.0 && it >= Int.MIN_VALUE && it <= Int.MAX_VALUE }?.toInt()
-    is Float -> value.takeIf { it % 1f == 0f && it >= Int.MIN_VALUE && it <= Int.MAX_VALUE }?.toInt()
+    is Double -> value.toWholeIntOrNull()
+    // Widen before the range check: Int.MAX_VALUE is not representable as a
+    // Float (it rounds up to 2^31), so a Float comparison would accept 2^31.
+    is Float -> value.toDouble().toWholeIntOrNull()
     else -> null
   }
   return whole ?: throw IapStackProtocolException("$key must be an integer")
 }
+
+private fun Double.toWholeIntOrNull(): Int? =
+  takeIf { it % 1.0 == 0.0 && it >= Int.MIN_VALUE && it <= Int.MAX_VALUE }?.toInt()
 
 internal fun requiredDateTime(json: Map<String, Any?>, key: String): Instant {
   val value = requiredString(json, key)
