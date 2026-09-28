@@ -7,6 +7,9 @@ the Flutter split:
 - `AppleIAPStack` — StoreKit 2 catalog, `appAccountToken` binding, compact JWS evidence,
   finish-after-verify, unfinished-transaction listening, restore batching
 
+Requires the Swift 6.1 toolchain (Xcode 16.3 or later). The package builds in
+Swift 5 language mode and supports iOS 15+ and macOS 12+.
+
 Authenticate the user in your trusted host backend, then mint a short-lived
 customer session there with the durable application bearer. Return only that
 customer token to the mobile app. Never ship the durable application bearer in
@@ -40,7 +43,7 @@ let hasPremium = snapshot.entitlements.contains { $0.key == "premium" && $0.gran
 `appAccountToken`.
 
 ```swift
-let stack = AppleIAPStack(
+let stack = try AppleIAPStack(
   client: client,
   productKinds: [
     "premium_monthly": .subscription,
@@ -49,12 +52,27 @@ let stack = AppleIAPStack(
 )
 
 let productQuery = try await stack.queryProducts(["premium_monthly", "premium_lifetime"])
+
+// Your signed-in customer's ID, as a lowercase UUID.
+let customerId = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+
+// Purchases made in this session are returned directly; StoreKit does not
+// re-emit them on `purchaseUpdates`.
+if let purchase = try await stack.launchPurchase(
+  externalCustomerId: customerId,
+  product: productQuery.products[0],
+) {
+  _ = try await stack.verifyPurchase(externalCustomerId: customerId, purchase: purchase)
+}
+
+// Renewals, Ask to Buy approvals, other devices, and unfinished transactions
+// from earlier launches arrive here.
 let updates = stack.purchaseUpdates
 
 for await update in updates {
   if update.canVerify {
     _ = try await stack.verifyPurchase(
-      externalCustomerId: "customer-uuid",
+      externalCustomerId: customerId,
       purchase: update,
     )
   }

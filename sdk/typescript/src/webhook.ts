@@ -20,13 +20,25 @@ const HEADER_EVENT_ID = 'IAPStack-Event-ID';
 const HEADER_TIMESTAMP = 'IAPStack-Timestamp';
 const HEADER_SIGNATURE = 'IAPStack-Signature';
 
-/** Atomically deduplicates authenticated webhook event identities. */
+/**
+ * Deduplicates authenticated webhook event identities the host already handled.
+ *
+ * The verifier hashes the raw body; hosts persist the fingerprint as-is and must
+ * not recompute SHA-256. An event ID is recorded only after the host handled it,
+ * so a failed, timed-out, or crashed attempt leaves nothing behind and
+ * IAPStack's retry reaches the host again.
+ */
 export interface EventStore {
   /**
-   * Records one authenticated event ID and opaque body fingerprint.
-   * The verifier hashes the raw body; hosts persist the fingerprint as-is and
-   * must not recompute SHA-256. Returns true when the same identity was stored
-   * before. A conflicting fingerprint for an existing ID throws a WebhookError.
+   * Reports whether remember already recorded this event ID. Returns true for
+   * the same fingerprint and false for an unknown ID; a conflicting fingerprint
+   * throws a WebhookError. Must not record anything.
+   */
+  seen(eventId: string, fingerprint: Uint8Array): Promise<boolean> | boolean;
+  /**
+   * Atomically records one handled event ID and fingerprint. Returns true when
+   * the same identity was stored before. A conflicting fingerprint for an
+   * existing ID throws a WebhookError.
    */
   remember(eventId: string, fingerprint: Uint8Array): Promise<boolean> | boolean;
 }
@@ -53,7 +65,7 @@ export interface WebhookRequest {
   body?: Uint8Array | ArrayBuffer | string | null;
 }
 
-/** One authenticated, optionally duplicate, entitlement change. */
+/** One authenticated entitlement change; duplicate means it was already handled. */
 export interface WebhookEvent {
   id: string;
   timestamp: Date;
@@ -61,7 +73,10 @@ export interface WebhookEvent {
   change: EntitlementChange;
 }
 
-/** Host callback invoked for authenticated, non-duplicate entitlement changes. */
+/**
+ * Host callback invoked for authenticated, non-duplicate entitlement changes.
+ * A retry can overlap a slow callback for the same event, so it must be idempotent.
+ */
 export type WebhookOnEvent = (event: WebhookEvent) => Promise<void> | void;
 
 /** Fetch-compatible webhook receiver that owns IAPStack retry-status mapping. */
@@ -71,17 +86,24 @@ export type WebhookHandler = (request: Request | WebhookRequest) => Promise<Resp
 export class MemoryEventStore implements EventStore {
   private readonly events = new Map<string, Buffer>();
 
-  remember(eventId: string, fingerprint: Uint8Array): boolean {
-    const next = Buffer.from(fingerprint);
+  seen(eventId: string, fingerprint: Uint8Array): boolean {
     const existing = this.events.get(eventId);
     if (!existing) {
-      this.events.set(eventId, next);
       return false;
     }
+    const next = Buffer.from(fingerprint);
     if (existing.length === next.length && timingSafeEqual(existing, next)) {
       return true;
     }
     throw new WebhookError('event_identity_conflict');
+  }
+
+  remember(eventId: string, fingerprint: Uint8Array): boolean {
+    if (this.seen(eventId, fingerprint)) {
+      return true;
+    }
+    this.events.set(eventId, Buffer.from(fingerprint));
+    return false;
   }
 }
 
@@ -92,6 +114,7 @@ export class WebhookVerifier {
   private readonly timestampToleranceMs: number;
   private readonly store: EventStore;
   private readonly clock: () => Date;
+  private readonly fingerprints = new WeakMap<WebhookEvent, Buffer>();
 
   constructor(config: WebhookConfig) {
     const secret = toSecretBuffer(config.secret);
@@ -123,7 +146,9 @@ export class WebhookVerifier {
    * Construct the verifier once at process start. The handler maps signature and
    * timestamp failures to 401, identity conflict to 409, and store or callback
    * errors to 503. IAPStack retries only 408, 429, and 5xx; 401 is a permanent
-   * webhook_rejected failure.
+   * webhook_rejected failure. The event ID is recorded only after the callback
+   * succeeds, so a retry that overlaps a slow callback runs it again; the
+   * callback must be idempotent.
    */
   handler(onEvent?: WebhookOnEvent | null): WebhookHandler {
     const callback: WebhookOnEvent = onEvent ?? (() => undefined);
@@ -140,20 +165,25 @@ export class WebhookVerifier {
       try {
         await callback(event);
       } catch (error) {
-        return webhookErrorResponse(
-          new WebhookError('receiver_unavailable', { cause: error }),
-        );
+        return webhookErrorResponse(new WebhookError('receiver_unavailable', { cause: error }));
+      }
+      try {
+        await this.markHandled(event);
+      } catch (error) {
+        return webhookErrorResponse(error);
       }
       return new Response(null, { status: 204 });
     };
   }
 
   /**
-   * Authenticates one HTTP delivery, parses the payload, and deduplicates it.
+   * Authenticates one HTTP delivery, parses the payload, and reports duplicates.
    * Pass the exact raw body; do not re-serialize parsed JSON.
    *
-   * Prefer handler so hosts do not reconstruct HTTP status mapping. Thrown
-   * WebhookError values include the status IAPStack's outbound delivery expects.
+   * It does not record the event: call markHandled once processing succeeds so
+   * later deliveries of the same ID report duplicate. Prefer handler so hosts do
+   * not reconstruct HTTP status mapping. Thrown WebhookError values include the
+   * status IAPStack's outbound delivery expects.
    */
   async verifyRequest(request: WebhookRequest | Request | null | undefined): Promise<WebhookEvent> {
     if (!request) {
@@ -186,16 +216,36 @@ export class WebhookVerifier {
     const fingerprint = createHash('sha256').update(body).digest();
     let duplicate: boolean;
     try {
-      duplicate = await this.store.remember(eventId, fingerprint);
+      duplicate = await this.store.seen(eventId, fingerprint);
     } catch (error) {
       throw wrapStoreError(error);
     }
-    return {
+    const event: WebhookEvent = {
       id: eventId,
       timestamp,
       duplicate,
       change,
     };
+    this.fingerprints.set(event, fingerprint);
+    return event;
+  }
+
+  /**
+   * Records one event returned by verifyRequest after the host handled it.
+   *
+   * Recording an already handled event is a no-op. A conflicting body for the
+   * same ID throws a 409 WebhookError; other store failures throw 503.
+   */
+  async markHandled(event: WebhookEvent): Promise<void> {
+    const fingerprint = this.fingerprints.get(event);
+    if (!fingerprint) {
+      throw new TypeError('webhook event must come from verifyRequest');
+    }
+    try {
+      await this.store.remember(event.id, fingerprint);
+    } catch (error) {
+      throw wrapStoreError(error);
+    }
   }
 
   /** Overwrites the in-memory signing secret. */

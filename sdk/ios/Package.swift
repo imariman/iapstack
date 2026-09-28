@@ -1,4 +1,6 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.1
+// Sources use trailing commas in argument and parameter lists (SE-0439), which
+// require the Swift 6.1 toolchain (Xcode 16.3+). Language mode stays Swift 5.
 import PackageDescription
 
 let package = Package(
@@ -24,4 +26,5 @@ let package = Package(
       path: "Tests/IAPStackAppleTests",
     ),
   ],
+  swiftLanguageModes: [.v5],
 )

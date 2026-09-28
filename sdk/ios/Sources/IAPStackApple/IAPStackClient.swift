@@ -123,10 +123,10 @@ public final class IAPStackClient {
     body: [String: Any]?,
     requestId: String?,
   ) async throws -> [String: Any] {
-    let normalizedRequestId = requestId?.trimmingCharacters(in: .whitespacesAndNewlines)
-    if let normalized = normalizedRequestId, normalized.isEmpty {
-      throw IAPStackSDKError.configurationError(message: "requestId cannot be empty")
-    }
+    // Blank request IDs are dropped, matching the other IAPStack SDKs.
+    let normalizedRequestId = requestId?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .nilIfEmpty
 
     var attempt = 1
     while attempt <= config.retryPolicy.maxAttempts {
@@ -482,5 +482,11 @@ private final class BoundedBodyCollector: NSObject, URLSessionDataDelegate, @unc
 
   private static func tooLarge() -> IAPStackSDKError {
     .protocolError(message: "IAPStack response exceeded maxResponseBytes")
+  }
+}
+
+private extension String {
+  var nilIfEmpty: String? {
+    isEmpty ? nil : self
   }
 }
