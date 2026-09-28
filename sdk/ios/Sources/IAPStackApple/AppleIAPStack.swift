@@ -56,7 +56,6 @@ public final class AppleIAPStack {
   /// Returns the completed purchase so the caller can pass it to
   /// `verifyPurchase`. StoreKit does not re-emit purchases made through this call
   /// on `purchaseUpdates`. Returns `nil` when the purchase is pending approval.
-  @discardableResult
   public func launchPurchase(externalCustomerId: String, product: AppleProduct) async throws -> ApplePurchase? {
     try validateExternalCustomerId(externalCustomerId)
     let expected = productKinds[product.id]
