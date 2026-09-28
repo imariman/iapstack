@@ -329,9 +329,15 @@ jobs:
 
       - name: Build and import from plain Node
         working-directory: sdk/typescript
+        # Self-referencing the package name resolves through the exports map,
+        # so a missing or broken `import` condition fails this step.
         run: |
           bun run build
-          node --input-type=module -e "import { Client } from './dist/index.js'; if (typeof Client !== 'function') process.exit(1);"
+          node --input-type=module -e "
+            import { Client } from '@iapstack/host';
+            const client = new Client({ baseUrl: 'https://iap.example', applicationId: 'app', applicationToken: 'token' });
+            if (Reflect.ownKeys(client).length !== 0) process.exit(1);
+          "
 
   flutter-ios:
     name: Flutter iOS build
