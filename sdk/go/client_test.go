@@ -184,7 +184,7 @@ func TestClientRetriesTransientResponses(t *testing.T) {
 			"expires_at": "2026-08-24T20:15:00Z",
 		})
 	}), func(config *Config) {
-		config.RetryPolicy = RetryPolicy{MaxAttempts: 2, BaseDelay: 0, MaxDelay: 0}
+		config.RetryPolicy = RetryPolicy{MaxAttempts: 2}
 	})
 
 	session, err := client.CreateCustomerSession(context.Background(), "customer-external")
@@ -320,7 +320,7 @@ func TestClientRetriesAndRedactsTransportErrors(t *testing.T) {
 		}
 		_ = conn.Close()
 	}), func(config *Config) {
-		config.RetryPolicy = RetryPolicy{MaxAttempts: 2, BaseDelay: 0, MaxDelay: 0}
+		config.RetryPolicy = RetryPolicy{MaxAttempts: 2}
 	})
 
 	_, err := client.CreateCustomerSession(context.Background(), "customer-external")
@@ -522,7 +522,7 @@ func newTestClient(t *testing.T, handler http.Handler, options ...func(*Config))
 		ApplicationID:     "application-1",
 		ApplicationToken:  testApplicationToken,
 		Timeout:           time.Second,
-		RetryPolicy:       RetryPolicy{MaxAttempts: 1, BaseDelay: 0, MaxDelay: 0},
+		RetryPolicy:       RetryPolicy{MaxAttempts: 1},
 		AllowInsecureHTTP: true,
 	}
 	for _, option := range options {
@@ -577,23 +577,106 @@ func entitlementSnapshotJSON() map[string]any {
 	}
 }
 
-// TestPartialRetryPolicyKeepsDefaultAttempts verifies MaxAttempts 0 is filled, not rejected.
-func TestPartialRetryPolicyKeepsDefaultAttempts(t *testing.T) {
+// TestPartialRetryPolicyFillsEveryZeroField verifies omitted retry fields take defaults.
+func TestPartialRetryPolicyFillsEveryZeroField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input RetryPolicy
+		want  RetryPolicy
+	}{
+		{
+			name:  "attempts only keeps default backoff",
+			input: RetryPolicy{MaxAttempts: 5},
+			want:  RetryPolicy{MaxAttempts: 5, BaseDelay: defaultBaseDelay, MaxDelay: defaultMaxDelay},
+		},
+		{
+			name:  "max delay only",
+			input: RetryPolicy{MaxDelay: time.Second},
+			want:  RetryPolicy{MaxAttempts: defaultMaxAttempts, BaseDelay: defaultBaseDelay, MaxDelay: time.Second},
+		},
+		{
+			name:  "base delay only",
+			input: RetryPolicy{BaseDelay: 100 * time.Millisecond},
+			want:  RetryPolicy{MaxAttempts: defaultMaxAttempts, BaseDelay: 100 * time.Millisecond, MaxDelay: defaultMaxDelay},
+		},
+		{
+			name:  "delays without attempts",
+			input: RetryPolicy{BaseDelay: 100 * time.Millisecond, MaxDelay: time.Second},
+			want:  RetryPolicy{MaxAttempts: defaultMaxAttempts, BaseDelay: 100 * time.Millisecond, MaxDelay: time.Second},
+		},
+		{
+			name:  "zero value",
+			input: RetryPolicy{},
+			want:  DefaultRetryPolicy(),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			config := Config{
+				BaseURL:          "https://iap.example",
+				ApplicationID:    "application-1",
+				ApplicationToken: testApplicationToken,
+				RetryPolicy:      test.input,
+			}.applyDefaults()
+			if config.RetryPolicy != test.want {
+				t.Fatalf("retry policy = %+v, want %+v", config.RetryPolicy, test.want)
+			}
+			if err := config.Validate(); err != nil {
+				t.Fatalf("Validate() = %v", err)
+			}
+		})
+	}
+}
+
+// TestPartialRetryPolicyStillValidatesOrder verifies a filled default cannot hide unordered delays.
+func TestPartialRetryPolicyStillValidatesOrder(t *testing.T) {
 	t.Parallel()
 
 	config := Config{
 		BaseURL:          "https://iap.example",
 		ApplicationID:    "application-1",
-		ApplicationToken: "application-token",
-		RetryPolicy:      RetryPolicy{BaseDelay: 100 * time.Millisecond, MaxDelay: time.Second},
+		ApplicationToken: testApplicationToken,
+		RetryPolicy:      RetryPolicy{BaseDelay: 5 * time.Second},
 	}.applyDefaults()
-	if config.RetryPolicy.MaxAttempts != defaultMaxAttempts {
-		t.Fatalf("max attempts = %d, want %d", config.RetryPolicy.MaxAttempts, defaultMaxAttempts)
+	if err := config.Validate(); err == nil {
+		t.Fatalf("Validate() accepted BaseDelay above the default MaxDelay: %+v", config.RetryPolicy)
 	}
-	if config.RetryPolicy.BaseDelay != 100*time.Millisecond || config.RetryPolicy.MaxDelay != time.Second {
-		t.Fatalf("explicit delays were overwritten: %+v", config.RetryPolicy)
+}
+
+// TestClientBacksOffWithAttemptsOnlyPolicy verifies RetryPolicy{MaxAttempts: n} does not retry back-to-back.
+func TestClientBacksOffWithAttemptsOnlyPolicy(t *testing.T) {
+	t.Parallel()
+
+	var waited time.Duration
+	var attempts atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if attempts.Add(1) == 1 {
+			writeJSON(writer, http.StatusTooManyRequests, map[string]any{
+				"error": map[string]any{"code": "rate_limited", "message": "slow down"},
+			})
+			return
+		}
+		writeJSON(writer, http.StatusCreated, map[string]any{
+			"token":      "iaps_customer",
+			"expires_at": "2026-08-24T20:15:00Z",
+		})
+	}), func(config *Config) {
+		config.RetryPolicy = RetryPolicy{MaxAttempts: 2}
+	})
+	client.jitter = func() float64 { return 1 }
+	client.delay = func(_ context.Context, delay time.Duration) error {
+		waited = delay
+		return nil
 	}
-	if err := config.Validate(); err != nil {
-		t.Fatalf("Validate() = %v", err)
+
+	if _, err := client.CreateCustomerSession(context.Background(), "customer-external"); err != nil {
+		t.Fatalf("CreateCustomerSession() error = %v", err)
+	}
+	if attempts.Load() != 2 || waited != defaultBaseDelay {
+		t.Fatalf("attempts = %d waited = %s, want 2 attempts and %s", attempts.Load(), waited, defaultBaseDelay)
 	}
 }

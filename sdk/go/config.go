@@ -68,13 +68,7 @@ func (config Config) applyDefaults() Config {
 	if config.MaxResponseBytes == 0 {
 		config.MaxResponseBytes = defaultMaxResponseBytes
 	}
-	if config.RetryPolicy == (RetryPolicy{}) {
-		config.RetryPolicy = DefaultRetryPolicy()
-	} else if config.RetryPolicy.MaxAttempts == 0 {
-		// A partially configured policy keeps its explicit delays but still gets
-		// the default attempt budget instead of failing validation.
-		config.RetryPolicy.MaxAttempts = defaultMaxAttempts
-	}
+	config.RetryPolicy = config.RetryPolicy.withDefaults()
 	return config
 }
 
