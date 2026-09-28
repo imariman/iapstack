@@ -9,7 +9,8 @@
     "skipLibCheck": true,
     "verbatimModuleSyntax": false,
     "isolatedModules": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "types": []
   },
   "include": ["src/**/*.ts"]
 }
