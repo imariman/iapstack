@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:iapstack/iapstack.dart';
 import 'package:test/test.dart';
 import 'package:yaml/yaml.dart';
 
@@ -66,6 +67,28 @@ void main() {
         'message',
       });
     });
+
+    test('declares the Retry-After header the SDK honors', () {
+      final responses =
+          (document['components'] as YamlMap)['responses'] as YamlMap;
+      final unavailable = responses['ServiceUnavailable'] as YamlMap;
+      final headers = unavailable['headers'] as YamlMap;
+      expect(headers.keys, contains('Retry-After'));
+      expect(IapStackRetryPolicy.maxRetryAfter, const Duration(seconds: 30));
+    });
+  });
+
+  test('shared SDK behavior is documented', () async {
+    final document = await File('../../../docs/api-v1.md').readAsString();
+    for (final needle in const <String>[
+      '## Shared SDK behavior',
+      '`max(jitter, min(Retry-After, 30 s))`',
+      '`grantsAccess`.** Go and Swift expose a method',
+      '`effective_starts_at` is informational',
+    ]) {
+      expect(document, contains(needle),
+          reason: 'shared SDK behavior is missing $needle');
+    }
   });
 }
 

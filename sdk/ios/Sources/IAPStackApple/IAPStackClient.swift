@@ -36,6 +36,12 @@ public final class IAPStackClient {
   private let config: IAPStackConfig
   private let session: URLSession
   private let ownsSession: Bool
+  /// Wall clock used to resolve HTTP-date `Retry-After` values; only tests replace it.
+  var clock: () -> Date = Date.init
+  /// Suspends between attempts; only tests replace it.
+  var sleep: (TimeInterval) async throws -> Void = { seconds in
+    try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+  }
   private let lifecycleLock = NSLock()
   private var closed = false
 
@@ -139,12 +145,17 @@ public final class IAPStackClient {
         )
       } catch {
         if shouldRetry(error: error, attempt: attempt) {
+          var retryAfter: TimeInterval?
+          if case let IAPStackSDKError.apiError(_, _, _, _, _, cooldown) = error {
+            retryAfter = cooldown
+          }
           let delay = config.retryPolicy.delayAfter(
             attempt: attempt,
             randomValue: Double.random(in: 0 ... 1),
+            retryAfter: retryAfter,
           )
           if delay > 0 {
-            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            try await sleep(delay)
           }
           attempt += 1
           continue
@@ -318,16 +329,21 @@ public final class IAPStackClient {
       }
       requestId = errorObject["request_id"] as? String
     }
-    let headerRequestId = response.allHeaderFields.first(
-      where: { ($0.key as? String)?.lowercased() == "x-request-id" },
-    )?.value as? String
+    let headerRequestId = headerValue("x-request-id", in: response)
     return IAPStackSDKError.apiError(
       statusCode: statusCode,
       code: code,
       message: message,
       requestId: requestId ?? headerRequestId,
       retryable: statusCode == 429 || statusCode >= 500,
+      retryAfter: parseRetryAfter(headerValue("retry-after", in: response), now: clock()),
     )
+  }
+
+  private func headerValue(_ name: String, in response: HTTPURLResponse) -> String? {
+    response.allHeaderFields.first(
+      where: { ($0.key as? String)?.lowercased() == name },
+    )?.value as? String
   }
 
   private func decodeJSONObject(from data: Data) throws -> [String: Any] {

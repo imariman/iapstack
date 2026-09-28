@@ -1,6 +1,9 @@
 package iapstack
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // APIError is a stable non-success v1 envelope.
 type APIError struct {
@@ -14,6 +17,11 @@ type APIError struct {
 	RequestID string
 	// Retryable reports whether a later idempotent retry may succeed.
 	Retryable bool
+	// RetryAfter is the cooldown the server requested through Retry-After.
+	// Zero collapses three cases the other IAPStack SDKs keep apart: the header
+	// was absent, it was malformed, or its HTTP-date had already elapsed. The
+	// client waits max(jitter, min(RetryAfter, MaxRetryAfter)) before a retry.
+	RetryAfter time.Duration
 }
 
 // TransportError is a network failure before a complete HTTP response.

@@ -177,6 +177,102 @@ void main() {
       }
     });
 
+    test('exposes the Retry-After cooldown on the API exception', () async {
+      final client = IapStackClient(
+        _config(),
+        httpClient: MockClient((request) async {
+          return http.Response(
+            '{"error":{"code":"rate_limited","message":"slow down"}}',
+            429,
+            headers: <String, String>{'retry-after': '17'},
+          );
+        }),
+      );
+
+      await expectLater(
+        client.getEntitlements('customer-external'),
+        throwsA(
+          isA<IapStackApiException>()
+              .having((error) => error.retryable, 'retryable', isTrue)
+              .having((error) => error.retryAfter, 'retryAfter',
+                  const Duration(seconds: 17)),
+        ),
+      );
+    });
+
+    test('waits at least the Retry-After cooldown before retrying', () async {
+      var attempts = 0;
+      final client = IapStackClient(
+        _config(
+          retryPolicy: const IapStackRetryPolicy(
+            maxAttempts: 2,
+            baseDelay: Duration.zero,
+            maxDelay: Duration.zero,
+          ),
+        ),
+        httpClient: MockClient((request) async {
+          attempts++;
+          if (attempts == 1) {
+            return http.Response(
+              '{"error":{"code":"provider_unavailable","message":"x"}}',
+              503,
+              headers: <String, String>{'retry-after': '1'},
+            );
+          }
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'customer_id': 'customer-internal',
+              'entitlements': _verificationJson['entitlements'],
+            }),
+            200,
+          );
+        }),
+      );
+
+      final stopwatch = Stopwatch()..start();
+      await client.getEntitlements('customer-external');
+
+      expect(attempts, 2);
+      expect(
+          stopwatch.elapsed, greaterThanOrEqualTo(const Duration(seconds: 1)),
+          reason: 'the client must sleep for the Retry-After second');
+    });
+
+    test('an elapsed Retry-After does not block the retry', () async {
+      var attempts = 0;
+      final client = IapStackClient(
+        _config(
+          retryPolicy: const IapStackRetryPolicy(
+            maxAttempts: 2,
+            baseDelay: Duration.zero,
+            maxDelay: Duration.zero,
+          ),
+        ),
+        httpClient: MockClient((request) async {
+          attempts++;
+          if (attempts == 1) {
+            return http.Response(
+              '{"error":{"code":"provider_unavailable","message":"x"}}',
+              503,
+              headers: <String, String>{'retry-after': '0'},
+            );
+          }
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'customer_id': 'customer-internal',
+              'entitlements': _verificationJson['entitlements'],
+            }),
+            200,
+          );
+        }),
+      );
+
+      final snapshot = await client.getEntitlements('customer-external');
+
+      expect(attempts, 2);
+      expect(snapshot.customerId, 'customer-internal');
+    });
+
     test('rejects entitlement versions below one', () async {
       final client = IapStackClient(
         _config(),
@@ -442,6 +538,45 @@ void main() {
       expect(policy.delayAfter(4, randomValue: 1),
           const Duration(milliseconds: 250));
       expect(() => policy.delayAfter(1, randomValue: 1.1), throwsArgumentError);
+    });
+
+    test('raises the jitter delay to a budgeted Retry-After', () {
+      const policy = IapStackRetryPolicy(
+        baseDelay: Duration(milliseconds: 100),
+        maxDelay: Duration(milliseconds: 250),
+      );
+
+      expect(policy.delayAfter(1, randomValue: 0.5, retryAfter: null),
+          const Duration(milliseconds: 50));
+      expect(policy.delayAfter(1, randomValue: 0.5, retryAfter: Duration.zero),
+          const Duration(milliseconds: 50));
+      expect(
+          policy.delayAfter(1,
+              randomValue: 1, retryAfter: const Duration(milliseconds: 20)),
+          const Duration(milliseconds: 100));
+      expect(
+          policy.delayAfter(1,
+              randomValue: 0, retryAfter: const Duration(seconds: 4)),
+          const Duration(seconds: 4));
+      expect(
+          policy.delayAfter(1,
+              randomValue: 1, retryAfter: const Duration(hours: 1)),
+          IapStackRetryPolicy.maxRetryAfter);
+      expect(IapStackRetryPolicy.maxRetryAfter, const Duration(seconds: 30));
+      expect(
+          () => policy.delayAfter(1,
+              randomValue: 1.1, retryAfter: const Duration(seconds: 4)),
+          throwsArgumentError);
+
+      // The budget bounds the cooldown, never the configured jitter.
+      const wide = IapStackRetryPolicy(
+        baseDelay: Duration(seconds: 40),
+        maxDelay: Duration(seconds: 60),
+      );
+      expect(
+          wide.delayAfter(1,
+              randomValue: 1, retryAfter: const Duration(seconds: 1)),
+          const Duration(seconds: 40));
     });
   });
 

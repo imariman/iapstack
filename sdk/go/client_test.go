@@ -230,6 +230,125 @@ func TestClientWaitsUsingRetryPolicy(t *testing.T) {
 	}
 }
 
+// TestClientHonorsRetryAfterCooldown verifies Retry-After raises the wait above the jitter delay.
+func TestClientHonorsRetryAfterCooldown(t *testing.T) {
+	t.Parallel()
+
+	var waited time.Duration
+	var attempts atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if attempts.Add(1) == 1 {
+			writer.Header().Set("Retry-After", "3")
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
+				"error": map[string]any{"code": "provider_unavailable", "message": "cooling down"},
+			})
+			return
+		}
+		writeJSON(writer, http.StatusCreated, map[string]any{
+			"token":      "iaps_customer",
+			"expires_at": "2026-08-24T20:15:00Z",
+		})
+	}), func(config *Config) {
+		config.RetryPolicy = RetryPolicy{MaxAttempts: 2, BaseDelay: 40 * time.Millisecond, MaxDelay: 40 * time.Millisecond}
+	})
+	client.jitter = func() float64 { return 1 }
+	client.delay = func(_ context.Context, delay time.Duration) error {
+		waited = delay
+		return nil
+	}
+
+	if _, err := client.CreateCustomerSession(context.Background(), "customer-external"); err != nil {
+		t.Fatalf("CreateCustomerSession() error = %v", err)
+	}
+	if waited != 3*time.Second {
+		t.Fatalf("waited = %s, want 3s", waited)
+	}
+}
+
+// TestAPIErrorExposesRetryAfter verifies delay-seconds and HTTP-date parsing on the error value.
+func TestAPIErrorExposesRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 28, 12, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name   string
+		header string
+		want   time.Duration
+	}{
+		{name: "absent", header: "", want: 0},
+		{name: "seconds", header: "17", want: 17 * time.Second},
+		{name: "padded seconds", header: " 5 ", want: 5 * time.Second},
+		{name: "nine digits", header: "999999999", want: 999999999 * time.Second},
+		{name: "ten digits", header: "1000000000", want: 0},
+		{name: "http date", header: now.Add(90 * time.Second).Format(http.TimeFormat), want: 90 * time.Second},
+		{name: "elapsed http date", header: now.Add(-time.Minute).Format(http.TimeFormat), want: 0},
+		{name: "impossible day", header: "Fri, 31 Feb 2026 00:00:00 GMT", want: 0},
+		{name: "wrong weekday", header: "Mon, 02 Oct 2026 00:00:00 GMT", want: 0},
+		{name: "rfc 850", header: "Friday, 02-Oct-26 00:00:00 GMT", want: 0},
+		{name: "asctime", header: "Fri Oct  2 00:00:00 2026", want: 0},
+		{name: "numeric offset", header: "Fri, 02 Oct 2026 00:00:00 +0000", want: 0},
+		{name: "no weekday", header: "02 Oct 2026 00:00:00 GMT", want: 0},
+		{name: "hour out of range", header: "Fri, 02 Oct 2026 24:00:00 GMT", want: 0},
+		{name: "negative", header: "-3", want: 0},
+		{name: "fraction", header: "1.5", want: 0},
+		{name: "garbage", header: "soon", want: 0},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			header := http.Header{}
+			if testCase.header != "" {
+				header.Set("Retry-After", testCase.header)
+			}
+			apiErr := apiErrorFromResponse(rawResponse{StatusCode: http.StatusTooManyRequests, Header: header, Body: []byte("{}")}, now)
+			if apiErr.RetryAfter != testCase.want {
+				t.Fatalf("RetryAfter = %s, want %s", apiErr.RetryAfter, testCase.want)
+			}
+			if !apiErr.Retryable {
+				t.Fatal("429 must stay retryable")
+			}
+		})
+	}
+}
+
+// TestRetryPolicyDelayAfterResponseBoundsRetryAfter verifies max(jitter, Retry-After) capped at MaxRetryAfter.
+func TestRetryPolicyDelayAfterResponseBoundsRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	policy := RetryPolicy{MaxAttempts: 3, BaseDelay: 100 * time.Millisecond, MaxDelay: 250 * time.Millisecond}
+	for _, testCase := range []struct {
+		name       string
+		random     float64
+		retryAfter time.Duration
+		want       time.Duration
+	}{
+		{name: "no header keeps jitter", random: 0.5, retryAfter: 0, want: 50 * time.Millisecond},
+		{name: "jitter wins when larger", random: 1, retryAfter: 20 * time.Millisecond, want: 100 * time.Millisecond},
+		{name: "retry after wins when larger", random: 0, retryAfter: 4 * time.Second, want: 4 * time.Second},
+		{name: "long cooldown is cut to the budget", random: 1, retryAfter: time.Hour, want: MaxRetryAfter},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := policy.DelayAfterResponse(1, testCase.random, testCase.retryAfter)
+			if err != nil {
+				t.Fatalf("DelayAfterResponse() error = %v", err)
+			}
+			if got != testCase.want {
+				t.Fatalf("DelayAfterResponse() = %s, want %s", got, testCase.want)
+			}
+		})
+	}
+	if _, err := policy.DelayAfterResponse(1, 2, time.Second); err == nil {
+		t.Fatal("DelayAfterResponse() accepted an out-of-range random value")
+	}
+
+	// The budget bounds the cooldown, never the configured jitter.
+	wide := RetryPolicy{MaxAttempts: 3, BaseDelay: 40 * time.Second, MaxDelay: 60 * time.Second}
+	got, err := wide.DelayAfterResponse(1, 1, time.Second)
+	if err != nil || got != 40*time.Second {
+		t.Fatalf("DelayAfterResponse() with wide jitter = %s, %v; want 40s", got, err)
+	}
+}
+
 // TestClientExposesStableAPIErrorsWithoutPayloads verifies envelope mapping and redaction.
 func TestClientExposesStableAPIErrorsWithoutPayloads(t *testing.T) {
 	t.Parallel()

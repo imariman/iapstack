@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:iapstack/src/config.dart';
 import 'package:iapstack/src/errors.dart';
 import 'package:iapstack/src/models.dart';
+import 'package:iapstack/src/retry_after.dart';
 
 const String _sdkVersion = '0.1.0-dev.1';
 
@@ -186,7 +187,7 @@ final class IapStackClient {
       }
       final exception = _apiException(response);
       if (exception.retryable && attempt < _config.retryPolicy.maxAttempts) {
-        await _delay(attempt);
+        await _delay(attempt, retryAfter: exception.retryAfter);
         continue;
       }
       throw exception;
@@ -241,10 +242,12 @@ final class IapStackClient {
     return builder.takeBytes();
   }
 
-  Future<void> _delay(int attempt) => Future<void>.delayed(
+  Future<void> _delay(int attempt, {Duration? retryAfter}) =>
+      Future<void>.delayed(
         _config.retryPolicy.delayAfter(
           attempt,
           randomValue: _retryRandom.nextDouble(),
+          retryAfter: retryAfter,
         ),
       );
 
@@ -279,6 +282,8 @@ final class IapStackClient {
       message: message,
       requestId: requestId,
       retryable: response.statusCode == 429 || response.statusCode >= 500,
+      retryAfter:
+          parseRetryAfter(response.headers['retry-after'], DateTime.now()),
     );
   }
 

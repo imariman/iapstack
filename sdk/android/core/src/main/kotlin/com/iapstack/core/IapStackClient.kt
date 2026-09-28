@@ -27,9 +27,60 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.random.Random
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+import java.time.DateTimeException
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneOffset
 
 private const val SDK_VERSION = "0.1.0-dev.1"
 private val JSON_MEDIA_TYPE = "application/json".toMediaType()
+private val DELAY_SECONDS = Regex("^\\d{1,9}$")
+private val IMF_FIXDATE = Regex(
+  "^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\\d{4}) (\\d{2}):(\\d{2}):(\\d{2}) GMT$",
+)
+private val WEEKDAYS = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+private val MONTHS = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+/**
+ * Parses a `Retry-After` header with the grammar every IAPStack SDK shares:
+ * delay-seconds of one to nine ASCII digits, or an IMF-fixdate HTTP-date
+ * (RFC 9110 section 5.6.7) whose fields, including the weekday, round-trip
+ * through the calendar. `DateTimeFormatter.RFC_1123_DATE_TIME` is not used
+ * because it also accepts an omitted weekday and numeric offsets.
+ *
+ * Returns the cooldown, [Duration.ZERO] for a date that elapsed before [now],
+ * and null for an absent or malformed header.
+ */
+internal fun parseRetryAfter(header: String?, now: Instant): Duration? {
+  val value = header?.trim().orEmpty()
+  if (value.isEmpty()) {
+    return null
+  }
+  if (DELAY_SECONDS.matches(value)) {
+    return value.toLong().seconds
+  }
+  val match = IMF_FIXDATE.matchEntire(value) ?: return null
+  val (weekday, dayText, monthText, yearText, hourText, minuteText, secondText) = match.destructured
+  val hour = hourText.toInt()
+  val minute = minuteText.toInt()
+  val second = secondText.toInt()
+  if (hour > 23 || minute > 59 || second > 59) {
+    return null
+  }
+  val at = try {
+    LocalDateTime.of(yearText.toInt(), MONTHS.indexOf(monthText) + 1, dayText.toInt(), hour, minute, second)
+  } catch (_: DateTimeException) {
+    return null
+  }
+  if (WEEKDAYS[at.dayOfWeek.value - 1] != weekday) {
+    return null
+  }
+  val instant = at.toInstant(ZoneOffset.UTC)
+  return (instant.toEpochMilli() - now.toEpochMilli()).coerceAtLeast(0).milliseconds
+}
 
 /**
  * Provider-neutral SDK transport for IAPStack v1.
@@ -42,6 +93,12 @@ class IapStackClient(
   httpClient: OkHttpClient? = null,
   private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
+  /** Wall clock used to resolve HTTP-date `Retry-After` values; only tests replace it. */
+  internal var clock: () -> Instant = Instant::now
+
+  /** Suspends between attempts; only tests replace it. */
+  internal var sleep: suspend (Duration) -> Unit = { delay(it) }
+
   private val gson = Gson()
   private val random = Random(System.nanoTime())
   private val closeClient: Boolean
@@ -163,19 +220,19 @@ class IapStackClient(
         if (attempt >= config.retryPolicy.maxAttempts || !error.retryable) {
           throw error
         }
-        delay(config.retryPolicy.delayAfter(attempt, jitter()))
+        sleep(config.retryPolicy.delayAfter(attempt, jitter(), error.retryAfter))
       } catch (error: TimeoutCancellationException) {
         if (attempt >= config.retryPolicy.maxAttempts) {
           throw IapStackTimeoutException("IAPStack request timed out", error)
         }
-        delay(config.retryPolicy.delayAfter(attempt, jitter()))
+        sleep(config.retryPolicy.delayAfter(attempt, jitter()))
       } catch (error: CancellationException) {
         throw error
       } catch (error: InterruptedIOException) {
         if (attempt >= config.retryPolicy.maxAttempts) {
           throw IapStackTimeoutException("IAPStack request timed out", error)
         }
-        delay(config.retryPolicy.delayAfter(attempt, jitter()))
+        sleep(config.retryPolicy.delayAfter(attempt, jitter()))
       } catch (error: IOException) {
         if (attempt >= config.retryPolicy.maxAttempts) {
           throw IapStackTransportException(
@@ -183,7 +240,7 @@ class IapStackClient(
             error,
           )
         }
-        delay(config.retryPolicy.delayAfter(attempt, jitter()))
+        sleep(config.retryPolicy.delayAfter(attempt, jitter()))
       } catch (error: IapStackProtocolException) {
         throw error
       }
@@ -218,7 +275,12 @@ class IapStackClient(
       if (resp.isSuccessful) {
         rawBody
       } else {
-        throw apiErrorFromResponse(resp.code, rawBody, resp.header("X-Request-ID"))
+        throw apiErrorFromResponse(
+          resp.code,
+          rawBody,
+          resp.header("X-Request-ID"),
+          resp.header("Retry-After"),
+        )
       }
     }
   }
@@ -301,8 +363,10 @@ class IapStackClient(
     statusCode: Int,
     responseBody: String,
     requestIdHeader: String?,
+    retryAfterHeader: String?,
   ): IapStackApiException {
     val headerRequestId = requestIdHeader?.trim()?.ifEmpty { null }
+    val retryAfter = parseRetryAfter(retryAfterHeader, clock())
     val parsed = try {
       decodeObject(responseBody)
     } catch (_: Exception) {
@@ -312,6 +376,7 @@ class IapStackClient(
         requestId = headerRequestId,
         retryable = statusCode == 429 || statusCode >= 500,
         message = "IAPStack returned an unsuccessful response",
+        retryAfter = retryAfter,
       )
     }
     val errorObject = parsed["error"] as? Map<*, *>
@@ -326,6 +391,7 @@ class IapStackClient(
       requestId = requestId,
       retryable = statusCode == 429 || statusCode >= 500,
       message = message,
+      retryAfter = retryAfter,
     )
   }
 

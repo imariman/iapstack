@@ -303,6 +303,45 @@ v2
 
 The event ID is authenticated. Reject `v1` signatures, timestamps outside the application's replay window, and any delivery whose `IAPStack-Event-ID` does not match the MAC. Deduplicate by that authenticated event ID.
 
+## Shared SDK behavior
+
+Behavior that is meant to be identical across the Go, TypeScript, React Native,
+Flutter, Kotlin and Swift SDKs. The SDK contract tests assert this section.
+
+- **Retries.** `429` and every `5xx` response, timeouts and transport failures
+  are retried with bounded full-jitter backoff (3 attempts, 250 ms base, 2 s
+  cap by default). Every omitted retry field takes its default separately.
+- **`Retry-After`.** The server sets `Retry-After` on a `503
+  provider_unavailable` when the store provider asked for a cooldown, as
+  delay-seconds rounded up. Every SDK honors the header on a retryable
+  response with one grammar: delay-seconds of one to nine ASCII digits, or an
+  IMF-fixdate HTTP-date such as `Sun, 06 Nov 1994 08:49:37 GMT` whose fields,
+  including the weekday, round-trip through the Gregorian calendar (`Fri, 31
+  Feb 2026 00:00:00 GMT` is malformed, not 3 March; RFC 850 and asctime forms
+  are malformed). A malformed header is ignored and an elapsed HTTP-date counts
+  as zero. The wait before the next attempt is
+  `max(jitter, min(Retry-After, 30 s))`: the 30-second cap is a client budget
+  that cuts a longer cooldown short, so the retry may then land inside it, and
+  it never reduces the configured jitter. The parsed cooldown is exposed on the
+  API error (`RetryAfter`, `retryAfterMs`, `retryAfter`); Go reports zero for
+  absent, malformed and elapsed alike.
+- **`X-Request-ID`.** A blank request ID is dropped before sending. An error's
+  request ID comes from the envelope `request_id`, falling back to the
+  `X-Request-ID` response header.
+- **`external_customer_id`.** Blank values and values with surrounding
+  whitespace are rejected before a request is sent.
+- **Timestamps.** Only RFC 3339 date-times are accepted.
+- **`grantsAccess`.** Go and Swift expose a method (`GrantsAccess()`,
+  `grantsAccess()`); TypeScript, React Native, Flutter and Kotlin expose a
+  property (`grantsAccess`). Every SDK also offers `grantsAccessAt(instant)`.
+- **`effective_starts_at`.** `grantsAccessAt` checks only `access` and
+  `effective_ends_at`. The server only emits an `allowed` projection once its
+  period has started, so `effective_starts_at` is informational; checking it on
+  a device whose clock runs behind the server would deny access right after a
+  purchase.
+- **`MemoryEventStore`.** The Go and TypeScript in-memory webhook stores never
+  evict and are for tests and local development only.
+
 ## Go host SDK
 
 The trusted-host Go package is in `sdk/go`. It uses the durable application bearer

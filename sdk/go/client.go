@@ -43,6 +43,8 @@ type Client struct {
 	delay func(context.Context, time.Duration) error
 	// jitter returns a full-jitter value in [0, 1].
 	jitter func() float64
+	// now reads the wall clock used to resolve HTTP-date Retry-After values.
+	now func() time.Time
 }
 
 type rawResponse struct {
@@ -104,6 +106,7 @@ func NewClient(config Config) (*Client, error) {
 		ownsClient:       ownsClient,
 		delay:            waitForRetry,
 		jitter:           rand.Float64,
+		now:              time.Now,
 	}, nil
 }
 
@@ -224,7 +227,7 @@ func (client *Client) request(
 			if !client.shouldRetry(ctx, err, attempt) {
 				return nil, err
 			}
-			if waitErr := client.wait(ctx, attempt); waitErr != nil {
+			if waitErr := client.wait(ctx, attempt, 0); waitErr != nil {
 				return nil, last
 			}
 			continue
@@ -232,12 +235,12 @@ func (client *Client) request(
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			return json.RawMessage(response.Body), nil
 		}
-		apiErr := apiErrorFromResponse(response)
+		apiErr := apiErrorFromResponse(response, client.now())
 		last = apiErr
 		if !client.shouldRetry(ctx, apiErr, attempt) {
 			return nil, apiErr
 		}
-		if waitErr := client.wait(ctx, attempt); waitErr != nil {
+		if waitErr := client.wait(ctx, attempt, apiErr.RetryAfter); waitErr != nil {
 			return nil, last
 		}
 	}
@@ -308,9 +311,10 @@ func (client *Client) shouldRetry(ctx context.Context, err error, attempt int) b
 	return errors.As(err, &transportErr)
 }
 
-// wait sleeps the full-jitter delay unless the parent context is already done.
-func (client *Client) wait(ctx context.Context, attempt int) error {
-	delay, err := client.retryPolicy.DelayAfter(attempt, client.jitter())
+// wait sleeps the full-jitter delay, raised to any server-requested Retry-After
+// cooldown, unless the parent context is already done.
+func (client *Client) wait(ctx context.Context, attempt int, retryAfter time.Duration) error {
+	delay, err := client.retryPolicy.DelayAfterResponse(attempt, client.jitter(), retryAfter)
 	if err != nil {
 		return err
 	}
@@ -338,7 +342,7 @@ func classifyAttemptError(parent context.Context, attempt context.Context, err e
 }
 
 // apiErrorFromResponse extracts the v1 error envelope without retaining extra payload fields.
-func apiErrorFromResponse(response rawResponse) *APIError {
+func apiErrorFromResponse(response rawResponse, now time.Time) *APIError {
 	code := "http_error"
 	message := "IAPStack returned an unsuccessful response"
 	requestID := strings.TrimSpace(response.Header.Get("X-Request-ID"))
@@ -360,6 +364,7 @@ func apiErrorFromResponse(response rawResponse) *APIError {
 		Message:    message,
 		RequestID:  requestID,
 		Retryable:  response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500,
+		RetryAfter: retryAfterFrom(response.Header, now),
 	}
 }
 

@@ -9,6 +9,7 @@ import {
   VerificationResult,
 } from './models';
 import { IapStackConfig } from './config';
+import { parseRetryAfter } from './retry_after';
 import {
   IapStackApiError,
   IapStackProtocolError,
@@ -92,7 +93,9 @@ export class IapStackClient {
           error.retryable &&
           attempt < this.config.retryPolicy.maxAttempts
         ) {
-          await delay(this.config.retryPolicy.delayAfter(attempt, Math.random()));
+          await delay(
+            this.config.retryPolicy.delayAfter(attempt, Math.random(), error.retryAfterMs),
+          );
           continue;
         }
         if (
@@ -158,6 +161,7 @@ export class IapStackClient {
         response.status,
         text,
         response.headers.get('x-request-id') ?? undefined,
+        response.headers.get('retry-after'),
       );
     } catch (error) {
       if (error instanceof IapStackProtocolError || error instanceof IapStackApiError) {
@@ -200,6 +204,7 @@ export class IapStackClient {
     status: number,
     body: string,
     requestIdHeader?: string,
+    retryAfterHeader?: string | null,
   ): IapStackApiError {
     let code = 'http_error';
     let message = 'IAPStack returned an unsuccessful response';
@@ -226,7 +231,14 @@ export class IapStackClient {
       // Keep safe generic values.
     }
 
-    return new IapStackApiError(status, code, message, RETRYABLE_STATUS(status), requestId);
+    return new IapStackApiError(
+      status,
+      code,
+      message,
+      RETRYABLE_STATUS(status),
+      requestId,
+      parseRetryAfter(retryAfterHeader, Date.now()),
+    );
   }
 
   private validateSubmission(submission: PurchaseSubmission): void {

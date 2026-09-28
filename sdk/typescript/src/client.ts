@@ -15,6 +15,7 @@ import {
   type CustomerSession,
   type EntitlementSnapshot,
 } from './models.js';
+import { parseRetryAfter } from './retry_after.js';
 
 const SDK_VERSION = '0.1.0-dev.1';
 const JSON_CONTENT_TYPE = 'application/json';
@@ -30,6 +31,7 @@ type DelayFn = (ms: number, signal?: AbortSignal) => Promise<void>;
 export interface RetrySeams {
   delay?: DelayFn;
   random?: () => number;
+  now?: () => number;
 }
 
 let installRetrySeams: (client: Client, seams: RetrySeams) => void;
@@ -42,11 +44,13 @@ export class Client {
   readonly #config: ResolvedConfig;
   #delay: DelayFn = waitForRetry;
   #random: () => number = Math.random;
+  #now: () => number = Date.now;
 
   static {
     installRetrySeams = (client, seams) => {
       client.#delay = seams.delay ?? client.#delay;
       client.#random = seams.random ?? client.#random;
+      client.#now = seams.now ?? client.#now;
     };
   }
 
@@ -161,7 +165,7 @@ export class Client {
         if (response.status >= 200 && response.status < 300) {
           return parseJsonObject(response.body);
         }
-        const apiError = apiErrorFromResponse(response);
+        const apiError = apiErrorFromResponse(response, this.#now());
         last = apiError;
         if (!this.shouldRetry(apiError, attempt, options.signal)) {
           throw apiError;
@@ -173,7 +177,8 @@ export class Client {
         }
       }
       try {
-        await this.wait(attempt, options.signal);
+        const retryAfterMs = last instanceof APIError ? last.retryAfterMs : undefined;
+        await this.wait(attempt, options.signal, retryAfterMs);
       } catch {
         throw decodeCaught(last);
       }
@@ -252,8 +257,8 @@ export class Client {
     return error instanceof TimeoutError || error instanceof TransportError;
   }
 
-  private async wait(attempt: number, signal?: AbortSignal): Promise<void> {
-    const delay = this.#config.retryPolicy.delayAfter(attempt, this.#random());
+  private async wait(attempt: number, signal?: AbortSignal, retryAfterMs?: number): Promise<void> {
+    const delay = this.#config.retryPolicy.delayAfter(attempt, this.#random(), retryAfterMs);
     if (delay <= 0) {
       return;
     }
@@ -285,11 +290,14 @@ function resolveUrl(base: URL, segments: string[]): URL {
   return resolved;
 }
 
-function apiErrorFromResponse(response: {
-  status: number;
-  headers: Headers;
-  body: string;
-}): APIError {
+function apiErrorFromResponse(
+  response: {
+    status: number;
+    headers: Headers;
+    body: string;
+  },
+  nowMs: number,
+): APIError {
   let code = 'http_error';
   let message = 'IAPStack returned an unsuccessful response';
   let requestId = response.headers.get('X-Request-ID')?.trim() ?? '';
@@ -317,6 +325,7 @@ function apiErrorFromResponse(response: {
     message,
     requestId,
     retryable: response.status === 429 || response.status >= 500,
+    retryAfterMs: parseRetryAfter(response.headers.get('Retry-After'), nowMs),
   });
 }
 

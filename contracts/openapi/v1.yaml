@@ -917,6 +917,14 @@ components:
             $ref: '#/components/schemas/ErrorEnvelope'
     ServiceUnavailable:
       description: Durable storage or provider is temporarily unavailable
+      headers:
+        Retry-After:
+          description: >-
+            Provider cooldown as delay-seconds, rounded up. SDKs accept
+            delay-seconds or an IMF-fixdate HTTP-date and wait
+            max(jitter, min(Retry-After, 30 s)) before a retry.
+          schema:
+            type: string
       content:
         application/json:
           schema:

@@ -134,6 +134,12 @@ public struct Entitlement: Sendable {
   }
 
   /// Whether access is granted at the given instant.
+  ///
+  /// Only `access` and `effectiveEndsAt` take part. `effectiveStartsAt` is
+  /// informational: the server only emits an allowed projection once its period
+  /// has started, and checking it here would let a device clock that runs behind
+  /// the server deny access right after a purchase. Every IAPStack SDK applies
+  /// this rule.
   public func grantsAccess(at instant: Date) -> Bool {
     guard access == "allowed" else {
       return false

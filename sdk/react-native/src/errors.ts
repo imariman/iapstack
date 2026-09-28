@@ -15,6 +15,13 @@ export class IapStackApiError extends IapStackError {
     message: string,
     public readonly retryable: boolean,
     public readonly requestId?: string,
+    /**
+     * Cooldown in milliseconds the server requested through Retry-After: 0
+     * when its HTTP-date had already elapsed, undefined when the header was
+     * absent or malformed. The client waits `max(jitter, min(retryAfterMs,
+     * MAX_RETRY_AFTER_MS))` before a retry.
+     */
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
   }

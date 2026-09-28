@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MAX_RETRY_AFTER_MS } from '../src/index';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = join(here, '..', '..', '..');
@@ -78,6 +79,21 @@ test('webhook contract fields are documented', () => {
   ]) {
     assert.equal(document.includes(needle), true, `webhook contract is missing ${needle}`);
   }
+});
+
+test('shared SDK behavior is documented', () => {
+  const document = readRepositoryFile('docs', 'api-v1.md');
+  for (const needle of [
+    '## Shared SDK behavior',
+    '`max(jitter, min(Retry-After, 30 s))`',
+    '`grantsAccess`.** Go and Swift expose a method',
+    '`effective_starts_at` is informational',
+  ]) {
+    assert.equal(document.includes(needle), true, `shared SDK behavior is missing ${needle}`);
+  }
+  assert.equal(MAX_RETRY_AFTER_MS, 30_000);
+  const contract = readRepositoryFile('contracts', 'openapi', 'v1.yaml');
+  assert.equal(contract.includes('Retry-After:'), true);
 });
 
 test('host SDK package has no runtime dependencies', () => {

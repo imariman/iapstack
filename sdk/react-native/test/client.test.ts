@@ -11,7 +11,9 @@ import {
   IapStackProtocolError,
   IapStackRetryPolicy,
   IapStackTimeoutError,
+  MAX_RETRY_AFTER_MS,
 } from '../src/index';
+import { parseRetryAfter } from '../src/retry_after';
 
 type MockRequest = {
   url: string;
@@ -172,6 +174,139 @@ test('restorePurchases retries only on retryable status codes', async () => {
     );
     assert.equal(calls[1].url, 'https://iapstack.test/api/v1/applications/app-1/purchases:restore');
     assert.equal(result.results[0].customerId, 'customer-123');
+  } finally {
+    restore();
+  }
+});
+
+test('API errors expose the Retry-After cooldown', async () => {
+  const { restore } = withMockFetch(
+    async () =>
+      new Response(JSON.stringify({ error: { code: 'rate_limited', message: 'slow down' } }), {
+        status: 429,
+        headers: { 'content-type': 'application/json', 'retry-after': '17' },
+      }),
+  );
+
+  try {
+    const client = new IapStackClient(
+      clientConfig({ retryPolicy: new IapStackRetryPolicy({ maxAttempts: 1 }) }),
+    );
+    await assert.rejects(
+      () => client.getEntitlements('customer-123'),
+      (error) => {
+        assert(error instanceof IapStackApiError);
+        assert.equal(error.retryable, true);
+        assert.equal(error.retryAfterMs, 17_000);
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('an elapsed Retry-After does not block the retry', async () => {
+  let attempt = 0;
+  const { restore } = withMockFetch(async () => {
+    attempt += 1;
+    if (attempt === 1) {
+      return new Response(JSON.stringify({ error: { code: 'provider_unavailable', message: 'x' } }), {
+        status: 503,
+        headers: { 'content-type': 'application/json', 'retry-after': '0' },
+      });
+    }
+    return new Response(JSON.stringify(restorePayload()), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+
+  try {
+    const client = new IapStackClient(
+      clientConfig({
+        retryPolicy: new IapStackRetryPolicy({ maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 }),
+      }),
+    );
+    const result = await client.restorePurchases([samplePurchase]);
+    assert.equal(attempt, 2);
+    assert.equal(result.results[0].customerId, 'customer-123');
+  } finally {
+    restore();
+  }
+});
+
+test('parseRetryAfter accepts delay-seconds and round-tripping IMF-fixdates only', () => {
+  const now = Date.UTC(2026, 8, 28, 12, 0, 0);
+  const cases: Array<[string | null | undefined, number | undefined]> = [
+    [undefined, undefined],
+    [null, undefined],
+    ['', undefined],
+    ['17', 17_000],
+    [' 5 ', 5_000],
+    ['999999999', 999_999_999_000],
+    ['1000000000', undefined],
+    ['Fri, 02 Oct 2026 00:00:00 GMT', Date.UTC(2026, 9, 2) - now],
+    ['Mon, 28 Sep 2026 11:59:00 GMT', 0],
+    ['Fri, 31 Feb 2026 00:00:00 GMT', undefined],
+    ['Wed, 31 Apr 2026 00:00:00 GMT', undefined],
+    ['Mon, 02 Oct 2026 00:00:00 GMT', undefined],
+    ['Friday, 02-Oct-26 00:00:00 GMT', undefined],
+    ['Fri Oct  2 00:00:00 2026', undefined],
+    ['Fri, 02 Oct 2026 00:00:00 +0000', undefined],
+    ['02 Oct 2026 00:00:00 GMT', undefined],
+    ['Fri, 02 Oct 2026 24:00:00 GMT', undefined],
+    ['-3', undefined],
+    ['1.5', undefined],
+    ['March 1, 2026', undefined],
+    ['soon', undefined],
+  ];
+  for (const [header, expected] of cases) {
+    assert.equal(parseRetryAfter(header, now), expected, `Retry-After ${String(header)}`);
+  }
+});
+
+test('retry policy raises the jitter delay to a budgeted Retry-After', () => {
+  const policy = new IapStackRetryPolicy({ baseDelayMs: 100, maxDelayMs: 250 });
+  assert.equal(policy.delayAfter(1, 0.5), 50);
+  assert.equal(policy.delayAfter(1, 0.5, 0), 50);
+  assert.equal(policy.delayAfter(1, 1, 20), 100);
+  assert.equal(policy.delayAfter(1, 0, 4000), 4000);
+  assert.equal(policy.delayAfter(1, 1, 3_600_000), MAX_RETRY_AFTER_MS);
+  assert.equal(MAX_RETRY_AFTER_MS, 30_000);
+  assert.throws(() => policy.delayAfter(1, 1.1, 4000));
+
+  // The budget bounds the cooldown, never the configured jitter.
+  const wide = new IapStackRetryPolicy({ baseDelayMs: 40_000, maxDelayMs: 60_000 });
+  assert.equal(wide.delayAfter(1, 1, 1000), 40_000);
+});
+
+test('client waits at least the Retry-After cooldown before retrying', async () => {
+  let attempt = 0;
+  const { restore } = withMockFetch(async () => {
+    attempt += 1;
+    if (attempt === 1) {
+      return new Response(JSON.stringify({ error: { code: 'provider_unavailable', message: 'x' } }), {
+        status: 503,
+        headers: { 'content-type': 'application/json', 'retry-after': '1' },
+      });
+    }
+    return new Response(JSON.stringify(restorePayload()), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+
+  try {
+    const client = new IapStackClient(
+      clientConfig({
+        retryPolicy: new IapStackRetryPolicy({ maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 }),
+      }),
+    );
+    const startedAt = Date.now();
+    await client.restorePurchases([samplePurchase]);
+    assert.equal(attempt, 2);
+    assert.ok(Date.now() - startedAt >= 1000, 'the client must sleep for the Retry-After second');
   } finally {
     restore();
   }

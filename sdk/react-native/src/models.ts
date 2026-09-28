@@ -62,10 +62,19 @@ export class Entitlement {
     this.effectiveEndsAt = init.effectiveEndsAt ?? null;
   }
 
+  /** Reports whether the projection permits access at the current time. */
   get grantsAccess(): boolean {
     return this.grantsAccessAt(new Date());
   }
 
+  /**
+   * Reports whether the projection permits access at the supplied instant.
+   *
+   * Only `access` and `effectiveEndsAt` take part. `effectiveStartsAt` is
+   * informational: the server only emits an allowed projection once its period
+   * has started, and checking it here would let a device clock that runs behind
+   * the server deny access right after a purchase. Every IAPStack SDK applies this rule.
+   */
   grantsAccessAt(instant: Date): boolean {
     if (this.access !== 'allowed') {
       return false;

@@ -14,6 +14,7 @@ import (
 	"github.com/imariman/iapstack/internal/auth"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/stores"
 	"github.com/imariman/iapstack/internal/validation"
 )
 
@@ -265,6 +266,38 @@ func TestRequestDeadlineReturnsRetryableServiceUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"code":"request_timeout"`) {
 		t.Fatalf("deadline response = %s", recorder.Body.String())
+	}
+}
+
+// TestProviderCooldownSetsRetryAfter verifies a throttled provider becomes a 503 with a rounded-up Retry-After.
+func TestProviderCooldownSetsRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	api := &API{}
+	request := httptest.NewRequest(http.MethodPost, "/v1/applications/application-1/purchases:verify", nil)
+	for _, testCase := range []struct {
+		name       string
+		failure    *stores.Failure
+		wantHeader string
+	}{
+		{name: "rate limited whole seconds", failure: stores.NewFailure(core.ProviderAppleAppStore, "query", stores.FailureRateLimited, 17*time.Second, nil), wantHeader: "17"},
+		{name: "temporary rounds up", failure: stores.NewFailure(core.ProviderGooglePlay, "query", stores.FailureTemporary, 1500*time.Millisecond, nil), wantHeader: "2"},
+		{name: "no cooldown", failure: stores.NewFailure(core.ProviderAppleAppStore, "query", stores.FailureRateLimited, 0, nil), wantHeader: ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			recorder := httptest.NewRecorder()
+			api.writeError(recorder, request, testCase.failure)
+			if recorder.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+			}
+			if !strings.Contains(recorder.Body.String(), `"code":"provider_unavailable"`) {
+				t.Fatalf("response = %s", recorder.Body.String())
+			}
+			if got := recorder.Header().Get("Retry-After"); got != testCase.wantHeader {
+				t.Fatalf("Retry-After = %q, want %q", got, testCase.wantHeader)
+			}
+		})
 	}
 }
 
