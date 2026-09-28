@@ -75,9 +75,6 @@ final class HuaweiIapStack {
       );
     }
 
-    // Drop cached choices for re-queried IDs so a product missing from this
-    // response can no longer pass the product_not_queried guard.
-    _queriedProducts.removeWhere((id, _) => normalized.contains(id));
     final found = <String, HuaweiProduct>{};
     for (final kind in HuaweiProductKind.values) {
       final ids = normalized
@@ -106,7 +103,12 @@ final class HuaweiIapStack {
         found[product.id] = product;
       }
     }
-    _queriedProducts.addAll(found);
+    // Only a complete response replaces cached choices: re-queried IDs that it
+    // omits can no longer pass the product_not_queried guard, and a failed
+    // query leaves earlier choices untouched.
+    _queriedProducts
+      ..removeWhere((id, _) => normalized.contains(id))
+      ..addAll(found);
     return HuaweiProductQuery(
       products: normalized
           .where(found.containsKey)
