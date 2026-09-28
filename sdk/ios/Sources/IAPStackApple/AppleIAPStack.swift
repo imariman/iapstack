@@ -3,19 +3,23 @@ import Foundation
 /// High-level companion around an `IAPStackClient` and StoreKit 2 platform.
 public final class AppleIAPStack {
   /// Creates a companion with explicit product catalog and optional explicit platform.
+  ///
+  /// Throws `AppleIAPStackError` with code `invalid_product_catalog` when a product
+  /// identifier is empty.
   public init(
     client: IAPStackClient,
     productKinds: [String: AppleProductKind],
     platform: AppleIAPPlatform? = nil,
-  ) {
+  ) throws {
+    for productId in productKinds.keys
+    where productId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      throw AppleIAPStackError(
+        code: "invalid_product_catalog",
+        message: "productKinds must not contain an empty product identifier",
+      )
+    }
     self.client = client
     self.productKinds = productKinds
-    for (productId, kind) in productKinds {
-      if productId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        preconditionFailure("productKinds must not contain an empty product identifier")
-      }
-      _ = kind
-    }
     self.platform = platform ?? AppleStoreKitPlatform()
   }
 

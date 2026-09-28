@@ -7,6 +7,9 @@ the Flutter split:
 - `AppleIAPStack` — StoreKit 2 catalog, `appAccountToken` binding, compact JWS evidence,
   finish-after-verify, unfinished-transaction listening, restore batching
 
+Requires the Swift 6.1 toolchain (Xcode 16.3 or later). The package builds in
+Swift 5 language mode and supports iOS 15+ and macOS 12+.
+
 Authenticate the user in your trusted host backend, then mint a short-lived
 customer session there with the durable application bearer. Return only that
 customer token to the mobile app. Never ship the durable application bearer in
@@ -40,7 +43,7 @@ let hasPremium = snapshot.entitlements.contains { $0.key == "premium" && $0.gran
 `appAccountToken`.
 
 ```swift
-let stack = AppleIAPStack(
+let stack = try AppleIAPStack(
   client: client,
   productKinds: [
     "premium_monthly": .subscription,
