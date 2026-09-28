@@ -1,5 +1,5 @@
 export { Client, type RequestOptions } from './client';
-export type { Config } from './config';
+export type { Config, FetchFn } from './config';
 export {
   APIError,
   ProtocolError,
