@@ -399,6 +399,38 @@ test('Client rejects non-finite numeric options', () => {
   );
 });
 
+test('Client rejects timer durations setTimeout cannot honor', () => {
+  const base = {
+    baseUrl: 'https://iap.example',
+    applicationId: 'application-1',
+    applicationToken: testApplicationToken,
+  };
+  for (const timeoutMs of [2 ** 31, 1e15, 0.4, 1.5, 0]) {
+    assert.throws(() => new Client({ ...base, timeoutMs }), TypeError, `timeoutMs ${timeoutMs}`);
+  }
+  assert.doesNotThrow(() => new Client({ ...base, timeoutMs: 1 }));
+  assert.doesNotThrow(() => new Client({ ...base, timeoutMs: 2 ** 31 - 1 }));
+
+  assert.throws(
+    () => new Client({ ...base, retryPolicy: new RetryPolicy({ maxDelayMs: 2 ** 31 }) }),
+    TypeError,
+  );
+  assert.throws(
+    () =>
+      new Client({
+        ...base,
+        retryPolicy: new RetryPolicy({ baseDelayMs: 2 ** 31, maxDelayMs: 2 ** 31 }),
+      }),
+    TypeError,
+  );
+  assert.doesNotThrow(
+    () => new Client({ ...base, retryPolicy: new RetryPolicy({ maxDelayMs: 2 ** 31 - 1 }) }),
+  );
+  assert.doesNotThrow(
+    () => new Client({ ...base, retryPolicy: new RetryPolicy({ baseDelayMs: 0, maxDelayMs: 0 }) }),
+  );
+});
+
 test('denied entitlement does not grant access', () => {
   const entitlement = new Entitlement({
     key: 'premium',

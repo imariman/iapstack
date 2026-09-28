@@ -1,4 +1,4 @@
-import { defaultRetryPolicy, RetryPolicy } from './retry.js';
+import { defaultRetryPolicy, MAX_TIMER_MS, RetryPolicy } from './retry.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 1 << 20;
@@ -64,8 +64,9 @@ export function resolveConfig(config: Config): ResolvedConfig {
     throw new TypeError('application ID must be one non-empty path segment');
   }
   validateBearer('application token', config.applicationToken);
-  if (!isPositiveFinite(timeoutMs)) {
-    throw new TypeError('timeout must be positive');
+  // timeoutMs feeds setTimeout directly, so it must be a duration the timer honors.
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMER_MS) {
+    throw new TypeError('timeout must be an integer between 1 and 2147483647 ms');
   }
   if (!isPositiveFinite(maxResponseBytes)) {
     throw new TypeError('max response bytes must be positive');
