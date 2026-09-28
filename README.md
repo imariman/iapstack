@@ -41,6 +41,32 @@ Consumable fulfillment, customer migration and alias consolidation, hosted opera
 and stores beyond the three above are outside the v0.1 scope. See the
 [v0.1 scope](docs/v0.1-scope.md) for the complete boundary.
 
+## SDK roadmap
+
+Flutter remains the only mobile client in the v0.1 release scope: a provider-neutral
+HTTP client plus Apple, Google Play, and Huawei companions. Additional SDK code is
+already in the repository, following the expansion plan in
+[#85](https://github.com/imariman/iapstack/issues/85). Its presence does not expand
+the v0.1 release gate or make these packages production releases.
+
+| SDK | Implemented in the repository | Remaining work |
+| --- | --- | --- |
+| [Go trusted host](sdk/go/README.md) | Customer sessions, server-side entitlement lookup, and signed webhook handling | Versioned package release |
+| [TypeScript trusted host](sdk/typescript/README.md) | Customer sessions, entitlement lookup, and signed webhook handling for Node backends | npm publication |
+| [iOS (Swift)](sdk/ios/README.md) | Provider-neutral HTTP client and StoreKit 2 companion | Full sample app with a StoreKit Configuration file |
+| [Android (Kotlin)](sdk/android/README.md) | HTTP client and Google Play/Huawei companion coordinators behind injectable platform interfaces | Production BillingClient/HMS adapters, Android library packaging, and Maven publication |
+| [React Native](sdk/react-native/README.md) | Provider-neutral HTTP client and signed-evidence envelope helpers | Native bridge, end-to-end examples, and npm publication |
+
+The durable application bearer stays on a trusted host backend and must never ship
+in a mobile binary or browser bundle. Mobile clients use short-lived customer
+sessions. React Native evidence helpers assemble payloads; store evidence collection
+still requires native integration.
+
+Unity remains deferred until consumable fulfillment exists. Kotlin Multiplatform,
+Capacitor, Cordova, MAUI, web/Stripe billing, and Amazon or Samsung store companions
+remain outside the current SDK work; the original expansion plan is not a release
+commitment for them.
+
 ## Quick start
 
 You need Docker with Compose and OpenSSL. From a clone of this repository, generate
@@ -367,10 +393,17 @@ credential/evidence and notification contracts, and webhook verification rules a
 - [x] Publish a machine-readable v1 API contract with client compatibility checks
 - [ ] Complete Apple App Store, Google Play, and Huawei lifecycle release gates and publish `v0.1.0-rc.1`
 - [ ] Resolve candidate feedback and publish stable `v0.1.0`
+- [x] Implement Go and TypeScript trusted-host SDKs for customer sessions, entitlements, and webhooks
+- [x] Implement the Swift HTTP client and StoreKit 2 companion
+- [x] Implement the Kotlin HTTP client and Google Play/Huawei companion coordinators
+- [x] Implement the React Native HTTP client and evidence envelope helpers
+- [ ] Complete Android BillingClient/HMS adapters and the React Native native bridge
+- [ ] Add the full Swift sample app and React Native end-to-end examples
+- [ ] Publish versioned host, Android, and React Native packages
 - [ ] Add Amazon Appstore and additional store adapters
 - [ ] Support customer migration and alias consolidation
 
-The order above describes the initial implementation sequence, not a limitation of the architecture. IAPStack is intended to treat every store as a first-class adapter.
+Completed items describe repository implementations, not production release readiness. IAPStack is intended to treat every store as a first-class adapter. Current package capabilities and remaining work are in the [SDK roadmap](#sdk-roadmap).
 
 ## License
 
