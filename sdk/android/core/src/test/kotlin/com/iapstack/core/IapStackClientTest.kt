@@ -275,36 +275,42 @@ class IapStackClientTest {
     val readThreads = Collections.synchronizedSet(mutableSetOf<String>())
     val caller = Executors.newSingleThreadExecutor { Thread(it, "caller-thread") }
     val io = Executors.newSingleThreadExecutor { Thread(it, "io-thread") }
+    val recordingClient = OkHttpClient.Builder()
+      .addNetworkInterceptor { chain ->
+        val response = chain.proceed(chain.request())
+        val body = response.body!!
+        val source = object : ForwardingSource(body.source()) {
+          override fun read(sink: Buffer, byteCount: Long): Long {
+            readThreads.add(Thread.currentThread().name.substringBefore(" @"))
+            return super.read(sink, byteCount)
+          }
+        }.buffer()
+        response.newBuilder().body(source.asResponseBody(body.contentType(), body.contentLength())).build()
+      }
+      .build()
     try {
       MockWebServer().use { server ->
         server.enqueue(jsonResponse(VERIFICATION_JSON))
-        val recordingClient = OkHttpClient.Builder()
-          .addNetworkInterceptor { chain ->
-            val response = chain.proceed(chain.request())
-            val body = response.body!!
-            val source = object : ForwardingSource(body.source()) {
-              override fun read(sink: Buffer, byteCount: Long): Long {
-                readThreads.add(Thread.currentThread().name.substringBefore(" @"))
-                return super.read(sink, byteCount)
-              }
-            }.buffer()
-            response.newBuilder().body(source.asResponseBody(body.contentType(), body.contentLength())).build()
-          }
-          .build()
         val client = IapStackClient(
           config(server),
           httpClient = recordingClient,
           ioDispatcher = io.asCoroutineDispatcher(),
         )
+        try {
+          runBlocking(caller.asCoroutineDispatcher()) {
+            client.verifyPurchase(purchase())
+          }
 
-        runBlocking(caller.asCoroutineDispatcher()) {
-          client.verifyPurchase(purchase())
+          assertEquals(setOf("io-thread"), readThreads.toSet())
+        } finally {
+          client.close()
         }
-
-        assertEquals(setOf("io-thread"), readThreads.toSet())
-        client.close()
       }
     } finally {
+      // close() leaves injected OkHttp clients alone, and the SDK's copy shares
+      // this dispatcher, whose threads are non-daemon. Release them here.
+      recordingClient.dispatcher.executorService.shutdown()
+      recordingClient.connectionPool.evictAll()
       caller.shutdownNow()
       io.shutdownNow()
     }
