@@ -182,9 +182,111 @@ class BillingClientGooglePlayPlatformTest {
       .queryProductDetailsAsync(any(QueryProductDetailsParams::class.java), any(ProductDetailsResponseListener::class.java))
     val pending = async(start = CoroutineStart.UNDISPATCHED) { runCatching { platform.queryProducts(setOf("lifetime")) } }
     advanceTimeBy(30_001)
-    assertTrue(pending.await().exceptionOrNull() is TimeoutCancellationException)
+    assertEquals("billing_timeout", (pending.await().exceptionOrNull() as GooglePlayIapStackException).code)
     callback.onProductDetailsResponse(result(), QueryProductDetailsResult.create(emptyList(), emptyList()))
     assertTrue(platform.isAvailable())
+    `when`(billing.isReady).thenReturn(false)
+    assertEquals("billing_timeout", assertFailsWith<GooglePlayIapStackException> { platform.isAvailable() }.code)
+  }
+
+  @Test fun preservesCallerCancellationAndOuterTimeouts() = runTest {
+    val cancelled = async(start = CoroutineStart.UNDISPATCHED) { platform.queryProducts(setOf("lifetime")) }
+    cancelled.cancelAndJoin()
+    assertTrue(cancelled.isCancelled)
+    assertFailsWith<TimeoutCancellationException> {
+      withTimeout(5) { platform.queryProducts(setOf("lifetime")) }
+    }
+    assertTrue(platform.isAvailable())
+  }
+
+  @Test fun classifiesAllUnfetchedStatuses() = runTest {
+    val unfetched = mock(UnfetchedProduct::class.java)
+    `when`(unfetched.productId).thenReturn("lifetime")
+    `when`(unfetched.productType).thenReturn(BillingClient.ProductType.INAPP)
+    doAnswer {
+      it.getArgument<ProductDetailsResponseListener>(1).onProductDetailsResponse(result(),
+        QueryProductDetailsResult.create(emptyList(), listOf(unfetched)))
+      null
+    }.`when`(billing).queryProductDetailsAsync(any(QueryProductDetailsParams::class.java), any(ProductDetailsResponseListener::class.java))
+    for (code in listOf(UnfetchedProduct.StatusCode.PRODUCT_NOT_FOUND, UnfetchedProduct.StatusCode.NO_ELIGIBLE_OFFER)) {
+      `when`(unfetched.statusCode).thenReturn(code)
+      assertEquals(setOf("lifetime"), platform.queryProducts(setOf("lifetime")).notFoundProductIds)
+    }
+    for (code in listOf(UnfetchedProduct.StatusCode.UNKNOWN, UnfetchedProduct.StatusCode.INVALID_PRODUCT_ID_FORMAT, 999)) {
+      `when`(unfetched.statusCode).thenReturn(code)
+      assertEquals("product_query_failed_$code", assertFailsWith<GooglePlayIapStackException> {
+        platform.queryProducts(setOf("lifetime"))
+      }.code)
+    }
+  }
+
+  @Test fun serializesCatalogRefreshAndCheckoutSelection() = runTest {
+    val callbacks = mutableListOf<ProductDetailsResponseListener>()
+    doAnswer { callbacks.add(it.getArgument(1)); null }.`when`(billing)
+      .queryProductDetailsAsync(any(QueryProductDetailsParams::class.java), any(ProductDetailsResponseListener::class.java))
+    val first = async(start = CoroutineStart.UNDISPATCHED) { platform.queryProducts(setOf("monthly")) }
+    val second = async(start = CoroutineStart.UNDISPATCHED) { platform.queryProducts(setOf("monthly")) }
+    val selected = GooglePlayProduct("monthly", GooglePlayProductKind.SUBSCRIPTION, "Monthly", "Access",
+      "$4.99", 4_990_000, "USD", "old-token", "monthly-plan")
+    val launch = async(start = CoroutineStart.UNDISPATCHED) { runCatching { platform.launchPurchase(selected, "opaque-customer") } }
+    assertEquals(1, callbacks.size)
+    assertFalse(launch.isCompleted)
+    callbacks[0].onProductDetailsResponse(result(), QueryProductDetailsResult.create(emptyList(), emptyList()))
+    first.await()
+    runCurrent()
+    assertEquals(2, callbacks.size)
+    assertFalse(launch.isCompleted)
+    callbacks[1].onProductDetailsResponse(result(), QueryProductDetailsResult.create(emptyList(), emptyList()))
+    second.await()
+    assertEquals("product_not_queried", (launch.await().exceptionOrNull() as GooglePlayIapStackException).code)
+    verify(billing, never()).launchBillingFlow(any(Activity::class.java), any(BillingFlowParams::class.java))
+  }
+
+  @Test fun rejectsMalformedPricingPhasesWithTypedErrors() = runTest {
+    val details = mock(ProductDetails::class.java)
+    val offer = mock(ProductDetails.SubscriptionOfferDetails::class.java)
+    val phases = mock(ProductDetails.PricingPhases::class.java)
+    `when`(details.productId).thenReturn("monthly")
+    `when`(details.productType).thenReturn(BillingClient.ProductType.SUBS)
+    `when`(details.subscriptionOfferDetails).thenReturn(listOf(offer))
+    `when`(offer.offerToken).thenReturn("token")
+    `when`(offer.basePlanId).thenReturn("plan")
+    `when`(offer.pricingPhases).thenReturn(phases)
+    doAnswer {
+      it.getArgument<ProductDetailsResponseListener>(1).onProductDetailsResponse(result(),
+        QueryProductDetailsResult.create(listOf(details), emptyList()))
+      null
+    }.`when`(billing).queryProductDetailsAsync(any(QueryProductDetailsParams::class.java), any(ProductDetailsResponseListener::class.java))
+    for (list in listOf(null, emptyList<ProductDetails.PricingPhase>())) {
+      `when`(phases.pricingPhaseList).thenReturn(list)
+      assertEquals("invalid_plugin_response", assertFailsWith<GooglePlayIapStackException> {
+        platform.queryProducts(setOf("monthly"))
+      }.code)
+    }
+    val corruptions: List<(ProductDetails.PricingPhase) -> Unit> = listOf(
+      { `when`(it.billingCycleCount).thenReturn(-1) },
+      { `when`(it.billingPeriod).thenReturn(null) },
+      { `when`(it.billingPeriod).thenReturn("") },
+      { `when`(it.formattedPrice).thenReturn(null) },
+      { `when`(it.formattedPrice).thenReturn("") },
+      { `when`(it.priceAmountMicros).thenReturn(-1) },
+      { `when`(it.priceCurrencyCode).thenReturn(null) },
+      { `when`(it.priceCurrencyCode).thenReturn("usd") },
+      { `when`(it.recurrenceMode).thenReturn(999) },
+    )
+    for (corrupt in corruptions) {
+      val phase = mock(ProductDetails.PricingPhase::class.java)
+      `when`(phase.billingPeriod).thenReturn("P1M")
+      `when`(phase.formattedPrice).thenReturn("$4.99")
+      `when`(phase.priceAmountMicros).thenReturn(4_990_000)
+      `when`(phase.priceCurrencyCode).thenReturn("USD")
+      `when`(phase.recurrenceMode).thenReturn(ProductDetails.RecurrenceMode.INFINITE_RECURRING)
+      corrupt(phase)
+      `when`(phases.pricingPhaseList).thenReturn(listOf(phase))
+      assertEquals("invalid_plugin_response", assertFailsWith<GooglePlayIapStackException> {
+        platform.queryProducts(setOf("monthly"))
+      }.code)
+    }
   }
 
   @Test fun closesAndCancelsWithoutWaitingForMissingStoreCallback() = runTest {

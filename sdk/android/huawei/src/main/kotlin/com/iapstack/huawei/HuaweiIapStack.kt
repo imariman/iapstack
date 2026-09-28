@@ -29,7 +29,8 @@ class HuaweiIapStack(
   }
 
   /**
-   * Checks whether Huawei IAP is available for the current account region.
+   * Returns false when Huawei IAP is unavailable in the account region.
+   * Sign-in and operational failures throw a [HuaweiIapStackException].
    */
   suspend fun isAvailable(): Boolean = platform.isAvailable()
 

@@ -27,7 +27,10 @@ runtime. The host authenticates it, selects the configured customer identity,
 and calls IAPStack's customer-session endpoint. Only the short-lived session
 returns to Android. Requests cannot select another customer. The app and host
 do not log or persist tokens. The app disables saved state, autofill, backups,
-and screenshots for the credential form; it clears the login field after use.
+and screenshots for the credential form; it clears the login field once session
+setup succeeds. Failed setup keeps the login and re-enables the session button.
+A store-sync failure displays a classified error and can be retried with the
+query/restore controls without replacing the established customer session.
 Production hosts should replace the single tester token with their existing
 user authentication, authorization, rate limits, and account-to-customer lookup.
 Never enter the IAPStack application bearer in the Android app.

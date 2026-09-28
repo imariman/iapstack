@@ -13,7 +13,7 @@ import java.util.concurrent.Executor
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -33,28 +33,43 @@ class HmsHuaweiIapPlatform internal constructor(
     this(activity, Iap.getIapClient(activity), requestCode)
 
   init { require(requestCode in 0..65535) }
-  private var resolution: CompletableDeferred<Intent?>? = null
+  private class Resolution {
+    val result = CompletableDeferred<Intent?>()
+    var launched = false
+  }
+  private var resolution: Resolution? = null
   private var closed = false
 
   override suspend fun isAvailable(): Boolean = withContext(Dispatchers.Main.immediate) {
     checkOpen()
-    checkCode(client.isEnvReady.awaitHms().returnCode)
-    true
+    try {
+      checkCode(client.isEnvReady.awaitHms().returnCode)
+      true
+    } catch (error: HuaweiIapStackException) {
+      if (error.code == "hms_environment_unavailable") false else throw error
+    }
   }
 
   /** Launches HMS's own sign-in/region resolution, when available, then rechecks readiness. */
   suspend fun resolveEnvironment(): Boolean = withContext(Dispatchers.Main.immediate) {
-    checkOpen()
-    try {
-      checkCode(client.isEnvReady.awaitRaw().returnCode)
-    } catch (error: IapApiException) {
-      val status = error.status
-      if (status == null || !status.hasResolution()) throw hmsError(error.statusCode)
-      val data = resolve(status)
-      if (data == null) throw hmsError(OrderStatusCode.ORDER_STATE_CANCEL)
-      checkCode(client.isEnvReady.awaitHms().returnCode)
+    withResolution { slot ->
+      try {
+        checkCode(client.isEnvReady.awaitRaw().returnCode)
+      } catch (error: IapApiException) {
+        val status = error.status
+        if (status == null || !status.hasResolution()) {
+          if (error.statusCode == OrderStatusCode.ORDER_ACCOUNT_AREA_NOT_SUPPORTED) return@withResolution false
+          throw hmsError(error.statusCode)
+        }
+        val data = resolve(status, slot)
+        if (data == null) throw hmsError(OrderStatusCode.ORDER_STATE_CANCEL)
+        return@withResolution isAvailable()
+      } catch (error: HuaweiIapStackException) {
+        if (error.code == "hms_environment_unavailable") return@withResolution false
+        throw error
+      }
+      true
     }
-    true
   }
 
   override suspend fun sandboxStatus(): HuaweiSandboxStatus = withContext(Dispatchers.Main.immediate) {
@@ -76,10 +91,17 @@ class HmsHuaweiIapPlatform internal constructor(
         }).awaitHms()
         checkCode(result.returnCode)
         result.productInfoList.orEmpty().map { info ->
-          if (info.priceType != productKind.priceType) throw HuaweiIapStackException(
-            "invalid_plugin_response", "Huawei returned an unexpected product kind")
-          HuaweiProduct(info.productId, productKind, info.productName, info.productDesc,
-            info.price, info.microsPrice, info.currency, info.status,
+          val id = info?.productId
+          val price = info?.price
+          val currency = info?.currency
+          if (info == null || id.isNullOrBlank() || id !in ids || info.priceType != productKind.priceType ||
+            price.isNullOrBlank() || info.microsPrice < 0 || currency == null ||
+            !Regex("^[A-Z]{3}$").matches(currency)) {
+            throw HuaweiIapStackException("invalid_plugin_response", "Huawei returned incomplete product data")
+          }
+          // HMS exposes micros/status as primitives: zero is valid, not evidence of a missing field.
+          HuaweiProduct(id, productKind, info.productName?.takeIf { it.isNotBlank() } ?: id,
+            info.productDesc.orEmpty(), price, info.microsPrice, currency, info.status,
             info.originalLocalPrice, info.originalMicroPrice, info.subSpecialPrice,
             info.subSpecialPriceMicros, info.subPeriod, info.subFreeTrialPeriod)
         }
@@ -90,20 +112,21 @@ class HmsHuaweiIapPlatform internal constructor(
     withContext(Dispatchers.Main.immediate) {
       checkOpen()
       require(productId.isNotBlank() && developerPayload.isNotBlank())
-      checkResolutionIdle()
-      isAvailable()
-      val result = client.createPurchaseIntent(PurchaseIntentReq().apply {
-        this.productId = productId
-        priceType = productKind.priceType
-        this.developerPayload = developerPayload
-      }).awaitHms()
-      checkCode(result.returnCode)
-      val status = result.status ?: throw HuaweiIapStackException("missing_resolution", "Huawei checkout is unavailable")
-      val data = resolve(status) ?: throw hmsError(OrderStatusCode.ORDER_STATE_CANCEL)
-      val purchase = client.parsePurchaseResultInfoFromIntent(data)
-        ?: throw HuaweiIapStackException("invalid_plugin_response", "Huawei returned no purchase result")
-      checkCode(purchase.returnCode)
-      signedPurchase(purchase.inAppPurchaseData, purchase.inAppDataSignature)
+      withResolution { slot ->
+        if (!isAvailable()) throw hmsError(OrderStatusCode.ORDER_ACCOUNT_AREA_NOT_SUPPORTED)
+        val result = client.createPurchaseIntent(PurchaseIntentReq().apply {
+          this.productId = productId
+          priceType = productKind.priceType
+          this.developerPayload = developerPayload
+        }).awaitHms()
+        checkCode(result.returnCode)
+        val status = result.status ?: throw HuaweiIapStackException("missing_resolution", "Huawei checkout is unavailable")
+        val data = resolve(status, slot) ?: throw hmsError(OrderStatusCode.ORDER_STATE_CANCEL)
+        val purchase = client.parsePurchaseResultInfoFromIntent(data)
+          ?: throw HuaweiIapStackException("invalid_plugin_response", "Huawei returned no purchase result")
+        checkCode(purchase.returnCode)
+        signedPurchase(purchase.inAppPurchaseData, purchase.inAppDataSignature)
+      }
     }
 
   override suspend fun ownedPurchases(productKind: HuaweiProductKind, continuationToken: String?): HuaweiOwnedPurchasesPage =
@@ -124,8 +147,8 @@ class HmsHuaweiIapPlatform internal constructor(
 
   /** Return true when this adapter consumed the result; forward other request codes normally. */
   fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
-    if (requestCode != this.requestCode || resolution == null) return false
-    val waiting = resolution!!
+    if (requestCode != this.requestCode || resolution?.launched != true) return false
+    val waiting = resolution!!.result
     resolution = null
     // HMS encodes its authoritative returnCode in data, even when Android's resultCode is cancelled.
     if (data != null) waiting.complete(data)
@@ -134,24 +157,34 @@ class HmsHuaweiIapPlatform internal constructor(
     return true
   }
 
-  private suspend fun resolve(status: Status): Intent? {
+  private suspend fun resolve(status: Status, slot: Resolution): Intent? {
     checkOpen()
-    checkResolutionIdle()
     if (!status.hasResolution()) throw HuaweiIapStackException("missing_resolution", "Huawei resolution is unavailable")
     if (activity.isFinishing || activity.isDestroyed) throw HuaweiIapStackException("activity_unavailable", "A foreground Activity is required")
-    val waiting = CompletableDeferred<Intent?>()
-    resolution = waiting
+    slot.launched = true
     try {
       status.startResolutionForResult(activity, requestCode)
     } catch (_: Exception) {
-      resolution = null
+      slot.launched = false
       throw HuaweiIapStackException("resolution_failed", "Could not open Huawei UI")
     }
-    return waiting.await()
+    return slot.result.await()
   }
 
-  private fun checkResolutionIdle() {
-    if (resolution != null) throw HuaweiIapStackException("purchase_in_progress", "Huawei UI is already open")
+  // Called on Main: reserve before readiness/intent requests can suspend.
+  private suspend fun <T> withResolution(block: suspend (Resolution) -> T): T {
+    checkOpen()
+    if (resolution != null) throw HuaweiIapStackException("purchase_in_progress", "Huawei checkout or resolution is already in progress")
+    val slot = Resolution()
+    resolution = slot
+    try {
+      return block(slot)
+    } finally {
+      if (!slot.launched && resolution === slot) {
+        resolution = null
+        slot.result.cancel()
+      }
+    }
   }
 
   private fun checkOpen() {
@@ -160,24 +193,26 @@ class HmsHuaweiIapPlatform internal constructor(
 
   override fun close() {
     closed = true
-    resolution?.cancel()
+    resolution?.result?.cancel()
     resolution = null
   }
 }
 
-private suspend fun <T> Task<T>.awaitRaw(): T = withTimeout(30_000) {
+private suspend fun <T : Any> Task<T>.awaitRaw(): T = withTimeoutOrNull(30_000) {
   suspendCancellableCoroutine { continuation ->
     val direct = Executor { it.run() }
     addOnSuccessListener(direct) { if (continuation.isActive) continuation.resume(it) }
     addOnFailureListener(direct) { if (continuation.isActive) continuation.resumeWithException(it) }
     addOnCanceledListener(direct) { continuation.cancel() }
   }
-}
+} ?: throw HuaweiIapStackException("hms_timeout", "Huawei IAP request timed out")
 
-private suspend fun <T> Task<T>.awaitHms(): T = try {
+private suspend fun <T : Any> Task<T>.awaitHms(): T = try {
   awaitRaw()
 } catch (error: IapApiException) {
   throw hmsError(error.statusCode)
+} catch (error: HuaweiIapStackException) {
+  throw error
 } catch (error: kotlinx.coroutines.CancellationException) {
   throw error
 } catch (_: Exception) {

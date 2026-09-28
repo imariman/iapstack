@@ -49,7 +49,13 @@ class HmsHuaweiIapPlatformTest {
     `when`(client.isEnvReady).thenReturn(failure(IapApiException(Status(OrderStatusCode.ORDER_HWID_NOT_LOGIN))))
     assertEquals("hms_sign_in_required", assertFailsWith<HuaweiIapStackException> { platform.isAvailable() }.code)
     `when`(client.isEnvReady).thenReturn(success(IsEnvReadyResult().apply { returnCode = OrderStatusCode.ORDER_ACCOUNT_AREA_NOT_SUPPORTED }))
-    assertEquals("hms_environment_unavailable", assertFailsWith<HuaweiIapStackException> { platform.isAvailable() }.code)
+    assertFalse(platform.isAvailable())
+    `when`(client.isEnvReady).thenReturn(failure(IapApiException(Status(OrderStatusCode.ORDER_ACCOUNT_AREA_NOT_SUPPORTED))))
+    assertFalse(platform.isAvailable())
+    assertFalse(platform.resolveEnvironment())
+    assertEquals("hms_environment_unavailable", assertFailsWith<HuaweiIapStackException> {
+      platform.purchase("lifetime", kind, "opaque-customer")
+    }.code)
     verify(client, never()).createPurchaseIntent(any(PurchaseIntentReq::class.java))
   }
 
@@ -137,6 +143,74 @@ class HmsHuaweiIapPlatformTest {
     assertTrue(platform.onActivityResult(41380, Activity.RESULT_CANCELED, null))
     platform.close()
     assertEquals("platform_closed", assertFailsWith<HuaweiIapStackException> { platform.isAvailable() }.code)
+  }
+
+  @Test fun rejectsOverlappingPurchaseAndSignInBeforePreflightCompletes() = runTest {
+    checkout(PurchaseResultInfo().apply { inAppPurchaseData = payload; inAppDataSignature = "signature" })
+    val ready = TaskCompletionSource<IsEnvReadyResult>()
+    `when`(client.isEnvReady).thenReturn(ready.task)
+    val first = async(start = CoroutineStart.UNDISPATCHED) { platform.purchase("lifetime", kind, "opaque-customer") }
+    assertEquals("purchase_in_progress", assertFailsWith<HuaweiIapStackException> {
+      platform.purchase("lifetime", kind, "opaque-customer")
+    }.code)
+    assertEquals("purchase_in_progress", assertFailsWith<HuaweiIapStackException> { platform.resolveEnvironment() }.code)
+    // A callback before any UI launch cannot steal the reserved slot.
+    assertFalse(platform.onActivityResult(41380, Activity.RESULT_OK, Intent()))
+    ready.setResult(IsEnvReadyResult())
+    assertEquals(payload, first.await().purchaseData)
+    verify(client, times(1)).createPurchaseIntent(any(PurchaseIntentReq::class.java))
+  }
+
+  @Test fun signInReservationBlocksPurchaseAndReleasesAfterPreflightCancellation() = runTest {
+    val ready = TaskCompletionSource<IsEnvReadyResult>()
+    `when`(client.isEnvReady).thenReturn(ready.task)
+    val signIn = async(start = CoroutineStart.UNDISPATCHED) { platform.resolveEnvironment() }
+    assertEquals("purchase_in_progress", assertFailsWith<HuaweiIapStackException> {
+      platform.purchase("lifetime", kind, "opaque-customer")
+    }.code)
+    signIn.cancelAndJoin()
+    `when`(client.isEnvReady).thenReturn(success(IsEnvReadyResult()))
+    assertTrue(platform.resolveEnvironment())
+    ready.setResult(IsEnvReadyResult()) // Late completion from the cancelled operation is harmless.
+  }
+
+  @Test fun reportsOwnTimeoutButPreservesOuterTimeoutAndCancellation() = runTest {
+    val ready = TaskCompletionSource<IsEnvReadyResult>()
+    `when`(client.isEnvReady).thenReturn(ready.task)
+    assertEquals("hms_timeout", assertFailsWith<HuaweiIapStackException> { platform.isAvailable() }.code)
+    assertEquals("hms_timeout", assertFailsWith<HuaweiIapStackException> { platform.resolveEnvironment() }.code)
+    assertFailsWith<TimeoutCancellationException> { withTimeout(5) { platform.resolveEnvironment() } }
+    val waiting = async(start = CoroutineStart.UNDISPATCHED) { platform.resolveEnvironment() }
+    waiting.cancelAndJoin()
+    assertTrue(waiting.isCancelled)
+    `when`(client.isEnvReady).thenReturn(success(IsEnvReadyResult()))
+    assertTrue(platform.resolveEnvironment())
+    ready.setResult(IsEnvReadyResult())
+  }
+
+  @Test fun rejectsIncompleteProductsWithoutRejectingValidZeroPrices() = runTest {
+    val corruptions: List<(ProductInfo) -> Unit> = listOf(
+      { it.productId = null }, { it.productId = "" }, { it.productId = "other" },
+      { it.price = null }, { it.price = "" }, { it.microsPrice = -1 },
+      { it.currency = null }, { it.currency = "usd" }, { it.priceType = 2 },
+    )
+    for (corrupt in corruptions) {
+      val info = ProductInfo().apply { productId = "lifetime"; priceType = 1; price = "Free"; currency = "USD" }
+      corrupt(info)
+      val response = success(ProductInfoResult().apply { productInfoList = listOf(info) })
+      `when`(client.obtainProductInfo(any(ProductInfoReq::class.java))).thenReturn(response)
+      assertEquals("invalid_plugin_response", assertFailsWith<HuaweiIapStackException> {
+        platform.queryProducts(listOf("lifetime"), kind)
+      }.code)
+    }
+    val free = ProductInfo().apply { productId = "lifetime"; priceType = 1; price = "Free"; currency = "USD" }
+    val response = success(ProductInfoResult().apply { productInfoList = listOf(free) })
+    `when`(client.obtainProductInfo(any(ProductInfoReq::class.java))).thenReturn(response)
+    val product = platform.queryProducts(listOf("lifetime"), kind).single()
+    assertEquals(0L, product.priceMicros)
+    assertTrue(product.isPurchasable)
+    assertEquals("lifetime", product.title)
+    assertEquals("", product.description)
   }
 
   private fun checkout(result: PurchaseResultInfo) {

@@ -26,6 +26,7 @@ class MainActivity : Activity() {
   private lateinit var controls: LinearLayout
   private var play: GooglePlayIapStack? = null
   private var huawei: HuaweiIapStack? = null
+  private var purchaseCollector: Job? = null
   private var customer = ""
   private var productId = ""
 
@@ -59,9 +60,21 @@ class MainActivity : Activity() {
       val usePlay = provider.selectedItemPosition == 0
       val isSubscription = subscription.isChecked
       productId = id.text.toString().trim()
-      login.text.clear()
       connect.isEnabled = false
-      runAction {
+      runAction(onFailure = {
+        purchaseCollector?.cancel()
+        playPlatform?.close()
+        hmsPlatform?.close()
+        client?.close()
+        playPlatform = null
+        hmsPlatform = null
+        client = null
+        play = null
+        huawei = null
+        controls.removeAllViews()
+        products.removeAllViews()
+        connect.isEnabled = true
+      }) {
         require(productId.isNotEmpty())
         val session = mintSession(endpoint, hostToken)
         customer = session.get("external_customer_id").asString
@@ -71,7 +84,7 @@ class MainActivity : Activity() {
           val catalog = mapOf(productId to if (isSubscription) GooglePlayProductKind.SUBSCRIPTION else GooglePlayProductKind.NON_CONSUMABLE)
           playPlatform = BillingClientGooglePlayPlatform(applicationContext, catalog) { this@MainActivity }
           play = GooglePlayIapStack(client!!, catalog, playPlatform!!)
-          scope.launch {
+          purchaseCollector = scope.launch {
             play!!.purchaseUpdates.collect { purchase ->
               runAction {
                 when (purchase.status) {
@@ -90,7 +103,10 @@ class MainActivity : Activity() {
           hmsPlatform = HmsHuaweiIapPlatform(this@MainActivity)
           val catalog = mapOf(productId to if (isSubscription) HuaweiProductKind.SUBSCRIPTION else HuaweiProductKind.NON_CONSUMABLE)
           huawei = HuaweiIapStack(client!!, catalog, hmsPlatform!!)
-          button("Resolve Huawei sign-in") { hmsPlatform!!.resolveEnvironment(); status.text = "Huawei environment ready." }
+          button("Resolve Huawei sign-in") {
+            status.text = if (hmsPlatform!!.resolveEnvironment()) "Huawei environment ready."
+              else "Huawei IAP is not available in this account's region."
+          }
           button("Check Huawei sandbox") {
             status.text = if (huawei!!.sandboxStatus().isActive) "Huawei sandbox active." else "Huawei sandbox is not active."
           }
@@ -98,15 +114,19 @@ class MainActivity : Activity() {
         button("Query products") { queryProducts() }
         button("Restore purchases") { restore() }
         button("Read entitlements") { refreshEntitlements() }
-        // Recovers purchases completed while the app was stopped or checkout was interrupted.
-        restore()
-        queryProducts()
+        login.text.clear()
+        status.text = "Customer session ready."
+        // Store synchronization can be retried with the controls without replacing the session.
+        runAction {
+          restore()
+          queryProducts()
+        }
       }
     }
   }
 
   private fun button(label: String, action: suspend () -> Unit) {
-    controls.addView(Button(this).apply { text = label; setOnClickListener { runAction(action) } })
+    controls.addView(Button(this).apply { text = label; setOnClickListener { runAction(action = action) } })
   }
 
   private suspend fun queryProducts() {
@@ -119,7 +139,10 @@ class MainActivity : Activity() {
         })
       }
     } else {
-      check(huawei!!.isAvailable())
+      if (!huawei!!.isAvailable()) {
+        status.text = "Huawei IAP is not available in this account's region."
+        return
+      }
       for (product in huawei!!.queryProducts(setOf(productId)).products) {
         products.addView(Button(this).apply {
           text = "${product.title} — ${product.price}"
@@ -141,11 +164,12 @@ class MainActivity : Activity() {
       .ifEmpty { "No active entitlements." }
   }
 
-  private fun runAction(action: suspend () -> Unit) {
+  private fun runAction(onFailure: () -> Unit = {}, action: suspend () -> Unit) {
     scope.launch {
       try { action() }
       catch (cancelled: CancellationException) { throw cancelled }
       catch (error: Exception) {
+        onFailure()
         // Display only classified error codes, never exception bodies, tokens, or signed evidence.
         status.text = when (error) {
           is GooglePlayIapStackException -> error.code

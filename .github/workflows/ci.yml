@@ -251,7 +251,7 @@ jobs:
       - name: Build native Android libraries and example, and run tests
         working-directory: sdk/android
         run: |
-          ./gradlew --no-daemon :core:test :google-play:testDebugUnitTest :huawei:testDebugUnitTest :google-play:assembleRelease :huawei:assembleRelease :example:assembleDebug :google-play:lintDebug :huawei:lintDebug :example:lintDebug
+          ./gradlew --no-daemon :core:test :google-play:testDebugUnitTest :huawei:testDebugUnitTest :example:testDebugUnitTest :google-play:assembleRelease :huawei:assembleRelease :example:assembleDebug :google-play:lintDebug :huawei:lintDebug :example:lintDebug
           python3 -m unittest discover -s example/trusted-host -p 'test_*.py'
           git check-ignore -q example/store.properties
           git check-ignore -q example/agconnect-services.json

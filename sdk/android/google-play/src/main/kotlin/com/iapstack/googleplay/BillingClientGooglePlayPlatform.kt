@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Play Billing adapter. Keep one instance per active app session and collect [purchaseUpdates]
@@ -44,6 +44,7 @@ class BillingClientGooglePlayPlatform internal constructor(
   override val purchaseUpdates = updates.receiveAsFlow()
   private val pending = ConcurrentHashMap.newKeySet<CompletableDeferred<*>>()
   private val connection = Mutex()
+  private val selectionOperations = Mutex()
   private val selections = mutableMapOf<String, Pair<GooglePlayProduct, ProductDetails>>()
   @Volatile private var closed = false
   private val billing = factory(PurchasesUpdatedListener { result, purchases ->
@@ -63,57 +64,78 @@ class BillingClientGooglePlayPlatform internal constructor(
     try {
       connect()
       true
-    } catch (_: GooglePlayIapStackException) {
+    } catch (error: GooglePlayIapStackException) {
+      if (error.code == "billing_timeout") throw error
       false
     }
   }
 
   override suspend fun queryProducts(productIds: Set<String>): GooglePlayProductQuery =
     withContext(Dispatchers.Main.immediate) {
-      require(productIds.isNotEmpty() && catalog.keys.containsAll(productIds))
-      connect()
-      selections.entries.removeAll { it.value.first.id in productIds }
-      val found = mutableListOf<GooglePlayProduct>()
-      for ((kind, ids) in productIds.groupBy { catalog.getValue(it) }) {
-        // Play accepts at most 20 products per details request.
-        for (batch in ids.chunked(20)) {
-          val params = QueryProductDetailsParams.newBuilder().setProductList(batch.map {
-            QueryProductDetailsParams.Product.newBuilder().setProductId(it)
-              .setProductType(kind.billingType).build()
-          }).build()
-          val details = request<List<ProductDetails>> { reply ->
-            billing.queryProductDetailsAsync(params) { result, response ->
-              reply(runCatching { checkResult(result); response.productDetailsList })
+      selectionOperations.withLock {
+        require(productIds.isNotEmpty() && catalog.keys.containsAll(productIds))
+        connect()
+        selections.entries.removeAll { it.value.first.id in productIds }
+        val found = mutableListOf<GooglePlayProduct>()
+        val queried = mutableMapOf<String, Pair<GooglePlayProduct, ProductDetails>>()
+        for ((kind, ids) in productIds.groupBy { catalog.getValue(it) }) {
+          // Play accepts at most 20 products per details request.
+          for (batch in ids.chunked(20)) {
+            val params = QueryProductDetailsParams.newBuilder().setProductList(batch.map {
+              QueryProductDetailsParams.Product.newBuilder().setProductId(it)
+                .setProductType(kind.billingType).build()
+            }).build()
+            val details = request<List<ProductDetails>> { reply ->
+              billing.queryProductDetailsAsync(params) { result, response ->
+                reply(runCatching {
+                  checkResult(result)
+                  for (unfetched in response.unfetchedProductList) {
+                    if (unfetched.productId !in batch || unfetched.productType != kind.billingType) {
+                      throw invalidProduct("Google Play returned an unexpected unfetched product")
+                    }
+                    when (unfetched.statusCode) {
+                      UnfetchedProduct.StatusCode.PRODUCT_NOT_FOUND,
+                      UnfetchedProduct.StatusCode.NO_ELIGIBLE_OFFER -> Unit
+                      else -> throw GooglePlayIapStackException(
+                        "product_query_failed_${unfetched.statusCode}", "Google Play could not fetch product details")
+                    }
+                  }
+                  response.productDetailsList
+                })
+              }
             }
-          }
-          for (detail in details) {
-            if (detail.productId !in batch || detail.productType != kind.billingType) {
-              throw GooglePlayIapStackException("invalid_plugin_response", "Google Play returned an unexpected product")
-            }
-            for (product in detail.toModels(kind)) {
-              found.add(product)
-              selections[product.selectionKey] = product to detail
+            for (detail in details) {
+              if (detail.productId !in batch || detail.productType != kind.billingType) {
+                throw GooglePlayIapStackException("invalid_plugin_response", "Google Play returned an unexpected product")
+              }
+              for (product in detail.toModels(kind)) {
+                found.add(product)
+                queried[product.selectionKey] = product to detail
+              }
             }
           }
         }
+        selections.putAll(queried)
+        GooglePlayProductQuery(found, productIds - found.map { it.id }.toSet())
       }
-      GooglePlayProductQuery(found, productIds - found.map { it.id }.toSet())
     }
 
   override suspend fun launchPurchase(product: GooglePlayProduct, obfuscatedAccountId: String) =
     withContext(Dispatchers.Main.immediate) {
-      require(obfuscatedAccountId.isNotBlank() && obfuscatedAccountId == obfuscatedAccountId.trim() &&
-        obfuscatedAccountId.length <= 64)
-      connect()
-      val selected = selections[product.selectionKey]
-      if (selected?.first != product) throw GooglePlayIapStackException(
-        "product_not_queried", "Query and select the Google Play offer before purchase")
-      val foreground = activity()?.takeUnless { it.isFinishing || it.isDestroyed }
-        ?: throw GooglePlayIapStackException("activity_unavailable", "A foreground Activity is required")
-      val item = BillingFlowParams.ProductDetailsParams.newBuilder().setProductDetails(selected.second)
-      product.offerToken?.let(item::setOfferToken)
-      checkResult(billing.launchBillingFlow(foreground, BillingFlowParams.newBuilder()
-        .setObfuscatedAccountId(obfuscatedAccountId).setProductDetailsParamsList(listOf(item.build())).build()))
+      selectionOperations.withLock {
+        require(obfuscatedAccountId.isNotBlank() && obfuscatedAccountId == obfuscatedAccountId.trim() &&
+          obfuscatedAccountId.length <= 64)
+        connect()
+        val selected = selections[product.selectionKey]
+        if (selected?.first != product) throw GooglePlayIapStackException(
+          "product_not_queried", "Query and select the Google Play offer before purchase")
+        val foreground = activity()?.takeUnless { it.isFinishing || it.isDestroyed }
+          ?: throw GooglePlayIapStackException("activity_unavailable", "A foreground Activity is required")
+        val item = BillingFlowParams.ProductDetailsParams.newBuilder().setProductDetails(selected.second)
+        product.offerToken?.let(item::setOfferToken)
+        checkResult(billing.launchBillingFlow(foreground, BillingFlowParams.newBuilder()
+          .setObfuscatedAccountId(obfuscatedAccountId).setProductDetailsParamsList(listOf(item.build())).build()))
+      }
     }
 
   override suspend fun ownedPurchases(obfuscatedAccountId: String): List<GooglePlayPurchase> =
@@ -145,7 +167,7 @@ class BillingClientGooglePlayPlatform internal constructor(
     }
   }
 
-  private suspend fun <T> request(start: ((Result<T>) -> Unit) -> Unit): T = withTimeout(30_000) {
+  private suspend fun <T : Any> request(start: ((Result<T>) -> Unit) -> Unit): T = withTimeoutOrNull(30_000) {
     checkOpen()
     val result = CompletableDeferred<T>()
     pending.add(result)
@@ -157,7 +179,7 @@ class BillingClientGooglePlayPlatform internal constructor(
       pending.remove(result)
       result.cancel()
     }
-  }
+  } ?: throw GooglePlayIapStackException("billing_timeout", "Google Play Billing request timed out")
 
   private fun checkOpen() {
     if (closed) throw GooglePlayIapStackException("platform_closed", "Google Play adapter is closed")
@@ -201,25 +223,52 @@ private fun Purchase.toModel(restored: Boolean) = GooglePlayPurchase(
   obfuscatedAccountId = accountIdentifiers?.obfuscatedAccountId,
 )
 
+private fun invalidProduct(message: String) = GooglePlayIapStackException("invalid_plugin_response", message)
+
 private fun ProductDetails.toModels(kind: GooglePlayProductKind): List<GooglePlayProduct> {
+  val id = productId?.takeIf { it.isNotBlank() }
+    ?: throw invalidProduct("Google Play returned an incomplete product")
+  val productTitle = title?.takeIf { it.isNotBlank() } ?: id
+  val productDescription = description.orEmpty()
   if (kind == GooglePlayProductKind.NON_CONSUMABLE) {
     val offers = oneTimePurchaseOfferDetailsList ?: listOfNotNull(oneTimePurchaseOfferDetails)
     return offers.filter { it.rentalDetails == null }.map { offer ->
-      GooglePlayProduct(productId, kind, title, description, offer.formattedPrice,
-        offer.priceAmountMicros, offer.priceCurrencyCode, offerToken = offer.offerToken)
+      val price = offer.formattedPrice
+      val currency = offer.priceCurrencyCode
+      if (price.isNullOrBlank() || offer.priceAmountMicros < 0 ||
+        currency == null || !Regex("^[A-Z]{3}$").matches(currency)) {
+        throw invalidProduct("Google Play returned invalid one-time pricing")
+      }
+      GooglePlayProduct(id, kind, productTitle, productDescription, price,
+        offer.priceAmountMicros, currency, offerToken = offer.offerToken)
     }
   }
   return subscriptionOfferDetails.orEmpty().map { offer ->
-    val phases = offer.pricingPhases.pricingPhaseList.map { phase ->
-      GooglePlayPricingPhase(phase.billingCycleCount, phase.billingPeriod, phase.formattedPrice,
-        phase.priceAmountMicros, phase.priceCurrencyCode, when (phase.recurrenceMode) {
+    val nativePhases = offer.pricingPhases?.pricingPhaseList
+    val token = offer.offerToken
+    val basePlan = offer.basePlanId
+    if (nativePhases.isNullOrEmpty() || token.isNullOrBlank() || basePlan.isNullOrBlank()) {
+      throw invalidProduct("Google Play returned an incomplete subscription offer")
+    }
+    val phases = nativePhases.map { phase ->
+      val period = phase?.billingPeriod
+      val price = phase?.formattedPrice
+      val currency = phase?.priceCurrencyCode
+      if (phase == null || phase.billingCycleCount < 0 || period.isNullOrBlank() ||
+        price.isNullOrBlank() || phase.priceAmountMicros < 0 ||
+        currency == null || !Regex("^[A-Z]{3}$").matches(currency)) {
+        throw invalidProduct("Google Play returned an invalid subscription pricing phase")
+      }
+      GooglePlayPricingPhase(phase.billingCycleCount, period, price,
+        phase.priceAmountMicros, currency, when (phase.recurrenceMode) {
           ProductDetails.RecurrenceMode.FINITE_RECURRING -> GooglePlayPricingRecurrence.FINITE
           ProductDetails.RecurrenceMode.INFINITE_RECURRING -> GooglePlayPricingRecurrence.INFINITE
-          else -> GooglePlayPricingRecurrence.NON_RECURRING
+          ProductDetails.RecurrenceMode.NON_RECURRING -> GooglePlayPricingRecurrence.NON_RECURRING
+          else -> throw invalidProduct("Google Play returned an unknown pricing recurrence")
         })
     }
     val price = phases.first()
-    GooglePlayProduct(productId, kind, title, description, price.formattedPrice, price.priceMicros,
-      price.currencyCode, offer.offerToken, offer.basePlanId, offer.offerId, offer.offerTags, phases)
+    GooglePlayProduct(id, kind, productTitle, productDescription, price.formattedPrice, price.priceMicros,
+      price.currencyCode, token, basePlan, offer.offerId, offer.offerTags.orEmpty(), phases)
   }
 }

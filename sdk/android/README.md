@@ -72,8 +72,12 @@ Query immediately before selection/checkout; do not persist product details.
 Own one adapter per active session. Supply the current foreground Activity;
 call `platform.close()` when the session ends and `client.close()` when done.
 A billing disconnect fails in-flight work with `billing_service_disconnected`;
-the next operation reconnects. SDK request waits are bounded to 30 seconds and
-support coroutine cancellation. Re-query/restore when the app returns to the foreground
+the next operation reconnects. Catalog queries and checkout selection are serialized;
+failed queries never publish partial selections. Unfetched products with `PRODUCT_NOT_FOUND`
+or `NO_ELIGIBLE_OFFER` are unavailable for this query, while other statuses throw
+`product_query_failed_<status>` so callers can report or retry the failure.
+SDK request waits are bounded to 30 seconds and report `billing_timeout`;
+caller cancellation (including a caller's shorter timeout) remains cancellation. Re-query/restore when the app returns to the foreground
 to recover completed pending payments or interrupted verification.
 
 **Play purchases are never acknowledged or consumed on device.** IAPStack
@@ -88,7 +92,7 @@ val huawei = HuaweiIapStack(client, mapOf(
   "premium_monthly" to HuaweiProductKind.SUBSCRIPTION,
 ), platform)
 
-huawei.isAvailable() // Throws a classified error for environment/sign-in failures.
+huawei.isAvailable() // False for an unsupported account region; sign-in/errors throw.
 val sandbox = huawei.sandboxStatus()
 val products = huawei.queryProducts(setOf("premium_monthly"))
 huawei.purchaseAndVerify(session.externalCustomerId, products.products.first())
@@ -109,7 +113,9 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
 
 On `hms_sign_in_required`, offer a user action calling
 `platform.resolveEnvironment()` to launch HMS sign-in/resolution and recheck readiness.
-Other errors include `hms_environment_unavailable`, `purchase_cancelled`
+Availability and environment resolution return false for an unsupported account region.
+Checkout in that region throws `hms_environment_unavailable`.
+Other errors include `purchase_cancelled`
 (`userCancelled = true`), and `hms_error_<provider-code>`.
 A sandbox check reports account and APK eligibility independently.
 
@@ -117,7 +123,10 @@ Scope this adapter to its Activity and call `close()` on destruction. Cancel
 caller coroutines with the Activity lifecycle. A cancelled coroutine cannot
 dismiss HMS UI; another checkout remains blocked until the old result arrives.
 After recreation or process death, create a new adapter and restore purchases.
-SDK task waits are bounded to 30 seconds; user interaction is not timed out.
+SDK task waits are bounded to 30 seconds and report `hms_timeout`; caller cancellation
+is preserved. User interaction is not timed out. Checkout/sign-in reserve the UI slot
+before any readiness or intent request suspends. A failure or cancellation before UI
+opens releases the slot; after UI opens, only its Activity result or `close()` releases it.
 
 The customer ID becomes `developerPayload`. The adapter forwards the exact
 signed `InAppPurchaseData` string and detached signature, including original
@@ -130,7 +139,7 @@ filters customer/catalog mismatches, and submits batches to the server.
 
 ```sh
 cd sdk/android
-./gradlew :core:test :google-play:testDebugUnitTest :huawei:testDebugUnitTest \
+./gradlew :core:test :google-play:testDebugUnitTest :huawei:testDebugUnitTest :example:testDebugUnitTest \
   :google-play:assembleRelease :huawei:assembleRelease :example:assembleDebug \
   :google-play:lintDebug :huawei:lintDebug :example:lintDebug
 python3 -m unittest discover -s example/trusted-host -p 'test_*.py'
