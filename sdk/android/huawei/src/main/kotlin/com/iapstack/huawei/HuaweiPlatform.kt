@@ -36,6 +36,7 @@ data class HuaweiOwnedPurchasesPage(
  * Testable boundary around a Huawei IAP implementation.
  */
 interface HuaweiIapPlatform {
+  /** False for an unsupported account region; sign-in and operational failures throw. */
   suspend fun isAvailable(): Boolean
 
   suspend fun sandboxStatus(): HuaweiSandboxStatus

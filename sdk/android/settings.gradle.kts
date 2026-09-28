@@ -15,3 +15,4 @@ rootProject.name = "iapstack-android"
 include(":core")
 include(":google-play")
 include(":huawei")
+include(":example")
