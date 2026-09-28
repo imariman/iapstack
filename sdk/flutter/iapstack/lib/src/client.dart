@@ -10,6 +10,9 @@ import 'package:iapstack/src/models.dart';
 
 const String _sdkVersion = '0.1.0-dev.1';
 
+/// Maximum purchases accepted by one `purchases:restore` request.
+const int maxRestoreBatchSize = 100;
+
 /// Application-scoped client for the IAPStack v1 API.
 final class IapStackClient {
   /// Creates a client, optionally using an injected HTTP transport for testing.
@@ -51,7 +54,7 @@ final class IapStackClient {
     List<PurchaseSubmission> purchases, {
     String? requestId,
   }) async {
-    if (purchases.isEmpty || purchases.length > 100) {
+    if (purchases.isEmpty || purchases.length > maxRestoreBatchSize) {
       throw ArgumentError.value(purchases.length, 'purchases',
           'must contain between 1 and 100 items');
     }
@@ -74,6 +77,29 @@ final class IapStackClient {
       requestId: requestId,
     );
     return _decode(() => RestoreResult.fromJson(json));
+  }
+
+  /// Verifies any number of purchases in request order, in bounded batches.
+  ///
+  /// Each batch after the first gets `requestId` with a `-2`, `-3`, ... suffix so
+  /// operators can correlate the calls. An empty list returns an empty result
+  /// without contacting IAPStack.
+  Future<RestoreResult> restorePurchasesInBatches(
+    List<PurchaseSubmission> purchases, {
+    String? requestId,
+  }) async {
+    final results = <VerificationResult>[];
+    for (var start = 0;
+        start < purchases.length;
+        start += maxRestoreBatchSize) {
+      final end = min(start + maxRestoreBatchSize, purchases.length);
+      final batch = await restorePurchases(
+        purchases.sublist(start, end),
+        requestId: _batchRequestId(requestId, start ~/ maxRestoreBatchSize),
+      );
+      results.addAll(batch.results);
+    }
+    return RestoreResult(results: results);
   }
 
   /// Loads the current projection snapshot for one external customer.
@@ -195,11 +221,12 @@ final class IapStackClient {
       request.bodyBytes = utf8.encode(jsonEncode(body));
     }
     final response = await _httpClient.send(request);
-    final bytes = await _collect(response.stream);
+    // Decoding waits until the status is known: a malformed 2xx body is a
+    // protocol error, while a malformed error body must not hide a 429 or 5xx.
     return _RawResponse(
       statusCode: response.statusCode,
       headers: response.headers,
-      body: utf8.decode(bytes),
+      body: await _collect(response.stream),
     );
   }
 
@@ -246,7 +273,8 @@ final class IapStackClient {
         }
       }
     } on IapStackProtocolException {
-      // Preserve the safe generic error when a proxy returns non-JSON content.
+      // Preserve the safe generic error, and the status-based retry decision,
+      // when a proxy returns non-JSON or non-UTF-8 content.
     }
     return IapStackApiException(
       statusCode: response.statusCode,
@@ -257,9 +285,16 @@ final class IapStackClient {
     );
   }
 
-  Map<String, Object?> _decodeObject(String body) {
+  Map<String, Object?> _decodeObject(Uint8List body) {
+    final String text;
     try {
-      final value = jsonDecode(body);
+      text = utf8.decode(body);
+    } on FormatException catch (error) {
+      throw IapStackProtocolException('IAPStack response was not valid UTF-8',
+          cause: error);
+    }
+    try {
+      final value = jsonDecode(text);
       if (value is! Map<String, Object?>) {
         throw const FormatException('root JSON value must be an object');
       }
@@ -297,11 +332,20 @@ final class IapStackClient {
   }
 }
 
+/// _batchRequestId creates stable suffixes for bounded restore API calls.
+String? _batchRequestId(String? requestId, int batchIndex) {
+  if (requestId == null || requestId.trim().isEmpty) {
+    return null;
+  }
+  final normalized = requestId.trim();
+  return batchIndex == 0 ? normalized : '$normalized-${batchIndex + 1}';
+}
+
 final class _RawResponse {
   const _RawResponse(
       {required this.statusCode, required this.headers, required this.body});
 
   final int statusCode;
   final Map<String, String> headers;
-  final String body;
+  final Uint8List body;
 }

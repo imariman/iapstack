@@ -1,5 +1,3 @@
-import 'dart:collection';
-
 import 'package:iapstack/iapstack.dart';
 import 'package:iapstack_huawei/src/errors.dart';
 import 'package:iapstack_huawei/src/evidence.dart';
@@ -50,6 +48,13 @@ final class HuaweiIapStack {
   final int maxRestorePagesPerKind;
 
   /// Checks whether Huawei IAP is available for the current account region.
+  ///
+  /// Returns false when IAP is not offered in the account's region (`60054`).
+  /// When no HUAWEI ID is signed in, `huawei_iap` first opens the HMS sign-in
+  /// screen and checks again after a successful sign-in. Throws
+  /// [HuaweiIapStackException] when that sign-in is cancelled or fails (for
+  /// example `ACTIVITY_RESULT_ERROR`, `ERR_CAN_NOT_LOG_IN` or `NO_RESOLUTION`)
+  /// and for every other environment failure.
   Future<bool> isAvailable() => _platform.isAvailable();
 
   /// Checks whether the current Huawei account and APK can use sandbox IAP.
@@ -101,7 +106,12 @@ final class HuaweiIapStack {
         found[product.id] = product;
       }
     }
-    _queriedProducts.addAll(found);
+    // Only a complete response replaces cached choices: re-queried IDs that it
+    // omits can no longer pass the product_not_queried guard, and a failed
+    // query leaves earlier choices untouched.
+    _queriedProducts
+      ..removeWhere((id, _) => normalized.contains(id))
+      ..addAll(found);
     return HuaweiProductQuery(
       products: normalized
           .where(found.containsKey)
@@ -212,20 +222,10 @@ final class HuaweiIapStack {
         }
       } while (continuationToken != null);
     }
-    if (submissions.isEmpty) {
-      return RestoreResult(results: const <VerificationResult>[]);
-    }
-    final results = <VerificationResult>[];
-    for (var start = 0; start < submissions.length; start += 100) {
-      final end = (start + 100).clamp(0, submissions.length);
-      final batch = await _client.restorePurchases(
-        submissions.sublist(start, end),
-        requestId: _batchRequestId(requestId, start ~/ 100),
-      );
-      results.addAll(batch.results);
-    }
-    return RestoreResult(
-        results: UnmodifiableListView<VerificationResult>(results));
+    return _client.restorePurchasesInBatches(
+      submissions,
+      requestId: requestId,
+    );
   }
 
   /// Loads the current IAPStack projection without contacting Huawei.
@@ -257,12 +257,4 @@ final class HuaweiIapStack {
       return null;
     }
   }
-}
-
-String? _batchRequestId(String? requestId, int batchIndex) {
-  if (requestId == null || requestId.trim().isEmpty) {
-    return null;
-  }
-  final normalized = requestId.trim();
-  return batchIndex == 0 ? normalized : '$normalized-${batchIndex + 1}';
 }
