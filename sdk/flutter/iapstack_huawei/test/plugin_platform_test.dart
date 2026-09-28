@@ -33,17 +33,39 @@ void main() {
     expect(await const HuaweiPluginPlatform().isAvailable(), isFalse);
   });
 
-  test('keeps actionable environment failures as exceptions', () async {
+  test('checks again after the plugin signs in the HUAWEI ID', () async {
+    final calls = <String>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-      throw PlatformException(code: '60050', message: 'not signed in');
+      calls.add(call.method);
+      return calls.length == 1
+          ? 'LOGGED_IN'
+          : jsonEncode(<String, Object?>{'returnCode': '0'});
     });
 
-    await expectLater(
-      const HuaweiPluginPlatform().isAvailable(),
-      throwsA(isA<HuaweiIapStackException>()
-          .having((error) => error.code, 'code', '60050')),
-    );
+    expect(await const HuaweiPluginPlatform().isAvailable(), isTrue);
+    expect(calls, <String>['isEnvReady', 'isEnvReady']);
+  });
+
+  test('keeps sign-in and other environment failures as exceptions', () async {
+    for (final code in <String>[
+      'ACTIVITY_RESULT_ERROR',
+      'ERR_CAN_NOT_LOG_IN',
+      'NO_RESOLUTION',
+      'UNKNOWN_REQUEST_CODE',
+      '60005',
+    ]) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        throw PlatformException(code: code, message: 'environment failure');
+      });
+
+      await expectLater(
+        const HuaweiPluginPlatform().isAvailable(),
+        throwsA(isA<HuaweiIapStackException>()
+            .having((error) => error.code, 'code', code)),
+      );
+    }
   });
 
   test('maps localized Huawei products without losing price precision',

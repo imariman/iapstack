@@ -49,9 +49,12 @@ final class HuaweiIapStack {
 
   /// Checks whether Huawei IAP is available for the current account region.
   ///
-  /// Returns false when IAP is not offered in the account's region, and throws
-  /// [HuaweiIapStackException] for actionable failures such as a signed-out
-  /// HMS account.
+  /// Returns false when IAP is not offered in the account's region (`60054`).
+  /// When no HUAWEI ID is signed in, `huawei_iap` first opens the HMS sign-in
+  /// screen and checks again after a successful sign-in. Throws
+  /// [HuaweiIapStackException] when that sign-in is cancelled or fails (for
+  /// example `ACTIVITY_RESULT_ERROR`, `ERR_CAN_NOT_LOG_IN` or `NO_RESOLUTION`)
+  /// and for every other environment failure.
   Future<bool> isAvailable() => _platform.isAvailable();
 
   /// Checks whether the current Huawei account and APK can use sandbox IAP.
