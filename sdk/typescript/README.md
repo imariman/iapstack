@@ -62,7 +62,7 @@ async function mintSession(externalCustomerId: string): Promise<string> {
   const session = await client.createCustomerSession(externalCustomerId);
   const snapshot = await client.getEntitlements(session);
   const hasPremium = snapshot.entitlements.some(
-    (item) => item.key === 'premium' && item.grantsAccess(),
+    (item) => item.key === 'premium' && item.grantsAccess,
   );
   void hasPremium;
 

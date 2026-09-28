@@ -1,3 +1,10 @@
+/**
+ * Upper bound for a server-requested Retry-After cooldown, so one response
+ * cannot stall a caller indefinitely. Every IAPStack SDK uses 30 seconds.
+ */
+export const MAX_RETRY_AFTER_MS = 30_000;
+
+/** Bounded full-jitter exponential backoff policy. */
 export class IapStackRetryPolicy {
   readonly maxAttempts: number;
   readonly baseDelayMs: number;
@@ -10,7 +17,23 @@ export class IapStackRetryPolicy {
     this.validate();
   }
 
-  delayAfter(attempt: number, randomValue: number): number {
+  /**
+   * Full-jitter delay in milliseconds after a failed one-based attempt.
+   *
+   * When the failed response carried a Retry-After cooldown, pass it as
+   * `retryAfterMs`: the result is then the larger of the jitter delay and the
+   * cooldown, capped at MAX_RETRY_AFTER_MS, so a retry never lands inside a
+   * cooldown the server asked for.
+   */
+  delayAfter(attempt: number, randomValue: number, retryAfterMs?: number): number {
+    const jitter = this.jitterDelay(attempt, randomValue);
+    if (retryAfterMs === undefined || !(retryAfterMs > 0)) {
+      return jitter;
+    }
+    return Math.min(Math.max(jitter, retryAfterMs), MAX_RETRY_AFTER_MS);
+  }
+
+  private jitterDelay(attempt: number, randomValue: number): number {
     if (randomValue < 0 || randomValue > 1 || Number.isNaN(randomValue)) {
       throw new RangeError('randomValue must be between 0 and 1');
     }

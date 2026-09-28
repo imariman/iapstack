@@ -177,6 +177,84 @@ void main() {
       }
     });
 
+    test('exposes Retry-After as delay-seconds or an HTTP-date', () async {
+      final farFuture = DateTime.utc(2100, 1, 1, 12, 0, 0);
+      for (final (header, matcher) in <(String?, Matcher)>[
+        (null, isNull),
+        ('17', equals(const Duration(seconds: 17))),
+        (' 5 ', equals(const Duration(seconds: 5))),
+        (_httpDate(farFuture), greaterThan(const Duration(days: 365))),
+        (_httpDate(DateTime.utc(2000, 1, 1)), equals(Duration.zero)),
+        ('-3', isNull),
+        ('1.5', isNull),
+        ('March 1, 2026', isNull),
+        ('soon', isNull),
+      ]) {
+        final client = IapStackClient(
+          _config(),
+          httpClient: MockClient((request) async {
+            return http.Response(
+              jsonEncode(<String, Object?>{
+                'error': <String, Object?>{
+                  'code': 'rate_limited',
+                  'message': 'slow down',
+                },
+              }),
+              429,
+              headers: <String, String>{
+                if (header != null) 'retry-after': header,
+              },
+            );
+          }),
+        );
+
+        await expectLater(
+          client.getEntitlements('customer-external'),
+          throwsA(
+            isA<IapStackApiException>()
+                .having((error) => error.retryable, 'retryable', isTrue)
+                .having((error) => error.retryAfter, 'retryAfter', matcher),
+          ),
+          reason: 'Retry-After $header',
+        );
+      }
+    });
+
+    test('an elapsed Retry-After does not block the retry', () async {
+      var attempts = 0;
+      final client = IapStackClient(
+        _config(
+          retryPolicy: const IapStackRetryPolicy(
+            maxAttempts: 2,
+            baseDelay: Duration.zero,
+            maxDelay: Duration.zero,
+          ),
+        ),
+        httpClient: MockClient((request) async {
+          attempts++;
+          if (attempts == 1) {
+            return http.Response(
+              '{"error":{"code":"provider_unavailable","message":"x"}}',
+              503,
+              headers: <String, String>{'retry-after': '0'},
+            );
+          }
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'customer_id': 'customer-internal',
+              'entitlements': _verificationJson['entitlements'],
+            }),
+            200,
+          );
+        }),
+      );
+
+      final snapshot = await client.getEntitlements('customer-external');
+
+      expect(attempts, 2);
+      expect(snapshot.customerId, 'customer-internal');
+    });
+
     test('rejects entitlement versions below one', () async {
       final client = IapStackClient(
         _config(),
@@ -443,6 +521,35 @@ void main() {
           const Duration(milliseconds: 250));
       expect(() => policy.delayAfter(1, randomValue: 1.1), throwsArgumentError);
     });
+
+    test('raises the jitter delay to Retry-After and caps it', () {
+      const policy = IapStackRetryPolicy(
+        baseDelay: Duration(milliseconds: 100),
+        maxDelay: Duration(milliseconds: 250),
+      );
+
+      expect(policy.delayAfter(1, randomValue: 0.5, retryAfter: null),
+          const Duration(milliseconds: 50));
+      expect(policy.delayAfter(1, randomValue: 0.5, retryAfter: Duration.zero),
+          const Duration(milliseconds: 50));
+      expect(
+          policy.delayAfter(1,
+              randomValue: 1, retryAfter: const Duration(milliseconds: 20)),
+          const Duration(milliseconds: 100));
+      expect(
+          policy.delayAfter(1,
+              randomValue: 0, retryAfter: const Duration(seconds: 4)),
+          const Duration(seconds: 4));
+      expect(
+          policy.delayAfter(1,
+              randomValue: 1, retryAfter: const Duration(hours: 1)),
+          IapStackRetryPolicy.maxRetryAfter);
+      expect(IapStackRetryPolicy.maxRetryAfter, const Duration(seconds: 30));
+      expect(
+          () => policy.delayAfter(1,
+              randomValue: 1.1, retryAfter: const Duration(seconds: 4)),
+          throwsArgumentError);
+    });
   });
 
   group('IapStackConfig', () {
@@ -532,4 +639,35 @@ final class _AbortTrackingClient extends http.BaseClient {
     }
     throw http.RequestAbortedException(request.url);
   }
+}
+
+const List<String> _weekdays = <String>[
+  'Mon',
+  'Tue',
+  'Wed',
+  'Thu',
+  'Fri',
+  'Sat',
+  'Sun',
+];
+const List<String> _monthNames = <String>[
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+String _httpDate(DateTime utc) {
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${_weekdays[utc.weekday - 1]}, ${two(utc.day)} '
+      '${_monthNames[utc.month - 1]} ${utc.year} '
+      '${two(utc.hour)}:${two(utc.minute)}:${two(utc.second)} GMT';
 }

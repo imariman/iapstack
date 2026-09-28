@@ -14,6 +14,9 @@ const (
 	defaultMaxDelay = 2 * time.Second
 	// maxBackoffExponent prevents duration overflow in the retry multiplier.
 	maxBackoffExponent = 20
+	// MaxRetryAfter bounds a server-requested Retry-After cooldown so one
+	// response cannot stall a caller indefinitely. Every IAPStack SDK uses it.
+	MaxRetryAfter = 30 * time.Second
 )
 
 // RetryPolicy is a bounded full-jitter exponential backoff policy.
@@ -76,6 +79,29 @@ func (policy RetryPolicy) DelayAfter(attempt int, randomValue float64) (time.Dur
 		delay = policy.MaxDelay
 	}
 	return time.Duration(float64(delay) * randomValue), nil
+}
+
+// DelayAfterResponse returns the delay after a failed one-based attempt whose
+// response may have carried a Retry-After cooldown.
+//
+// A zero retryAfter behaves like DelayAfter. Otherwise the result is the larger
+// of the full-jitter delay and retryAfter, capped at MaxRetryAfter, so a retry
+// never lands inside a cooldown the server asked for.
+func (policy RetryPolicy) DelayAfterResponse(attempt int, randomValue float64, retryAfter time.Duration) (time.Duration, error) {
+	delay, err := policy.DelayAfter(attempt, randomValue)
+	if err != nil {
+		return 0, err
+	}
+	if retryAfter <= 0 {
+		return delay, nil
+	}
+	if retryAfter > delay {
+		delay = retryAfter
+	}
+	if delay > MaxRetryAfter {
+		delay = MaxRetryAfter
+	}
+	return delay, nil
 }
 
 // Validate reports whether retry bounds are safe.

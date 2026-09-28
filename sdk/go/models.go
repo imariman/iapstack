@@ -82,6 +82,11 @@ func (entitlement Entitlement) GrantsAccess() bool {
 }
 
 // GrantsAccessAt reports whether the projection permits access at the supplied instant.
+//
+// Only Access and EffectiveEndsAt take part. EffectiveStartsAt is informational:
+// the server only emits an allowed projection once its period has started, and
+// checking it here would let a device clock that runs behind the server deny
+// access right after a purchase. Every IAPStack SDK applies this rule.
 func (entitlement Entitlement) GrantsAccessAt(instant time.Time) bool {
 	if entitlement.Access != accessAllowed {
 		return false

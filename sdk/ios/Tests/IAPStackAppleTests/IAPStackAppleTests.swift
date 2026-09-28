@@ -434,13 +434,97 @@ final class IAPStackAppleTests: XCTestCase {
     do {
       _ = try await client.getEntitlements("customer-id")
       XCTFail("expected api error")
-    } catch let IAPStackSDKError.apiError(statusCode, code, _, requestId, retryable) {
+    } catch let IAPStackSDKError.apiError(statusCode, code, _, requestId, retryable, _) {
       XCTAssertEqual(statusCode, 503)
       XCTAssertEqual(code, "http_error")
       XCTAssertEqual(requestId, "edge-1")
       XCTAssertTrue(retryable)
     }
     XCTAssertEqual(attempts.value, 2)
+  }
+
+  func testApiErrorExposesRetryAfterAsDelaySecondsOrHttpDate() async throws {
+    let now = Date(timeIntervalSince1970: 1_790_000_000)
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+    let cases: [(String?, TimeInterval?)] = [
+      (nil, nil),
+      ("17", 17),
+      (" 5 ", 5),
+      (formatter.string(from: now.addingTimeInterval(90)), 90),
+      (formatter.string(from: now.addingTimeInterval(-60)), 0),
+      ("-3", nil),
+      ("1.5", nil),
+      ("March 1, 2026", nil),
+      ("soon", nil),
+    ]
+    for (header, expected) in cases {
+      URLStubProtocol.reset()
+      URLStubProtocol.enqueue { request in
+        var headers = ["Content-Type": "application/json"]
+        if let header {
+          headers["Retry-After"] = header
+        }
+        let response = HTTPURLResponse(
+          url: request.url!,
+          statusCode: 429,
+          httpVersion: nil,
+          headerFields: headers,
+        )!
+        return (response, Data(#"{"error":{"code":"rate_limited","message":"slow down"}}"#.utf8))
+      }
+      let config = IAPStackConfig(
+        baseUri: URL(string: "https://example.local")!,
+        applicationId: "application-1",
+        customerToken: "customer-token",
+        retryPolicy: .init(maxAttempts: 1),
+      )
+      let client = try IAPStackClient(config: config, session: makeSession())
+      client.clock = { now }
+      do {
+        _ = try await client.getEntitlements("customer-id")
+        XCTFail("expected api error for Retry-After \(header ?? "nil")")
+      } catch let IAPStackSDKError.apiError(_, _, _, _, retryable, retryAfter) {
+        XCTAssertTrue(retryable)
+        if let expected {
+          XCTAssertEqual(retryAfter ?? -1, expected, accuracy: 0.001, "Retry-After \(header ?? "nil")")
+        } else {
+          XCTAssertNil(retryAfter, "Retry-After \(header ?? "nil")")
+        }
+      }
+    }
+  }
+
+  func testElapsedRetryAfterDoesNotBlockTheRetry() async throws {
+    URLStubProtocol.reset()
+    let attempts = Counter()
+    URLStubProtocol.enqueue { request in
+      attempts.increment()
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 503,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json", "Retry-After": "0"],
+      )!
+      return (response, Data(#"{"error":{"code":"provider_unavailable","message":"x"}}"#.utf8))
+    }
+    enqueueEntitlementsResponse(attempts: attempts)
+    let client = try IAPStackClient(config: retryingConfig(), session: makeSession())
+    _ = try await client.getEntitlements("customer-id")
+    XCTAssertEqual(attempts.value, 2)
+  }
+
+  func testRetryPolicyRaisesJitterToRetryAfterAndCapsIt() {
+    let policy = IAPStackRetryPolicy(baseDelay: 0.1, maxDelay: 0.25)
+    XCTAssertEqual(policy.delayAfter(attempt: 1, randomValue: 0.5), 0.05, accuracy: 0.0001)
+    XCTAssertEqual(policy.delayAfter(attempt: 1, randomValue: 0.5, retryAfter: nil), 0.05, accuracy: 0.0001)
+    XCTAssertEqual(policy.delayAfter(attempt: 1, randomValue: 0.5, retryAfter: 0), 0.05, accuracy: 0.0001)
+    XCTAssertEqual(policy.delayAfter(attempt: 1, randomValue: 1, retryAfter: 0.02), 0.1, accuracy: 0.0001)
+    XCTAssertEqual(policy.delayAfter(attempt: 1, randomValue: 0, retryAfter: 4), 4, accuracy: 0.0001)
+    XCTAssertEqual(policy.delayAfter(attempt: 1, randomValue: 1, retryAfter: 3600), IAPStackRetryPolicy.maxRetryAfter)
+    XCTAssertEqual(IAPStackRetryPolicy.maxRetryAfter, 30)
   }
 
   func testCloseDoesNotInvalidateInjectedSession() async throws {

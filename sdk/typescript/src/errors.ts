@@ -4,6 +4,12 @@ export class APIError extends Error {
   readonly code: string;
   readonly requestId: string;
   readonly retryable: boolean;
+  /**
+   * Cooldown in milliseconds the server requested through Retry-After, or
+   * undefined when the header was absent or malformed. The client waits at
+   * least this long, capped at MAX_RETRY_AFTER_MS, before a retry.
+   */
+  readonly retryAfterMs: number | undefined;
 
   constructor(init: {
     statusCode: number;
@@ -11,6 +17,7 @@ export class APIError extends Error {
     message: string;
     requestId?: string;
     retryable: boolean;
+    retryAfterMs?: number;
   }) {
     super(
       init.requestId
@@ -22,6 +29,7 @@ export class APIError extends Error {
     this.code = init.code;
     this.requestId = init.requestId ?? '';
     this.retryable = init.retryable;
+    this.retryAfterMs = init.retryAfterMs;
   }
 }
 

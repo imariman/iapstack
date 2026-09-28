@@ -13,7 +13,7 @@ export {
   type CustomerSession,
   type EntitlementSnapshot,
 } from './models.js';
-export { defaultRetryPolicy, RetryPolicy } from './retry.js';
+export { defaultRetryPolicy, MAX_RETRY_AFTER_MS, RetryPolicy } from './retry.js';
 export {
   MemoryEventStore,
   WebhookVerifier,

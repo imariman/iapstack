@@ -36,6 +36,8 @@ public final class IAPStackClient {
   private let config: IAPStackConfig
   private let session: URLSession
   private let ownsSession: Bool
+  /// Wall clock used to resolve HTTP-date `Retry-After` values; only tests replace it.
+  var clock: () -> Date = Date.init
   private let lifecycleLock = NSLock()
   private var closed = false
 
@@ -139,9 +141,14 @@ public final class IAPStackClient {
         )
       } catch {
         if shouldRetry(error: error, attempt: attempt) {
+          var retryAfter: TimeInterval?
+          if case let IAPStackSDKError.apiError(_, _, _, _, _, cooldown) = error {
+            retryAfter = cooldown
+          }
           let delay = config.retryPolicy.delayAfter(
             attempt: attempt,
             randomValue: Double.random(in: 0 ... 1),
+            retryAfter: retryAfter,
           )
           if delay > 0 {
             try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -318,16 +325,21 @@ public final class IAPStackClient {
       }
       requestId = errorObject["request_id"] as? String
     }
-    let headerRequestId = response.allHeaderFields.first(
-      where: { ($0.key as? String)?.lowercased() == "x-request-id" },
-    )?.value as? String
+    let headerRequestId = headerValue("x-request-id", in: response)
     return IAPStackSDKError.apiError(
       statusCode: statusCode,
       code: code,
       message: message,
       requestId: requestId ?? headerRequestId,
       retryable: statusCode == 429 || statusCode >= 500,
+      retryAfter: parseRetryAfter(headerValue("retry-after", in: response), now: clock()),
     )
+  }
+
+  private func headerValue(_ name: String, in response: HTTPURLResponse) -> String? {
+    response.allHeaderFields.first(
+      where: { ($0.key as? String)?.lowercased() == name },
+    )?.value as? String
   }
 
   private func decodeJSONObject(from data: Data) throws -> [String: Any] {
@@ -485,4 +497,30 @@ private extension String {
   var nilIfEmpty: String? {
     isEmpty ? nil : self
   }
+}
+
+/// Parses `Retry-After` as delay-seconds or an IMF-fixdate HTTP-date (RFC 9110).
+/// A missing or malformed value yields nil; an elapsed date yields zero.
+func parseRetryAfter(_ header: String?, now: Date) -> TimeInterval? {
+  guard let header else { return nil }
+  let value = header.trimmingCharacters(in: .whitespacesAndNewlines)
+  if value.isEmpty {
+    return nil
+  }
+  if value.count <= 9, value.allSatisfy(\.isASCIIDigit), let seconds = Double(value) {
+    return seconds
+  }
+  // Built per call: DateFormatter is not Sendable, and this only runs on error paths.
+  let imfFixdate = DateFormatter()
+  imfFixdate.locale = Locale(identifier: "en_US_POSIX")
+  imfFixdate.timeZone = TimeZone(secondsFromGMT: 0)
+  imfFixdate.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+  guard let at = imfFixdate.date(from: value) else {
+    return nil
+  }
+  return max(0, at.timeIntervalSince(now))
+}
+
+private extension Character {
+  var isASCIIDigit: Bool { isASCII && isNumber }
 }

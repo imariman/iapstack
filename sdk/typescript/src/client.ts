@@ -30,6 +30,7 @@ type DelayFn = (ms: number, signal?: AbortSignal) => Promise<void>;
 export interface RetrySeams {
   delay?: DelayFn;
   random?: () => number;
+  now?: () => number;
 }
 
 let installRetrySeams: (client: Client, seams: RetrySeams) => void;
@@ -42,11 +43,13 @@ export class Client {
   readonly #config: ResolvedConfig;
   #delay: DelayFn = waitForRetry;
   #random: () => number = Math.random;
+  #now: () => number = Date.now;
 
   static {
     installRetrySeams = (client, seams) => {
       client.#delay = seams.delay ?? client.#delay;
       client.#random = seams.random ?? client.#random;
+      client.#now = seams.now ?? client.#now;
     };
   }
 
@@ -161,7 +164,7 @@ export class Client {
         if (response.status >= 200 && response.status < 300) {
           return parseJsonObject(response.body);
         }
-        const apiError = apiErrorFromResponse(response);
+        const apiError = apiErrorFromResponse(response, this.#now());
         last = apiError;
         if (!this.shouldRetry(apiError, attempt, options.signal)) {
           throw apiError;
@@ -173,7 +176,8 @@ export class Client {
         }
       }
       try {
-        await this.wait(attempt, options.signal);
+        const retryAfterMs = last instanceof APIError ? last.retryAfterMs : undefined;
+        await this.wait(attempt, options.signal, retryAfterMs);
       } catch {
         throw decodeCaught(last);
       }
@@ -252,8 +256,8 @@ export class Client {
     return error instanceof TimeoutError || error instanceof TransportError;
   }
 
-  private async wait(attempt: number, signal?: AbortSignal): Promise<void> {
-    const delay = this.#config.retryPolicy.delayAfter(attempt, this.#random());
+  private async wait(attempt: number, signal?: AbortSignal, retryAfterMs?: number): Promise<void> {
+    const delay = this.#config.retryPolicy.delayAfter(attempt, this.#random(), retryAfterMs);
     if (delay <= 0) {
       return;
     }
@@ -285,11 +289,14 @@ function resolveUrl(base: URL, segments: string[]): URL {
   return resolved;
 }
 
-function apiErrorFromResponse(response: {
-  status: number;
-  headers: Headers;
-  body: string;
-}): APIError {
+function apiErrorFromResponse(
+  response: {
+    status: number;
+    headers: Headers;
+    body: string;
+  },
+  nowMs: number,
+): APIError {
   let code = 'http_error';
   let message = 'IAPStack returned an unsuccessful response';
   let requestId = response.headers.get('X-Request-ID')?.trim() ?? '';
@@ -317,7 +324,34 @@ function apiErrorFromResponse(response: {
     message,
     requestId,
     retryable: response.status === 429 || response.status >= 500,
+    retryAfterMs: parseRetryAfter(response.headers.get('Retry-After'), nowMs),
   });
+}
+
+const DELAY_SECONDS = /^\d{1,9}$/;
+const IMF_FIXDATE =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+/**
+ * Parses Retry-After as delay-seconds or an IMF-fixdate HTTP-date (RFC 9110).
+ * A missing or malformed value yields undefined; an elapsed date yields 0.
+ */
+function parseRetryAfter(header: string | null, nowMs: number): number | undefined {
+  const value = header?.trim() ?? '';
+  if (!value) {
+    return undefined;
+  }
+  if (DELAY_SECONDS.test(value)) {
+    return Number.parseInt(value, 10) * 1000;
+  }
+  if (!IMF_FIXDATE.test(value)) {
+    return undefined;
+  }
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) {
+    return undefined;
+  }
+  return Math.max(0, at - nowMs);
 }
 
 function parseJsonObject(raw: string): Record<string, unknown> {

@@ -24,8 +24,25 @@ data class IapStackRetryPolicy(
 
   /**
    * Returns a bounded full-jitter delay after a one-based failed attempt.
+   *
+   * When the failed response carried a `Retry-After` cooldown, pass it as
+   * [retryAfter]: the result is then the larger of the jitter delay and the
+   * cooldown, capped at [MAX_RETRY_AFTER], so a retry never lands inside a
+   * cooldown the server asked for.
    */
   fun delayAfter(
+    attempt: Int,
+    randomValue: Double,
+    retryAfter: Duration? = null,
+  ): Duration {
+    val jitter = jitterDelay(attempt, randomValue)
+    if (retryAfter == null || retryAfter <= Duration.ZERO) {
+      return jitter
+    }
+    return maxOf(jitter, retryAfter).coerceAtMost(MAX_RETRY_AFTER)
+  }
+
+  private fun jitterDelay(
     attempt: Int,
     randomValue: Double,
   ): Duration {
@@ -40,5 +57,14 @@ data class IapStackRetryPolicy(
     val capMicros =
       (baseDelay.inWholeMicroseconds * multiplier).coerceAtMost(maxDelay.inWholeMicroseconds)
     return (capMicros * randomValue).toLong().microseconds
+  }
+
+  companion object {
+    /**
+     * Upper bound for a server-requested `Retry-After` cooldown, so one
+     * response cannot stall a caller indefinitely. Every IAPStack SDK uses
+     * 30 seconds.
+     */
+    val MAX_RETRY_AFTER: Duration = 30.seconds
   }
 }

@@ -303,6 +303,37 @@ v2
 
 The event ID is authenticated. Reject `v1` signatures, timestamps outside the application's replay window, and any delivery whose `IAPStack-Event-ID` does not match the MAC. Deduplicate by that authenticated event ID.
 
+## Shared SDK behavior
+
+Behavior that is meant to be identical across the Go, TypeScript, React Native,
+Flutter, Kotlin and Swift SDKs. The SDK contract tests assert this section.
+
+- **Retries.** `429` and every `5xx` response, timeouts and transport failures
+  are retried with bounded full-jitter backoff (3 attempts, 250 ms base, 2 s
+  cap by default). Every omitted retry field takes its default separately.
+- **`Retry-After`.** When a retryable response carries `Retry-After` as
+  delay-seconds or an HTTP-date, the wait before the next attempt is
+  `max(jitter, Retry-After)` capped at 30 seconds, so a retry never lands inside
+  a cooldown the server or a proxy asked for. A malformed header is ignored and
+  an elapsed HTTP-date counts as zero. The parsed cooldown is exposed on the API
+  error (`RetryAfter`, `retryAfterMs`, `retryAfter`).
+- **`X-Request-ID`.** A blank request ID is dropped before sending. An error's
+  request ID comes from the envelope `request_id`, falling back to the
+  `X-Request-ID` response header.
+- **`external_customer_id`.** Blank values and values with surrounding
+  whitespace are rejected before a request is sent.
+- **Timestamps.** Only RFC 3339 date-times are accepted.
+- **`grantsAccess`.** Go and Swift expose a method (`GrantsAccess()`,
+  `grantsAccess()`); TypeScript, React Native, Flutter and Kotlin expose a
+  property (`grantsAccess`). Every SDK also offers `grantsAccessAt(instant)`.
+- **`effective_starts_at`.** `grantsAccessAt` checks only `access` and
+  `effective_ends_at`. The server only emits an `allowed` projection once its
+  period has started, so `effective_starts_at` is informational; checking it on
+  a device whose clock runs behind the server would deny access right after a
+  purchase.
+- **`MemoryEventStore`.** The Go and TypeScript in-memory webhook stores never
+  evict and are for tests and local development only.
+
 ## Go host SDK
 
 The trusted-host Go package is in `sdk/go`. It uses the durable application bearer

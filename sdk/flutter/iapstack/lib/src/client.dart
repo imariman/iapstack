@@ -186,7 +186,7 @@ final class IapStackClient {
       }
       final exception = _apiException(response);
       if (exception.retryable && attempt < _config.retryPolicy.maxAttempts) {
-        await _delay(attempt);
+        await _delay(attempt, retryAfter: exception.retryAfter);
         continue;
       }
       throw exception;
@@ -241,10 +241,12 @@ final class IapStackClient {
     return builder.takeBytes();
   }
 
-  Future<void> _delay(int attempt) => Future<void>.delayed(
+  Future<void> _delay(int attempt, {Duration? retryAfter}) =>
+      Future<void>.delayed(
         _config.retryPolicy.delayAfter(
           attempt,
           randomValue: _retryRandom.nextDouble(),
+          retryAfter: retryAfter,
         ),
       );
 
@@ -279,6 +281,7 @@ final class IapStackClient {
       message: message,
       requestId: requestId,
       retryable: response.statusCode == 429 || response.statusCode >= 500,
+      retryAfter: _parseRetryAfter(response.headers['retry-after']),
     );
   }
 
@@ -354,4 +357,54 @@ final class _RawResponse {
   final int statusCode;
   final Map<String, String> headers;
   final Uint8List body;
+}
+
+final RegExp _delaySeconds = RegExp(r'^\d{1,9}$');
+final RegExp _imfFixdate = RegExp(
+  r'^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) '
+  r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) '
+  r'(\d{2}):(\d{2}):(\d{2}) GMT$',
+);
+const List<String> _months = <String>[
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/// Parses `Retry-After` as delay-seconds or an IMF-fixdate HTTP-date (RFC 9110).
+///
+/// A missing or malformed value yields null; an elapsed date yields zero.
+Duration? _parseRetryAfter(String? header) {
+  final value = header?.trim() ?? '';
+  if (value.isEmpty) {
+    return null;
+  }
+  if (_delaySeconds.hasMatch(value)) {
+    return Duration(seconds: int.parse(value));
+  }
+  final match = _imfFixdate.firstMatch(value);
+  if (match == null) {
+    return null;
+  }
+  final day = int.parse(match.group(1)!);
+  final month = _months.indexOf(match.group(2)!) + 1;
+  final year = int.parse(match.group(3)!);
+  final hour = int.parse(match.group(4)!);
+  final minute = int.parse(match.group(5)!);
+  final second = int.parse(match.group(6)!);
+  if (day < 1 || day > 31 || hour > 23 || minute > 59 || second > 60) {
+    return null;
+  }
+  final at = DateTime.utc(year, month, day, hour, minute, second);
+  final remaining = at.difference(DateTime.now().toUtc());
+  return remaining.isNegative ? Duration.zero : remaining;
 }

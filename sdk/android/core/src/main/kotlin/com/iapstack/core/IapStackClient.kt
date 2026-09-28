@@ -27,9 +27,37 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.random.Random
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+import java.time.Instant
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 
 private const val SDK_VERSION = "0.1.0-dev.1"
 private val JSON_MEDIA_TYPE = "application/json".toMediaType()
+private val DELAY_SECONDS = Regex("^\\d{1,9}$")
+
+/**
+ * Parses `Retry-After` as delay-seconds or an RFC 1123 HTTP-date (RFC 9110).
+ * A missing or malformed value yields null; an elapsed date yields zero.
+ */
+internal fun parseRetryAfter(header: String?, now: Instant): Duration? {
+  val value = header?.trim().orEmpty()
+  if (value.isEmpty()) {
+    return null
+  }
+  if (DELAY_SECONDS.matches(value)) {
+    return value.toLong().seconds
+  }
+  val at = try {
+    ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()
+  } catch (_: DateTimeParseException) {
+    return null
+  }
+  return (at.toEpochMilli() - now.toEpochMilli()).coerceAtLeast(0).milliseconds
+}
 
 /**
  * Provider-neutral SDK transport for IAPStack v1.
@@ -42,6 +70,9 @@ class IapStackClient(
   httpClient: OkHttpClient? = null,
   private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
+  /** Wall clock used to resolve HTTP-date `Retry-After` values; only tests replace it. */
+  internal var clock: () -> Instant = Instant::now
+
   private val gson = Gson()
   private val random = Random(System.nanoTime())
   private val closeClient: Boolean
@@ -163,7 +194,7 @@ class IapStackClient(
         if (attempt >= config.retryPolicy.maxAttempts || !error.retryable) {
           throw error
         }
-        delay(config.retryPolicy.delayAfter(attempt, jitter()))
+        delay(config.retryPolicy.delayAfter(attempt, jitter(), error.retryAfter))
       } catch (error: TimeoutCancellationException) {
         if (attempt >= config.retryPolicy.maxAttempts) {
           throw IapStackTimeoutException("IAPStack request timed out", error)
@@ -218,7 +249,12 @@ class IapStackClient(
       if (resp.isSuccessful) {
         rawBody
       } else {
-        throw apiErrorFromResponse(resp.code, rawBody, resp.header("X-Request-ID"))
+        throw apiErrorFromResponse(
+          resp.code,
+          rawBody,
+          resp.header("X-Request-ID"),
+          resp.header("Retry-After"),
+        )
       }
     }
   }
@@ -301,8 +337,10 @@ class IapStackClient(
     statusCode: Int,
     responseBody: String,
     requestIdHeader: String?,
+    retryAfterHeader: String?,
   ): IapStackApiException {
     val headerRequestId = requestIdHeader?.trim()?.ifEmpty { null }
+    val retryAfter = parseRetryAfter(retryAfterHeader, clock())
     val parsed = try {
       decodeObject(responseBody)
     } catch (_: Exception) {
@@ -312,6 +350,7 @@ class IapStackClient(
         requestId = headerRequestId,
         retryable = statusCode == 429 || statusCode >= 500,
         message = "IAPStack returned an unsuccessful response",
+        retryAfter = retryAfter,
       )
     }
     val errorObject = parsed["error"] as? Map<*, *>
@@ -326,6 +365,7 @@ class IapStackClient(
       requestId = requestId,
       retryable = statusCode == 429 || statusCode >= 500,
       message = message,
+      retryAfter = retryAfter,
     )
   }
 

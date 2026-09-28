@@ -11,6 +11,9 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import java.net.URI
 import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import kotlin.test.assertNull
 import java.util.Collections
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -119,6 +122,84 @@ class IapStackClientTest {
       assertEquals("customer-internal", result.customerId)
       client.close()
     }
+  }
+
+  @Test
+  fun exposesRetryAfterAsDelaySecondsOrHttpDate() = runBlocking {
+    val now = Instant.parse("2026-09-28T12:00:00Z")
+    fun httpDate(instant: Instant): String =
+      DateTimeFormatter.RFC_1123_DATE_TIME.format(instant.atOffset(ZoneOffset.UTC))
+    val cases = listOf<Pair<String?, Duration?>>(
+      null to null,
+      "17" to 17.seconds,
+      " 5 " to 5.seconds,
+      httpDate(now.plusSeconds(90)) to 90.seconds,
+      httpDate(now.minusSeconds(60)) to Duration.ZERO,
+      "-3" to null,
+      "1.5" to null,
+      "March 1, 2026" to null,
+      "soon" to null,
+    )
+    for ((header, expected) in cases) {
+      MockWebServer().use { server ->
+        val response = jsonResponse(
+          """{"error":{"code":"rate_limited","message":"slow down"}}""",
+          429,
+        )
+        if (header != null) {
+          response.setHeader("Retry-After", header)
+        }
+        server.enqueue(response)
+        val client = client(server)
+        client.clock = { now }
+
+        val error = assertFailsWith<IapStackApiException> {
+          client.getEntitlements("customer-external")
+        }
+        assertTrue(error.retryable)
+        assertEquals(expected, error.retryAfter, "Retry-After $header")
+        client.close()
+      }
+    }
+  }
+
+  @Test
+  fun elapsedRetryAfterDoesNotBlockTheRetry() = runBlocking {
+    MockWebServer().use { server ->
+      server.enqueue(
+        jsonResponse("""{"error":{"code":"provider_unavailable","message":"x"}}""", 503)
+          .setHeader("Retry-After", "0"),
+      )
+      server.enqueue(jsonResponse(VERIFICATION_JSON))
+      val client = client(
+        server,
+        IapStackRetryPolicy(maxAttempts = 2, baseDelay = Duration.ZERO, maxDelay = Duration.ZERO),
+      )
+
+      val result = client.verifyPurchase(purchase())
+
+      assertEquals(2, server.requestCount)
+      assertEquals("customer-internal", result.customerId)
+      client.close()
+    }
+  }
+
+  @Test
+  fun retryPolicyRaisesJitterToRetryAfterAndCapsIt() {
+    val policy = IapStackRetryPolicy(
+      baseDelay = 100.milliseconds,
+      maxDelay = 250.milliseconds,
+    )
+    assertEquals(50.milliseconds, policy.delayAfter(1, 0.5, null))
+    assertEquals(50.milliseconds, policy.delayAfter(1, 0.5, Duration.ZERO))
+    assertEquals(100.milliseconds, policy.delayAfter(1, 1.0, 20.milliseconds))
+    assertEquals(4.seconds, policy.delayAfter(1, 0.0, 4.seconds))
+    assertEquals(IapStackRetryPolicy.MAX_RETRY_AFTER, policy.delayAfter(1, 1.0, 3600.seconds))
+    assertEquals(30.seconds, IapStackRetryPolicy.MAX_RETRY_AFTER)
+    assertFailsWith<IllegalArgumentException> {
+      policy.delayAfter(1, 1.1, 4.seconds)
+    }
+    assertNull(IapStackApiException(429, "rate_limited", null, true, "slow down").retryAfter)
   }
 
   @Test

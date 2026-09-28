@@ -22,8 +22,23 @@ public struct IAPStackRetryPolicy: Sendable {
   /// Upper delay bound.
   public let maxDelay: TimeInterval
 
-  /// Returns a full-jitter delay after a failed one-based [attempt].
-  public func delayAfter(attempt: Int, randomValue: Double) -> TimeInterval {
+  /// Upper bound for a server-requested `Retry-After` cooldown, so one response
+  /// cannot stall a caller indefinitely. Every IAPStack SDK uses 30 seconds.
+  public static let maxRetryAfter: TimeInterval = 30
+
+  /// Returns a full-jitter delay after a failed one-based `attempt`.
+  ///
+  /// When the failed response carried a `Retry-After` cooldown, pass it as
+  /// `retryAfter`: the result is then the larger of the jitter delay and the
+  /// cooldown, capped at `maxRetryAfter`, so a retry never lands inside a
+  /// cooldown the server asked for.
+  public func delayAfter(attempt: Int, randomValue: Double, retryAfter: TimeInterval? = nil) -> TimeInterval {
+    let jitter = jitterDelay(attempt: attempt, randomValue: randomValue)
+    guard let retryAfter, retryAfter > 0 else { return jitter }
+    return min(max(jitter, retryAfter), Self.maxRetryAfter)
+  }
+
+  private func jitterDelay(attempt: Int, randomValue: Double) -> TimeInterval {
     precondition(attempt > 0, "attempt must be positive")
     precondition(randomValue >= 0.0 && randomValue <= 1.0, "randomValue must be in [0, 1]")
     guard baseDelay > 0 else { return 0 }

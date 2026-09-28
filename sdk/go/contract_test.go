@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -68,6 +69,30 @@ func TestWebhookContractFieldsAreDocumented(t *testing.T) {
 		if !strings.Contains(document, needle) {
 			t.Fatalf("webhook contract is missing %q", needle)
 		}
+	}
+}
+
+// TestSharedSDKBehaviorIsDocumented verifies the cross-SDK rules this package implements.
+func TestSharedSDKBehaviorIsDocumented(t *testing.T) {
+	t.Parallel()
+
+	document := readRepositoryFile(t, "docs", "api-v1.md")
+	for _, needle := range []string{
+		"## Shared SDK behavior",
+		"`max(jitter, Retry-After)` capped at 30 seconds",
+		"`grantsAccess`.** Go and Swift expose a method",
+		"`effective_starts_at` is informational",
+	} {
+		if !strings.Contains(document, needle) {
+			t.Fatalf("shared SDK behavior is missing %q", needle)
+		}
+	}
+	if MaxRetryAfter != 30*time.Second {
+		t.Fatalf("MaxRetryAfter = %s, want the documented 30s", MaxRetryAfter)
+	}
+	contract := readRepositoryFile(t, "contracts", "openapi", "v1.yaml")
+	if !strings.Contains(contract, "Retry-After:") {
+		t.Fatal("OpenAPI does not declare the Retry-After header")
 	}
 }
 

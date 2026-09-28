@@ -21,6 +21,35 @@ const SDK_VERSION = '0.1.0-dev.1';
 const RETRYABLE_STATUS = (statusCode: number): boolean =>
   statusCode === 429 || statusCode >= 500;
 
+const DELAY_SECONDS = /^\d{1,9}$/;
+const IMF_FIXDATE =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+/**
+ * Parses Retry-After as delay-seconds or an IMF-fixdate HTTP-date (RFC 9110).
+ * A missing or malformed value yields undefined; an elapsed date yields 0.
+ */
+export function parseRetryAfter(
+  header: string | null | undefined,
+  nowMs: number,
+): number | undefined {
+  const value = header?.trim() ?? '';
+  if (!value) {
+    return undefined;
+  }
+  if (DELAY_SECONDS.test(value)) {
+    return Number.parseInt(value, 10) * 1000;
+  }
+  if (!IMF_FIXDATE.test(value)) {
+    return undefined;
+  }
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) {
+    return undefined;
+  }
+  return Math.max(0, at - nowMs);
+}
+
 /** Runtime client for the IAPStack v1 API from React Native. */
 export class IapStackClient {
   constructor(private readonly config: IapStackConfig) {}
@@ -92,7 +121,9 @@ export class IapStackClient {
           error.retryable &&
           attempt < this.config.retryPolicy.maxAttempts
         ) {
-          await delay(this.config.retryPolicy.delayAfter(attempt, Math.random()));
+          await delay(
+            this.config.retryPolicy.delayAfter(attempt, Math.random(), error.retryAfterMs),
+          );
           continue;
         }
         if (
@@ -158,6 +189,7 @@ export class IapStackClient {
         response.status,
         text,
         response.headers.get('x-request-id') ?? undefined,
+        response.headers.get('retry-after'),
       );
     } catch (error) {
       if (error instanceof IapStackProtocolError || error instanceof IapStackApiError) {
@@ -200,6 +232,7 @@ export class IapStackClient {
     status: number,
     body: string,
     requestIdHeader?: string,
+    retryAfterHeader?: string | null,
   ): IapStackApiError {
     let code = 'http_error';
     let message = 'IAPStack returned an unsuccessful response';
@@ -226,7 +259,14 @@ export class IapStackClient {
       // Keep safe generic values.
     }
 
-    return new IapStackApiError(status, code, message, RETRYABLE_STATUS(status), requestId);
+    return new IapStackApiError(
+      status,
+      code,
+      message,
+      RETRYABLE_STATUS(status),
+      requestId,
+      parseRetryAfter(retryAfterHeader, Date.now()),
+    );
   }
 
   private validateSubmission(submission: PurchaseSubmission): void {
