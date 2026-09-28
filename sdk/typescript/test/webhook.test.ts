@@ -32,8 +32,30 @@ const defaultWebhookBodyLimit = 1 << 20;
 class FailingStore implements EventStore {
   constructor(private readonly error: unknown) {}
 
+  seen(): never {
+    throw this.error;
+  }
+
   remember(): never {
     throw this.error;
+  }
+}
+
+/** Fails remember a fixed number of times before delegating to the memory store. */
+class FlakyRememberStore extends MemoryEventStore {
+  constructor(
+    private failures: number,
+    private readonly error: unknown,
+  ) {
+    super();
+  }
+
+  override remember(eventId: string, fingerprint: Uint8Array): boolean {
+    if (this.failures > 0) {
+      this.failures -= 1;
+      throw this.error;
+    }
+    return super.remember(eventId, fingerprint);
   }
 }
 
@@ -183,19 +205,32 @@ test('webhook verifier deduplicates an exact authenticated replay', async () => 
   const now = new Date('2026-08-31T10:00:00.000Z');
   const verifier = newTestVerifier(now);
   const first = await verifier.verifyRequest(signedWebhookRequest(now, testWebhookBody, 'event-1'));
-  const second = await verifier.verifyRequest(signedWebhookRequest(now, testWebhookBody, 'event-1'));
+  const unhandled = await verifier.verifyRequest(
+    signedWebhookRequest(now, testWebhookBody, 'event-1'),
+  );
   assert.equal(first.duplicate, false);
+  assert.equal(unhandled.duplicate, false);
+  await verifier.markHandled(first);
+  await verifier.markHandled(unhandled);
+  const second = await verifier.verifyRequest(signedWebhookRequest(now, testWebhookBody, 'event-1'));
   assert.equal(second.duplicate, true);
+  await assert.rejects(() => verifier.markHandled({ ...first }), TypeError);
   verifier.close();
 });
 
 test('webhook verifier rejects an event identity conflict', async () => {
   const now = new Date('2026-08-31T10:00:00.000Z');
   const verifier = newTestVerifier(now);
-  await verifier.verifyRequest(signedWebhookRequest(now, testWebhookBody, 'event-1'));
+  const first = await verifier.verifyRequest(signedWebhookRequest(now, testWebhookBody, 'event-1'));
   const altered = testWebhookBody.replace('"version":1', '"version":2');
+  const pending = await verifier.verifyRequest(signedWebhookRequest(now, altered, 'event-1'));
+  await verifier.markHandled(first);
   await assert.rejects(
     () => verifier.verifyRequest(signedWebhookRequest(now, altered, 'event-1')),
+    (error) => webhookCode(error, 'event_identity_conflict'),
+  );
+  await assert.rejects(
+    () => verifier.markHandled(pending),
     (error) => webhookCode(error, 'event_identity_conflict'),
   );
   verifier.close();
@@ -355,7 +390,10 @@ test('webhook handler owns IAPStack retry statuses', async () => {
   assert.deepEqual(await unauthorized.json(), { code: 'invalid_signature' });
 
   const conflictVerifier = newTestVerifier(now);
-  await conflictVerifier.verifyRequest(signedWebhookRequest(now, testWebhookBody, 'event-3'));
+  const seed = await conflictVerifier.verifyRequest(
+    signedWebhookRequest(now, testWebhookBody, 'event-3'),
+  );
+  await conflictVerifier.markHandled(seed);
   const altered = testWebhookBody.replace('"version":1', '"version":2');
   const conflict = await conflictVerifier.handler(async () => undefined)(
     signedWebhookRequest(now, altered, 'event-3'),
@@ -395,5 +433,87 @@ test('webhook handler owns IAPStack retry statuses', async () => {
   const noop = await verifier.handler()(signedWebhookRequest(now, testWebhookBody, 'event-6'));
   assert.equal(noop.status, 204);
 
+  verifier.close();
+});
+
+test('webhook handler redelivers an event after the host callback fails', async () => {
+  const now = new Date('2026-08-31T10:00:00.000Z');
+  const verifier = newTestVerifier(now);
+  let calls = 0;
+  const handle = verifier.handler(async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new Error('transient host failure');
+    }
+  });
+
+  const first = await handle(signedWebhookRequest(now, testWebhookBody, 'event-retry'));
+  assert.equal(first.status, 503);
+  const second = await handle(signedWebhookRequest(now, testWebhookBody, 'event-retry'));
+  assert.equal(second.status, 204);
+  const third = await handle(signedWebhookRequest(now, testWebhookBody, 'event-retry'));
+  assert.equal(third.status, 204);
+  assert.equal(calls, 2);
+  verifier.close();
+});
+
+// Models IAPStack's client timeout: the retry arrives while the first callback
+// is still running and must reach the callback instead of being acknowledged.
+test('webhook handler redelivers a retry that overlaps a slow callback', async () => {
+  const now = new Date('2026-08-31T10:00:00.000Z');
+  const store = new MemoryEventStore();
+  const verifier = newTestVerifier(now, defaultWebhookBodyLimit, store);
+  let calls = 0;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const handle = verifier.handler(async () => {
+    calls += 1;
+    if (calls === 1) {
+      markStarted();
+      await gate;
+      throw new Error('slow host failure');
+    }
+  });
+
+  const first = handle(signedWebhookRequest(now, testWebhookBody, 'event-overlap'));
+  await started;
+  const fingerprint = createHash('sha256').update(testWebhookBody).digest();
+  assert.equal(store.seen('event-overlap', fingerprint), false);
+
+  const retry = await handle(signedWebhookRequest(now, testWebhookBody, 'event-overlap'));
+  assert.equal(retry.status, 204);
+  assert.equal(calls, 2);
+  release();
+  assert.equal((await first).status, 503);
+
+  const duplicate = await handle(signedWebhookRequest(now, testWebhookBody, 'event-overlap'));
+  assert.equal(duplicate.status, 204);
+  assert.equal(calls, 2);
+  verifier.close();
+});
+
+test('webhook handler redelivers when recording a handled event fails', async () => {
+  const now = new Date('2026-08-31T10:00:00.000Z');
+  const store = new FlakyRememberStore(1, new Error('disk full'));
+  const verifier = newTestVerifier(now, defaultWebhookBodyLimit, store);
+  let calls = 0;
+  const handle = verifier.handler(async () => {
+    calls += 1;
+  });
+
+  const first = await handle(signedWebhookRequest(now, testWebhookBody, 'event-record'));
+  assert.equal(first.status, 503);
+  assert.deepEqual(await first.json(), { code: 'receiver_unavailable' });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const retry = await handle(signedWebhookRequest(now, testWebhookBody, 'event-record'));
+    assert.equal(retry.status, 204);
+  }
+  assert.equal(calls, 2);
   verifier.close();
 });

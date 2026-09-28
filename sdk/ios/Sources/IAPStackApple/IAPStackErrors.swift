@@ -38,8 +38,16 @@ public enum IAPStackSDKError: Error, LocalizedError, Sendable {
       return retryable
     case .protocolError, .configurationError:
       return false
-    case .transportError, .timeoutError:
+    case let .transportError(_, cause):
+      // A task its URLSession cancelled fails the same way on every attempt.
+      return !isCancellation(cause)
+    case .timeoutError:
       return true
     }
   }
+}
+
+/// Reports cancellation from Swift concurrency or from a cancelled `URLSessionTask`.
+func isCancellation(_ error: (any Error)?) -> Bool {
+  error is CancellationError || (error as? URLError)?.code == .cancelled
 }
