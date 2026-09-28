@@ -88,6 +88,6 @@ payloads from an iOS binary.
 ## Roadmap
 
 - Add a thin native module around the iOS and Android SDKs so signed payloads
-  cross the bridge unaltered.
-- Add React Native examples and end-to-end verification flows.
-- Publish package metadata and release artifacts for consumption via npm.
+  cross the bridge unaltered ([#140](https://github.com/imariman/iapstack/issues/140)).
+- Add React Native examples and end-to-end verification flows ([#140](https://github.com/imariman/iapstack/issues/140)).
+- Publish package metadata and release artifacts for consumption via npm ([#141](https://github.com/imariman/iapstack/issues/141)).

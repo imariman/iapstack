@@ -18,8 +18,9 @@ payload string, not a parsed rewrite.
 
 This drop is the HTTP client and companion coordinators behind injectable
 `GooglePlayIapPlatform` / `HuaweiIapPlatform` boundaries. Production
-BillingClient and HMS adapters, Android library packaging, and Maven
-publication are follow-up work; this package does not yet close issue #92.
+BillingClient and HMS adapters and Android library packaging are tracked in
+[#138](https://github.com/imariman/iapstack/issues/138); Maven
+publication is tracked in [#141](https://github.com/imariman/iapstack/issues/141).
 
 ## Build
 
