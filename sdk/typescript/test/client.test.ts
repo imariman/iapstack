@@ -1,5 +1,8 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
+import { inspect } from 'node:util';
+import { setRetrySeamsForTesting } from '../src/client';
+import { resolveConfig } from '../src/config';
 import {
   APIError,
   Client,
@@ -97,7 +100,7 @@ function newTestClient(
     },
     ...overrides,
   });
-  client.delay = async () => {};
+  setRetrySeamsForTesting(client, { delay: async () => {} });
   return { client, calls };
 }
 
@@ -201,10 +204,12 @@ test('client waits using the retry policy', async () => {
     },
     { retryPolicy: new RetryPolicy({ maxAttempts: 2, baseDelayMs: 40, maxDelayMs: 40 }) },
   );
-  client.random = () => 1;
-  client.delay = async (ms) => {
-    waited = ms;
-  };
+  setRetrySeamsForTesting(client, {
+    random: () => 1,
+    delay: async (ms) => {
+      waited = ms;
+    },
+  });
 
   await client.createCustomerSession('customer-external');
   assert.equal(waited, 40);
@@ -339,17 +344,91 @@ test('createCustomerSession rejects a whitespace customer ID', async () => {
   assert.equal(calls.length, 0);
 });
 
-test('new Client applies operational defaults', () => {
+test('resolveConfig applies operational defaults', () => {
+  const config = resolveConfig({
+    baseUrl: 'https://iap.example',
+    applicationId: 'application-1',
+    applicationToken: testApplicationToken,
+  });
+  assert.equal(config.timeoutMs, 10_000);
+  assert.equal(config.maxResponseBytes, 1 << 20);
+  assert.equal(config.retryPolicy.maxAttempts, 3);
+  assert.equal(config.retryPolicy.baseDelayMs, 250);
+  assert.equal(config.retryPolicy.maxDelayMs, 2000);
+});
+
+test('Client does not expose the application token when logged or serialized', () => {
+  const secret = 'iaps_app_do-not-leak';
+  const client = new Client({
+    baseUrl: 'https://iap.example',
+    applicationId: 'application-1',
+    applicationToken: secret,
+  });
+  assert.equal(JSON.stringify(client).includes(secret), false);
+  assert.equal(inspect(client, { depth: 10, showHidden: true }).includes(secret), false);
+  assert.equal(Object.values(client).some((value) => JSON.stringify(value)?.includes(secret)), false);
+  assert.equal('config' in client, false);
+});
+
+test('Client keeps its retry hooks off the instance', () => {
   const client = new Client({
     baseUrl: 'https://iap.example',
     applicationId: 'application-1',
     applicationToken: testApplicationToken,
   });
-  assert.equal(client.config.timeoutMs, 10_000);
-  assert.equal(client.config.maxResponseBytes, 1 << 20);
-  assert.equal(client.config.retryPolicy.maxAttempts, 3);
-  assert.equal(client.config.retryPolicy.baseDelayMs, 250);
-  assert.equal(client.config.retryPolicy.maxDelayMs, 2000);
+  assert.deepEqual(Reflect.ownKeys(client), []);
+  assert.equal('delay' in client, false);
+  assert.equal('random' in client, false);
+  const printed = inspect(client, { depth: 10, showHidden: true });
+  assert.equal(printed.includes('waitForRetry'), false);
+  assert.equal(printed.includes('random'), false);
+});
+
+test('Client rejects non-finite numeric options', () => {
+  const base = {
+    baseUrl: 'https://iap.example',
+    applicationId: 'application-1',
+    applicationToken: testApplicationToken,
+  };
+  assert.throws(() => new Client({ ...base, timeoutMs: Number.NaN }), TypeError);
+  assert.throws(() => new Client({ ...base, timeoutMs: Number.POSITIVE_INFINITY }), TypeError);
+  assert.throws(() => new Client({ ...base, maxResponseBytes: Number.NaN }), TypeError);
+  assert.throws(
+    () => new Client({ ...base, retryPolicy: new RetryPolicy({ baseDelayMs: Number.NaN }) }),
+    TypeError,
+  );
+});
+
+test('Client rejects timer durations setTimeout cannot honor', () => {
+  const base = {
+    baseUrl: 'https://iap.example',
+    applicationId: 'application-1',
+    applicationToken: testApplicationToken,
+  };
+  for (const timeoutMs of [2 ** 31, 1e15, 0.4, 1.5, 0]) {
+    assert.throws(() => new Client({ ...base, timeoutMs }), TypeError, `timeoutMs ${timeoutMs}`);
+  }
+  assert.doesNotThrow(() => new Client({ ...base, timeoutMs: 1 }));
+  assert.doesNotThrow(() => new Client({ ...base, timeoutMs: 2 ** 31 - 1 }));
+
+  assert.throws(
+    () => new Client({ ...base, retryPolicy: new RetryPolicy({ maxDelayMs: 2 ** 31 }) }),
+    TypeError,
+  );
+  assert.throws(
+    () =>
+      new Client({
+        ...base,
+        retryPolicy: new RetryPolicy({ baseDelayMs: 2 ** 31, maxDelayMs: 2 ** 31 }),
+      }),
+    TypeError,
+  );
+  assert.doesNotThrow(
+    () => new Client({ ...base, retryPolicy: new RetryPolicy({ maxDelayMs: 2 ** 31 - 1 }) }),
+  );
+  assert.doesNotThrow(
+    () => new Client({ ...base, retryPolicy: new RetryPolicy({ baseDelayMs: 0, maxDelayMs: 0 }) }),
+  );
 });
 
 test('denied entitlement does not grant access', () => {

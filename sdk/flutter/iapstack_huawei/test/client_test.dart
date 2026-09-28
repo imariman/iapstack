@@ -80,7 +80,7 @@ void main() {
     test('groups configured product queries by kind and reports missing IDs',
         () async {
       final platform = _FakePlatform(
-        omittedProductIds: const <String>{'premium_lifetime'},
+        omittedProductIds: <String>{'premium_lifetime'},
       );
       final huawei = HuaweiIapStack(
         client: _backend((request) async => http.Response('{}', 500)),
@@ -96,6 +96,74 @@ void main() {
         'nonConsumable:premium_lifetime',
         'subscription:premium_monthly',
       ]);
+    });
+
+    test('keeps cached products when a re-query fails part-way', () async {
+      final platform = _FakePlatform(
+        purchaseResult:
+            _signedPurchase('premium_monthly', customerId: 'customer-1'),
+      );
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async =>
+            http.Response(jsonEncode(_verificationJson), 200)),
+        productKinds: _productKinds,
+        platform: platform,
+      );
+      final monthly = (await huawei.queryProducts(
+        const <String>{'premium_monthly'},
+      ))
+          .products
+          .single;
+
+      platform.failingProductKinds.add(HuaweiProductKind.subscription);
+      await expectLater(
+        huawei.queryProducts(_productKinds.keys.toSet()),
+        throwsA(isA<HuaweiIapStackException>()),
+      );
+
+      final result = await huawei.purchaseAndVerify(
+        externalCustomerId: 'customer-1',
+        product: monthly,
+      );
+      expect(platform.productQueryCalls, <String>[
+        'subscription:premium_monthly',
+        'nonConsumable:premium_lifetime',
+        'subscription:premium_monthly',
+      ]);
+      expect(result.entitlements.single.grantsAccess, isTrue);
+    });
+
+    test('evicts cached products that a completed re-query omits', () async {
+      final platform = _FakePlatform();
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async => http.Response('{}', 500)),
+        productKinds: _productKinds,
+        platform: platform,
+      );
+      final monthly = (await huawei.queryProducts(
+        const <String>{'premium_monthly'},
+      ))
+          .products
+          .single;
+
+      platform.omittedProductIds.add('premium_monthly');
+      final requery = await huawei.queryProducts(_productKinds.keys.toSet());
+
+      expect(requery.notFoundProductIds, <String>{'premium_monthly'});
+      await expectLater(
+        huawei.purchaseAndVerify(
+          externalCustomerId: 'customer-1',
+          product: monthly,
+        ),
+        throwsA(
+          isA<HuaweiIapStackException>().having(
+            (error) => error.code,
+            'code',
+            'product_not_queried',
+          ),
+        ),
+      );
+      expect(platform.purchaseCalls, 0);
     });
 
     test('requires a queried, purchasable product', () async {
@@ -413,14 +481,16 @@ final class _FakePlatform implements HuaweiIapPlatform {
         isSandboxUser: false,
         isSandboxApk: false,
       ),
-      this.omittedProductIds = const <String>{},
+      Set<String>? omittedProductIds,
       Map<HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>? pages})
-      : pages = pages ?? <HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>{};
+      : omittedProductIds = omittedProductIds ?? <String>{},
+        pages = pages ?? <HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>{};
 
   final HuaweiSignedPurchase? purchaseResult;
   final bool environmentAvailable;
   final HuaweiSandboxStatus sandboxResult;
   final Set<String> omittedProductIds;
+  final Set<HuaweiProductKind> failingProductKinds = <HuaweiProductKind>{};
   final Map<HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>> pages;
   final List<String> restoreCalls = <String>[];
   final List<String> productQueryCalls = <String>[];
@@ -437,6 +507,12 @@ final class _FakePlatform implements HuaweiIapPlatform {
     required HuaweiProductKind productKind,
   }) async {
     productQueryCalls.add('${productKind.name}:${productIds.join(',')}');
+    if (failingProductKinds.contains(productKind)) {
+      throw const HuaweiIapStackException(
+        code: 'huawei_product_query_failed',
+        message: 'Huawei IAP product query failed',
+      );
+    }
     return productIds
         .where((id) => !omittedProductIds.contains(id))
         .map(_product)

@@ -4,17 +4,40 @@ private let sdkVersion = "0.1.0-dev.1"
 
 /// Provider-neutral HTTP client for the IAPStack v1 API.
 public final class IAPStackClient {
-  /// Creates a client with optional custom URLSession for testing.
-  public init(config: IAPStackConfig, session: URLSession = .shared) throws {
+  /// Creates a client, optionally using a caller-owned `URLSession`.
+  ///
+  /// When `session` is nil the client creates and owns an ephemeral session that
+  /// `close()` invalidates. An injected session is never invalidated by the SDK.
+  public convenience init(config: IAPStackConfig, session: URLSession? = nil) throws {
+    try self.init(config: config, session: session, ownedSessionConfiguration: .ephemeral)
+  }
+
+  /// Uses `ownedSessionConfiguration` for the session created when `session` is nil.
+  init(
+    config: IAPStackConfig,
+    session: URLSession?,
+    ownedSessionConfiguration: URLSessionConfiguration,
+  ) throws {
     try config.validate()
     self.config = config
-    self.session = session
-    self.ownsSession = session !== URLSession.shared
+    if let session {
+      self.session = session
+      self.ownsSession = false
+    } else {
+      self.session = URLSession(configuration: ownedSessionConfiguration)
+      self.ownsSession = true
+    }
   }
+
+  private static let closedError = IAPStackSDKError.configurationError(
+    message: "IAPStackClient is closed",
+  )
 
   private let config: IAPStackConfig
   private let session: URLSession
   private let ownsSession: Bool
+  private let lifecycleLock = NSLock()
+  private var closed = false
 
   /// Verifies one signed purchase evidence row.
   public func verifyPurchase(_ purchase: PurchaseSubmission, requestId: String? = nil) async throws -> VerificationResult {
@@ -67,11 +90,27 @@ public final class IAPStackClient {
     return try EntitlementSnapshot.from(json)
   }
 
-  /// Releases the owned `URLSession`.
+  /// Closes the client and invalidates the `URLSession` it created; injected sessions are
+  /// left untouched.
+  ///
+  /// Later calls, and retries of calls already in flight, throw a non-retryable
+  /// `IAPStackSDKError.configurationError` without touching the session.
   public func close() {
+    lifecycleLock.lock()
+    defer { lifecycleLock.unlock() }
+    guard !closed else {
+      return
+    }
+    closed = true
     if ownsSession {
       session.invalidateAndCancel()
     }
+  }
+
+  private var isClosed: Bool {
+    lifecycleLock.lock()
+    defer { lifecycleLock.unlock() }
+    return closed
   }
 
   private func request(
@@ -80,13 +119,17 @@ public final class IAPStackClient {
     body: [String: Any]?,
     requestId: String?,
   ) async throws -> [String: Any] {
-    let normalizedRequestId = requestId?.trimmingCharacters(in: .whitespacesAndNewlines)
-    if let normalized = normalizedRequestId, normalized.isEmpty {
-      throw IAPStackSDKError.configurationError(message: "requestId cannot be empty")
-    }
+    // Blank request IDs are dropped, matching the other IAPStack SDKs.
+    let normalizedRequestId = requestId?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .nilIfEmpty
 
     var attempt = 1
     while attempt <= config.retryPolicy.maxAttempts {
+      try Task.checkCancellation()
+      if isClosed {
+        throw Self.closedError
+      }
       do {
         return try await requestAttempt(
           method: method,
@@ -121,14 +164,13 @@ public final class IAPStackClient {
     let (data, response) = try await withTimeout {
       try await self.send(method: method, path: path, body: body, requestId: requestId)
     }
-    if data.count > config.maxResponseBytes {
-      throw IAPStackSDKError.protocolError(message: "IAPStack response exceeded maxResponseBytes")
-    }
-    let json = try decodeJSONObject(from: data)
     if (200 ... 299).contains(response.statusCode) {
-      return json
+      return try decodeJSONObject(from: data)
     }
-    throw parseApiError(statusCode: response.statusCode, response: response, body: json)
+    // Proxies and load balancers often answer 5xx with HTML or an empty body; keep
+    // the status so retry and error classification still apply.
+    let envelope = (try? decodeJSONObject(from: data)) ?? [:]
+    throw parseApiError(statusCode: response.statusCode, response: response, body: envelope)
   }
 
   private func send(
@@ -155,11 +197,41 @@ public final class IAPStackClient {
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     }
 
-    let (data, response) = try await session.data(for: request)
+    let (data, response) = try await load(request)
     guard let httpResponse = response as? HTTPURLResponse else {
       throw IAPStackSDKError.protocolError(message: "non-HTTP response from server")
     }
     return (data, httpResponse)
+  }
+
+  /// Runs one data task and collects the body in the chunks URLSession delivers,
+  /// cancelling the task as soon as it would exceed `maxResponseBytes`.
+  private func load(_ request: URLRequest) async throws -> (Data, URLResponse) {
+    let collector = BoundedBodyCollector(limit: config.maxResponseBytes)
+    let task = try makeTask(for: request, delegate: collector)
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        collector.start(task, continuation: continuation)
+      }
+    } onCancel: {
+      collector.cancel(task)
+    }
+  }
+
+  /// Creates the task under the lifecycle lock. A task created on a session that
+  /// `close()` has invalidated raises an Objective-C exception, not a Swift error.
+  private func makeTask(
+    for request: URLRequest,
+    delegate: URLSessionDataDelegate,
+  ) throws -> URLSessionDataTask {
+    lifecycleLock.lock()
+    defer { lifecycleLock.unlock() }
+    if closed {
+      throw Self.closedError
+    }
+    let task = session.dataTask(with: request)
+    task.delegate = delegate
+    return task
   }
 
   private func withTimeout<T>(_ operation: @escaping () async throws -> T) async throws -> T {
@@ -181,15 +253,26 @@ public final class IAPStackClient {
           throw IAPStackSDKError.transportError(message: "IAPStack request did not execute")
         }
       }
-    } catch is CancellationError {
-      throw IAPStackSDKError.timeoutError(message: "IAPStack request timed out")
     } catch {
-      if case IAPStackSDKError.timeoutError = error {
+      // Caller cancellation is not a timeout: surface it unchanged so it is never retried.
+      if Task.isCancelled {
+        throw CancellationError()
+      }
+      // Anything else that cancelled the task (close(), the owner of an injected session
+      // invalidating it, a delegate rejecting a challenge) fails the same way on retry.
+      if isCancellation(error) {
+        if isClosed {
+          throw Self.closedError
+        }
+        throw IAPStackSDKError.transportError(
+          message: "IAPStack request was cancelled by its URLSession",
+          cause: error,
+        )
+      }
+      if error is IAPStackSDKError {
         throw error
       }
-      if let urlError = error as? URLError,
-        urlError.code == .timedOut || urlError.code == .cancelled
-      {
+      if let urlError = error as? URLError, urlError.code == .timedOut {
         throw IAPStackSDKError.timeoutError(
           message: "IAPStack request timed out",
           cause: error,
@@ -206,10 +289,10 @@ public final class IAPStackClient {
   }
 
   private func shouldRetry(error: Error, attempt: Int) -> Bool {
-    guard attempt < config.retryPolicy.maxAttempts else {
+    guard attempt < config.retryPolicy.maxAttempts, !isClosed else {
       return false
     }
-    if error is CancellationError {
+    if isCancellation(error) {
       return false
     }
     guard let sdkError = error as? IAPStackSDKError else {
@@ -287,4 +370,119 @@ public final class IAPStackClient {
 private enum TimeoutRace<Value> {
   case value(Value)
   case timeout
+}
+
+/// Per-task delegate that buffers one response body and fails once it exceeds `limit`.
+private final class BoundedBodyCollector: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+  init(limit: Int) {
+    self.limit = limit
+  }
+
+  private let limit: Int
+  private let lock = NSLock()
+  private var continuation: CheckedContinuation<(Data, URLResponse), Error>?
+  private var earlyOutcome: Result<(Data, URLResponse), Error>?
+  private var finished = false
+  private var response: URLResponse?
+  private var body = Data()
+
+  func start(_ task: URLSessionDataTask, continuation: CheckedContinuation<(Data, URLResponse), Error>) {
+    lock.lock()
+    if let earlyOutcome {
+      // Cancelled before the task started.
+      lock.unlock()
+      continuation.resume(with: earlyOutcome)
+      return
+    }
+    self.continuation = continuation
+    lock.unlock()
+    task.resume()
+  }
+
+  func cancel(_ task: URLSessionTask) {
+    finish(.failure(CancellationError()))
+    task.cancel()
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    dataTask: URLSessionDataTask,
+    didReceive response: URLResponse,
+    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void,
+  ) {
+    let declaredLength = response.expectedContentLength
+    if declaredLength > Int64(limit) {
+      finish(.failure(Self.tooLarge()))
+      completionHandler(.cancel)
+      return
+    }
+    lock.lock()
+    self.response = response
+    if declaredLength > 0 {
+      body.reserveCapacity(Int(declaredLength))
+    }
+    lock.unlock()
+    completionHandler(.allow)
+  }
+
+  func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    lock.lock()
+    if finished {
+      lock.unlock()
+      return
+    }
+    if data.count > limit - body.count {
+      lock.unlock()
+      finish(.failure(Self.tooLarge()))
+      dataTask.cancel()
+      return
+    }
+    body.append(data)
+    lock.unlock()
+  }
+
+  func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    if let error {
+      finish(.failure(error))
+      return
+    }
+    lock.lock()
+    let response = self.response ?? task.response
+    let body = self.body
+    lock.unlock()
+    guard let response else {
+      finish(.failure(IAPStackSDKError.protocolError(message: "IAPStack response had no headers")))
+      return
+    }
+    finish(.success((body, response)))
+  }
+
+  /// Delivers the first outcome; later ones (such as the cancellation that follows a
+  /// size-limit failure) are dropped.
+  private func finish(_ outcome: Result<(Data, URLResponse), Error>) {
+    lock.lock()
+    if finished {
+      lock.unlock()
+      return
+    }
+    finished = true
+    body = Data()
+    let continuation = self.continuation
+    self.continuation = nil
+    if continuation == nil {
+      earlyOutcome = outcome
+    }
+    lock.unlock()
+    continuation?.resume(with: outcome)
+  }
+
+  private static func tooLarge() -> IAPStackSDKError {
+    .protocolError(message: "IAPStack response exceeded maxResponseBytes")
+  }
+}
+
+private extension String {
+  var nilIfEmpty: String? {
+    isEmpty ? nil : self
+  }
 }

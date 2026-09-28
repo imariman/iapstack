@@ -11,21 +11,23 @@ export interface CustomerBinding {
   value: string;
 }
 
-export interface AppleEvidence {
+// Evidence shapes are type aliases (not interfaces) so they stay assignable to
+// PurchaseEvidence's index signature.
+export type AppleEvidence = {
   signed_transaction: string;
   product_kind: ProductKind;
-}
+};
 
-export interface GooglePlayEvidence {
+export type GooglePlayEvidence = {
   purchase_token: string;
   product_kind: ProductKind;
-}
+};
 
-export interface HuaweiEvidence {
+export type HuaweiEvidence = {
   purchase_data: string;
   signature: string;
   product_kind: ProductKind;
-}
+};
 
 export type PurchaseEvidence = Record<string, unknown>;
 

@@ -3,9 +3,12 @@ package com.iapstack.core
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.Call
 import okhttp3.Callback
@@ -20,23 +23,24 @@ import okhttp3.ResponseBody
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InterruptedIOException
-import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.math.abs
 import kotlin.random.Random
-import kotlin.time.Duration
 
 private const val SDK_VERSION = "0.1.0-dev.1"
 private val JSON_MEDIA_TYPE = "application/json".toMediaType()
 
 /**
  * Provider-neutral SDK transport for IAPStack v1.
+ *
+ * Calls are safe from any dispatcher, including `Dispatchers.Main`: blocking
+ * response-body reads run on [ioDispatcher].
  */
 class IapStackClient(
   private val config: IapStackConfig,
   httpClient: OkHttpClient? = null,
+  private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
   private val gson = Gson()
   private val random = Random(System.nanoTime())
@@ -142,9 +146,6 @@ class IapStackClient(
     requestId: String? = null,
   ): Map<String, Any?> {
     val normalizedRequestId = requestId?.trim()?.ifEmpty { null }
-    if (config.timeout <= Duration.ZERO) {
-      throw IllegalArgumentException("timeout must be positive")
-    }
     if (body != null && body.isEmpty()) {
       throw IllegalArgumentException("body must not be empty")
     }
@@ -153,7 +154,9 @@ class IapStackClient(
       val request = buildRequest(method, path, body, normalizedRequestId)
       try {
         val bodyText = withTimeout(config.timeout) {
-          execute(request)
+          // OkHttp delivers headers on its own thread, but the body is read by a
+          // blocking stream; never do that on the caller's (possibly main) thread.
+          withContext(ioDispatcher) { execute(request) }
         }
         return decodeObject(bodyText)
       } catch (error: IapStackApiException) {
@@ -168,11 +171,6 @@ class IapStackClient(
         delay(config.retryPolicy.delayAfter(attempt, jitter()))
       } catch (error: CancellationException) {
         throw error
-      } catch (error: SocketTimeoutException) {
-        if (attempt >= config.retryPolicy.maxAttempts) {
-          throw IapStackTimeoutException("IAPStack request timed out", error)
-        }
-        delay(config.retryPolicy.delayAfter(attempt, jitter()))
       } catch (error: InterruptedIOException) {
         if (attempt >= config.retryPolicy.maxAttempts) {
           throw IapStackTimeoutException("IAPStack request timed out", error)
@@ -220,12 +218,12 @@ class IapStackClient(
       if (resp.isSuccessful) {
         rawBody
       } else {
-        throw apiErrorFromResponse(resp.code, rawBody)
+        throw apiErrorFromResponse(resp.code, rawBody, resp.header("X-Request-ID"))
       }
     }
   }
 
-  private fun jitter(): Double = abs(random.nextDouble())
+  private fun jitter(): Double = random.nextDouble()
 
   private fun buildRequest(
     method: String,
@@ -243,9 +241,6 @@ class IapStackClient(
       .addHeader("Authorization", "Bearer ${config.customerToken}")
       .addHeader("X-IAPStack-SDK", "android-kotlin/$SDK_VERSION")
 
-    if (requestId != null && requestId.isBlank()) {
-      throw IllegalArgumentException("requestId cannot be blank")
-    }
     requestId?.let {
       requestBuilder.addHeader("X-Request-ID", it)
     }
@@ -305,14 +300,16 @@ class IapStackClient(
   private fun apiErrorFromResponse(
     statusCode: Int,
     responseBody: String,
+    requestIdHeader: String?,
   ): IapStackApiException {
+    val headerRequestId = requestIdHeader?.trim()?.ifEmpty { null }
     val parsed = try {
       decodeObject(responseBody)
     } catch (_: Exception) {
       return IapStackApiException(
         statusCode = statusCode,
         code = "http_error",
-        requestId = null,
+        requestId = headerRequestId,
         retryable = statusCode == 429 || statusCode >= 500,
         message = "IAPStack returned an unsuccessful response",
       )
@@ -322,7 +319,7 @@ class IapStackClient(
     val message = (errorObject?.get("message") as? String)?.ifBlank {
       "IAPStack returned an unsuccessful response"
     } ?: "IAPStack returned an unsuccessful response"
-    val requestId = errorObject?.get("request_id") as? String
+    val requestId = (errorObject?.get("request_id") as? String)?.ifBlank { null } ?: headerRequestId
     return IapStackApiException(
       statusCode = statusCode,
       code = code,

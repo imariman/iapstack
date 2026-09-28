@@ -130,19 +130,7 @@ final class AppleIapStack {
         _submission(externalCustomerId: externalCustomerId, purchase: purchase),
       );
     }
-    if (submissions.isEmpty) {
-      return RestoreResult(results: const <VerificationResult>[]);
-    }
-    final results = <VerificationResult>[];
-    for (var start = 0; start < submissions.length; start += 100) {
-      final end = (start + 100).clamp(0, submissions.length);
-      final batch = await _client.restorePurchases(
-        submissions.sublist(start, end),
-        requestId: _batchRequestId(requestId, start ~/ 100),
-      );
-      results.addAll(batch.results);
-    }
-    return RestoreResult(results: results);
+    return _client.restorePurchasesInBatches(submissions, requestId: requestId);
   }
 
   /// Loads the current IAPStack projection without contacting StoreKit.
@@ -204,13 +192,4 @@ void _validateAppAccountToken(String externalCustomerId) {
       'must be a canonical lowercase RFC 4122 UUID for appAccountToken',
     );
   }
-}
-
-/// _batchRequestId creates stable suffixes for bounded restore API calls.
-String? _batchRequestId(String? requestId, int batchIndex) {
-  if (requestId == null || requestId.trim().isEmpty) {
-    return null;
-  }
-  final normalized = requestId.trim();
-  return batchIndex == 0 ? normalized : '$normalized-${batchIndex + 1}';
 }

@@ -23,13 +23,13 @@ function withMockFetch(
 ): { calls: MockRequest[]; restore: () => void } {
   const originalFetch = globalThis.fetch;
   const calls: MockRequest[] = [];
-  globalThis.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
     calls.push({
       url: input instanceof URL ? input.toString() : `${input}`,
       init,
     });
     return handler(input, init);
-  };
+  }) as typeof fetch;
 
   return {
     calls,

@@ -89,6 +89,156 @@ void main() {
       expect(calls, 0);
     });
 
+    test('treats invalid UTF-8 as a non-retried protocol error', () async {
+      var attempts = 0;
+      final client = IapStackClient(
+        _config(
+          retryPolicy: const IapStackRetryPolicy(
+            maxAttempts: 3,
+            baseDelay: Duration.zero,
+            maxDelay: Duration.zero,
+          ),
+        ),
+        httpClient: MockClient((request) async {
+          attempts++;
+          return http.Response.bytes(<int>[0x7b, 0xff, 0xfe, 0x7d], 200);
+        }),
+      );
+
+      await expectLater(
+        client.getEntitlements('customer-external'),
+        throwsA(isA<IapStackProtocolException>()),
+      );
+      expect(attempts, 1);
+    });
+
+    test('retries a transient status whose body is not valid UTF-8', () async {
+      var attempts = 0;
+      final client = IapStackClient(
+        _config(
+          retryPolicy: const IapStackRetryPolicy(
+            maxAttempts: 2,
+            baseDelay: Duration.zero,
+            maxDelay: Duration.zero,
+          ),
+        ),
+        httpClient: MockClient((request) async {
+          attempts++;
+          if (attempts == 1) {
+            return http.Response.bytes(<int>[0xff, 0xfe], 503);
+          }
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'customer_id': 'customer-internal',
+              'entitlements': _verificationJson['entitlements'],
+            }),
+            200,
+          );
+        }),
+      );
+
+      final snapshot = await client.getEntitlements('customer-external');
+
+      expect(attempts, 2);
+      expect(snapshot.customerId, 'customer-internal');
+    });
+
+    test('keeps the HTTP status when an error body is not valid UTF-8',
+        () async {
+      for (final (status, retryable, expectedAttempts) in <(int, bool, int)>[
+        (429, true, 2),
+        (403, false, 1),
+      ]) {
+        var attempts = 0;
+        final client = IapStackClient(
+          _config(
+            retryPolicy: const IapStackRetryPolicy(
+              maxAttempts: 2,
+              baseDelay: Duration.zero,
+              maxDelay: Duration.zero,
+            ),
+          ),
+          httpClient: MockClient((request) async {
+            attempts++;
+            return http.Response.bytes(<int>[0xff, 0xfe], status);
+          }),
+        );
+
+        await expectLater(
+          client.getEntitlements('customer-external'),
+          throwsA(
+            isA<IapStackApiException>()
+                .having((error) => error.statusCode, 'statusCode', status)
+                .having((error) => error.code, 'code', 'http_error')
+                .having((error) => error.retryable, 'retryable', retryable),
+          ),
+        );
+        expect(attempts, expectedAttempts, reason: 'HTTP $status');
+      }
+    });
+
+    test('rejects entitlement versions below one', () async {
+      final client = IapStackClient(
+        _config(),
+        httpClient: MockClient((request) async => http.Response(
+              jsonEncode(<String, Object?>{
+                'customer_id': 'customer-internal',
+                'entitlements': <Object?>[
+                  <String, Object?>{
+                    'key': 'premium',
+                    'access': 'allowed',
+                    'reason': 'purchase_valid',
+                    'version': 0,
+                  },
+                ],
+              }),
+              200,
+            )),
+      );
+
+      await expectLater(
+        client.getEntitlements('customer-external'),
+        throwsA(isA<IapStackProtocolException>()),
+      );
+    });
+
+    test('restores any number of purchases in ordered batches of 100',
+        () async {
+      final batches = <int>[];
+      final requestIds = <String?>[];
+      final client = IapStackClient(
+        _config(),
+        httpClient: MockClient((request) async {
+          final purchases = (jsonDecode(request.body)
+              as Map<String, dynamic>)['purchases'] as List<dynamic>;
+          batches.add(purchases.length);
+          requestIds.add(request.headers['X-Request-ID']);
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'results':
+                  List<Object?>.filled(purchases.length, _verificationJson),
+            }),
+            200,
+          );
+        }),
+      );
+
+      final result = await client.restorePurchasesInBatches(
+        List<PurchaseSubmission>.generate(
+            250, (index) => _purchase('product_$index')),
+        requestId: ' restore-1 ',
+      );
+
+      expect(batches, <int>[100, 100, 50]);
+      expect(requestIds, <String?>['restore-1', 'restore-1-2', 'restore-1-3']);
+      expect(result.results, hasLength(250));
+      expect(
+        (await client.restorePurchasesInBatches(const <PurchaseSubmission>[]))
+            .results,
+        isEmpty,
+      );
+    });
+
     test('fails closed when an allowed entitlement reaches its effective end',
         () {
       final endsAt = DateTime.utc(2026, 8, 26, 12);

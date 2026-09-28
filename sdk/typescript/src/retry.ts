@@ -3,6 +3,12 @@ const DEFAULT_BASE_DELAY_MS = 250;
 const DEFAULT_MAX_DELAY_MS = 2000;
 const MAX_BACKOFF_EXPONENT = 20;
 
+/**
+ * Largest delay setTimeout honors. Node and Bun turn larger values, and any
+ * value below 1, into a 1ms timer.
+ */
+export const MAX_TIMER_MS = 2_147_483_647;
+
 /** Bounded full-jitter exponential backoff policy. */
 export class RetryPolicy {
   readonly maxAttempts: number;
@@ -39,8 +45,15 @@ export class RetryPolicy {
     if (!Number.isInteger(this.maxAttempts) || this.maxAttempts < 1 || this.maxAttempts > 5) {
       throw new TypeError('retry max attempts must be between 1 and 5');
     }
-    if (this.baseDelayMs < 0 || this.maxDelayMs < 0 || this.baseDelayMs > this.maxDelayMs) {
-      throw new TypeError('retry delays must be non-negative and ordered');
+    if (
+      !Number.isFinite(this.baseDelayMs) ||
+      !Number.isFinite(this.maxDelayMs) ||
+      this.baseDelayMs < 0 ||
+      this.maxDelayMs < 0 ||
+      this.maxDelayMs > MAX_TIMER_MS ||
+      this.baseDelayMs > this.maxDelayMs
+    ) {
+      throw new TypeError('retry delays must be non-negative, ordered, and at most 2147483647 ms');
     }
   }
 }

@@ -102,8 +102,14 @@ func main() {
 
 Replace `NewMemoryEventStore` with a durable store in production so retries
 across processes still dedupe by the authenticated `IAPStack-Event-ID`. The
-handler hashes the raw body and passes an opaque fingerprint into `Remember`;
-do not recompute SHA-256 in the store.
+handler hashes the raw body and passes an opaque fingerprint into `Seen` and
+`Remember`; do not recompute SHA-256 in the store. The handler checks `Seen`
+before your callback and calls `Remember` only after it returns nil. A callback
+error, a crash, or IAPStack's delivery timeout leaves nothing recorded, so the
+retry invokes the callback again. That retry can overlap a callback that is
+still running, so make the callback idempotent, for example by applying
+`Change.Version` monotonically. If you call `VerifyRequest` directly, call
+`MarkHandled` after your processing succeeds.
 
 ## Webhook verification
 
