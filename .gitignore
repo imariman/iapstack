@@ -41,3 +41,12 @@ scripts/huawei-sandbox.env
 
 # Local research and generated scratch files
 /tmp/
+
+# Native Android store configuration and credentials
+sdk/android/local.properties
+sdk/android/example/store.properties
+sdk/android/**/agconnect-services.json
+sdk/android/**/*.keystore
+sdk/android/**/*.jks
+sdk/android/example/trusted-host/*.env
+sdk/android/**/__pycache__/

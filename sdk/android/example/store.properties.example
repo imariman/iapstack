@@ -1,0 +1,7 @@
+# Copy to ignored store.properties. Use a package registered in the selected store.
+applicationId=com.example.your.registered.app
+hmsAppId=YOUR_APPGALLERY_APP_ID
+# Optional signing for Play internal testing / Huawei sandbox; keep the keystore outside git.
+# storeFile=/absolute/path/to/upload.keystore
+# keyAlias=upload
+# Passwords: IAPSTACK_ANDROID_STORE_PASSWORD and IAPSTACK_ANDROID_KEY_PASSWORD env vars.

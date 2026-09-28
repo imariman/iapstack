@@ -82,7 +82,7 @@ data class GooglePlayPricingPhase(
   val billingCycleCount: Int,
   val billingPeriod: String,
   val formattedPrice: String,
-  val priceMicros: Int,
+  val priceMicros: Long,
   val currencyCode: String,
   val recurrence: GooglePlayPricingRecurrence,
 )
@@ -96,7 +96,7 @@ data class GooglePlayProduct(
   val title: String,
   val description: String,
   val price: String,
-  val priceMicros: Int,
+  val priceMicros: Long,
   val currencyCode: String,
   val offerToken: String? = null,
   val basePlanId: String? = null,
@@ -118,7 +118,7 @@ data class GooglePlayProduct(
       id.isEmpty() || price.isEmpty() || priceMicros < 0 ||
         !Regex("^[A-Z]{3}$").matches(currencyCode) -> false
       kind == GooglePlayProductKind.NON_CONSUMABLE ->
-        offerToken == null && basePlanId == null && pricingPhases.isEmpty()
+        basePlanId == null && pricingPhases.isEmpty()
       kind == GooglePlayProductKind.SUBSCRIPTION ->
         !offerToken.isNullOrEmpty() &&
           !basePlanId.isNullOrEmpty() &&

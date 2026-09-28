@@ -248,9 +248,14 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
 
-      - name: Test Kotlin packages
+      - name: Build native Android libraries and example, and run tests
         working-directory: sdk/android
-        run: ./gradlew --no-daemon test
+        run: |
+          ./gradlew --no-daemon :core:test :google-play:testDebugUnitTest :huawei:testDebugUnitTest :google-play:assembleRelease :huawei:assembleRelease :example:assembleDebug :google-play:lintDebug :huawei:lintDebug :example:lintDebug
+          python3 -m unittest discover -s example/trusted-host -p 'test_*.py'
+          git check-ignore -q example/store.properties
+          git check-ignore -q example/agconnect-services.json
+          git check-ignore -q example/upload.jks
 
   react-native-sdk:
     name: React Native SDK checks
