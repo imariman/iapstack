@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -37,7 +38,16 @@ const (
 )
 
 type failingStore struct {
-	// err is returned from every Remember call.
+	// err is returned from every Seen and Remember call.
+	err error
+}
+
+// flakyRememberStore fails Remember a fixed number of times before delegating.
+type flakyRememberStore struct {
+	*MemoryEventStore
+	// failures counts the remaining Remember calls that return err.
+	failures atomic.Int32
+	// err is returned while failures remain.
 	err error
 }
 
@@ -159,9 +169,22 @@ func TestWebhookVerifierDeduplicatesExactAuthenticatedReplay(t *testing.T) {
 	if err != nil || first.Duplicate {
 		t.Fatalf("first delivery = %#v err=%v", first, err)
 	}
+	unhandled, err := verifier.VerifyRequest(signedWebhookRequest(t, now, []byte(testWebhookBody), "event-1"))
+	if err != nil || unhandled.Duplicate {
+		t.Fatalf("replay before MarkHandled = %#v err=%v", unhandled, err)
+	}
+	if err := verifier.MarkHandled(context.Background(), first); err != nil {
+		t.Fatalf("MarkHandled() error = %v", err)
+	}
+	if err := verifier.MarkHandled(context.Background(), unhandled); err != nil {
+		t.Fatalf("repeated MarkHandled() error = %v", err)
+	}
 	second, err := verifier.VerifyRequest(signedWebhookRequest(t, now, []byte(testWebhookBody), "event-1"))
 	if err != nil || !second.Duplicate {
 		t.Fatalf("replay = %#v err=%v", second, err)
+	}
+	if err := verifier.MarkHandled(context.Background(), WebhookEvent{ID: "event-1"}); err == nil {
+		t.Fatal("MarkHandled() accepted an event that VerifyRequest did not return")
 	}
 }
 
@@ -173,12 +196,23 @@ func TestWebhookVerifierRejectsEventIdentityConflict(t *testing.T) {
 	verifier := newTestVerifier(t, now, defaultWebhookBodyLimit)
 	defer verifier.Close()
 
-	if _, err := verifier.VerifyRequest(signedWebhookRequest(t, now, []byte(testWebhookBody), "event-1")); err != nil {
+	first, err := verifier.VerifyRequest(signedWebhookRequest(t, now, []byte(testWebhookBody), "event-1"))
+	if err != nil {
 		t.Fatalf("first delivery error = %v", err)
 	}
 	altered := []byte(strings.Replace(testWebhookBody, `"version":1`, `"version":2`, 1))
+	pending, err := verifier.VerifyRequest(signedWebhookRequest(t, now, altered, "event-1"))
+	if err != nil {
+		t.Fatalf("unhandled altered delivery error = %v", err)
+	}
+	if err := verifier.MarkHandled(context.Background(), first); err != nil {
+		t.Fatalf("MarkHandled() error = %v", err)
+	}
 	if _, err := verifier.VerifyRequest(signedWebhookRequest(t, now, altered, "event-1")); !webhookCode(err, "event_identity_conflict") {
 		t.Fatalf("error = %v, want event_identity_conflict", err)
+	}
+	if err := verifier.MarkHandled(context.Background(), pending); !webhookCode(err, "event_identity_conflict") {
+		t.Fatalf("MarkHandled() error = %v, want event_identity_conflict", err)
 	}
 }
 
@@ -332,8 +366,12 @@ func TestWebhookHandlerOwnsIAPStackRetryStatuses(t *testing.T) {
 
 	conflictVerifier := newTestVerifier(t, now, defaultWebhookBodyLimit)
 	defer conflictVerifier.Close()
-	if _, err := conflictVerifier.VerifyRequest(signedWebhookRequest(t, now, []byte(testWebhookBody), "event-3")); err != nil {
+	seed, err := conflictVerifier.VerifyRequest(signedWebhookRequest(t, now, []byte(testWebhookBody), "event-3"))
+	if err != nil {
 		t.Fatalf("seed delivery error = %v", err)
+	}
+	if err := conflictVerifier.MarkHandled(context.Background(), seed); err != nil {
+		t.Fatalf("seed MarkHandled() error = %v", err)
 	}
 	conflict := httptest.NewRecorder()
 	altered := []byte(strings.Replace(testWebhookBody, `"version":1`, `"version":2`, 1))
@@ -379,14 +417,22 @@ func TestWebhookHandlerOwnsIAPStackRetryStatuses(t *testing.T) {
 	}
 }
 
+// Seen returns the injected store failure.
+func (store failingStore) Seen(context.Context, string, []byte) (bool, error) {
+	return false, store.err
+}
+
 // Remember returns the injected store failure without recording the event.
 func (store failingStore) Remember(context.Context, string, []byte) (bool, error) {
 	return false, store.err
 }
 
-// Forget is a no-op because failingStore never records events.
-func (store failingStore) Forget(context.Context, string) error {
-	return nil
+// Remember fails while injected failures remain, then records through the memory store.
+func (store *flakyRememberStore) Remember(ctx context.Context, eventID string, fingerprint []byte) (bool, error) {
+	if store.failures.Add(-1) >= 0 {
+		return false, store.err
+	}
+	return store.MemoryEventStore.Remember(ctx, eventID, fingerprint)
 }
 
 // newTestVerifier constructs a verifier with an isolated memory store.
@@ -450,10 +496,9 @@ func TestWebhookHandlerRedeliversAfterCallbackFailure(t *testing.T) {
 	now := time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC)
 	verifier := newTestVerifier(t, now, defaultWebhookBodyLimit)
 	defer verifier.Close()
-	calls := 0
+	var calls atomic.Int32
 	handler := verifier.Handler(func(context.Context, WebhookEvent) error {
-		calls++
-		if calls == 1 {
+		if calls.Add(1) == 1 {
 			return errors.New("transient host failure")
 		}
 		return nil
@@ -474,7 +519,95 @@ func TestWebhookHandlerRedeliversAfterCallbackFailure(t *testing.T) {
 	if third.Code != http.StatusNoContent {
 		t.Fatalf("duplicate delivery status = %d, want 204", third.Code)
 	}
-	if calls != 2 {
-		t.Fatalf("onEvent calls = %d, want 2", calls)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("onEvent calls = %d, want 2", got)
+	}
+}
+
+// TestWebhookHandlerRedeliversRetryThatOverlapsSlowCallback models IAPStack's
+// client timeout: the retry arrives while the first onEvent is still running
+// and must reach onEvent instead of being acknowledged as a duplicate.
+func TestWebhookHandlerRedeliversRetryThatOverlapsSlowCallback(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC)
+	store := NewMemoryEventStore()
+	verifier := newTestVerifierWithStore(t, now, defaultWebhookBodyLimit, store)
+	defer verifier.Close()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	handler := verifier.Handler(func(context.Context, WebhookEvent) error {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+			return errors.New("slow host failure")
+		}
+		return nil
+	})
+
+	first := httptest.NewRecorder()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		handler.ServeHTTP(first, signedWebhookRequest(t, now, []byte(testWebhookBody), "event-overlap"))
+	}()
+	<-started
+	fingerprint := sha256.Sum256([]byte(testWebhookBody))
+	if seen, err := store.Seen(context.Background(), "event-overlap", fingerprint[:]); err != nil || seen {
+		t.Fatalf("in-flight event recorded before onEvent succeeded: seen=%t err=%v", seen, err)
+	}
+
+	retry := httptest.NewRecorder()
+	handler.ServeHTTP(retry, signedWebhookRequest(t, now, []byte(testWebhookBody), "event-overlap"))
+	if retry.Code != http.StatusNoContent {
+		t.Fatalf("overlapping retry status = %d, want 204", retry.Code)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("onEvent calls after overlapping retry = %d, want 2", got)
+	}
+	close(release)
+	<-firstDone
+	if first.Code != http.StatusServiceUnavailable {
+		t.Fatalf("slow failing delivery status = %d, want 503", first.Code)
+	}
+
+	duplicate := httptest.NewRecorder()
+	handler.ServeHTTP(duplicate, signedWebhookRequest(t, now, []byte(testWebhookBody), "event-overlap"))
+	if duplicate.Code != http.StatusNoContent || calls.Load() != 2 {
+		t.Fatalf("duplicate status = %d calls = %d, want 204 and 2", duplicate.Code, calls.Load())
+	}
+}
+
+// TestWebhookHandlerRedeliversWhenRecordingFails verifies a store failure after onEvent stays retryable.
+func TestWebhookHandlerRedeliversWhenRecordingFails(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC)
+	cause := errors.New("disk full")
+	store := &flakyRememberStore{MemoryEventStore: NewMemoryEventStore(), err: cause}
+	store.failures.Store(1)
+	verifier := newTestVerifierWithStore(t, now, defaultWebhookBodyLimit, store)
+	defer verifier.Close()
+	var calls atomic.Int32
+	handler := verifier.Handler(func(context.Context, WebhookEvent) error {
+		calls.Add(1)
+		return nil
+	})
+
+	first := httptest.NewRecorder()
+	handler.ServeHTTP(first, signedWebhookRequest(t, now, []byte(testWebhookBody), "event-record"))
+	if first.Code != http.StatusServiceUnavailable {
+		t.Fatalf("record failure status = %d, want 503", first.Code)
+	}
+	for attempt := range 2 {
+		retry := httptest.NewRecorder()
+		handler.ServeHTTP(retry, signedWebhookRequest(t, now, []byte(testWebhookBody), "event-record"))
+		if retry.Code != http.StatusNoContent {
+			t.Fatalf("retry %d status = %d, want 204", attempt, retry.Code)
+		}
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("onEvent calls = %d, want 2", got)
 	}
 }
