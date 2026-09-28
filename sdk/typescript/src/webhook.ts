@@ -1,11 +1,12 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import { WebhookError, webhookStatus } from './errors';
+import { isPositiveFinite } from './config.js';
+import { WebhookError, webhookStatus } from './errors.js';
 import {
   EntitlementChange,
   optionalDate,
   requiredInt,
   requiredString,
-} from './models';
+} from './models.js';
 
 const SIGNATURE_VERSION = 'v2';
 const SIGNATURE_PREFIX = `${SIGNATURE_VERSION}=`;
@@ -125,12 +126,12 @@ export class WebhookVerifier {
       throw new TypeError('webhook event store is required');
     }
     const bodyLimit = config.bodyLimit ?? DEFAULT_WEBHOOK_BODY_LIMIT;
-    if (bodyLimit <= 0) {
+    if (!isPositiveFinite(bodyLimit)) {
       throw new TypeError('webhook body limit must be positive');
     }
     const timestampToleranceMs =
       config.timestampToleranceMs ?? DEFAULT_WEBHOOK_TIMESTAMP_TOLERANCE_MS;
-    if (timestampToleranceMs <= 0) {
+    if (!isPositiveFinite(timestampToleranceMs)) {
       throw new TypeError('webhook timestamp tolerance must be positive');
     }
     this.secret = Buffer.from(secret);
