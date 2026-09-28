@@ -19,6 +19,8 @@ public protocol AppleIAPPlatform: Sendable {
   func launchPurchase(product: AppleProduct, appAccountToken: String) async throws -> ApplePurchase?
 
   /// Restores previously owned StoreKit rows.
+  ///
+  /// Rows that StoreKit has not finished yet have `pendingCompletion == true`.
   func restorePurchases() async throws -> [ApplePurchase]
 
   /// Finishes one StoreKit transaction.

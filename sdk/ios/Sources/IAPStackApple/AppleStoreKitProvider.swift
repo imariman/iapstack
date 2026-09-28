@@ -141,13 +141,26 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
 
   public func restorePurchases() async throws -> [ApplePurchase] {
     try await AppStore.sync()
+    // `Transaction.all` is the full history, finished or not. Only rows that are
+    // still in `Transaction.unfinished` need `finish()`, so only those keep a
+    // finish handle and `pendingTransactions` does not grow with the history.
+    var unfinishedIds = Set<UInt64>()
+    for await result in Transaction.unfinished {
+      if case .verified(let transaction) = result {
+        unfinishedIds.insert(transaction.id)
+      }
+    }
     var purchases: [ApplePurchase] = []
     var seen = Set<String>()
     for await result in Transaction.all {
-      guard case .verified = result else {
+      guard case .verified(let transaction) = result else {
         continue
       }
-      let purchase = try await mapVerification(result, status: .restored, pendingCompletion: false)
+      let purchase = try await mapVerification(
+        result,
+        status: .restored,
+        pendingCompletion: unfinishedIds.contains(transaction.id),
+      )
       if seen.insert(purchase.transactionId).inserted {
         purchases.append(purchase)
       }
@@ -178,7 +191,7 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
         status: status,
         pendingCompletion: pendingCompletion,
       )
-      // History rows are already finished; only live transactions need a finish handle.
+      // Keep a finish handle only for transactions StoreKit still expects `finish()` on.
       if pendingCompletion {
         await state.setPending(transaction, id: purchase.transactionId)
       }

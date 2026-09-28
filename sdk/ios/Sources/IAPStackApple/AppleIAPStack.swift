@@ -88,12 +88,16 @@ public final class AppleIAPStack {
   }
 
   /// Restores StoreKit history and verifies one bounded set per API request.
+  ///
+  /// Unfinished StoreKit rows are finished after the batch that carried them
+  /// verifies.
   public func restorePurchases(
     externalCustomerId: String,
     requestId: String? = nil,
   ) async throws -> RestoreResult {
     try validateExternalCustomerId(externalCustomerId)
     let purchases = try await platform.restorePurchases()
+    var accepted: [ApplePurchase] = []
     var submissions: [PurchaseSubmission] = []
     var seen: Set<String> = []
     for purchase in purchases where purchase.canVerify {
@@ -106,18 +110,24 @@ public final class AppleIAPStack {
       }
       seen.insert(purchase.transactionId)
       submissions.append(try submission(externalCustomerId: externalCustomerId, purchase: purchase))
+      accepted.append(purchase)
     }
     if submissions.isEmpty {
       return RestoreResult(results: [])
     }
     var results: [VerificationResult] = []
     for start in stride(from: 0, to: submissions.count, by: 100) {
-      let batch = Array(submissions[start..<min(start + 100, submissions.count)])
+      let end = min(start + 100, submissions.count)
+      let batch = Array(submissions[start..<end])
       let batchRequestId = batchRequestId(base: requestId, index: start / 100)
       results.append(contentsOf: try await client.restorePurchases(
         batch,
         requestId: batchRequestId,
       ).results)
+      // The server answers 200 only after every item in the batch verified.
+      for purchase in accepted[start..<end] where purchase.pendingCompletion {
+        try await platform.completePurchase(purchase)
+      }
     }
     return RestoreResult(results: results)
   }
