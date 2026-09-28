@@ -444,20 +444,13 @@ final class IAPStackAppleTests: XCTestCase {
   }
 
   func testApiErrorExposesRetryAfterAsDelaySecondsOrHttpDate() async throws {
-    let now = Date(timeIntervalSince1970: 1_790_000_000)
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(secondsFromGMT: 0)
-    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+    // 2026-09-28T12:00:00Z
+    let now = Date(timeIntervalSince1970: 1_790_596_800)
     let cases: [(String?, TimeInterval?)] = [
       (nil, nil),
       ("17", 17),
-      (" 5 ", 5),
-      (formatter.string(from: now.addingTimeInterval(90)), 90),
-      (formatter.string(from: now.addingTimeInterval(-60)), 0),
-      ("-3", nil),
-      ("1.5", nil),
-      ("March 1, 2026", nil),
+      ("Fri, 02 Oct 2026 00:00:00 GMT", 302_400),
+      ("Fri, 31 Feb 2026 00:00:00 GMT", nil),
       ("soon", nil),
     ]
     for (header, expected) in cases {
@@ -497,6 +490,69 @@ final class IAPStackAppleTests: XCTestCase {
     }
   }
 
+  func testParseRetryAfterAcceptsDelaySecondsAndRoundTrippingImfFixdatesOnly() {
+    // 2026-09-28T12:00:00Z
+    let now = Date(timeIntervalSince1970: 1_790_596_800)
+    let cases: [(String?, TimeInterval?)] = [
+      (nil, nil),
+      ("", nil),
+      ("17", 17),
+      (" 5 ", 5),
+      ("999999999", 999_999_999),
+      ("1000000000", nil),
+      ("Fri, 02 Oct 2026 00:00:00 GMT", 302_400),
+      ("Mon, 28 Sep 2026 11:59:00 GMT", 0),
+      ("Fri, 31 Feb 2026 00:00:00 GMT", nil),
+      ("Wed, 31 Apr 2026 00:00:00 GMT", nil),
+      ("Mon, 02 Oct 2026 00:00:00 GMT", nil),
+      ("Friday, 02-Oct-26 00:00:00 GMT", nil),
+      ("Fri Oct  2 00:00:00 2026", nil),
+      ("Fri, 02 Oct 2026 00:00:00 +0000", nil),
+      ("02 Oct 2026 00:00:00 GMT", nil),
+      ("Fri, 02 Oct 2026 24:00:00 GMT", nil),
+      ("-3", nil),
+      ("1.5", nil),
+      ("March 1, 2026", nil),
+      ("soon", nil),
+    ]
+    for (header, expected) in cases {
+      let parsed = parseRetryAfter(header, now: now)
+      if let expected {
+        XCTAssertEqual(parsed ?? -1, expected, accuracy: 0.001, "Retry-After \(header ?? "nil")")
+      } else {
+        XCTAssertNil(parsed, "Retry-After \(header ?? "nil")")
+      }
+    }
+  }
+
+  func testWaitsAtLeastTheRetryAfterCooldownBeforeRetrying() async throws {
+    URLStubProtocol.reset()
+    let attempts = Counter()
+    URLStubProtocol.enqueue { request in
+      attempts.increment()
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 503,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json", "Retry-After": "3"],
+      )!
+      return (response, Data(#"{"error":{"code":"provider_unavailable","message":"cooling down"}}"#.utf8))
+    }
+    enqueueEntitlementsResponse(attempts: attempts)
+    let config = IAPStackConfig(
+      baseUri: URL(string: "https://example.local")!,
+      applicationId: "application-1",
+      customerToken: "customer-token",
+      retryPolicy: .init(maxAttempts: 2, baseDelay: 0.04, maxDelay: 0.04),
+    )
+    let client = try IAPStackClient(config: config, session: makeSession())
+    let slept = Slept()
+    client.sleep = { slept.record($0) }
+    _ = try await client.getEntitlements("customer-id")
+    XCTAssertEqual(attempts.value, 2)
+    XCTAssertEqual(slept.values, [3])
+  }
+
   func testElapsedRetryAfterDoesNotBlockTheRetry() async throws {
     URLStubProtocol.reset()
     let attempts = Counter()
@@ -516,7 +572,7 @@ final class IAPStackAppleTests: XCTestCase {
     XCTAssertEqual(attempts.value, 2)
   }
 
-  func testRetryPolicyRaisesJitterToRetryAfterAndCapsIt() {
+  func testRetryPolicyRaisesJitterToABudgetedRetryAfter() {
     let policy = IAPStackRetryPolicy(baseDelay: 0.1, maxDelay: 0.25)
     XCTAssertEqual(policy.delayAfter(attempt: 1, randomValue: 0.5), 0.05, accuracy: 0.0001)
     XCTAssertEqual(policy.delayAfter(attempt: 1, randomValue: 0.5, retryAfter: nil), 0.05, accuracy: 0.0001)
@@ -525,6 +581,10 @@ final class IAPStackAppleTests: XCTestCase {
     XCTAssertEqual(policy.delayAfter(attempt: 1, randomValue: 0, retryAfter: 4), 4, accuracy: 0.0001)
     XCTAssertEqual(policy.delayAfter(attempt: 1, randomValue: 1, retryAfter: 3600), IAPStackRetryPolicy.maxRetryAfter)
     XCTAssertEqual(IAPStackRetryPolicy.maxRetryAfter, 30)
+
+    // The budget bounds the cooldown, never the configured jitter.
+    let wide = IAPStackRetryPolicy(baseDelay: 40, maxDelay: 60)
+    XCTAssertEqual(wide.delayAfter(attempt: 1, randomValue: 1, retryAfter: 1), 40, accuracy: 0.0001)
   }
 
   func testCloseDoesNotInvalidateInjectedSession() async throws {
@@ -933,6 +993,20 @@ final class IAPStackAppleTests: XCTestCase {
     }
     XCTAssertEqual(message, "IAPStackClient is closed", file: file, line: line)
     XCTAssertFalse((error as? IAPStackSDKError)?.isRetryable ?? true, file: file, line: line)
+  }
+}
+
+/// Records the delays a client asked to sleep for.
+final class Slept: @unchecked Sendable {
+  private let lock = NSLock()
+  private var recorded: [TimeInterval] = []
+
+  var values: [TimeInterval] {
+    lock.withLock { recorded }
+  }
+
+  func record(_ seconds: TimeInterval) {
+    lock.withLock { recorded.append(seconds) }
   }
 }
 

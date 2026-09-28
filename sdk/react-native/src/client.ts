@@ -9,6 +9,7 @@ import {
   VerificationResult,
 } from './models';
 import { IapStackConfig } from './config';
+import { parseRetryAfter } from './retry_after';
 import {
   IapStackApiError,
   IapStackProtocolError,
@@ -20,35 +21,6 @@ const SDK_VERSION = '0.1.0-dev.1';
 
 const RETRYABLE_STATUS = (statusCode: number): boolean =>
   statusCode === 429 || statusCode >= 500;
-
-const DELAY_SECONDS = /^\d{1,9}$/;
-const IMF_FIXDATE =
-  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
-
-/**
- * Parses Retry-After as delay-seconds or an IMF-fixdate HTTP-date (RFC 9110).
- * A missing or malformed value yields undefined; an elapsed date yields 0.
- */
-export function parseRetryAfter(
-  header: string | null | undefined,
-  nowMs: number,
-): number | undefined {
-  const value = header?.trim() ?? '';
-  if (!value) {
-    return undefined;
-  }
-  if (DELAY_SECONDS.test(value)) {
-    return Number.parseInt(value, 10) * 1000;
-  }
-  if (!IMF_FIXDATE.test(value)) {
-    return undefined;
-  }
-  const at = Date.parse(value);
-  if (Number.isNaN(at)) {
-    return undefined;
-  }
-  return Math.max(0, at - nowMs);
-}
 
 /** Runtime client for the IAPStack v1 API from React Native. */
 export class IapStackClient {

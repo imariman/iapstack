@@ -1,7 +1,8 @@
 /// Retry settings for idempotent verification, restore, and entitlement calls.
 final class IapStackRetryPolicy {
-  /// Upper bound for a server-requested `Retry-After` cooldown, so one
-  /// response cannot stall a caller indefinitely. Every IAPStack SDK uses
+  /// Client budget for a server-requested `Retry-After` cooldown. A longer
+  /// cooldown is cut to this value, so the retry may still land inside it; the
+  /// budget never reduces the configured jitter. Every IAPStack SDK uses
   /// 30 seconds.
   static const Duration maxRetryAfter = Duration(seconds: 30);
 
@@ -24,9 +25,9 @@ final class IapStackRetryPolicy {
   /// Returns a full-jitter delay after a failed one-based [attempt].
   ///
   /// When the failed response carried a `Retry-After` cooldown, pass it as
-  /// [retryAfter]: the result is then the larger of the jitter delay and the
-  /// cooldown, capped at [maxRetryAfter], so a retry never lands inside a
-  /// cooldown the server asked for.
+  /// [retryAfter]: the result is then `max(jitter, min(retryAfter,
+  /// maxRetryAfter))`. The cooldown raises the wait up to the client budget
+  /// and never shortens the jitter delay.
   Duration delayAfter(
     int attempt, {
     required double randomValue,
@@ -36,8 +37,8 @@ final class IapStackRetryPolicy {
     if (retryAfter == null || retryAfter <= Duration.zero) {
       return jitter;
     }
-    final raised = retryAfter > jitter ? retryAfter : jitter;
-    return raised > maxRetryAfter ? maxRetryAfter : raised;
+    final budgeted = retryAfter > maxRetryAfter ? maxRetryAfter : retryAfter;
+    return budgeted > jitter ? budgeted : jitter;
   }
 
   Duration _jitterDelay(int attempt, double randomValue) {

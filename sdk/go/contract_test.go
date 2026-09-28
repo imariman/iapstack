@@ -79,7 +79,7 @@ func TestSharedSDKBehaviorIsDocumented(t *testing.T) {
 	document := readRepositoryFile(t, "docs", "api-v1.md")
 	for _, needle := range []string{
 		"## Shared SDK behavior",
-		"`max(jitter, Retry-After)` capped at 30 seconds",
+		"`max(jitter, min(Retry-After, 30 s))`",
 		"`grantsAccess`.** Go and Swift expose a method",
 		"`effective_starts_at` is informational",
 	} {

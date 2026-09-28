@@ -11,8 +11,6 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import java.net.URI
 import java.time.Instant
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
 import kotlin.test.assertNull
 import java.util.Collections
 import java.util.concurrent.Executors
@@ -127,17 +125,11 @@ class IapStackClientTest {
   @Test
   fun exposesRetryAfterAsDelaySecondsOrHttpDate() = runBlocking {
     val now = Instant.parse("2026-09-28T12:00:00Z")
-    fun httpDate(instant: Instant): String =
-      DateTimeFormatter.RFC_1123_DATE_TIME.format(instant.atOffset(ZoneOffset.UTC))
     val cases = listOf<Pair<String?, Duration?>>(
       null to null,
       "17" to 17.seconds,
-      " 5 " to 5.seconds,
-      httpDate(now.plusSeconds(90)) to 90.seconds,
-      httpDate(now.minusSeconds(60)) to Duration.ZERO,
-      "-3" to null,
-      "1.5" to null,
-      "March 1, 2026" to null,
+      "Fri, 02 Oct 2026 00:00:00 GMT" to (Instant.parse("2026-10-02T00:00:00Z").toEpochMilli() - now.toEpochMilli()).milliseconds,
+      "Fri, 31 Feb 2026 00:00:00 GMT" to null,
       "soon" to null,
     )
     for ((header, expected) in cases) {
@@ -164,6 +156,60 @@ class IapStackClientTest {
   }
 
   @Test
+  fun parseRetryAfterAcceptsDelaySecondsAndRoundTrippingImfFixdatesOnly() {
+    val now = Instant.parse("2026-09-28T12:00:00Z")
+    val cases = listOf<Pair<String?, Duration?>>(
+      null to null,
+      "" to null,
+      "17" to 17.seconds,
+      " 5 " to 5.seconds,
+      "999999999" to 999999999.seconds,
+      "1000000000" to null,
+      "Fri, 02 Oct 2026 00:00:00 GMT" to (Instant.parse("2026-10-02T00:00:00Z").toEpochMilli() - now.toEpochMilli()).milliseconds,
+      "Mon, 28 Sep 2026 11:59:00 GMT" to Duration.ZERO,
+      "Fri, 31 Feb 2026 00:00:00 GMT" to null,
+      "Wed, 31 Apr 2026 00:00:00 GMT" to null,
+      "Mon, 02 Oct 2026 00:00:00 GMT" to null,
+      "Friday, 02-Oct-26 00:00:00 GMT" to null,
+      "Fri Oct  2 00:00:00 2026" to null,
+      "Fri, 02 Oct 2026 00:00:00 +0000" to null,
+      "02 Oct 2026 00:00:00 GMT" to null,
+      "Fri, 02 Oct 2026 24:00:00 GMT" to null,
+      "-3" to null,
+      "1.5" to null,
+      "March 1, 2026" to null,
+      "soon" to null,
+    )
+    for ((header, expected) in cases) {
+      assertEquals(expected, parseRetryAfter(header, now), "Retry-After $header")
+    }
+  }
+
+  @Test
+  fun waitsAtLeastTheRetryAfterCooldownBeforeRetrying() = runBlocking {
+    MockWebServer().use { server ->
+      server.enqueue(
+        jsonResponse("""{"error":{"code":"provider_unavailable","message":"cooling down"}}""", 503)
+          .setHeader("Retry-After", "3"),
+      )
+      server.enqueue(jsonResponse(VERIFICATION_JSON))
+      val client = client(
+        server,
+        IapStackRetryPolicy(maxAttempts = 2, baseDelay = 40.milliseconds, maxDelay = 40.milliseconds),
+      )
+      val slept = mutableListOf<Duration>()
+      client.sleep = { slept.add(it) }
+
+      val result = client.verifyPurchase(purchase())
+
+      assertEquals(2, server.requestCount)
+      assertEquals("customer-internal", result.customerId)
+      assertEquals(listOf(3.seconds), slept)
+      client.close()
+    }
+  }
+
+  @Test
   fun elapsedRetryAfterDoesNotBlockTheRetry() = runBlocking {
     MockWebServer().use { server ->
       server.enqueue(
@@ -185,7 +231,7 @@ class IapStackClientTest {
   }
 
   @Test
-  fun retryPolicyRaisesJitterToRetryAfterAndCapsIt() {
+  fun retryPolicyRaisesJitterToABudgetedRetryAfter() {
     val policy = IapStackRetryPolicy(
       baseDelay = 100.milliseconds,
       maxDelay = 250.milliseconds,
@@ -200,6 +246,10 @@ class IapStackClientTest {
       policy.delayAfter(1, 1.1, 4.seconds)
     }
     assertNull(IapStackApiException(429, "rate_limited", null, true, "slow down").retryAfter)
+
+    // The budget bounds the cooldown, never the configured jitter.
+    val wide = IapStackRetryPolicy(baseDelay = 40.seconds, maxDelay = 60.seconds)
+    assertEquals(40.seconds, wide.delayAfter(1, 1.0, 1.seconds))
   }
 
   @Test

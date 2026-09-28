@@ -13,7 +13,7 @@ import {
   IapStackTimeoutError,
   MAX_RETRY_AFTER_MS,
 } from '../src/index';
-import { parseRetryAfter } from '../src/client';
+import { parseRetryAfter } from '../src/retry_after';
 
 type MockRequest = {
   url: string;
@@ -236,22 +236,37 @@ test('an elapsed Retry-After does not block the retry', async () => {
   }
 });
 
-test('parseRetryAfter accepts delay-seconds and IMF-fixdate values only', () => {
+test('parseRetryAfter accepts delay-seconds and round-tripping IMF-fixdates only', () => {
   const now = Date.UTC(2026, 8, 28, 12, 0, 0);
-  assert.equal(parseRetryAfter(undefined, now), undefined);
-  assert.equal(parseRetryAfter(null, now), undefined);
-  assert.equal(parseRetryAfter('', now), undefined);
-  assert.equal(parseRetryAfter('17', now), 17_000);
-  assert.equal(parseRetryAfter(' 5 ', now), 5_000);
-  assert.equal(parseRetryAfter(new Date(now + 90_000).toUTCString(), now), 90_000);
-  assert.equal(parseRetryAfter(new Date(now - 60_000).toUTCString(), now), 0);
-  assert.equal(parseRetryAfter('-3', now), undefined);
-  assert.equal(parseRetryAfter('1.5', now), undefined);
-  assert.equal(parseRetryAfter('March 1, 2026', now), undefined);
-  assert.equal(parseRetryAfter('soon', now), undefined);
+  const cases: Array<[string | null | undefined, number | undefined]> = [
+    [undefined, undefined],
+    [null, undefined],
+    ['', undefined],
+    ['17', 17_000],
+    [' 5 ', 5_000],
+    ['999999999', 999_999_999_000],
+    ['1000000000', undefined],
+    ['Fri, 02 Oct 2026 00:00:00 GMT', Date.UTC(2026, 9, 2) - now],
+    ['Mon, 28 Sep 2026 11:59:00 GMT', 0],
+    ['Fri, 31 Feb 2026 00:00:00 GMT', undefined],
+    ['Wed, 31 Apr 2026 00:00:00 GMT', undefined],
+    ['Mon, 02 Oct 2026 00:00:00 GMT', undefined],
+    ['Friday, 02-Oct-26 00:00:00 GMT', undefined],
+    ['Fri Oct  2 00:00:00 2026', undefined],
+    ['Fri, 02 Oct 2026 00:00:00 +0000', undefined],
+    ['02 Oct 2026 00:00:00 GMT', undefined],
+    ['Fri, 02 Oct 2026 24:00:00 GMT', undefined],
+    ['-3', undefined],
+    ['1.5', undefined],
+    ['March 1, 2026', undefined],
+    ['soon', undefined],
+  ];
+  for (const [header, expected] of cases) {
+    assert.equal(parseRetryAfter(header, now), expected, `Retry-After ${String(header)}`);
+  }
 });
 
-test('retry policy raises the jitter delay to Retry-After and caps it', () => {
+test('retry policy raises the jitter delay to a budgeted Retry-After', () => {
   const policy = new IapStackRetryPolicy({ baseDelayMs: 100, maxDelayMs: 250 });
   assert.equal(policy.delayAfter(1, 0.5), 50);
   assert.equal(policy.delayAfter(1, 0.5, 0), 50);
@@ -260,6 +275,41 @@ test('retry policy raises the jitter delay to Retry-After and caps it', () => {
   assert.equal(policy.delayAfter(1, 1, 3_600_000), MAX_RETRY_AFTER_MS);
   assert.equal(MAX_RETRY_AFTER_MS, 30_000);
   assert.throws(() => policy.delayAfter(1, 1.1, 4000));
+
+  // The budget bounds the cooldown, never the configured jitter.
+  const wide = new IapStackRetryPolicy({ baseDelayMs: 40_000, maxDelayMs: 60_000 });
+  assert.equal(wide.delayAfter(1, 1, 1000), 40_000);
+});
+
+test('client waits at least the Retry-After cooldown before retrying', async () => {
+  let attempt = 0;
+  const { restore } = withMockFetch(async () => {
+    attempt += 1;
+    if (attempt === 1) {
+      return new Response(JSON.stringify({ error: { code: 'provider_unavailable', message: 'x' } }), {
+        status: 503,
+        headers: { 'content-type': 'application/json', 'retry-after': '1' },
+      });
+    }
+    return new Response(JSON.stringify(restorePayload()), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+
+  try {
+    const client = new IapStackClient(
+      clientConfig({
+        retryPolicy: new IapStackRetryPolicy({ maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 }),
+      }),
+    );
+    const startedAt = Date.now();
+    await client.restorePurchases([samplePurchase]);
+    assert.equal(attempt, 2);
+    assert.ok(Date.now() - startedAt >= 1000, 'the client must sleep for the Retry-After second');
+  } finally {
+    restore();
+  }
 });
 
 test('non-retryable API errors are surfaced without another attempt', async () => {

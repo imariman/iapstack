@@ -15,6 +15,7 @@ import {
   type CustomerSession,
   type EntitlementSnapshot,
 } from './models.js';
+import { parseRetryAfter } from './retry_after.js';
 
 const SDK_VERSION = '0.1.0-dev.1';
 const JSON_CONTENT_TYPE = 'application/json';
@@ -326,32 +327,6 @@ function apiErrorFromResponse(
     retryable: response.status === 429 || response.status >= 500,
     retryAfterMs: parseRetryAfter(response.headers.get('Retry-After'), nowMs),
   });
-}
-
-const DELAY_SECONDS = /^\d{1,9}$/;
-const IMF_FIXDATE =
-  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
-
-/**
- * Parses Retry-After as delay-seconds or an IMF-fixdate HTTP-date (RFC 9110).
- * A missing or malformed value yields undefined; an elapsed date yields 0.
- */
-function parseRetryAfter(header: string | null, nowMs: number): number | undefined {
-  const value = header?.trim() ?? '';
-  if (!value) {
-    return undefined;
-  }
-  if (DELAY_SECONDS.test(value)) {
-    return Number.parseInt(value, 10) * 1000;
-  }
-  if (!IMF_FIXDATE.test(value)) {
-    return undefined;
-  }
-  const at = Date.parse(value);
-  if (Number.isNaN(at)) {
-    return undefined;
-  }
-  return Math.max(0, at - nowMs);
 }
 
 function parseJsonObject(raw: string): Record<string, unknown> {

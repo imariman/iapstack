@@ -37,9 +37,10 @@ final class IapStackApiException extends IapStackException {
   /// Whether a later idempotent retry may succeed.
   final bool retryable;
 
-  /// Cooldown the server requested through `Retry-After`, or null when the
-  /// header was absent or malformed. The client waits at least this long,
-  /// capped at `IapStackRetryPolicy.maxRetryAfter`, before a retry.
+  /// Cooldown the server requested through `Retry-After`: [Duration.zero]
+  /// when its HTTP-date had already elapsed, null when the header was absent
+  /// or malformed. The client waits `max(jitter, min(retryAfter,
+  /// IapStackRetryPolicy.maxRetryAfter))` before a retry.
   final Duration? retryAfter;
 }
 

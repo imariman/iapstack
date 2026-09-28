@@ -5,9 +5,9 @@ public enum IAPStackSDKError: Error, LocalizedError, Sendable {
   /// Structured API error returned by IAPStack with a machine-readable status.
   ///
   /// `retryAfter` is the cooldown in seconds the server requested through
-  /// `Retry-After`, or nil when the header was absent or malformed. The client
-  /// waits at least this long, capped at `IAPStackRetryPolicy.maxRetryAfter`,
-  /// before a retry.
+  /// `Retry-After`: 0 when its HTTP-date had already elapsed, nil when the
+  /// header was absent or malformed. The client waits `max(jitter,
+  /// min(retryAfter, IAPStackRetryPolicy.maxRetryAfter))` before a retry.
   case apiError(
     statusCode: Int,
     code: String,

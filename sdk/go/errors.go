@@ -17,9 +17,10 @@ type APIError struct {
 	RequestID string
 	// Retryable reports whether a later idempotent retry may succeed.
 	Retryable bool
-	// RetryAfter is the cooldown the server requested through Retry-After, or
-	// zero when the header was absent or malformed. The client waits at least
-	// this long, capped at MaxRetryAfter, before a retry.
+	// RetryAfter is the cooldown the server requested through Retry-After.
+	// Zero collapses three cases the other IAPStack SDKs keep apart: the header
+	// was absent, it was malformed, or its HTTP-date had already elapsed. The
+	// client waits max(jitter, min(RetryAfter, MaxRetryAfter)) before a retry.
 	RetryAfter time.Duration
 }
 

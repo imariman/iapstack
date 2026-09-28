@@ -7,9 +7,10 @@ sealed class IapStackException(message: String, cause: Throwable? = null) : Exce
 /**
  * Structured v1 API error returned by IAPStack.
  *
- * [retryAfter] is the cooldown the server requested through `Retry-After`, or
- * null when the header was absent or malformed. The client waits at least this
- * long, capped at [IapStackRetryPolicy.MAX_RETRY_AFTER], before a retry.
+ * [retryAfter] is the cooldown the server requested through `Retry-After`:
+ * [Duration.ZERO] when its HTTP-date had already elapsed, null when the header
+ * was absent or malformed. The client waits `max(jitter, min(retryAfter,
+ * IapStackRetryPolicy.MAX_RETRY_AFTER))` before a retry.
  */
 class IapStackApiException(
   val statusCode: Int,

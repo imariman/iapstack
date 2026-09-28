@@ -10,8 +10,9 @@ const MAX_BACKOFF_EXPONENT = 20;
 export const MAX_TIMER_MS = 2_147_483_647;
 
 /**
- * Upper bound for a server-requested Retry-After cooldown, so one response
- * cannot stall a caller indefinitely. Every IAPStack SDK uses 30 seconds.
+ * Client budget for a server-requested Retry-After cooldown. A longer cooldown
+ * is cut to this value, so the retry may still land inside it; the budget never
+ * reduces the configured jitter. Every IAPStack SDK uses 30 seconds.
  */
 export const MAX_RETRY_AFTER_MS = 30_000;
 
@@ -31,16 +32,16 @@ export class RetryPolicy {
    * Full-jitter delay in milliseconds after a failed one-based attempt.
    *
    * When the failed response carried a Retry-After cooldown, pass it as
-   * `retryAfterMs`: the result is then the larger of the jitter delay and the
-   * cooldown, capped at MAX_RETRY_AFTER_MS, so a retry never lands inside a
-   * cooldown the server asked for.
+   * `retryAfterMs`: the result is then `max(jitter, min(retryAfterMs,
+   * MAX_RETRY_AFTER_MS))`. The cooldown raises the wait up to the client
+   * budget and never shortens the jitter delay.
    */
   delayAfter(attempt: number, randomValue: number, retryAfterMs?: number): number {
     const jitter = this.jitterDelay(attempt, randomValue);
     if (retryAfterMs === undefined || !(retryAfterMs > 0)) {
       return jitter;
     }
-    return Math.min(Math.max(jitter, retryAfterMs), MAX_RETRY_AFTER_MS);
+    return Math.max(jitter, Math.min(retryAfterMs, MAX_RETRY_AFTER_MS));
   }
 
   private jitterDelay(attempt: number, randomValue: number): number {

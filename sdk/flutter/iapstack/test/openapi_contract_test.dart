@@ -82,7 +82,7 @@ void main() {
     final document = await File('../../../docs/api-v1.md').readAsString();
     for (final needle in const <String>[
       '## Shared SDK behavior',
-      '`max(jitter, Retry-After)` capped at 30 seconds',
+      '`max(jitter, min(Retry-After, 30 s))`',
       '`grantsAccess`.** Go and Swift expose a method',
       '`effective_starts_at` is informational',
     ]) {

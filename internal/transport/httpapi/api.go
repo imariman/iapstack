@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1088,6 +1089,12 @@ func (api *API) writeError(writer http.ResponseWriter, request *http.Request, er
 				status, code, message = http.StatusNotFound, "purchase_not_found", "the provider did not find the purchase"
 			case stores.FailureRateLimited, stores.FailureTemporary:
 				status, code, message = http.StatusServiceUnavailable, "provider_unavailable", "the provider is temporarily unavailable"
+				if providerFailure.RetryAfter > 0 {
+					// Forward the provider cooldown as delay-seconds, rounded up, so SDKs
+					// wait it out instead of retrying on their own jitter.
+					seconds := int64((providerFailure.RetryAfter + time.Second - 1) / time.Second)
+					writer.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+				}
 			default:
 				status, code, message = http.StatusBadGateway, "provider_error", "the provider request failed"
 			}

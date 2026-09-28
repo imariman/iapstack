@@ -10,7 +10,6 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -367,24 +366,6 @@ func apiErrorFromResponse(response rawResponse, now time.Time) *APIError {
 		Retryable:  response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500,
 		RetryAfter: retryAfterFrom(response.Header, now),
 	}
-}
-
-// retryAfterFrom parses Retry-After as delay-seconds or an HTTP-date (RFC 9110).
-// A missing, malformed, or already elapsed value yields zero.
-func retryAfterFrom(header http.Header, now time.Time) time.Duration {
-	value := strings.TrimSpace(header.Get("Retry-After"))
-	if value == "" {
-		return 0
-	}
-	if seconds, err := strconv.ParseUint(value, 10, 32); err == nil {
-		return time.Duration(seconds) * time.Second
-	}
-	if at, err := http.ParseTime(value); err == nil {
-		if delay := at.Sub(now); delay > 0 {
-			return delay
-		}
-	}
-	return 0
 }
 
 // decodeJSON unmarshals one success body into a contract struct.

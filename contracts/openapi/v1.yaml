@@ -920,8 +920,9 @@ components:
       headers:
         Retry-After:
           description: >-
-            Optional cooldown as delay-seconds or an HTTP-date (RFC 9110). SDKs
-            wait at least this long, capped at 30 seconds, before a retry.
+            Provider cooldown as delay-seconds, rounded up. SDKs accept
+            delay-seconds or an IMF-fixdate HTTP-date and wait
+            max(jitter, min(Retry-After, 30 s)) before a retry.
           schema:
             type: string
       content:

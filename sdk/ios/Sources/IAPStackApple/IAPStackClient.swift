@@ -38,6 +38,10 @@ public final class IAPStackClient {
   private let ownsSession: Bool
   /// Wall clock used to resolve HTTP-date `Retry-After` values; only tests replace it.
   var clock: () -> Date = Date.init
+  /// Suspends between attempts; only tests replace it.
+  var sleep: (TimeInterval) async throws -> Void = { seconds in
+    try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+  }
   private let lifecycleLock = NSLock()
   private var closed = false
 
@@ -151,7 +155,7 @@ public final class IAPStackClient {
             retryAfter: retryAfter,
           )
           if delay > 0 {
-            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            try await sleep(delay)
           }
           attempt += 1
           continue
@@ -497,30 +501,4 @@ private extension String {
   var nilIfEmpty: String? {
     isEmpty ? nil : self
   }
-}
-
-/// Parses `Retry-After` as delay-seconds or an IMF-fixdate HTTP-date (RFC 9110).
-/// A missing or malformed value yields nil; an elapsed date yields zero.
-func parseRetryAfter(_ header: String?, now: Date) -> TimeInterval? {
-  guard let header else { return nil }
-  let value = header.trimmingCharacters(in: .whitespacesAndNewlines)
-  if value.isEmpty {
-    return nil
-  }
-  if value.count <= 9, value.allSatisfy(\.isASCIIDigit), let seconds = Double(value) {
-    return seconds
-  }
-  // Built per call: DateFormatter is not Sendable, and this only runs on error paths.
-  let imfFixdate = DateFormatter()
-  imfFixdate.locale = Locale(identifier: "en_US_POSIX")
-  imfFixdate.timeZone = TimeZone(secondsFromGMT: 0)
-  imfFixdate.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
-  guard let at = imfFixdate.date(from: value) else {
-    return nil
-  }
-  return max(0, at.timeIntervalSince(now))
-}
-
-private extension Character {
-  var isASCIIDigit: Bool { isASCII && isNumber }
 }
