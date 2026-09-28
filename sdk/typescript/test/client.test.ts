@@ -1,6 +1,7 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { inspect } from 'node:util';
+import { setRetrySeamsForTesting } from '../src/client';
 import { resolveConfig } from '../src/config';
 import {
   APIError,
@@ -17,16 +18,6 @@ import {
 const testApplicationToken = 'application-token';
 const testCustomerToken = 'customer-token';
 const testSecretBearer = 'secret with spaces';
-
-type RetrySeams = {
-  delay: (ms: number, signal?: AbortSignal) => Promise<void>;
-  random: () => number;
-};
-
-/** Reaches the private retry seams that only tests replace. */
-function retrySeams(client: Client): RetrySeams {
-  return client as unknown as RetrySeams;
-}
 
 type CapturedRequest = {
   method: string;
@@ -109,7 +100,7 @@ function newTestClient(
     },
     ...overrides,
   });
-  retrySeams(client).delay = async () => {};
+  setRetrySeamsForTesting(client, { delay: async () => {} });
   return { client, calls };
 }
 
@@ -213,10 +204,12 @@ test('client waits using the retry policy', async () => {
     },
     { retryPolicy: new RetryPolicy({ maxAttempts: 2, baseDelayMs: 40, maxDelayMs: 40 }) },
   );
-  retrySeams(client).random = () => 1;
-  retrySeams(client).delay = async (ms) => {
-    waited = ms;
-  };
+  setRetrySeamsForTesting(client, {
+    random: () => 1,
+    delay: async (ms) => {
+      waited = ms;
+    },
+  });
 
   await client.createCustomerSession('customer-external');
   assert.equal(waited, 40);
@@ -375,6 +368,20 @@ test('Client does not expose the application token when logged or serialized', (
   assert.equal(inspect(client, { depth: 10, showHidden: true }).includes(secret), false);
   assert.equal(Object.values(client).some((value) => JSON.stringify(value)?.includes(secret)), false);
   assert.equal('config' in client, false);
+});
+
+test('Client keeps its retry hooks off the instance', () => {
+  const client = new Client({
+    baseUrl: 'https://iap.example',
+    applicationId: 'application-1',
+    applicationToken: testApplicationToken,
+  });
+  assert.deepEqual(Reflect.ownKeys(client), []);
+  assert.equal('delay' in client, false);
+  assert.equal('random' in client, false);
+  const printed = inspect(client, { depth: 10, showHidden: true });
+  assert.equal(printed.includes('waitForRetry'), false);
+  assert.equal(printed.includes('random'), false);
 });
 
 test('Client rejects non-finite numeric options', () => {

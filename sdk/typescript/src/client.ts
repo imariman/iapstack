@@ -26,14 +26,29 @@ export interface RequestOptions {
 
 type DelayFn = (ms: number, signal?: AbortSignal) => Promise<void>;
 
+/** Retry timing hooks that only tests replace. */
+export interface RetrySeams {
+  delay?: DelayFn;
+  random?: () => number;
+}
+
+let installRetrySeams: (client: Client, seams: RetrySeams) => void;
+
 /** Application-bearer HTTP client for trusted host backends. */
 export class Client {
-  // A true private field keeps the durable application bearer out of
-  // console.log, util.inspect, JSON.stringify, and property enumeration.
+  // True private fields keep the durable application bearer and the retry
+  // hooks out of console.log, util.inspect, JSON.stringify, and property
+  // enumeration, and make the hooks unwritable from outside the class.
   readonly #config: ResolvedConfig;
-  // Retry seams replaced only by tests.
-  private delay: DelayFn = waitForRetry;
-  private random: () => number = Math.random;
+  #delay: DelayFn = waitForRetry;
+  #random: () => number = Math.random;
+
+  static {
+    installRetrySeams = (client, seams) => {
+      client.#delay = seams.delay ?? client.#delay;
+      client.#random = seams.random ?? client.#random;
+    };
+  }
 
   constructor(config: Config) {
     this.#config = resolveConfig(config);
@@ -238,12 +253,20 @@ export class Client {
   }
 
   private async wait(attempt: number, signal?: AbortSignal): Promise<void> {
-    const delay = this.#config.retryPolicy.delayAfter(attempt, this.random());
+    const delay = this.#config.retryPolicy.delayAfter(attempt, this.#random());
     if (delay <= 0) {
       return;
     }
-    await this.delay(delay, signal);
+    await this.#delay(delay, signal);
   }
+}
+
+/**
+ * Test-only: replaces retry timing on one client. The package entry point does
+ * not re-export this, so consumers cannot reach it through `@iapstack/host`.
+ */
+export function setRetrySeamsForTesting(client: Client, seams: RetrySeams): void {
+  installRetrySeams(client, seams);
 }
 
 function validateExternalCustomerId(value: string): void {
