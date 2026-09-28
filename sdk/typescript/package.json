@@ -39,9 +39,10 @@
     "build": "tsc -p tsconfig.build.json",
     "prepack": "tsc -p tsconfig.build.json",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json"
   },
   "devDependencies": {
+    "@types/bun": "1.4.2",
     "@types/node": "24.5.2",
     "typescript": "5.9.2"
   },

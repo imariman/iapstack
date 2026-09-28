@@ -3,6 +3,9 @@ import { defaultRetryPolicy, MAX_TIMER_MS, RetryPolicy } from './retry.js';
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 1 << 20;
 
+/** Minimal fetch signature the client needs; any WHATWG-compatible fetch works. */
+export type FetchFn = (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>;
+
 /** Runtime-only trusted-host configuration for one application. */
 export interface Config {
   /** IAPStack origin, optionally including a reverse-proxy path prefix. */
@@ -20,7 +23,7 @@ export interface Config {
   /** Allows plain HTTP for explicit local development environments. */
   allowInsecureHttp?: boolean;
   /** Optional injected fetch implementation. */
-  fetch?: typeof fetch;
+  fetch?: FetchFn;
 }
 
 export interface ResolvedConfig {
@@ -30,7 +33,7 @@ export interface ResolvedConfig {
   timeoutMs: number;
   retryPolicy: RetryPolicy;
   maxResponseBytes: number;
-  fetch: typeof fetch;
+  fetch: FetchFn;
 }
 
 /** Validates host configuration and fills operational defaults. */

@@ -7,7 +7,8 @@ This directory documents the integration flow for an iOS app:
 2. Create an `IAPStackClient` with `IAPStackConfig`.
 3. Use `AppleIAPStack` with a map of configured product IDs and `AppleProductKind`.
 4. Convert your canonical lower-case customer UUID to `appAccountToken`.
-5. Launch StoreKit flow (`launchPurchase`) and forward emitted `ApplePurchase` rows to
-   `verifyPurchase`.
+5. Launch StoreKit flow (`launchPurchase`) and pass the returned `ApplePurchase` to
+   `verifyPurchase`. Also forward `purchaseUpdates` rows (renewals, Ask to Buy
+   approvals, unfinished transactions from earlier launches) to `verifyPurchase`.
 
 Only keep `signedTransaction` tokens in memory and never persist them.

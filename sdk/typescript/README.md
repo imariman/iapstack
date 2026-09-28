@@ -89,8 +89,14 @@ same `handler`. Pass the exact raw webhook body; do not re-serialize parsed JSON
 
 Replace `MemoryEventStore` with a durable store in production so retries
 across processes still dedupe by the authenticated `IAPStack-Event-ID`. The
-handler hashes the raw body and passes an opaque fingerprint into `remember`;
-do not recompute SHA-256 in the store.
+handler hashes the raw body and passes an opaque fingerprint into `seen` and
+`remember`; do not recompute SHA-256 in the store. The handler checks `seen`
+before your callback and calls `remember` only after it resolves. A thrown
+callback, a crash, or IAPStack's delivery timeout leaves nothing recorded, so
+the retry invokes the callback again. That retry can overlap a callback that is
+still running, so make the callback idempotent, for example by applying
+`change.version` monotonically. If you call `verifyRequest` directly, call
+`markHandled` with the returned event after your processing succeeds.
 
 ## Webhook verification
 

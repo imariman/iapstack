@@ -1,5 +1,5 @@
 export { Client, type RequestOptions } from './client.js';
-export type { Config } from './config.js';
+export type { Config, FetchFn } from './config.js';
 export {
   APIError,
   ProtocolError,
