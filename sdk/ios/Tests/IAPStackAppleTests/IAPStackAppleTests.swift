@@ -362,6 +362,146 @@ final class IAPStackAppleTests: XCTestCase {
     }
   }
 
+  func testLaunchPurchaseReturnsTransactionForVerificationAndFinish() async throws {
+    URLStubProtocol.reset()
+    URLStubProtocol.enqueue { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"],
+      )!
+      let body = """
+      {"verified_at": "2026-09-10T12:00:00Z", "customer_id": "customer-internal", "entitlements": []}
+      """
+      return (response, Data(body.utf8))
+    }
+    let customer = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    let purchase = ApplePurchase(
+      transactionId: "tx-1",
+      productId: "premium_lifetime",
+      signedTransaction: "a.b.c",
+      status: .purchased,
+      pendingCompletion: true,
+      appAccountToken: customer,
+      errorCode: nil,
+    )
+    let platform = FakeApplePlatform(launchResult: purchase)
+    let client = try IAPStackClient(
+      config: IAPStackConfig(
+        baseUri: URL(string: "https://example.local")!,
+        applicationId: "application-1",
+        customerToken: "customer-token",
+      ),
+      session: makeSession(),
+    )
+    // `try` keeps this compiling once AppleIAPStack.init becomes throwing (#122).
+    let stack = try AppleIAPStack(
+      client: client,
+      productKinds: ["premium_lifetime": .nonConsumable],
+      platform: platform,
+    )
+    let product = AppleProduct(
+      id: "premium_lifetime",
+      kind: .nonConsumable,
+      title: "Lifetime",
+      description: "",
+      price: "$1",
+      rawPrice: 1,
+      currencyCode: "USD",
+    )
+
+    let launched = try await stack.launchPurchase(externalCustomerId: customer, product: product)
+    let returned = try XCTUnwrap(launched)
+    XCTAssertEqual(returned.transactionId, "tx-1")
+
+    let result = try await stack.verifyPurchase(externalCustomerId: customer, purchase: returned)
+    XCTAssertEqual(result.customerId, "customer-internal")
+    XCTAssertEqual(platform.completedTransactionIds, ["tx-1"])
+  }
+
+  func testRestoreFinishesOnlyUnfinishedRowsAfterBatchVerifies() async throws {
+    URLStubProtocol.reset()
+    URLStubProtocol.enqueue { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"],
+      )!
+      let row = #"{"verified_at": "2026-09-10T12:00:00Z", "customer_id": "customer-internal", "entitlements": []}"#
+      return (response, Data(#"{"results": [\#(row), \#(row)]}"#.utf8))
+    }
+    let customer = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    let platform = FakeApplePlatform(restoreResult: [
+      restoredRow("tx-unfinished", customer: customer, pendingCompletion: true),
+      restoredRow("tx-finished", customer: customer, pendingCompletion: false),
+      restoredRow("tx-other-customer", customer: "9b2c1f64-1c7e-4c55-9a51-0c6f1d7e2a10", pendingCompletion: true),
+    ])
+    let stack = try makeAppleStack(platform: platform)
+
+    let result = try await stack.restorePurchases(externalCustomerId: customer)
+
+    XCTAssertEqual(result.results.count, 2)
+    XCTAssertEqual(platform.completedTransactionIds, ["tx-unfinished"])
+  }
+
+  func testRestoreDoesNotFinishRowsWhenBatchFails() async throws {
+    URLStubProtocol.reset()
+    URLStubProtocol.enqueue { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 400,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"],
+      )!
+      let body = #"{"error": {"code": "invalid_request", "message": "rejected", "request_id": "request-1"}}"#
+      return (response, Data(body.utf8))
+    }
+    let customer = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    let platform = FakeApplePlatform(restoreResult: [
+      restoredRow("tx-unfinished", customer: customer, pendingCompletion: true),
+    ])
+    let stack = try makeAppleStack(platform: platform)
+
+    do {
+      _ = try await stack.restorePurchases(externalCustomerId: customer)
+      XCTFail("Expected the rejected batch to throw")
+    } catch {
+      XCTAssertEqual(platform.completedTransactionIds, [])
+    }
+  }
+
+  private func makeAppleStack(platform: FakeApplePlatform) throws -> AppleIAPStack {
+    let client = try IAPStackClient(
+      config: IAPStackConfig(
+        baseUri: URL(string: "https://example.local")!,
+        applicationId: "application-1",
+        customerToken: "customer-token",
+        retryPolicy: .init(maxAttempts: 1),
+      ),
+      session: makeSession(),
+    )
+    // `try` keeps this compiling once AppleIAPStack.init becomes throwing (#122).
+    return try AppleIAPStack(
+      client: client,
+      productKinds: ["premium_lifetime": .nonConsumable],
+      platform: platform,
+    )
+  }
+
+  private func restoredRow(_ transactionId: String, customer: String, pendingCompletion: Bool) -> ApplePurchase {
+    ApplePurchase(
+      transactionId: transactionId,
+      productId: "premium_lifetime",
+      signedTransaction: "a.b.c",
+      status: .restored,
+      pendingCompletion: pendingCompletion,
+      appAccountToken: customer,
+      errorCode: nil,
+    )
+  }
+
   func testEmptyProductIdentifierThrowsInsteadOfTrapping() throws {
     let client = try IAPStackClient(
       config: IAPStackConfig(
@@ -405,5 +545,45 @@ final class IAPStackAppleTests: XCTestCase {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [URLStubProtocol.self]
     return URLSession(configuration: configuration)
+  }
+}
+
+final class FakeApplePlatform: AppleIAPPlatform, @unchecked Sendable {
+  init(launchResult: ApplePurchase? = nil, restoreResult: [ApplePurchase] = []) {
+    self.launchResult = launchResult
+    self.restoreResult = restoreResult
+  }
+
+  private let launchResult: ApplePurchase?
+  private let restoreResult: [ApplePurchase]
+  private let lock = NSLock()
+  private var completed: [String] = []
+
+  var completedTransactionIds: [String] {
+    lock.withLock { completed }
+  }
+
+  var purchaseUpdates: AsyncStream<ApplePurchase> {
+    AsyncStream { $0.finish() }
+  }
+
+  func isAvailable() async throws -> Bool {
+    true
+  }
+
+  func queryProducts(productIds: Set<String>) async throws -> AppleProductQuery {
+    AppleProductQuery(products: [], notFoundProductIds: productIds)
+  }
+
+  func launchPurchase(product: AppleProduct, appAccountToken: String) async throws -> ApplePurchase? {
+    launchResult
+  }
+
+  func restorePurchases() async throws -> [ApplePurchase] {
+    restoreResult
+  }
+
+  func completePurchase(_ purchase: ApplePurchase) async throws {
+    lock.withLock { completed.append(purchase.transactionId) }
   }
 }
