@@ -152,6 +152,117 @@ void main() {
     );
   });
 
+  test('failed refresh invalidates cached native choices', () async {
+    final nativeProduct = GooglePlayProductDetails.fromProductDetails(
+      _oneTimeDetails,
+    ).single;
+    officialPlatform.productResponse = ProductDetailsResponse(
+      productDetails: <ProductDetails>[nativeProduct],
+      notFoundIDs: const <String>[],
+    );
+    final product = (await bridge.queryProducts(<String>{
+      'premium_lifetime',
+    })).products.single;
+    officialPlatform.productResponse = ProductDetailsResponse(
+      productDetails: const <ProductDetails>[],
+      notFoundIDs: const <String>[],
+      error: IAPError(source: 'google_play', code: 'query_failed', message: ''),
+    );
+    await expectLater(
+      bridge.queryProducts(<String>{'premium_lifetime'}),
+      throwsA(isA<GooglePlayIapStackException>()),
+    );
+    await expectLater(
+      bridge.launchPurchase(
+        product: product,
+        obfuscatedAccountId: 'customer-1',
+      ),
+      throwsA(
+        isA<GooglePlayIapStackException>().having(
+          (error) => error.code,
+          'code',
+          'product_not_queried',
+        ),
+      ),
+    );
+    expect(officialPlatform.purchaseParam, isNull);
+  });
+
+  test(
+    'malformed product responses never cache partially validated offers',
+    () async {
+      final nativeProduct = GooglePlayProductDetails.fromProductDetails(
+        _oneTimeDetails,
+      ).single;
+      officialPlatform.productResponse = ProductDetailsResponse(
+        productDetails: <ProductDetails>[nativeProduct],
+        notFoundIDs: const <String>[],
+      );
+      final product = (await bridge.queryProducts(<String>{
+        'premium_lifetime',
+      })).products.single;
+      final malformedResponses = <ProductDetailsResponse>[
+        ProductDetailsResponse(
+          productDetails: <ProductDetails>[nativeProduct, nativeProduct],
+          notFoundIDs: const <String>['premium_monthly'],
+        ),
+        ProductDetailsResponse(
+          productDetails: <ProductDetails>[nativeProduct],
+          notFoundIDs: const <String>[],
+        ),
+        ProductDetailsResponse(
+          productDetails: <ProductDetails>[nativeProduct],
+          notFoundIDs: const <String>['premium_lifetime', 'premium_monthly'],
+        ),
+        ProductDetailsResponse(
+          productDetails: <ProductDetails>[nativeProduct],
+          notFoundIDs: const <String>['unexpected_product', 'premium_monthly'],
+        ),
+        ProductDetailsResponse(
+          productDetails: <ProductDetails>[
+            nativeProduct,
+            ProductDetails(
+              id: 'premium_monthly',
+              title: 'Wrong platform',
+              description: '',
+              price: r'$1.00',
+              rawPrice: 1,
+              currencyCode: 'USD',
+            ),
+          ],
+          notFoundIDs: const <String>[],
+        ),
+      ];
+      for (final response in malformedResponses) {
+        officialPlatform.productResponse = response;
+        await expectLater(
+          bridge.queryProducts(<String>{'premium_lifetime', 'premium_monthly'}),
+          throwsA(
+            isA<GooglePlayIapStackException>().having(
+              (error) => error.code,
+              'code',
+              'invalid_plugin_response',
+            ),
+          ),
+        );
+        await expectLater(
+          bridge.launchPurchase(
+            product: product,
+            obfuscatedAccountId: 'customer-1',
+          ),
+          throwsA(
+            isA<GooglePlayIapStackException>().having(
+              (error) => error.code,
+              'code',
+              'product_not_queried',
+            ),
+          ),
+        );
+        expect(officialPlatform.purchaseParam, isNull);
+      }
+    },
+  );
+
   test(
     'requires a native cached product and a launched Billing flow',
     () async {

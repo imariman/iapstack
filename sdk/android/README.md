@@ -10,7 +10,10 @@ Provider-neutral Kotlin HTTP client plus native Google Play and Huawei adapters:
 Requires Android API 26+, Java 17, Android SDK 35. `core` stays a JVM library;
 its `java.time` use is supported by the companions' API 26 minimum.
 Store price micro-units are `Long`, matching the native SDKs.
-Maven publication remains tracked in [#141](https://github.com/imariman/iapstack/issues/141).
+Maven binaries, source jars, dependency metadata and release automation are prepared.
+The first registry publication remains tracked in [#141](https://github.com/imariman/iapstack/issues/141);
+see the [SDK release guide](../../docs/sdk-releases.md) for GitHub Packages installation
+and local staging commands.
 Flutter remains the only v0.1 mobile release gate. Native Android is post-v0.1;
 CI builds and tests it independently, without asserting live store certification.
 
@@ -22,6 +25,21 @@ customer token, the opaque external customer ID, API URL, and application ID to
 the mobile app. Never ship the durable application bearer in a mobile binary,
 and never persist or log the customer bearer or signed purchase evidence.
 Refresh expired sessions through the host and recreate the client/coordinator.
+
+If your host implements the example `/session` contract, `IapStackSessionLoader`
+posts `{}` with your app's own login bearer and returns a validated
+`IapStackCustomerSession`. It sends that bearer only to the HTTPS endpoint, never
+follows redirects, uses no cookies or caches, caps the response at 16 KiB, and
+times out after 15 seconds without progress or 20 seconds overall. Failures are
+`IapStackSessionException`s with stable `code` strings.
+
+```kotlin
+val loader = IapStackSessionLoader()
+val session = try { loader.load(sessionUrl, loginToken) } finally { loader.close() }
+val client = IapStackClient(session.config)
+```
+
+Hosts with another contract can build the client directly:
 
 ```kotlin
 val client = IapStackClient(IapStackConfig(

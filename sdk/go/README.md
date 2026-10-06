@@ -11,8 +11,9 @@ application bearer in a Flutter, iOS, Android, or React Native binary, and never
 log or persist either bearer.
 
 This is the first post-v0.1 SDK. Flutter remains the only v0.1 mobile client.
-The package is not published to a module proxy yet; depend on the repository
-path `sdk/go`.
+The package is prepared for versioned module tags; see the
+[SDK release guide](../../docs/sdk-releases.md) for publication status and installation.
+Before publication, depend on the repository path `sdk/go`.
 
 ## Trusted-host boundary
 

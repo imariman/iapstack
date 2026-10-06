@@ -30,13 +30,16 @@ final class ApplePluginPlatform implements AppleIapPlatform {
   Future<AppleProductQuery> queryProducts(Set<String> productIds) => _guard(
     operation: 'product_query',
     callback: () async {
+      // Re-querying invalidates prior checkout handles even if StoreKit fails.
+      _queriedProducts.removeWhere((id, _) => productIds.contains(id));
       final response = await _plugin.queryProductDetails(productIds);
       final error = response.error;
       if (error != null) {
         throw _pluginError(error, operation: 'product_query');
       }
-      _queriedProducts.removeWhere((id, _) => productIds.contains(id));
       final products = <AppleProduct>[];
+      final validatedProducts = <String, ProductDetails>{};
+      final missingIds = response.notFoundIDs.toSet();
       for (final details in response.productDetails) {
         if (details is! AppStoreProduct2Details) {
           throw const AppleIapStackException(
@@ -45,12 +48,32 @@ final class ApplePluginPlatform implements AppleIapPlatform {
           );
         }
         final product = _appleProduct(details);
-        _queriedProducts[product.id] = details;
+        if (!productIds.contains(product.id) ||
+            validatedProducts.containsKey(product.id) ||
+            missingIds.contains(product.id)) {
+          throw const AppleIapStackException(
+            code: 'invalid_plugin_response',
+            message: 'App Store returned an unexpected product',
+          );
+        }
+        validatedProducts[product.id] = details;
         products.add(product);
       }
+      if (!productIds.containsAll(missingIds) ||
+          !validatedProducts.keys
+              .toSet()
+              .union(missingIds)
+              .containsAll(productIds)) {
+        throw const AppleIapStackException(
+          code: 'invalid_plugin_response',
+          message: 'App Store product query was incomplete',
+        );
+      }
+      // Publish handles only after the entire query has been validated.
+      _queriedProducts.addAll(validatedProducts);
       return AppleProductQuery(
         products: products,
-        notFoundProductIds: response.notFoundIDs.toSet(),
+        notFoundProductIds: missingIds,
       );
     },
   );

@@ -75,6 +75,44 @@ class GooglePlayIapStackTest {
   }
 
   @Test
+  fun failedQueriesNeverCachePartiallyValidatedOffers() = runBlocking {
+    val lifetime = lifetimeProduct()
+    val malformedQueries = listOf(
+      GooglePlayProductQuery(listOf(lifetime, lifetime), emptySet()),
+      GooglePlayProductQuery(listOf(lifetime), emptySet()),
+      GooglePlayProductQuery(listOf(lifetime), setOf("premium_lifetime", "premium_monthly")),
+      GooglePlayProductQuery(listOf(lifetime, monthlyProduct().copy(kind = GooglePlayProductKind.NON_CONSUMABLE)), emptySet()),
+    )
+    for (query in malformedQueries) {
+      val platform = FakePlatform(productQuery = query)
+      val googlePlay = googlePlay(platform = platform)
+      assertEquals("invalid_plugin_response", assertFailsWith<GooglePlayIapStackException> {
+        googlePlay.queryProducts(setOf("premium_lifetime", "premium_monthly"))
+      }.code)
+      assertEquals("product_not_queried", assertFailsWith<GooglePlayIapStackException> {
+        googlePlay.launchPurchase("customer-1", lifetime)
+      }.code)
+      assertNull(platform.launchedProduct)
+    }
+  }
+
+  @Test
+  fun failedRefreshEvictsRequestedOffersButKeepsOtherProducts() = runBlocking {
+    val lifetime = lifetimeProduct()
+    val monthly = monthlyProduct()
+    val platform = FakePlatform(productQuery = GooglePlayProductQuery(listOf(lifetime, monthly), emptySet()))
+    val googlePlay = googlePlay(platform = platform)
+    googlePlay.queryProducts(setOf("premium_lifetime", "premium_monthly"))
+    platform.productQuery = GooglePlayProductQuery(emptyList(), emptySet())
+    assertFailsWith<GooglePlayIapStackException> { googlePlay.queryProducts(setOf("premium_lifetime")) }
+    assertEquals("product_not_queried", assertFailsWith<GooglePlayIapStackException> {
+      googlePlay.launchPurchase("customer-1", lifetime)
+    }.code)
+    googlePlay.launchPurchase("customer-1", monthly)
+    assertSame(monthly, platform.launchedProduct)
+  }
+
+  @Test
   fun verifyPurchaseSendsPurchaseTokenEvidence() = runBlocking {
     MockWebServer().use { server ->
       server.enqueue(MockResponse().setBody(VERIFICATION_JSON).setResponseCode(200))
@@ -166,7 +204,7 @@ class GooglePlayIapStackTest {
 
   class FakePlatform(
     private val available: Boolean = true,
-    private val productQuery: GooglePlayProductQuery = GooglePlayProductQuery(emptyList(), emptySet()),
+    var productQuery: GooglePlayProductQuery = GooglePlayProductQuery(emptyList(), emptySet()),
   ) : GooglePlayIapPlatform {
     override val purchaseUpdates: Flow<GooglePlayPurchase> = emptyFlow()
     var queriedProductIds: Set<String>? = null

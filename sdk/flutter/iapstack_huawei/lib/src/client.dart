@@ -78,6 +78,8 @@ final class HuaweiIapStack {
       );
     }
 
+    // Re-querying invalidates prior checkout handles even if HMS fails.
+    _queriedProducts.removeWhere((id, _) => normalized.contains(id));
     final found = <String, HuaweiProduct>{};
     for (final kind in HuaweiProductKind.values) {
       final ids = normalized
@@ -106,12 +108,8 @@ final class HuaweiIapStack {
         found[product.id] = product;
       }
     }
-    // Only a complete response replaces cached choices: re-queried IDs that it
-    // omits can no longer pass the product_not_queried guard, and a failed
-    // query leaves earlier choices untouched.
-    _queriedProducts
-      ..removeWhere((id, _) => normalized.contains(id))
-      ..addAll(found);
+    // Publish handles only after every kind was queried and validated.
+    _queriedProducts.addAll(found);
     return HuaweiProductQuery(
       products: normalized
           .where(found.containsKey)

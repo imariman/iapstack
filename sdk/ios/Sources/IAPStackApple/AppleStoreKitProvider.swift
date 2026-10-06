@@ -11,8 +11,16 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
     var productCache: [String: Product] = [:]
     var pendingTransactions: [String: Transaction] = [:]
 
-    func cache(product: Product) {
-      productCache[product.id] = product
+    func cache(products: [Product]) {
+      for product in products {
+        productCache[product.id] = product
+      }
+    }
+
+    func evict(ids: Set<String>) {
+      for id in ids {
+        productCache[id] = nil
+      }
     }
 
     func product(for id: String) -> Product? {
@@ -59,6 +67,8 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
   }
 
   public func queryProducts(productIds: Set<String>) async throws -> AppleProductQuery {
+    // Re-querying invalidates prior checkout handles even if StoreKit fails.
+    await state.evict(ids: productIds)
     let products = try await Product.products(for: productIds)
     var mapped: [AppleProduct] = []
     for product in products {
@@ -85,7 +95,6 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
         )
       }
 
-      await state.cache(product: product)
       mapped.append(
         AppleProduct(
           id: product.id,
@@ -98,6 +107,8 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
         ),
       )
     }
+    // Publish handles only after the entire query has been validated.
+    await state.cache(products: products)
     return AppleProductQuery(
       products: mapped,
       notFoundProductIds: productIds.subtracting(Set(mapped.map(\.id))),
