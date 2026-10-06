@@ -111,6 +111,145 @@ void main() {
     );
   });
 
+  test('failed refresh invalidates the previous checkout handle', () async {
+    officialPlatform.productResponse = ProductDetailsResponse(
+      productDetails: <ProductDetails>[
+        _productDetails(
+          id: 'premium_lifetime',
+          type: SK2ProductType.nonConsumable,
+        ),
+      ],
+      notFoundIDs: const <String>[],
+    );
+    final product = (await bridge.queryProducts(const <String>{
+      'premium_lifetime',
+    })).products.single;
+    officialPlatform.productResponse = ProductDetailsResponse(
+      productDetails: const <ProductDetails>[],
+      notFoundIDs: const <String>[],
+      error: IAPError(source: 'app_store', code: 'offline', message: 'offline'),
+    );
+    await expectLater(
+      bridge.queryProducts(const <String>{'premium_lifetime'}),
+      throwsA(isA<AppleIapStackException>()),
+    );
+    await expectLater(
+      bridge.launchPurchase(
+        product: product,
+        appAccountToken: '018f59d0-a200-7000-8000-000000000001',
+      ),
+      throwsA(
+        isA<AppleIapStackException>().having(
+          (error) => error.code,
+          'code',
+          'product_not_queried',
+        ),
+      ),
+    );
+    expect(officialPlatform.purchaseParam, isNull);
+  });
+
+  test(
+    'rejected mixed query never exposes a partial checkout handle',
+    () async {
+      officialPlatform.productResponse = ProductDetailsResponse(
+        productDetails: <ProductDetails>[
+          _productDetails(
+            id: 'premium_lifetime',
+            type: SK2ProductType.nonConsumable,
+          ),
+          _productDetails(id: 'coins', type: SK2ProductType.consumable),
+        ],
+        notFoundIDs: const <String>[],
+      );
+      await expectLater(
+        bridge.queryProducts(const <String>{'premium_lifetime', 'coins'}),
+        throwsA(
+          isA<AppleIapStackException>().having(
+            (error) => error.code,
+            'code',
+            'unsupported_product_kind',
+          ),
+        ),
+      );
+      await expectLater(
+        bridge.launchPurchase(
+          product: const AppleProduct(
+            id: 'premium_lifetime',
+            kind: AppleProductKind.nonConsumable,
+            title: 'Premium',
+            description: 'Premium',
+            price: r'$49.99',
+            rawPrice: 49.99,
+            currencyCode: 'USD',
+          ),
+          appAccountToken: '018f59d0-a200-7000-8000-000000000001',
+        ),
+        throwsA(
+          isA<AppleIapStackException>().having(
+            (error) => error.code,
+            'code',
+            'product_not_queried',
+          ),
+        ),
+      );
+      expect(officialPlatform.purchaseParam, isNull);
+    },
+  );
+
+  test('rejects incomplete or inconsistent product query results', () async {
+    for (final response in <ProductDetailsResponse>[
+      ProductDetailsResponse(
+        productDetails: const <ProductDetails>[],
+        notFoundIDs: const <String>[],
+      ),
+      ProductDetailsResponse(
+        productDetails: const <ProductDetails>[],
+        notFoundIDs: const <String>['unexpected'],
+      ),
+      ProductDetailsResponse(
+        productDetails: <ProductDetails>[
+          _productDetails(
+            id: 'premium_lifetime',
+            type: SK2ProductType.nonConsumable,
+          ),
+        ],
+        notFoundIDs: const <String>['premium_lifetime'],
+      ),
+      ProductDetailsResponse(
+        productDetails: <ProductDetails>[
+          _productDetails(id: 'unexpected', type: SK2ProductType.nonConsumable),
+        ],
+        notFoundIDs: const <String>[],
+      ),
+      ProductDetailsResponse(
+        productDetails: <ProductDetails>[
+          _productDetails(
+            id: 'premium_lifetime',
+            type: SK2ProductType.nonConsumable,
+          ),
+          _productDetails(
+            id: 'premium_lifetime',
+            type: SK2ProductType.nonConsumable,
+          ),
+        ],
+        notFoundIDs: const <String>[],
+      ),
+    ]) {
+      officialPlatform.productResponse = response;
+      await expectLater(
+        bridge.queryProducts(const <String>{'premium_lifetime'}),
+        throwsA(
+          isA<AppleIapStackException>().having(
+            (error) => error.code,
+            'code',
+            'invalid_plugin_response',
+          ),
+        ),
+      );
+    }
+  });
+
   test('requires a cached product and a launched StoreKit flow', () async {
     const product = AppleProduct(
       id: 'premium_lifetime',

@@ -29,6 +29,18 @@ jobs:
         run: swift --version
 
       - name: Run Swift package tests
-        working-directory: sdk/ios
+        run: swift test
+
+      - name: Run runnable example flow tests
+        working-directory: sdk/ios/example
+        run: swift test
+
+      - name: Build runnable iOS example without signing
         run: |
-          swift test
+          xcodebuild \
+            -project sdk/ios/example/IAPStackExample.xcodeproj \
+            -scheme IAPStackExample \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/iapstack-ios-example" \
+            CODE_SIGNING_ALLOWED=NO build

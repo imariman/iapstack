@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "main": "../lib/native.js",
+  "types": "../lib/native.d.ts",
+  "react-native": "../src/native.ts"
+}

@@ -55,6 +55,8 @@ class HuaweiIapStack(
       )
     }
 
+    // Re-querying invalidates prior checkout handles even if HMS fails.
+    queriedProducts.keys.removeAll(normalized)
     val found = mutableMapOf<String, HuaweiProduct>()
     for (kind in HuaweiProductKind.values()) {
       val idsForKind = normalized.filter { productKinds[it] == kind }
@@ -81,6 +83,7 @@ class HuaweiIapStack(
       }
     }
 
+    // Publish handles only after every kind was queried and validated.
     queriedProducts.putAll(found)
     return HuaweiProductQuery(
       products = normalized.filter(found::containsKey).map { found[it]!! },

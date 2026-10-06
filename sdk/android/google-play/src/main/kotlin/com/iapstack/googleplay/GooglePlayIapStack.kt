@@ -85,7 +85,6 @@ class GooglePlayIapStack(
       }
       foundIds.add(product.id)
       foundProducts.add(product)
-      queriedProducts[product.selectionKey] = product
     }
     if (foundIds.intersect(result.notFoundProductIds).isNotEmpty() ||
       !foundIds.union(result.notFoundProductIds).containsAll(normalized)
@@ -96,6 +95,8 @@ class GooglePlayIapStack(
       )
     }
 
+    // A malformed response must never make a partially validated offer purchasable.
+    queriedProducts.putAll(foundProducts.associateBy { it.selectionKey })
     return GooglePlayProductQuery(
       products = foundProducts.toList(),
       notFoundProductIds = result.notFoundProductIds.toSet(),

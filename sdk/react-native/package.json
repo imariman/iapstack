@@ -1,9 +1,8 @@
 {
   "name": "@iapstack/react-native",
-  "version": "0.1.0-dev.1",
-  "description": "Provider-neutral React Native client for the IAPStack v1 API.",
+  "version": "0.1.0-sdk.1",
+  "description": "React Native StoreKit, Play Billing, Huawei IAP and customer HTTP SDK for IAPStack.",
   "license": "Apache-2.0",
-  "private": true,
   "homepage": "https://github.com/imariman/iapstack",
   "keywords": [
     "iapstack",
@@ -17,18 +16,57 @@
     "url": "https://github.com/imariman/iapstack.git",
     "directory": "sdk/react-native"
   },
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./lib/index.d.ts",
+      "react-native": "./src/index.native.ts",
+      "default": "./lib/index.js"
+    },
+    "./store": {
+      "types": "./lib/native.d.ts",
+      "react-native": "./src/native.ts",
+      "default": "./lib/native.js"
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "bun test",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json"
+    "test": "bun test test",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "build": "tsc -p tsconfig.build.json",
+    "prepare:native": "node scripts/prepare-native.mjs",
+    "prepack": "bun run typecheck && bun run build && bun run prepare:native",
+    "prepare:example": "bun run build && bun run prepare:native && node scripts/prepare-example.mjs"
   },
   "devDependencies": {
     "@types/bun": "1.4.2",
-    "typescript": "5.9.2"
+    "typescript": "5.9.2",
+    "react-native": "0.84.1",
+    "react": "19.2.3",
+    "@types/react": "^19.2.0"
   },
-  "author": "IAPStack Contributors"
+  "author": "IAPStack Contributors",
+  "react-native": "./src/index.native.ts",
+  "files": [
+    "lib",
+    "src",
+    "ios",
+    "android/src",
+    "android/build.gradle",
+    "native",
+    "store",
+    "IAPStackReactNative.podspec",
+    "react-native.config.js",
+    "LICENSE",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "react-native": ">=0.76 <1",
+    "react": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  }
 }
