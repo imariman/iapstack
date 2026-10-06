@@ -98,7 +98,7 @@ void main() {
       ]);
     });
 
-    test('keeps cached products when a re-query fails part-way', () async {
+    test('evicts requested products when a re-query fails part-way', () async {
       final platform = _FakePlatform(
         purchaseResult:
             _signedPurchase('premium_monthly', customerId: 'customer-1'),
@@ -120,7 +120,23 @@ void main() {
         huawei.queryProducts(_productKinds.keys.toSet()),
         throwsA(isA<HuaweiIapStackException>()),
       );
+      await expectLater(
+        huawei.purchaseAndVerify(
+          externalCustomerId: 'customer-1',
+          product: monthly,
+        ),
+        throwsA(
+          isA<HuaweiIapStackException>().having(
+            (error) => error.code,
+            'code',
+            'product_not_queried',
+          ),
+        ),
+      );
+      expect(platform.purchaseCalls, 0);
 
+      platform.failingProductKinds.clear();
+      await huawei.queryProducts(const <String>{'premium_monthly'});
       final result = await huawei.purchaseAndVerify(
         externalCustomerId: 'customer-1',
         product: monthly,
@@ -128,6 +144,7 @@ void main() {
       expect(platform.productQueryCalls, <String>[
         'subscription:premium_monthly',
         'nonConsumable:premium_lifetime',
+        'subscription:premium_monthly',
         'subscription:premium_monthly',
       ]);
       expect(result.entitlements.single.grantsAccess, isTrue);

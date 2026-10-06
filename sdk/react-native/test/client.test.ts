@@ -369,6 +369,41 @@ test('non-retryable API errors are surfaced without another attempt', async () =
   }
 });
 
+test('redirects are surfaced as non-retryable API errors without being followed', async () => {
+  const { calls, restore } = withMockFetch(async () =>
+    new Response(null, {
+      status: 307,
+      headers: { location: 'https://elsewhere.test/collect' },
+    }),
+  );
+
+  try {
+    const client = new IapStackClient(
+      clientConfig({
+        retryPolicy: new IapStackRetryPolicy({
+          maxAttempts: 3,
+          baseDelayMs: 0,
+          maxDelayMs: 0,
+        }),
+      }),
+    );
+
+    await assert.rejects(
+      () => client.getEntitlements('customer-123'),
+      (error) => {
+        assert(error instanceof IapStackApiError);
+        assert.equal((error as IapStackApiError).statusCode, 307);
+        assert.equal((error as IapStackApiError).retryable, false);
+        return true;
+      },
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].init.redirect, 'manual');
+  } finally {
+    restore();
+  }
+});
+
 test('request timeouts are converted into IapStackTimeoutError', async () => {
   const { restore } = withMockFetch(async (_input, init) => {
     return new Promise((_resolve, reject) => {

@@ -5,6 +5,7 @@ import argparse
 import io
 import json
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import tarfile
 import xml.etree.ElementTree as ET
@@ -20,6 +21,15 @@ CLIENT_FILES = (
     "sdk/ios/Sources/IAPStackApple/IAPStackClient.swift",
     "sdk/react-native/src/client.ts",
 )
+RUNTIME_DEPENDENCY = re.compile(r"""^\s*(?:api|implementation)\s*\(?\s*['"]([\w.-]+):[\w.-]+:([\w.-]+)['"]""", re.M)
+
+
+def dependency_versions(text):
+    """Map each versioned runtime dependency group in a Gradle build to its versions."""
+    versions = {}
+    for group, version in RUNTIME_DEPENDENCY.findall(text):
+        versions.setdefault(group, set()).add(version)
+    return versions
 
 
 def check_metadata(root=ROOT):
@@ -39,6 +49,15 @@ def check_metadata(root=ROOT):
     for path in CLIENT_FILES:
         if not re.search(r"(?:sdkVersion|SDK_VERSION)\s*=\s*['\"]" + re.escape(version) + r"['\"]", (root / path).read_text()):
             raise ValueError(f"{path}: X-IAPStack-SDK version differs from sdk/version.txt")
+    # The React Native module compiles the canonical Android sources, so it must link the same libraries.
+    canonical = {}
+    for module in ("core", "google-play", "huawei"):
+        for group, versions in dependency_versions((root / f"sdk/android/{module}/build.gradle.kts").read_text()).items():
+            canonical.setdefault(group, set()).update(versions)
+    bridge = dependency_versions((root / "sdk/react-native/android/build.gradle").read_text())
+    for group, versions in canonical.items():
+        if bridge.get(group) != versions:
+            raise ValueError(f"sdk/react-native/android/build.gradle: {group} versions differ from the Android SDK")
     return version
 
 
@@ -79,6 +98,18 @@ def check_tarball(path, expected_name, version):
         if "package/LICENSE" not in files:
             raise ValueError(f"Missing Apache license in {path}")
         if expected_name.endswith("react-native"):
+            # Metro before React Native 0.79 ignores exports; a nested manifest keeps subpaths resolvable.
+            for subpath in package.get("exports", {}):
+                if subpath in {".", "./package.json"}:
+                    continue
+                redirect = f"package/{subpath[2:]}/package.json"
+                if redirect not in files:
+                    raise ValueError(f"Missing legacy Metro redirect for {subpath} in {path}")
+                for field, target in json.load(archive.extractfile(redirect)).items():
+                    if field in {"main", "types", "react-native"}:
+                        resolved = posixpath.normpath(f"{posixpath.dirname(redirect)}/{target}")
+                        if resolved not in files:
+                            raise ValueError(f"Legacy Metro redirect {redirect} points at missing {target}")
             if not any(name.endswith(".podspec") for name in files):
                 raise ValueError("React Native package is missing its podspec")
             if not any(name.endswith(".swift") for name in files) or not any(name.endswith(".kt") for name in files):

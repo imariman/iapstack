@@ -13,17 +13,10 @@ tasks.withType<AbstractArchiveTask>().configureEach {
 
 configure<PublishingExtension> {
   repositories {
+    // Only stage locally; scripts/publish-sdk-maven.py verifies and uploads the exact bytes.
     maven {
       name = "Staging"
       url = uri(rootProject.layout.buildDirectory.dir("maven"))
-    }
-    maven {
-      name = "GitHubPackages"
-      url = uri("https://maven.pkg.github.com/imariman/iapstack")
-      credentials {
-        username = providers.environmentVariable("GITHUB_ACTOR").orNull
-        password = providers.environmentVariable("GITHUB_TOKEN").orNull
-      }
     }
   }
 }

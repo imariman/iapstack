@@ -151,7 +151,8 @@ export class IapStackClient {
     try {
       const response = await fetch(uri.toString(), {
         method,
-        redirect: 'error',
+        // A redirect is a non-retryable API error; never resend the bearer or evidence.
+        redirect: 'manual',
         headers,
         body:
           params.body && method === 'POST'

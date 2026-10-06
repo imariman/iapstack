@@ -1,5 +1,6 @@
 """Regression tests for SDK release input and artifact validation."""
 
+import http.server
 import importlib.util
 import io
 import json
@@ -8,6 +9,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
+import threading
 import unittest
 import xml.etree.ElementTree as ET
 import zipfile
@@ -70,6 +72,12 @@ class SDKPackageTests(unittest.TestCase):
         for value in ("v0.1.0", "0.1.0", "0.1.0-alpha.1", "0.1.0-sdk.0", "01.1.0-sdk.1", "0.1.0-sdk.01"):
             self.assertIsNone(checks.VERSION_PATTERN.fullmatch(value))
 
+    def test_runtime_dependency_versions_ignore_test_and_unversioned_libraries(self):
+        groovy = "implementation 'com.facebook.react:react-android'\nimplementation 'com.squareup.okhttp3:okhttp:4.12.0'\ntestImplementation 'com.squareup.okhttp3:mockwebserver:5.0.0'\n"
+        kotlin = '  api("com.squareup.okhttp3:okhttp:4.12.0")\n  implementation("com.huawei.hms:iap:6.13.0.300")\n'
+        self.assertEqual(checks.dependency_versions(groovy), {"com.squareup.okhttp3": {"4.12.0"}})
+        self.assertEqual(checks.dependency_versions(kotlin), {"com.squareup.okhttp3": {"4.12.0"}, "com.huawei.hms": {"6.13.0.300"}})
+
     def test_maven_rerun_keeps_history_and_latest(self):
         original = maven.merged_metadata(None, "iapstack-core", "0.1.0-sdk.10")
         retried = maven.merged_metadata(original, "iapstack-core", "0.1.0-sdk.2")
@@ -78,6 +86,50 @@ class SDKPackageTests(unittest.TestCase):
         self.assertEqual([node.text for node in root.findall("versioning/versions/version")], ["0.1.0-sdk.10", "0.1.0-sdk.2"])
         again = ET.fromstring(maven.merged_metadata(retried, "iapstack-core", "0.1.0-sdk.2"))
         self.assertEqual(len(again.findall("versioning/versions/version")), 2)
+
+    def test_maven_download_redirect_drops_credentials(self):
+        seen = {}
+
+        class Blob(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen["blob"] = self.headers.get("Authorization")
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"published bytes")
+
+            def log_message(self, *args):
+                pass
+
+        blob = http.server.HTTPServer(("127.0.0.1", 0), Blob)
+
+        class Registry(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen["registry"] = self.headers.get("Authorization")
+                if self.path.endswith("missing.pom"):
+                    self.send_response(404)
+                else:
+                    self.send_response(302)
+                    self.send_header("Location", f"http://127.0.0.1:{blob.server_port}/signed")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        registry = http.server.HTTPServer(("127.0.0.1", 0), Registry)
+        servers = [blob, registry]
+        for server in servers:
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        original = maven.REGISTRY
+        maven.REGISTRY = f"http://127.0.0.1:{registry.server_port}/"
+        try:
+            self.assertEqual(maven.request("GET", "artifact.aar", "Basic secret"), b"published bytes")
+            self.assertEqual(seen, {"registry": "Basic secret", "blob": None})
+            self.assertIsNone(maven.request("GET", "missing.pom", "Basic secret"))
+        finally:
+            maven.REGISTRY = original
+            for server in servers:
+                server.shutdown()
+                server.server_close()
 
     def test_maven_coordinate_mismatch_is_rejected(self):
         original = maven.merged_metadata(None, "iapstack-core", "0.1.0-sdk.1")

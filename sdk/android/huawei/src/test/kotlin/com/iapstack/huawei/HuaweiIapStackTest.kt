@@ -31,7 +31,7 @@ class HuaweiIapStackTest {
   }
 
   @Test
-  fun failedRefreshPreservesOldChoicesWithoutCachingPartialResults() = runBlocking {
+  fun failedRefreshEvictsRequestedChoicesWithoutCachingPartialResults() = runBlocking {
     MockWebServer().use { server ->
       server.enqueue(MockResponse().setBody(VERIFICATION_JSON).setResponseCode(200))
       val client = client(server)
@@ -45,10 +45,14 @@ class HuaweiIapStackTest {
       huawei.queryProducts(setOf(monthly.id))
       platform.failingProductKinds.add(HuaweiProductKind.SUBSCRIPTION)
       assertFailsWith<HuaweiIapStackException> { huawei.queryProducts(productKinds.keys) }
-      assertEquals("product_not_queried", assertFailsWith<HuaweiIapStackException> {
-        huawei.purchaseAndVerify("customer-1", lifetime)
-      }.code)
+      for (product in listOf(monthly, lifetime)) {
+        assertEquals("product_not_queried", assertFailsWith<HuaweiIapStackException> {
+          huawei.purchaseAndVerify("customer-1", product)
+        }.code)
+      }
       assertNull(platform.purchasedProductId)
+      platform.failingProductKinds.clear()
+      huawei.queryProducts(setOf(monthly.id))
       assertTrue(huawei.purchaseAndVerify("customer-1", monthly).entitlements.single().grantsAccess)
       client.close()
     }

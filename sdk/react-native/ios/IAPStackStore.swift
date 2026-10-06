@@ -176,7 +176,8 @@ final class IAPStackStore: RCTEventEmitter {
     resolve(nil)
   }
   override func invalidate() {
-    DispatchQueue.main.async { [weak self] in self?.clearSession() }
+    // Never skip cleanup: a weak deferred hop leaves the old listener and bearer running.
+    if Thread.isMainThread { clearSession() } else { DispatchQueue.main.async { self.clearSession() } }
     super.invalidate()
   }
   private func clearSession() {
@@ -305,7 +306,10 @@ private func rejectError(_ reject: RCTPromiseRejectBlock, _ error: Error) {
 }
 private func timestamp(_ date: Date?) -> Any {
   guard let date else { return NSNull() }
-  return ISO8601DateFormatter().string(from: date)
+  // Keep sub-second precision so access windows never open early in JS.
+  let formatter = ISO8601DateFormatter()
+  formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+  return formatter.string(from: date)
 }
 private func entitlement(_ value: Entitlement) -> [String: Any] {
   ["key": value.key, "access": value.access, "reason": value.reason, "version": value.version,

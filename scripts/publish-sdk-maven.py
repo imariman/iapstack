@@ -8,6 +8,7 @@ import importlib.util
 import os
 from pathlib import Path
 import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -17,20 +18,35 @@ GROUP_PATH = "io/github/imariman/iapstack"
 
 
 def request(method, path, authorization, body=None):
-    """Exchange an artifact without exposing credentials or following redirects."""
+    """Exchange an artifact without exposing credentials to redirect targets."""
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
             return None
 
-    headers = {"Authorization": authorization, "Content-Type": "application/octet-stream"}
-    req = urllib.request.Request(REGISTRY + path, data=body, headers=headers, method=method)
-    try:
-        with urllib.request.build_opener(NoRedirect()).open(req, timeout=60) as response:
-            return response.read()
-    except urllib.error.HTTPError as error:
-        if method == "GET" and error.code == 404:
-            return None
-        raise RuntimeError(f"Maven {method} failed with HTTP {error.code} for {path}") from None
+    registry = urllib.parse.urlsplit(REGISTRY)
+    url = REGISTRY + path
+    for _ in range(4):
+        target = urllib.parse.urlsplit(url)
+        # GitHub Packages serves downloads from pre-signed blob URLs on another host.
+        headers = {} if body is None else {"Content-Type": "application/octet-stream"}
+        if (target.scheme, target.netloc) == (registry.scheme, registry.netloc):
+            headers["Authorization"] = authorization
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
+        try:
+            with urllib.request.build_opener(NoRedirect()).open(req, timeout=60) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            location = error.headers.get("Location")
+            error.close()
+            if method == "GET" and error.code in (301, 302, 303, 307, 308) and location:
+                url = urllib.parse.urljoin(url, location)
+                if urllib.parse.urlsplit(url).scheme != registry.scheme:
+                    raise RuntimeError(f"Maven GET redirect changed scheme for {path}") from None
+                continue
+            if method == "GET" and error.code == 404:
+                return None
+            raise RuntimeError(f"Maven {method} failed with HTTP {error.code} for {path}") from None
+    raise RuntimeError(f"Maven GET redirected too many times for {path}")
 
 
 def merged_metadata(existing, artifact, version):

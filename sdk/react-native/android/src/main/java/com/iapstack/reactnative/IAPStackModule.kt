@@ -8,6 +8,7 @@ import com.iapstack.core.*
 import com.iapstack.googleplay.*
 import com.iapstack.huawei.*
 import kotlinx.coroutines.*
+import okhttp3.OkHttpClient
 import java.net.URI
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -17,6 +18,8 @@ class IAPStackModule(private val context: ReactApplicationContext) :
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private var session: Session? = null
   private var listeners = 0
+  // JS-driven HTTP calls share one pool and dispatcher instead of leaking one per call.
+  private val transport = lazy { OkHttpClient() }
 
   private class Session(val customer: String, val client: IapStackClient) {
     var playPlatform: BillingClientGooglePlayPlatform? = null
@@ -30,6 +33,7 @@ class IAPStackModule(private val context: ReactApplicationContext) :
       playPlatform?.close()
       huaweiPlatform?.close()
       products.clear()
+      client.close()
     }
   }
 
@@ -49,7 +53,7 @@ class IAPStackModule(private val context: ReactApplicationContext) :
     scope.launch {
       try {
         val retry = requireNotNull(config.getMap("retryPolicy"))
-        val client = IapStackClient(IapStackConfig(
+        val client = IapStackClient(httpClient = transport.value, config = IapStackConfig(
           baseUri = URI(requireNotNull(config.getString("baseUri"))),
           applicationId = requireNotNull(config.getString("applicationId")),
           customerToken = requireNotNull(config.getString("customerToken")),
@@ -95,35 +99,39 @@ class IAPStackModule(private val context: ReactApplicationContext) :
           customerToken = requireNotNull(config.getString("customerToken")),
           allowInsecureHttp = config.hasKey("allowInsecureHttp") && config.getBoolean("allowInsecureHttp"),
         )))
-        if (storefront == "google_play") {
-          require(customer.length <= 64) { "Google Play customer ID exceeds 64 characters" }
-          val catalog = kinds.mapValues { if (it.value) GooglePlayProductKind.SUBSCRIPTION else GooglePlayProductKind.NON_CONSUMABLE }
-          val platform = BillingClientGooglePlayPlatform(context, catalog) { context.currentActivity }
-          next.playPlatform = platform
-          val companion = GooglePlayIapStack(next.client, catalog, platform)
-          next.play = companion
-          session = next
-          val job = scope.launch {
-            companion.purchaseUpdates.collect { purchase ->
-              try {
-                val result = companion.verifyPurchase(next.customer, purchase)
-                emit(next, mapOf("type" to "verified", "result" to verification(result)))
-              } catch (error: CancellationException) { throw error
-              } catch (error: Exception) { emit(next, errorEvent(error)) }
-            }
-          }
-          next.jobs.add(job)
-        } else {
-          val activity = context.currentActivity ?: error("A foreground Activity is required for Huawei")
-          val platform = HmsHuaweiIapPlatform(activity)
-          next.huaweiPlatform = platform
-          next.huawei = HuaweiIapStack(next.client, kinds.mapValues {
-            if (it.value) HuaweiProductKind.SUBSCRIPTION else HuaweiProductKind.NON_CONSUMABLE
-          }, platform)
-          session = next
-        }
+        try { install(next, storefront, customer, kinds) } catch (error: Exception) { next.close(); throw error }
         promise.resolve(null)
       } catch (error: Exception) { reject(promise, error) }
+    }
+  }
+
+  private fun install(next: Session, storefront: String, customer: String, kinds: Map<String, Boolean>) {
+    if (storefront == "google_play") {
+      require(customer.length <= 64) { "Google Play customer ID exceeds 64 characters" }
+      val catalog = kinds.mapValues { if (it.value) GooglePlayProductKind.SUBSCRIPTION else GooglePlayProductKind.NON_CONSUMABLE }
+      val platform = BillingClientGooglePlayPlatform(context, catalog) { context.currentActivity }
+      next.playPlatform = platform
+      val companion = GooglePlayIapStack(next.client, catalog, platform)
+      next.play = companion
+      session = next
+      val job = scope.launch {
+        companion.purchaseUpdates.collect { purchase ->
+          try {
+            val result = companion.verifyPurchase(next.customer, purchase)
+            emit(next, mapOf("type" to "verified", "result" to verification(result)))
+          } catch (error: CancellationException) { throw error
+          } catch (error: Exception) { emit(next, errorEvent(error)) }
+        }
+      }
+      next.jobs.add(job)
+    } else {
+      val activity = context.currentActivity ?: error("A foreground Activity is required for Huawei")
+      val platform = HmsHuaweiIapPlatform(activity)
+      next.huaweiPlatform = platform
+      next.huawei = HuaweiIapStack(next.client, kinds.mapValues {
+        if (it.value) HuaweiProductKind.SUBSCRIPTION else HuaweiProductKind.NON_CONSUMABLE
+      }, platform)
+      session = next
     }
   }
 
@@ -168,7 +176,7 @@ class IAPStackModule(private val context: ReactApplicationContext) :
     Arguments.makeNativeMap(mapOf("products" to products, "notFoundProductIds" to missing.toList()))
   }
   @ReactMethod fun purchase(selectionKey: String, requestId: String?, promise: Promise) = operation(promise) { s ->
-    when (val product = s.products[selectionKey] ?: error("Query and select a product before purchase")) {
+    when (val product = s.products[selectionKey] ?: throw BridgeException("product_not_queried")) {
       is GooglePlayProduct -> { s.play!!.launchPurchase(s.customer, product); null }
       is HuaweiProduct -> Arguments.makeNativeMap(verification(s.huawei!!.purchaseAndVerify(s.customer, product, requestId)))
       else -> error("Unsupported product")
@@ -200,6 +208,7 @@ class IAPStackModule(private val context: ReactApplicationContext) :
   }
   override fun invalidate() {
     clearSession(); scope.cancel()
+    if (transport.isInitialized()) transport.value.run { dispatcher.executorService.shutdown(); connectionPool.evictAll() }
     context.removeActivityEventListener(this); context.removeLifecycleEventListener(this)
     super.invalidate()
   }
@@ -237,9 +246,11 @@ class IAPStackModule(private val context: ReactApplicationContext) :
   }
 }
 
+private class BridgeException(val code: String) : Exception(code)
 private fun kind(subscription: Boolean) = if (subscription) "subscription" else "non_consumable"
 private fun errorEvent(error: Exception): Map<String, Any?> {
   val code = when (error) {
+    is BridgeException -> error.code
     is GooglePlayIapStackException -> error.code
     is HuaweiIapStackException -> error.code
     is IapStackApiException -> error.code
