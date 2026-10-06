@@ -42,7 +42,13 @@ class IAPStackModule(private val context: ReactApplicationContext) :
 
   @ReactMethod fun requestSession(endpoint: String, loginToken: String, promise: Promise) {
     scope.launch {
-      try { promise.resolve(Arguments.makeNativeMap(requestCustomerSession(endpoint, loginToken)))
+      try {
+        val session = IapStackSessionLoader(transport.value).load(endpoint, loginToken)
+        promise.resolve(Arguments.makeNativeMap(mapOf(
+          "base_url" to session.baseUri.toString(), "application_id" to session.applicationId,
+          "external_customer_id" to session.externalCustomerId, "token" to session.customerToken,
+          "expires_at" to session.expiresAt.toString(),
+        )))
       } catch (error: CancellationException) { promise.reject("session_disposed", "Request cancelled")
       } catch (error: Exception) { reject(promise, error) }
     }
@@ -62,7 +68,7 @@ class IAPStackModule(private val context: ReactApplicationContext) :
           allowInsecureHttp = config.getBoolean("allowInsecureHttp"),
           retryPolicy = IapStackRetryPolicy(retry.getInt("maxAttempts"),
             retry.getDouble("baseDelayMs").milliseconds, retry.getDouble("maxDelayMs").milliseconds),
-        ))
+        )).apply { sdkName = SDK_NAME }
         val result = when (operation) {
           "purchases:verify" -> verification(client.verifyPurchase(submission(payload.toHashMap()), requestId))
           "purchases:restore" -> mapOf("results" to client.restorePurchases(
@@ -98,7 +104,7 @@ class IAPStackModule(private val context: ReactApplicationContext) :
           applicationId = requireNotNull(config.getString("applicationId")),
           customerToken = requireNotNull(config.getString("customerToken")),
           allowInsecureHttp = config.hasKey("allowInsecureHttp") && config.getBoolean("allowInsecureHttp"),
-        )))
+        )).apply { sdkName = SDK_NAME })
         try { install(next, storefront, customer, kinds) } catch (error: Exception) { next.close(); throw error }
         promise.resolve(null)
       } catch (error: Exception) { reject(promise, error) }
@@ -246,11 +252,14 @@ class IAPStackModule(private val context: ReactApplicationContext) :
   }
 }
 
+// Devices identify React Native traffic even though the canonical native clients send it.
+private const val SDK_NAME = "react-native"
 private class BridgeException(val code: String) : Exception(code)
 private fun kind(subscription: Boolean) = if (subscription) "subscription" else "non_consumable"
 private fun errorEvent(error: Exception): Map<String, Any?> {
   val code = when (error) {
     is BridgeException -> error.code
+    is IapStackSessionException -> error.code
     is GooglePlayIapStackException -> error.code
     is HuaweiIapStackException -> error.code
     is IapStackApiException -> error.code

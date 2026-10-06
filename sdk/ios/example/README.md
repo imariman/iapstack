@@ -102,7 +102,7 @@ Xcode and the sandbox](https://developer.apple.com/documentation/storekit/testin
 From the repository root:
 
 ```sh
-swift test --package-path sdk/ios
+swift test
 swift test --package-path sdk/ios/example
 xcodebuild \
   -project sdk/ios/example/IAPStackExample.xcodeproj \

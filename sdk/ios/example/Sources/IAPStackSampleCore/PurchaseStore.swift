@@ -22,7 +22,7 @@ public final class PurchaseStore: ObservableObject {
   private let loader: CustomerSessionLoading
   private let platform: AppleIAPPlatform
   private let makeClient: (IAPStackConfig) throws -> IAPStackClient
-  private var session: CustomerSession?
+  private var session: IAPStackCustomerSession?
   private var client: IAPStackClient?
   private var stack: AppleIAPStack?
   private var listener: Task<Void, Never>?
@@ -32,7 +32,7 @@ public final class PurchaseStore: ObservableObject {
   private var verifying: Set<String> = []
 
   public init(
-    loader: CustomerSessionLoading = TrustedHostSessionLoader(),
+    loader: CustomerSessionLoading = IAPStackSessionLoader(),
     platform: AppleIAPPlatform = AppleStoreKitPlatform(),
     makeClient: @escaping (IAPStackConfig) throws -> IAPStackClient = { try IAPStackClient(config: $0) }
   ) {
@@ -52,12 +52,15 @@ public final class PurchaseStore: ObservableObject {
     defer { if current == generation { isBusy = false } }
     do {
       guard let url = URL(string: endpoint.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-        throw SessionError.invalidEndpoint
+        throw IAPStackSessionError.invalidEndpoint
       }
       let customerSession = try await loader.load(endpoint: url, loginToken: loginToken)
       try Task.checkCancellation()
       guard current == generation else { return }
-      try customerSession.validate()
+      // StoreKit carries the customer as appAccountToken, which must be a lowercase UUID.
+      guard UUID(uuidString: customerSession.externalCustomerId)?.uuidString.lowercased() == customerSession.externalCustomerId
+      else { throw IAPStackSessionError.invalidResponse }
+      guard customerSession.expiresAt > Date() else { throw IAPStackSessionError.expired }
       let newClient = try makeClient(customerSession.config)
       let newStack = try AppleIAPStack(client: newClient, productKinds: Self.catalog, platform: platform)
       client = newClient
@@ -74,7 +77,7 @@ public final class PurchaseStore: ObservableObject {
           await self?.receive(purchase, generation: current)
         }
       }
-      await loadEntitlements(using: newStack, customer: customerSession.externalCustomerID, generation: current)
+      await loadEntitlements(using: newStack, customer: customerSession.externalCustomerId, generation: current)
     } catch {
       guard current == generation else { return }
       status = safeMessage(error)
@@ -125,7 +128,7 @@ public final class PurchaseStore: ObservableObject {
     defer { if current == generation { isBusy = false } }
     do {
       guard let purchase = try await stack.launchPurchase(
-        externalCustomerId: session.externalCustomerID, product: product
+        externalCustomerId: session.externalCustomerId, product: product
       ) else {
         if current == generation { status = "Awaiting approval. The update listener will verify it when approved." }
         return
@@ -149,7 +152,7 @@ public final class PurchaseStore: ObservableObject {
     isBusy = true
     let current = generation
     defer { if current == generation { isBusy = false } }
-    await loadEntitlements(using: stack, customer: session.externalCustomerID, generation: current)
+    await loadEntitlements(using: stack, customer: session.externalCustomerId, generation: current)
   }
 
   public func restore() async {
@@ -158,13 +161,13 @@ public final class PurchaseStore: ObservableObject {
     let current = generation
     defer { if current == generation { isBusy = false } }
     do {
-      _ = try await stack.restorePurchases(externalCustomerId: session.externalCustomerID)
+      _ = try await stack.restorePurchases(externalCustomerId: session.externalCustomerId)
       guard current == generation else { return }
       // Restore returns entitlement results, not transaction IDs. Retry remembered
       // failures idempotently so the local queue reflects what the server accepted.
       for purchase in Array(pending.values) { await receive(purchase, generation: current) }
       // A complete server snapshot is authoritative; an empty restore still refreshes access.
-      await loadEntitlements(using: stack, customer: session.externalCustomerID, generation: current)
+      await loadEntitlements(using: stack, customer: session.externalCustomerId, generation: current)
     } catch {
       if current == generation { status = safeMessage(error) + " Restore can be retried; unverified transactions remain unfinished." }
     }
@@ -177,7 +180,7 @@ public final class PurchaseStore: ObservableObject {
       return
     }
     // Never submit a transaction belonging to a different signed-in customer.
-    guard purchase.appAccountToken?.lowercased() == session?.externalCustomerID,
+    guard purchase.appAccountToken?.lowercased() == session?.externalCustomerId,
       Self.catalog[purchase.productId] != nil else {
       status = "A transaction belongs to another customer or catalog; it remains unfinished."
       return
@@ -189,7 +192,7 @@ public final class PurchaseStore: ObservableObject {
     verifying.insert(purchase.transactionId)
     defer { if current == generation { verifying.remove(purchase.transactionId) } }
     do {
-      let result = try await stack.verifyPurchase(externalCustomerId: session.externalCustomerID, purchase: purchase)
+      let result = try await stack.verifyPurchase(externalCustomerId: session.externalCustomerId, purchase: purchase)
       guard current == generation else { return }
       pending.removeValue(forKey: purchase.transactionId)
       pendingCount = pending.count
@@ -201,7 +204,7 @@ public final class PurchaseStore: ObservableObject {
     }
   }
 
-  private func readySession() -> (AppleIAPStack, CustomerSession)? {
+  private func readySession() -> (AppleIAPStack, IAPStackCustomerSession)? {
     guard let stack, let session else { status = "Connect to your trusted host first."; return nil }
     guard session.expiresAt > Date() else {
       status = "Customer session expired. Reconnect to your host; unfinished purchases will be replayed."
@@ -229,8 +232,8 @@ public final class PurchaseStore: ObservableObject {
     if let apple = error as? AppleIAPStackError, apple.userCancelled || apple.code == "purchase_cancelled" {
       return "Purchase cancelled."
     }
-    if case SessionError.expired = error { return "Customer session expired. Connect again." }
-    if case SessionError.invalidEndpoint = error { return "Enter an HTTPS trusted-host session URL without credentials or a query." }
+    if case IAPStackSessionError.expired = error { return "Customer session expired. Connect again." }
+    if case IAPStackSessionError.invalidEndpoint = error { return "Enter an HTTPS trusted-host session URL without credentials or a query." }
     if case IAPStackSDKError.apiError(let status, _, _, _, _, _) = error, status == 401 || status == 403 {
       return "Session rejected. Reconnect to your trusted host."
     }

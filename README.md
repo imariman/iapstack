@@ -282,7 +282,7 @@ Run the Flutter SDK checks with:
 (cd sdk/flutter/iapstack_google_play/example && flutter pub get && flutter analyze && flutter test)
 (cd sdk/flutter/iapstack_apple && flutter pub get && flutter analyze && flutter test)
 (cd sdk/flutter/iapstack_apple/example && flutter pub get && flutter analyze && flutter test)
-(cd sdk/ios && swift test)
+swift test
 (cd sdk/go && go test -race -count=1 ./...)
 (cd sdk/typescript && bun install --frozen-lockfile && bun run typecheck && bun test)
 ```

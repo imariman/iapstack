@@ -38,6 +38,8 @@ public final class IAPStackClient {
   private let ownsSession: Bool
   /// Wall clock used to resolve HTTP-date `Retry-After` values; only tests replace it.
   var clock: () -> Date = Date.init
+  /// Product name in `X-IAPStack-SDK`; only in-module wrappers such as the React Native bridge replace it.
+  var sdkName = "ios-swift"
   /// Suspends between attempts; only tests replace it.
   var sleep: (TimeInterval) async throws -> Void = { seconds in
     try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -199,7 +201,7 @@ public final class IAPStackClient {
     request.httpMethod = method
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     request.setValue("Bearer \(config.customerToken)", forHTTPHeaderField: "Authorization")
-    request.setValue("ios-swift/\(sdkVersion)", forHTTPHeaderField: "X-IAPStack-SDK")
+    request.setValue("\(sdkName)/\(sdkVersion)", forHTTPHeaderField: "X-IAPStack-SDK")
     if let requestId {
       request.setValue(requestId, forHTTPHeaderField: "X-Request-ID")
     }

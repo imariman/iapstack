@@ -39,9 +39,10 @@ Keychain, preferences, logs, analytics, or crash reports.
 
 For hosts implementing the example `/session` contract, the optional
 `IapStackStore.requestCustomerSession(httpsEndpoint, testerLoginToken)` helper
-performs an HTTPS POST with a separate login bearer. Its native transport rejects
-redirects, limits the response to 16 KiB and the request to 15 seconds, and returns
-a validated session with an `expiresAt` date. Pass a user authentication credential,
+performs an HTTPS POST with a separate login bearer through the Swift and Kotlin
+SDKs' session loaders. They reject redirects, limit the response to 16 KiB and the
+request to 15 seconds without progress or 20 seconds overall, and return a
+validated session with an `expiresAt` date. Pass a user authentication credential,
 never the durable application bearer. Other host login flows can use your existing
 authenticated session transport.
 

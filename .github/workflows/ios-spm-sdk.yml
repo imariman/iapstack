@@ -29,11 +29,6 @@ jobs:
         run: swift --version
 
       - name: Run Swift package tests
-        working-directory: sdk/ios
-        run: |
-          swift test
-
-      - name: Run repository-root Swift package tests
         run: swift test
 
       - name: Run runnable example flow tests

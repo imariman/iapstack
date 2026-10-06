@@ -6,14 +6,10 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.WindowManager
 import android.widget.*
-import com.google.gson.JsonParser
 import com.iapstack.core.*
 import com.iapstack.googleplay.*
 import com.iapstack.huawei.*
-import java.net.URI
 import kotlinx.coroutines.*
-import okhttp3.*
-import okhttp3.RequestBody.Companion.toRequestBody
 
 /** Manual store harness: runtime credentials are never saved, bundled, or logged. */
 class MainActivity : Activity() {
@@ -76,10 +72,10 @@ class MainActivity : Activity() {
         connect.isEnabled = true
       }) {
         require(productId.isNotEmpty())
-        val session = mintSession(endpoint, hostToken)
-        customer = session.get("external_customer_id").asString
-        client = IapStackClient(IapStackConfig(URI(session.get("base_url").asString),
-          session.get("application_id").asString, session.get("token").asString))
+        val loader = IapStackSessionLoader()
+        val session = try { loader.load(endpoint, hostToken) } finally { loader.close() }
+        customer = session.externalCustomerId
+        client = IapStackClient(session.config)
         if (usePlay) {
           val catalog = mapOf(productId to if (isSubscription) GooglePlayProductKind.SUBSCRIPTION else GooglePlayProductKind.NON_CONSUMABLE)
           playPlatform = BillingClientGooglePlayPlatform(applicationContext, catalog) { this@MainActivity }
@@ -177,26 +173,6 @@ class MainActivity : Activity() {
           else -> "Request failed. Check configuration or restart to obtain a fresh session."
         }
       }
-    }
-  }
-
-  private suspend fun mintSession(endpoint: String, login: String) = withContext(Dispatchers.IO) {
-    val uri = URI(endpoint)
-    require(uri.scheme == "https" && uri.host != null && uri.userInfo == null && uri.fragment == null)
-    require(login.isNotBlank())
-    val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
-      .callTimeout(20, java.util.concurrent.TimeUnit.SECONDS).build()
-    try {
-      http.newCall(Request.Builder().url(endpoint).header("Authorization", "Bearer $login")
-        .post(ByteArray(0).toRequestBody()).build()).execute().use { response ->
-        check(response.isSuccessful)
-        val bytes = response.peekBody(65537).bytes()
-        check(bytes.size <= 65536)
-        JsonParser.parseString(bytes.toString(Charsets.UTF_8)).asJsonObject
-      }
-    } finally {
-      http.connectionPool.evictAll()
-      http.dispatcher.executorService.shutdown()
     }
   }
 

@@ -32,17 +32,19 @@ final class IAPStackStore: RCTEventEmitter {
   override func startObserving() { listening = true }
   override func stopObserving() { listening = false }
 
-  /// Exchanges a separate host login for a short-lived customer session without exposing it to redirects.
+  /// Exchanges a separate host login for a short-lived customer session through the canonical loader.
   @objc(requestSession:loginToken:resolve:reject:)
   func requestSession(_ endpoint: String, loginToken: String,
                       resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
     Task { @MainActor in
-      do { resolve(try await loadCustomerSession(endpoint: endpoint, loginToken: loginToken)) }
-      catch {
-        let code: String
-        if let failure = error as? SessionBootstrapError { code = failure.code }
-        else if (error as? URLError)?.code == .timedOut { code = "timeout" }
-        else { code = "transport_error" }
+      do {
+        guard let url = URL(string: endpoint) else { throw IAPStackSessionError.invalidEndpoint }
+        let session = try await IAPStackSessionLoader().load(endpoint: url, loginToken: loginToken)
+        resolve(["base_url": session.baseURL.absoluteString, "application_id": session.applicationId,
+                 "external_customer_id": session.externalCustomerId, "token": session.customerToken,
+                 "expires_at": timestamp(session.expiresAt)])
+      } catch {
+        let code = (error as? IAPStackSessionError)?.code ?? (error is CancellationError ? "session_disposed" : "transport_error")
         reject(code, "Customer session request failed (\(code))", nil)
       }
     }
@@ -64,6 +66,7 @@ final class IAPStackStore: RCTEventEmitter {
           customerToken: token, timeout: timeout / 1000,
           retryPolicy: IAPStackRetryPolicy(maxAttempts: attempts, baseDelay: baseDelay / 1000, maxDelay: maxDelay / 1000),
           maxResponseBytes: limit, allowInsecureHttp: config["allowInsecureHttp"] as? Bool ?? false))
+        client.sdkName = reactNativeSDKName
         defer { client.close() }
         switch operation {
         case "purchases:verify":
@@ -103,6 +106,7 @@ final class IAPStackStore: RCTEventEmitter {
       let client = try IAPStackClient(config: IAPStackConfig(baseUri: url,
         applicationId: application, customerToken: token,
         allowInsecureHttp: config["allowInsecureHttp"] as? Bool ?? false))
+      client.sdkName = reactNativeSDKName
       let companion = try AppleIAPStack(client: client, productKinds: kinds)
       let next = Session(customer: customer, companion: companion, client: client)
       session = next
@@ -208,73 +212,8 @@ final class IAPStackStore: RCTEventEmitter {
   }
 }
 
-private struct SessionBootstrapError: Error {
-  let code: String
-}
-
-private final class RejectSessionRedirects: NSObject, URLSessionTaskDelegate {
-  func urlSession(_ session: URLSession, task: URLSessionTask,
-                  willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
-                  completionHandler: @escaping (URLRequest?) -> Void) {
-    completionHandler(nil)
-  }
-}
-
-private func loadCustomerSession(endpoint: String, loginToken: String) async throws -> [String: String] {
-  guard let url = URL(string: endpoint), url.scheme?.lowercased() == "https",
-    let host = url.host, !host.isEmpty, url.user == nil, url.password == nil,
-    url.query == nil, url.fragment == nil,
-    !loginToken.isEmpty, !loginToken.contains(where: { $0.isWhitespace })
-  else { throw SessionBootstrapError(code: "invalid_session_request") }
-  let configuration = URLSessionConfiguration.ephemeral
-  configuration.httpShouldSetCookies = false
-  configuration.urlCache = nil
-  configuration.timeoutIntervalForRequest = 15
-  configuration.timeoutIntervalForResource = 15
-  let session = URLSession(configuration: configuration)
-  defer { session.invalidateAndCancel() }
-  var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
-  request.httpMethod = "POST"
-  request.httpBody = Data("{}".utf8)
-  request.setValue("Bearer \(loginToken)", forHTTPHeaderField: "Authorization")
-  request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-  request.setValue("application/json", forHTTPHeaderField: "Accept")
-  let (bytes, response) = try await session.bytes(for: request, delegate: RejectSessionRedirects())
-  defer { bytes.task.cancel() }
-  guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-    throw SessionBootstrapError(code: "session_unavailable")
-  }
-  let limit = 16_384
-  guard response.expectedContentLength <= limit else {
-    throw SessionBootstrapError(code: "invalid_session_response")
-  }
-  var data = Data()
-  for try await byte in bytes {
-    guard data.count < limit else { throw SessionBootstrapError(code: "invalid_session_response") }
-    data.append(byte)
-  }
-  guard let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-    let base = payload["base_url"] as? String, let baseURL = URL(string: base),
-    let application = payload["application_id"] as? String,
-    let customer = payload["external_customer_id"] as? String,
-    !customer.isEmpty, customer.trimmingCharacters(in: .whitespacesAndNewlines) == customer,
-    let token = payload["token"] as? String, let expires = payload["expires_at"] as? String
-  else { throw SessionBootstrapError(code: "invalid_session_response") }
-  do {
-    try IAPStackConfig(baseUri: baseURL, applicationId: application, customerToken: token).validate()
-  } catch { throw SessionBootstrapError(code: "invalid_session_response") }
-  let formatter = ISO8601DateFormatter()
-  formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-  var expiry = formatter.date(from: expires)
-  if expiry == nil {
-    formatter.formatOptions = [.withInternetDateTime]
-    expiry = formatter.date(from: expires)
-  }
-  guard let expiry else { throw SessionBootstrapError(code: "invalid_session_response") }
-  guard expiry > Date() else { throw SessionBootstrapError(code: "session_expired") }
-  return ["base_url": base, "application_id": application, "external_customer_id": customer,
-          "token": token, "expires_at": expires]
-}
+/// Devices identify React Native traffic even though the canonical native client sends it.
+private let reactNativeSDKName = "react-native"
 
 private func bridgeError(_ code: String) -> AppleIAPStackError {
   AppleIAPStackError(code: code, message: "IAPStack operation failed (\(code))")

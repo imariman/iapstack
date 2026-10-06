@@ -26,6 +26,21 @@ the mobile app. Never ship the durable application bearer in a mobile binary,
 and never persist or log the customer bearer or signed purchase evidence.
 Refresh expired sessions through the host and recreate the client/coordinator.
 
+If your host implements the example `/session` contract, `IapStackSessionLoader`
+posts `{}` with your app's own login bearer and returns a validated
+`IapStackCustomerSession`. It sends that bearer only to the HTTPS endpoint, never
+follows redirects, uses no cookies or caches, caps the response at 16 KiB, and
+times out after 15 seconds without progress or 20 seconds overall. Failures are
+`IapStackSessionException`s with stable `code` strings.
+
+```kotlin
+val loader = IapStackSessionLoader()
+val session = try { loader.load(sessionUrl, loginToken) } finally { loader.close() }
+val client = IapStackClient(session.config)
+```
+
+Hosts with another contract can build the client directly:
+
 ```kotlin
 val client = IapStackClient(IapStackConfig(
   baseUri = URI(session.baseUrl),

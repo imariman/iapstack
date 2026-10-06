@@ -99,6 +99,9 @@ class IapStackClient(
   /** Suspends between attempts; only tests replace it. */
   internal var sleep: suspend (Duration) -> Unit = { delay(it) }
 
+  /** Product name in `X-IAPStack-SDK`; only in-module wrappers such as the React Native bridge replace it. */
+  internal var sdkName = "android-kotlin"
+
   private val gson = Gson()
   private val random = Random(System.nanoTime())
   private val closeClient: Boolean
@@ -309,7 +312,7 @@ class IapStackClient(
       .url(urlBuilder.build())
       .addHeader("Accept", "application/json")
       .addHeader("Authorization", "Bearer ${config.customerToken}")
-      .addHeader("X-IAPStack-SDK", "android-kotlin/$SDK_VERSION")
+      .addHeader("X-IAPStack-SDK", "$sdkName/$SDK_VERSION")
 
     requestId?.let {
       requestBuilder.addHeader("X-Request-ID", it)

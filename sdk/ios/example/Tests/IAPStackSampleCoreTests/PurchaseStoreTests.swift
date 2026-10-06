@@ -11,6 +11,12 @@ private let snapshot = #"{"customer_id":"internal","entitlements":[]}"#
 final class PurchaseStoreTests: XCTestCase {
   override func setUp() { StubProtocol.reset() }
 
+  func testSessionWithoutLowercaseUUIDCustomerIsRejected() async {
+    let store = PurchaseStore(loader: StubLoader(externalCustomerId: customer.uppercased()), platform: Platform())
+    await store.connect(endpoint: "https://host.example/session", loginToken: "temporary-login")
+    XCTAssertFalse(store.isConnected)
+  }
+
   func testCatalogCanBeLoadedBeforeAuthentication() async {
     let store = PurchaseStore(loader: StubLoader(), platform: Platform())
     await store.queryProducts()
@@ -197,74 +203,12 @@ final class PurchaseStoreTests: XCTestCase {
   }
 }
 
-final class CustomerSessionTests: XCTestCase {
-  override func setUp() { StubProtocol.reset() }
-
-  func testHostRequestUsesTemporaryLoginAndDerivesCustomerFromResponse() async throws {
-    StubProtocol.enqueue(status: 200, body: sessionJSON())
-    let loader = TrustedHostSessionLoader(session: makeSession())
-    let session = try await loader.load(endpoint: URL(string: "https://host.example/session")!, loginToken: "temporary-login")
-    XCTAssertEqual(session.externalCustomerID, customer)
-    XCTAssertEqual(session.applicationID, "app")
-    let request = try XCTUnwrap(StubProtocol.requests.first)
-    XCTAssertEqual(request.httpMethod, "POST")
-    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer temporary-login")
-    XCTAssertEqual(request.httpBody, Data("{}".utf8))
-    XCTAssertEqual(session.token, "short-lived")
-  }
-
-  func testUnsafeHostEndpointsFailBeforeSendingCredential() async {
-    let loader = TrustedHostSessionLoader(session: makeSession())
-    for endpoint in ["http://host.example/session", "https://name:pass@host.example/session", "https://host.example/session?token=bad", "https://host.example/session#fragment"] {
-      do {
-        _ = try await loader.load(endpoint: URL(string: endpoint)!, loginToken: "temporary-login")
-        XCTFail("Expected unsafe URL rejection")
-      } catch SessionError.invalidEndpoint {} catch { XCTFail("Unexpected error: \(error)") }
-    }
-    XCTAssertTrue(StubProtocol.requests.isEmpty)
-  }
-
-  func testUnusableHostSessionsAreRejected() async {
-    let loader = TrustedHostSessionLoader(session: makeSession())
-    let invalid = [sessionJSON(baseURL: "http://insecure.example"), sessionJSON(customerID: customer.uppercased()),
-      sessionJSON(expiry: "2000-01-01T00:00:00Z"), sessionJSON(token: "")]
-    for body in invalid {
-      StubProtocol.enqueue(status: 200, body: body)
-      do {
-        _ = try await loader.load(endpoint: URL(string: "https://host.example/session")!, loginToken: "temporary-login")
-        XCTFail("Expected unusable session rejection")
-      } catch { /* Do not expose raw session response in test failure messages. */ }
-    }
-  }
-
-  func testFractionalExpiryIsAccepted() async throws {
-    StubProtocol.enqueue(status: 200, body: sessionJSON(expiry: "2099-01-01T00:00:00.123Z"))
-    _ = try await TrustedHostSessionLoader(session: makeSession())
-      .load(endpoint: URL(string: "https://host.example/session")!, loginToken: "temporary-login")
-  }
-
-  func testOversizedHostResponseIsRejected() async {
-    StubProtocol.enqueue(status: 200, body: String(repeating: "x", count: 65_537))
-    do {
-      _ = try await TrustedHostSessionLoader(session: makeSession())
-        .load(endpoint: URL(string: "https://host.example/session")!, loginToken: "temporary-login")
-      XCTFail("Expected bounded response rejection")
-    } catch SessionError.invalidResponse {} catch { XCTFail("Unexpected error") }
-  }
-
-  private func sessionJSON(baseURL: String = "https://iap.example", customerID: String = customer,
-    expiry: String = "2099-01-01T00:00:00Z", token: String = "short-lived") -> String {
-    """
-    {"base_url":"\(baseURL)","application_id":"app","external_customer_id":"\(customerID)","token":"\(token)","expires_at":"\(expiry)"}
-    """
-  }
-}
-
 private struct StubLoader: CustomerSessionLoading {
   var expiresAt = Date().addingTimeInterval(600)
-  func load(endpoint: URL, loginToken: String) async throws -> CustomerSession {
-    CustomerSession(baseURL: URL(string: "https://iap.example")!, applicationID: "app",
-      externalCustomerID: customer, token: "short-lived", expiresAt: expiresAt)
+  var externalCustomerId = customer
+  func load(endpoint: URL, loginToken: String) async throws -> IAPStackCustomerSession {
+    IAPStackCustomerSession(baseURL: URL(string: "https://iap.example")!, applicationId: "app",
+      externalCustomerId: externalCustomerId, customerToken: "short-lived", expiresAt: expiresAt)
   }
 }
 

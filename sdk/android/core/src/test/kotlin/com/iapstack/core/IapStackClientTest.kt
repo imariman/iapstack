@@ -128,6 +128,20 @@ class IapStackClientTest {
   }
 
   @Test
+  fun inModuleWrapperNamesItselfInSdkHeader() = runBlocking {
+    MockWebServer().use { server ->
+      server.enqueue(jsonResponse("""{"customer_id":"customer-internal","entitlements":[]}"""))
+      val client = client(server)
+      client.sdkName = "react-native"
+
+      client.getEntitlements("customer-external")
+
+      assertEquals("react-native/0.1.0-sdk.1", server.takeRequest().getHeader("X-IAPStack-SDK"))
+      client.close()
+    }
+  }
+
+  @Test
   fun escapesCustomerIdentifiersAsOnePathSegment() = runBlocking {
     MockWebServer().use { server ->
       server.enqueue(

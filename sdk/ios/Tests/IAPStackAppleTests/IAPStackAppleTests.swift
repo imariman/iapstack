@@ -256,6 +256,22 @@ final class IAPStackAppleTests: XCTestCase {
     )
   }
 
+  func testInModuleWrapperNamesItselfInSDKHeader() async throws {
+    URLStubProtocol.reset()
+    let captured = Counter()
+    URLStubProtocol.enqueue { request in
+      if request.value(forHTTPHeaderField: "X-IAPStack-SDK") == "react-native/0.1.0-sdk.1" { captured.increment() }
+      let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"])!
+      return (response, Data(#"{"customer_id":"customer-internal","entitlements":[]}"#.utf8))
+    }
+    let client = try IAPStackClient(config: IAPStackConfig(baseUri: URL(string: "https://example.local")!,
+      applicationId: "application-1", customerToken: "customer-token"), session: makeSession())
+    client.sdkName = "react-native"
+    _ = try await client.getEntitlements("customer-id")
+    XCTAssertEqual(captured.value, 1)
+  }
+
   func testTimeoutTurnsIntoTimeoutError() async throws {
     URLStubProtocol.reset()
     URLStubProtocol.enqueue { request in
