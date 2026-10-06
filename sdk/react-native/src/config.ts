@@ -39,16 +39,16 @@ export class IapStackConfig {
     if (uri.protocol !== 'https:' && !(this.allowInsecureHttp && uri.protocol === 'http:')) {
       throw new TypeError('baseUri must use HTTPS');
     }
-    if (!this.applicationId || this.applicationId.includes('/')) {
+    if (!this.applicationId?.trim() || this.applicationId.includes('/')) {
       throw new TypeError('applicationId must be a non-empty path segment');
     }
     if (!this.customerToken || /\s/.test(this.customerToken)) {
       throw new TypeError('customerToken must be a non-empty bearer without spaces');
     }
-    if (this.timeoutMs <= 0) {
+    if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0) {
       throw new TypeError('timeoutMs must be greater than 0');
     }
-    if (this.maxResponseBytes <= 0) {
+    if (!Number.isSafeInteger(this.maxResponseBytes) || this.maxResponseBytes <= 0) {
       throw new TypeError('maxResponseBytes must be greater than 0');
     }
     this.retryPolicy.validate();

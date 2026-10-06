@@ -1,6 +1,6 @@
 import Foundation
 
-private let sdkVersion = "0.1.0-dev.1"
+private let sdkVersion = "0.1.0-sdk.1"
 
 /// Provider-neutral HTTP client for the IAPStack v1 API.
 public final class IAPStackClient {
@@ -38,6 +38,8 @@ public final class IAPStackClient {
   private let ownsSession: Bool
   /// Wall clock used to resolve HTTP-date `Retry-After` values; only tests replace it.
   var clock: () -> Date = Date.init
+  /// Product name in `X-IAPStack-SDK`; only in-module wrappers such as the React Native bridge replace it.
+  var sdkName = "ios-swift"
   /// Suspends between attempts; only tests replace it.
   var sleep: (TimeInterval) async throws -> Void = { seconds in
     try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -73,7 +75,11 @@ public final class IAPStackClient {
       body: ["purchases": purchases.map { $0.toDictionary() }],
       requestId: requestId,
     )
-    return try RestoreResult.from(json)
+    let result = try RestoreResult.from(json)
+    guard result.results.count == purchases.count else {
+      throw IAPStackSDKError.protocolError(message: "Restore response must contain one result per purchase")
+    }
+    return result
   }
 
   /// Loads the current entitlement snapshot for one external customer.
@@ -195,7 +201,7 @@ public final class IAPStackClient {
     request.httpMethod = method
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     request.setValue("Bearer \(config.customerToken)", forHTTPHeaderField: "Authorization")
-    request.setValue("ios-swift/\(sdkVersion)", forHTTPHeaderField: "X-IAPStack-SDK")
+    request.setValue("\(sdkName)/\(sdkVersion)", forHTTPHeaderField: "X-IAPStack-SDK")
     if let requestId {
       request.setValue(requestId, forHTTPHeaderField: "X-Request-ID")
     }
@@ -418,6 +424,18 @@ private final class BoundedBodyCollector: NSObject, URLSessionDataDelegate, @unc
   func cancel(_ task: URLSessionTask) {
     finish(.failure(CancellationError()))
     task.cancel()
+  }
+
+  /// Never replay customer credentials or signed purchase evidence at a redirect target.
+  /// A per-task delegate also enforces this for caller-injected sessions.
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest,
+    completionHandler: @escaping (URLRequest?) -> Void,
+  ) {
+    completionHandler(nil)
   }
 
   func urlSession(

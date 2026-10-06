@@ -1,7 +1,10 @@
 plugins {
   id("com.android.library")
   kotlin("android")
+  `maven-publish`
 }
+
+apply(from = rootProject.file("publishing.gradle.kts"))
 
 android {
   namespace = "com.iapstack.huawei"
@@ -12,6 +15,7 @@ android {
     targetCompatibility = JavaVersion.VERSION_17
   }
   testOptions { unitTests.isIncludeAndroidResources = true }
+  publishing { singleVariant("release") { withSourcesJar() } }
 }
 
 kotlin { jvmToolchain(17) }

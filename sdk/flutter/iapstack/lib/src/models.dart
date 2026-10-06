@@ -207,7 +207,7 @@ int _requiredPositiveInt(Map<String, Object?> json, String key) {
 
 DateTime _requiredDateTime(Map<String, Object?> json, String key) {
   final value = _requiredString(json, key);
-  return DateTime.parse(value).toUtc();
+  return _parseDateTime(value, key);
 }
 
 DateTime? _optionalDateTime(Map<String, Object?> json, String key) {
@@ -216,9 +216,35 @@ DateTime? _optionalDateTime(Map<String, Object?> json, String key) {
     return null;
   }
   if (value is! String || value.isEmpty) {
-    throw FormatException('$key must be an ISO-8601 string');
+    throw FormatException('$key must be an RFC 3339 date-time');
   }
-  return DateTime.parse(value).toUtc();
+  return _parseDateTime(value, key);
+}
+
+/// Rejects local dates and impossible calendar fields before Dart normalizes them.
+DateTime _parseDateTime(String value, String key) {
+  final match = RegExp(
+    r'^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-](\d{2}):(\d{2}))$',
+  ).firstMatch(value);
+  if (match == null) {
+    throw FormatException('$key must be an RFC 3339 date-time');
+  }
+  final fields = <int>[
+    for (var index = 1; index <= 8; index++)
+      int.parse(match.group(index) ?? '0'),
+  ];
+  final calendar = DateTime.utc(fields[0], fields[1], fields[2]);
+  if (calendar.year != fields[0] ||
+      calendar.month != fields[1] ||
+      calendar.day != fields[2] ||
+      fields[3] > 23 ||
+      fields[4] > 59 ||
+      fields[5] > 59 ||
+      fields[6] > 23 ||
+      fields[7] > 59) {
+    throw FormatException('$key must be an RFC 3339 date-time');
+  }
+  return DateTime.parse(value.toUpperCase()).toUtc();
 }
 
 List<Map<String, Object?>> _objectList(Map<String, Object?> json, String key) {

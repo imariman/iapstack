@@ -68,8 +68,8 @@ public struct IAPStackConfig: Sendable {
         message: "customerToken must be a non-empty bearer token",
       )
     }
-    if timeout <= 0 {
-      throw IAPStackSDKError.configurationError(message: "timeout must be positive")
+    if !timeout.isFinite || timeout <= 0 || timeout >= Double(UInt64.max) / 1_000_000_000 {
+      throw IAPStackSDKError.configurationError(message: "timeout must be positive, finite, and representable in nanoseconds")
     }
     if maxResponseBytes <= 0 {
       throw IAPStackSDKError.configurationError(

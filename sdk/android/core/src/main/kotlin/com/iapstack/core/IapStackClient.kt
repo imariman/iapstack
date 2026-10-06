@@ -35,7 +35,7 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 
-private const val SDK_VERSION = "0.1.0-dev.1"
+private const val SDK_VERSION = "0.1.0-sdk.1"
 private val JSON_MEDIA_TYPE = "application/json".toMediaType()
 private val DELAY_SECONDS = Regex("^\\d{1,9}$")
 private val IMF_FIXDATE = Regex(
@@ -99,6 +99,9 @@ class IapStackClient(
   /** Suspends between attempts; only tests replace it. */
   internal var sleep: suspend (Duration) -> Unit = { delay(it) }
 
+  /** Product name in `X-IAPStack-SDK`; only in-module wrappers such as the React Native bridge replace it. */
+  internal var sdkName = "android-kotlin"
+
   private val gson = Gson()
   private val random = Random(System.nanoTime())
   private val closeClient: Boolean
@@ -110,6 +113,9 @@ class IapStackClient(
     closeClient = httpClient == null
     val timeoutMillis = config.timeout.inWholeMilliseconds
     client = (httpClient ?: OkHttpClient()).newBuilder()
+      // Keep customer credentials and signed evidence at the configured endpoint.
+      .followRedirects(false)
+      .followSslRedirects(false)
       .callTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
       .connectTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
       .readTimeout(timeoutMillis, TimeUnit.MILLISECONDS)
@@ -145,13 +151,18 @@ class IapStackClient(
       throw IllegalArgumentException("purchases must contain between 1 and 100 items")
     }
     purchases.forEach(::validatePurchase)
+    val expectedResults = purchases.size
     val json = request(
       method = "POST",
       path = listOf("v1", "applications", config.applicationId, "purchases:restore"),
       body = mapOf("purchases" to purchases.map(PurchaseSubmission::toJson)),
       requestId = requestId,
     )
-    return decode { RestoreResult.fromJson(json) }
+    val result = decode { RestoreResult.fromJson(json) }
+    if (result.results.size != expectedResults) {
+      throw IapStackProtocolException("IAPStack restore response did not contain one result per purchase")
+    }
+    return result
   }
 
   /**
@@ -301,7 +312,7 @@ class IapStackClient(
       .url(urlBuilder.build())
       .addHeader("Accept", "application/json")
       .addHeader("Authorization", "Bearer ${config.customerToken}")
-      .addHeader("X-IAPStack-SDK", "android-kotlin/$SDK_VERSION")
+      .addHeader("X-IAPStack-SDK", "$sdkName/$SDK_VERSION")
 
     requestId?.let {
       requestBuilder.addHeader("X-Request-ID", it)

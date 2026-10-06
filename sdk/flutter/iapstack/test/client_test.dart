@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -8,6 +9,45 @@ import 'package:test/test.dart';
 
 void main() {
   group('IapStackClient', () {
+    test('does not forward credentials or evidence to redirect targets',
+        () async {
+      var redirected = 0;
+      final target = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      target.listen((request) async {
+        redirected++;
+        request.response.write(jsonEncode(_verificationJson));
+        await request.response.close();
+      });
+      addTearDown(() => target.close(force: true));
+      for (final status in <int>[302, 307, 308]) {
+        final origin = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        origin.listen((request) async {
+          await request.drain<void>();
+          request.response.statusCode = status;
+          request.response.headers
+              .set('Location', 'http://127.0.0.1:${target.port}/');
+          request.response.headers.set('X-Request-ID', 'redirect-request');
+          await request.response.close();
+        });
+        addTearDown(() => origin.close(force: true));
+        final client = IapStackClient(IapStackConfig(
+          baseUri: Uri.parse('http://127.0.0.1:${origin.port}'),
+          applicationId: 'application-1',
+          customerToken: 'customer-token',
+          allowInsecureHttp: true,
+        ));
+        addTearDown(client.close);
+        await expectLater(
+          client.verifyPurchase(_purchase()),
+          throwsA(isA<IapStackApiException>()
+              .having((error) => error.statusCode, 'status', status)
+              .having((error) => error.retryable, 'retryable', isFalse)
+              .having(
+                  (error) => error.requestId, 'requestId', 'redirect-request')),
+        );
+      }
+      expect(redirected, 0);
+    });
     test('sends the exact verify contract and decodes projections', () async {
       late http.Request captured;
       final client = IapStackClient(
@@ -64,6 +104,76 @@ void main() {
       final json = body! as Map<String, dynamic>;
       expect((json['purchases']! as List<dynamic>), hasLength(2));
       expect(result.results, hasLength(2));
+    });
+
+    test('rejects restore responses with missing or extra results', () async {
+      for (final count in <int>[0, 1, 3]) {
+        final client =
+            IapStackClient(_config(), httpClient: MockClient((request) async {
+          return http.Response(
+              jsonEncode(<String, Object?>{
+                'results': List<Object?>.filled(count, _verificationJson),
+              }),
+              200);
+        }));
+        await expectLater(
+          client.restorePurchases(
+              <PurchaseSubmission>[_purchase(), _purchase('pro_monthly')]),
+          throwsA(isA<IapStackProtocolException>()),
+        );
+      }
+    });
+
+    test('rejects non-RFC 3339 or normalized entitlement expiry dates',
+        () async {
+      for (final expiry in <String>[
+        '2026-10-06',
+        '2026-10-06T12:00:00',
+        '2026-02-31T12:00:00Z',
+        '2026-10-06T24:00:00Z',
+        '2026-10-06T12:60:00Z',
+        '2026-10-06T12:00:60Z',
+        '2026-10-06T12:00:00+24:00',
+      ]) {
+        final client =
+            IapStackClient(_config(), httpClient: MockClient((request) async {
+          return http.Response(
+              jsonEncode(<String, Object?>{
+                'customer_id': 'customer-internal',
+                'entitlements': <Object?>[
+                  <String, Object?>{
+                    'key': 'premium',
+                    'access': 'allowed',
+                    'reason': 'purchase_valid',
+                    'version': 1,
+                    'effective_ends_at': expiry,
+                  }
+                ],
+              }),
+              200);
+        }));
+        await expectLater(client.getEntitlements('customer-external'),
+            throwsA(isA<IapStackProtocolException>()),
+            reason: expiry);
+      }
+    });
+
+    test('accepts leap days and offset RFC 3339 entitlement dates', () {
+      for (final value in <String>[
+        '2028-02-29T12:30:45.123456Z',
+        '2028-02-29t15:30:45.123456+03:00',
+        '2028-02-29t12:30:45.123456z',
+      ]) {
+        final entitlement = Entitlement.fromJson(<String, Object?>{
+          'key': 'premium',
+          'access': 'allowed',
+          'reason': 'purchase_valid',
+          'version': 1,
+          'effective_ends_at': value,
+        });
+        expect(entitlement.effectiveEndsAt,
+            DateTime.utc(2028, 2, 29, 12, 30, 45, 123, 456));
+      }
     });
 
     test('rejects external customer IDs with surrounding whitespace', () async {

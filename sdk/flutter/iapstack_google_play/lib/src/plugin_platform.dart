@@ -28,36 +28,58 @@ final class GooglePlayPluginPlatform implements GooglePlayIapPlatform {
       _guard(operation: 'availability', callback: _plugin.isAvailable);
 
   @override
-  Future<GooglePlayProductQuery> queryProducts(Set<String> productIds) =>
-      _guard(
-        operation: 'product_query',
-        callback: () async {
-          final response = await _plugin.queryProductDetails(productIds);
-          final error = response.error;
-          if (error != null) {
-            throw _pluginError(error, operation: 'product_query');
-          }
-          _queriedProducts.removeWhere(
-            (_, product) => productIds.contains(product.id),
-          );
-          final products = <GooglePlayProduct>[];
-          for (final details in response.productDetails) {
-            if (details is! GooglePlayProductDetails) {
-              throw const GooglePlayIapStackException(
-                code: 'invalid_plugin_response',
-                message: 'The purchase plugin returned a non-Google product',
-              );
-            }
-            final product = _googlePlayProduct(details);
-            _queriedProducts[product.selectionKey] = details;
-            products.add(product);
-          }
-          return GooglePlayProductQuery(
-            products: products,
-            notFoundProductIds: response.notFoundIDs.toSet(),
-          );
-        },
+  Future<GooglePlayProductQuery> queryProducts(
+    Set<String> productIds,
+  ) => _guard(
+    operation: 'product_query',
+    callback: () async {
+      _queriedProducts.removeWhere(
+        (_, product) => productIds.contains(product.id),
       );
+      final response = await _plugin.queryProductDetails(productIds);
+      final error = response.error;
+      if (error != null) {
+        throw _pluginError(error, operation: 'product_query');
+      }
+      final products = <GooglePlayProduct>[];
+      final validatedDetails = <String, ProductDetails>{};
+      final foundIds = <String>{};
+      for (final details in response.productDetails) {
+        if (details is! GooglePlayProductDetails ||
+            !productIds.contains(details.id)) {
+          throw const GooglePlayIapStackException(
+            code: 'invalid_plugin_response',
+            message: 'The purchase plugin returned an unexpected product',
+          );
+        }
+        final product = _googlePlayProduct(details);
+        if (!product.isPurchasable ||
+            validatedDetails.containsKey(product.selectionKey)) {
+          throw const GooglePlayIapStackException(
+            code: 'invalid_plugin_response',
+            message: 'The purchase plugin returned an invalid product offer',
+          );
+        }
+        validatedDetails[product.selectionKey] = details;
+        foundIds.add(product.id);
+        products.add(product);
+      }
+      final missingIds = response.notFoundIDs.toSet();
+      if (!productIds.containsAll(missingIds) ||
+          foundIds.intersection(missingIds).isNotEmpty ||
+          !foundIds.union(missingIds).containsAll(productIds)) {
+        throw const GooglePlayIapStackException(
+          code: 'invalid_plugin_response',
+          message: 'The purchase plugin returned an incomplete product query',
+        );
+      }
+      _queriedProducts.addAll(validatedDetails);
+      return GooglePlayProductQuery(
+        products: products,
+        notFoundProductIds: missingIds,
+      );
+    },
+  );
 
   @override
   Future<void> launchPurchase({

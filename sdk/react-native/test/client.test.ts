@@ -111,7 +111,7 @@ test('verifyPurchase sends correct method, path, headers, and payload', async ()
     const headers = new Headers(calls[0].init.headers as HeadersInit);
     assert.equal(headers.get('Accept'), 'application/json');
     assert.equal(headers.get('Authorization'), 'Bearer token');
-    assert.equal(headers.get('X-IAPStack-SDK'), 'react-native/0.1.0-dev.1');
+    assert.equal(headers.get('X-IAPStack-SDK'), 'react-native/0.1.0-sdk.1');
     assert.equal(headers.get('X-Request-ID'), 'request-123');
     assert.equal(headers.get('Content-Type'), 'application/json');
 
@@ -176,6 +176,19 @@ test('restorePurchases retries only on retryable status codes', async () => {
     assert.equal(result.results[0].customerId, 'customer-123');
   } finally {
     restore();
+  }
+});
+
+test('restorePurchases rejects incomplete or extra results without retrying', async () => {
+  for (const count of [0, 2]) {
+    const {calls, restore} = withMockFetch(async () => new Response(JSON.stringify({
+      results: Array.from({length: count}, verificationPayload),
+    }), {status: 200}));
+    try {
+      const client = new IapStackClient(clientConfig());
+      await assert.rejects(() => client.restorePurchases([samplePurchase]), IapStackProtocolError);
+      assert.equal(calls.length, 1);
+    } finally { restore(); }
   }
 });
 
@@ -351,6 +364,41 @@ test('non-retryable API errors are surfaced without another attempt', async () =
     );
     assert.equal(attempt, 1);
     assert.equal(calls.length, 1);
+  } finally {
+    restore();
+  }
+});
+
+test('redirects are surfaced as non-retryable API errors without being followed', async () => {
+  const { calls, restore } = withMockFetch(async () =>
+    new Response(null, {
+      status: 307,
+      headers: { location: 'https://elsewhere.test/collect' },
+    }),
+  );
+
+  try {
+    const client = new IapStackClient(
+      clientConfig({
+        retryPolicy: new IapStackRetryPolicy({
+          maxAttempts: 3,
+          baseDelayMs: 0,
+          maxDelayMs: 0,
+        }),
+      }),
+    );
+
+    await assert.rejects(
+      () => client.getEntitlements('customer-123'),
+      (error) => {
+        assert(error instanceof IapStackApiError);
+        assert.equal((error as IapStackApiError).statusCode, 307);
+        assert.equal((error as IapStackApiError).retryable, false);
+        return true;
+      },
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].init.redirect, 'manual');
   } finally {
     restore();
   }
@@ -654,4 +702,13 @@ test('rejects external customer IDs with surrounding whitespace', async () => {
   } finally {
     restore();
   }
+});
+
+test('configuration rejects blank application IDs and non-finite limits', () => {
+  const base = {baseUri: 'https://example.com', applicationId: 'app', customerToken: 'token'};
+  for (const override of [{applicationId: ' '}, {timeoutMs: NaN}, {timeoutMs: Infinity},
+    {maxResponseBytes: NaN}, {maxResponseBytes: 1.5}]) {
+    assert.throws(() => new IapStackConfig({...base, ...override}));
+  }
+  assert.throws(() => new IapStackRetryPolicy({baseDelayMs: NaN}));
 });
