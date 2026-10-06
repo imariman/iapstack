@@ -21,6 +21,47 @@ const testApplicationToken = 'application-token';
 const testCustomerToken = 'customer-token';
 const testSecretBearer = 'secret with spaces';
 
+test('client never forwards credentials or customer data to redirect targets', async () => {
+  let redirected = 0;
+  const target = Bun.serve({
+    hostname: '127.0.0.1', port: 0,
+    fetch() {
+      redirected += 1;
+      return jsonResponse(201, { token: 'unexpected', expires_at: '2026-08-24T20:15:00Z' });
+    },
+  });
+  try {
+    for (const status of [302, 307, 308]) {
+      const origin = Bun.serve({
+        hostname: '127.0.0.1', port: 0,
+        fetch: () => new Response(null, {
+          status, headers: { Location: target.url.href, 'X-Request-ID': 'redirect-request' },
+        }),
+      });
+      try {
+        const client = new Client({
+          baseUrl: origin.url.href,
+          applicationId: 'application-1',
+          applicationToken: testApplicationToken,
+          allowInsecureHttp: true,
+        });
+        await assert.rejects(client.createCustomerSession('customer-external'), (error: unknown) => {
+          assert.ok(error instanceof APIError);
+          assert.equal(error.statusCode, status);
+          assert.equal(error.retryable, false);
+          assert.equal(error.requestId, 'redirect-request');
+          return true;
+        });
+      } finally {
+        await origin.stop(true);
+      }
+    }
+    assert.equal(redirected, 0);
+  } finally {
+    await target.stop(true);
+  }
+});
+
 type CapturedRequest = {
   method: string;
   url: string;

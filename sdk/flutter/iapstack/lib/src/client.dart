@@ -62,6 +62,7 @@ final class IapStackClient {
     for (final purchase in purchases) {
       _validatePurchase(purchase);
     }
+    final expectedResults = purchases.length;
     final json = await _request(
       method: 'POST',
       path: <String>[
@@ -77,7 +78,12 @@ final class IapStackClient {
       },
       requestId: requestId,
     );
-    return _decode(() => RestoreResult.fromJson(json));
+    final result = _decode(() => RestoreResult.fromJson(json));
+    if (result.results.length != expectedResults) {
+      throw const IapStackProtocolException(
+          'IAPStack restore response did not contain one result per purchase');
+    }
+    return result;
   }
 
   /// Verifies any number of purchases in request order, in bounded batches.
@@ -208,6 +214,8 @@ final class IapStackClient {
       uri,
       abortTrigger: abortTrigger,
     )
+      // Redirects must not forward customer credentials or purchase evidence.
+      ..followRedirects = false
       ..headers['Accept'] = 'application/json'
       ..headers['Authorization'] = 'Bearer ${_config.customerToken}'
       ..headers['X-IAPStack-SDK'] = 'flutter/$_sdkVersion';

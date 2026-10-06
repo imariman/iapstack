@@ -17,7 +17,7 @@ import {
   IapStackTransportError,
 } from './errors';
 
-const SDK_VERSION = '0.1.0-dev.1';
+const SDK_VERSION = '0.1.0-sdk.1';
 
 const RETRYABLE_STATUS = (statusCode: number): boolean =>
   statusCode === 429 || statusCode >= 500;
@@ -55,7 +55,13 @@ export class IapStackClient {
         body: { purchases: purchases.map((item) => parsePurchaseSubmission(item)) },
       },
     );
-    return this.decode(() => decodeRestoreResult(json));
+    return this.decode(() => {
+      const result = decodeRestoreResult(json);
+      if (result.results.length !== purchases.length) {
+        throw new IapStackProtocolError('Restore result count did not match submitted purchases');
+      }
+      return result;
+    });
   }
 
   async getEntitlements(
@@ -78,7 +84,7 @@ export class IapStackClient {
     return this.decode(() => decodeEntitlementSnapshot(json));
   }
 
-  private async request(
+  protected async request(
     method: 'GET' | 'POST',
     pathSegments: string[],
     params: { requestId?: string; body?: Record<string, unknown> } = {},
@@ -145,6 +151,8 @@ export class IapStackClient {
     try {
       const response = await fetch(uri.toString(), {
         method,
+        // A redirect is a non-retryable API error; never resend the bearer or evidence.
+        redirect: 'manual',
         headers,
         body:
           params.body && method === 'POST'
@@ -364,7 +372,13 @@ function concatBytes(chunks: Uint8Array[], length: number): Uint8Array {
 
 function byteLength(value: string): number {
   if (typeof TextEncoder === 'undefined') {
-    return value.length;
+    // Count UTF-8 bytes even in Hermes runtimes without TextEncoder.
+    let bytes = 0;
+    for (const character of value) {
+      const code = character.codePointAt(0)!;
+      bytes += code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4;
+    }
+    return bytes;
   }
   return new TextEncoder().encode(value).byteLength;
 }

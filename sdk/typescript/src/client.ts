@@ -17,7 +17,7 @@ import {
 } from './models.js';
 import { parseRetryAfter } from './retry_after.js';
 
-const SDK_VERSION = '0.1.0-dev.1';
+const SDK_VERSION = '0.1.0-sdk.1';
 const JSON_CONTENT_TYPE = 'application/json';
 
 export interface RequestOptions {
@@ -223,6 +223,8 @@ export class Client {
         headers,
         body: payload,
         signal: abortController.signal,
+        // A redirect must never resend host credentials or customer data.
+        redirect: 'manual',
       });
       const text = await readLimitedBody(response, this.#config.maxResponseBytes);
       return { status: response.status, headers: response.headers, body: text };

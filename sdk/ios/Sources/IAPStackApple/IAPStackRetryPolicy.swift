@@ -56,9 +56,10 @@ public struct IAPStackRetryPolicy: Sendable {
         message: "maxAttempts must be between 1 and 5",
       )
     }
-    if baseDelay < 0 || maxDelay < 0 || baseDelay > maxDelay {
+    if !baseDelay.isFinite || !maxDelay.isFinite || baseDelay < 0 || maxDelay < 0 || baseDelay > maxDelay ||
+      maxDelay >= Double(UInt64.max) / 1_000_000_000 {
       throw IAPStackSDKError.configurationError(
-        message: "retry delays must be non-negative and ordered",
+        message: "retry delays must be finite, non-negative, ordered, and representable in nanoseconds",
       )
     }
   }

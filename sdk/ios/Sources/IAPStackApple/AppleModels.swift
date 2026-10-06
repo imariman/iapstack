@@ -113,7 +113,7 @@ public struct ApplePurchase: Sendable {
   public var canVerify: Bool {
     (status == .purchased || status == .restored) &&
       !signedTransaction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-      signedTransaction.split(separator: ".").count == 3
+      isCompactJWS(signedTransaction)
   }
 }
 
@@ -135,7 +135,7 @@ public enum ApplePurchaseStatus: String, Sendable {
 public struct ApplePurchaseEvidence: Sendable {
   /// Creates one StoreKit evidence tuple.
   public init(signedTransaction: String, productKind: AppleProductKind) throws {
-    if signedTransaction.split(separator: ".").count != 3 {
+    if !isCompactJWS(signedTransaction) {
       throw AppleIAPStackError(
         code: "invalid_signed_transaction",
         message: "StoreKit signed transaction is not a compact JWS",
@@ -176,4 +176,11 @@ public struct ApplePurchaseEvidence: Sendable {
       ],
     )
   }
+}
+
+/// A compact JWS has exactly three non-empty, whitespace-free segments.
+private func isCompactJWS(_ value: String) -> Bool {
+  let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+  return parts.count == 3 && parts.allSatisfy { !$0.isEmpty } &&
+    !value.contains(where: { $0.isWhitespace })
 }

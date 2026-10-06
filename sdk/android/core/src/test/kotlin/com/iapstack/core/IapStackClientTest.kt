@@ -26,6 +26,32 @@ import kotlin.time.Duration.Companion.seconds
 
 class IapStackClientTest {
   @Test
+  fun redirectsNeverReceiveCustomerCredentialsOrPurchaseEvidence() = runBlocking {
+    MockWebServer().use { target ->
+      target.enqueue(jsonResponse(VERIFICATION_JSON))
+      for (status in listOf(302, 307, 308)) {
+        MockWebServer().use { origin ->
+          origin.enqueue(MockResponse().setResponseCode(status)
+            .setHeader("Location", target.url("/capture"))
+            .setHeader("X-Request-ID", "redirect-request"))
+          val client = client(origin)
+          try {
+            val error = assertFailsWith<IapStackApiException> {
+              client.verifyPurchase(purchase())
+            }
+            assertEquals(status, error.statusCode)
+            assertFalse(error.retryable)
+            assertEquals("redirect-request", error.requestId)
+          } finally {
+            client.close()
+          }
+        }
+      }
+      assertEquals(0, target.requestCount)
+    }
+  }
+
+  @Test
   fun verifyPurchaseSendsContractAndDecodesProjections() = runBlocking {
     MockWebServer().use { server ->
       server.enqueue(jsonResponse(VERIFICATION_JSON))
@@ -67,6 +93,24 @@ class IapStackClientTest {
   }
 
   @Test
+  fun rejectsRestoreResponsesWithMissingOrExtraResults() = runBlocking {
+    for (count in listOf(0, 1, 3)) {
+      MockWebServer().use { server ->
+        val results = List(count) { VERIFICATION_JSON }.joinToString(",")
+        server.enqueue(jsonResponse("""{"results":[$results]}"""))
+        val client = client(server)
+        try {
+          assertFailsWith<IapStackProtocolException> {
+            client.restorePurchases(listOf(purchase(), purchase("pro_monthly")))
+          }
+        } finally {
+          client.close()
+        }
+      }
+    }
+  }
+
+  @Test
   fun failsClosedWhenAllowedEntitlementReachesEffectiveEnd() {
     val endsAt = Instant.parse("2026-08-26T12:00:00Z")
     val entitlement = Entitlement(
@@ -81,6 +125,20 @@ class IapStackClientTest {
     assertTrue(entitlement.grantsAccessAt(endsAt.minusNanos(1_000)))
     assertFalse(entitlement.grantsAccessAt(endsAt))
     assertFalse(entitlement.grantsAccessAt(endsAt.plusSeconds(3600)))
+  }
+
+  @Test
+  fun inModuleWrapperNamesItselfInSdkHeader() = runBlocking {
+    MockWebServer().use { server ->
+      server.enqueue(jsonResponse("""{"customer_id":"customer-internal","entitlements":[]}"""))
+      val client = client(server)
+      client.sdkName = "react-native"
+
+      client.getEntitlements("customer-external")
+
+      assertEquals("react-native/0.1.0-sdk.1", server.takeRequest().getHeader("X-IAPStack-SDK"))
+      client.close()
+    }
   }
 
   @Test

@@ -367,7 +367,8 @@ func (clock apiIntegrationClock) Now() time.Time {
 func newAPIIntegrationFixture(t *testing.T) *apiIntegrationFixture {
 	t.Helper()
 	database := openAPIIntegrationDatabase(t)
-	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	// Admin analytics windows use PostgreSQL CURRENT_TIMESTAMP, so a fixed date would age out of them.
+	now := time.Now().UTC().Truncate(time.Second)
 	keyringConfig, err := platformprotection.NewConfig(
 		"http-integration-key",
 		map[string][]byte{"http-integration-key": bytes.Repeat([]byte{31}, 32)},

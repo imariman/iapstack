@@ -23,6 +23,15 @@ node_modules/
 .gradle/
 sdk/android/**/build/
 sdk/ios/.build/
+.build/
+.swiftpm/
+sdk/ios/example/**/.build/
+sdk/ios/example/**/.swiftpm/
+sdk/android/build/
+sdk/react-native/dist/
+sdk/react-native/native/
+sdk/react-native/**/*.tgz
+sdk/typescript/*.tgz
 sdk/typescript/dist/
 
 # Go workspace file
@@ -50,3 +59,6 @@ sdk/android/**/*.keystore
 sdk/android/**/*.jks
 sdk/android/example/trusted-host/*.env
 sdk/android/**/__pycache__/
+scripts/__pycache__/
+scripts/tests/__pycache__/
+sdk/flutter/**/coverage/

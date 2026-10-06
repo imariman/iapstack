@@ -11,10 +11,53 @@ import java.net.URI
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 class HuaweiIapStackTest {
+  @Test
+  fun completedRefreshEvictsMissingProducts() = runBlocking {
+    val monthly = monthlyProduct()
+    val platform = FakePlatform(products = listOf(monthly))
+    val huawei = HuaweiIapStack(unusedClient(), productKinds, platform)
+    huawei.queryProducts(setOf(monthly.id))
+    platform.products = emptyList()
+    assertEquals(setOf(monthly.id), huawei.queryProducts(setOf(monthly.id)).notFoundProductIds)
+    assertEquals("product_not_queried", assertFailsWith<HuaweiIapStackException> {
+      huawei.purchaseAndVerify("customer-1", monthly)
+    }.code)
+    assertNull(platform.purchasedProductId)
+  }
+
+  @Test
+  fun failedRefreshEvictsRequestedChoicesWithoutCachingPartialResults() = runBlocking {
+    MockWebServer().use { server ->
+      server.enqueue(MockResponse().setBody(VERIFICATION_JSON).setResponseCode(200))
+      val client = client(server)
+      val monthly = monthlyProduct()
+      val lifetime = monthly.copy(id = "premium_lifetime", kind = HuaweiProductKind.NON_CONSUMABLE)
+      val platform = FakePlatform(
+        products = listOf(monthly, lifetime),
+        purchaseResult = HuaweiSignedPurchase(purchaseData(monthly.id, "customer-1"), "signature"),
+      )
+      val huawei = HuaweiIapStack(client, productKinds, platform)
+      huawei.queryProducts(setOf(monthly.id))
+      platform.failingProductKinds.add(HuaweiProductKind.SUBSCRIPTION)
+      assertFailsWith<HuaweiIapStackException> { huawei.queryProducts(productKinds.keys) }
+      for (product in listOf(monthly, lifetime)) {
+        assertEquals("product_not_queried", assertFailsWith<HuaweiIapStackException> {
+          huawei.purchaseAndVerify("customer-1", product)
+        }.code)
+      }
+      assertNull(platform.purchasedProductId)
+      platform.failingProductKinds.clear()
+      huawei.queryProducts(setOf(monthly.id))
+      assertTrue(huawei.purchaseAndVerify("customer-1", monthly).entitlements.single().grantsAccess)
+      client.close()
+    }
+  }
+
   @Test
   fun purchasesWithCustomerBindingAndPreservesSignedData() = runBlocking {
     MockWebServer().use { server ->
@@ -144,13 +187,14 @@ class HuaweiIapStackTest {
     """{"productId":"$productId","developerPayload":"$customerId"}"""
 
   class FakePlatform(
-    private val products: List<HuaweiProduct> = emptyList(),
+    var products: List<HuaweiProduct> = emptyList(),
     private val purchaseResult: HuaweiSignedPurchase = HuaweiSignedPurchase("{}", "sig"),
     private val sandboxResult: HuaweiSandboxStatus = HuaweiSandboxStatus(false, false),
     private val owned: List<HuaweiSignedPurchase> = emptyList(),
     private val ownedPages: List<HuaweiOwnedPurchasesPage>? = null,
   ) : HuaweiIapPlatform {
     var purchasedProductId: String? = null
+    val failingProductKinds = mutableSetOf<HuaweiProductKind>()
     var purchasedDeveloperPayload: String? = null
     private var pageIndex = 0
 
@@ -161,7 +205,12 @@ class HuaweiIapStackTest {
     override suspend fun queryProducts(
       productIds: List<String>,
       productKind: HuaweiProductKind,
-    ): List<HuaweiProduct> = products.filter { it.id in productIds && it.kind == productKind }
+    ): List<HuaweiProduct> {
+      if (productKind in failingProductKinds) {
+        throw HuaweiIapStackException("query_failed", "Product query failed")
+      }
+      return products.filter { it.id in productIds && it.kind == productKind }
+    }
 
     override suspend fun purchase(
       productId: String,

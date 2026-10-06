@@ -51,7 +51,7 @@ export class IapStackRetryPolicy {
     if (!Number.isInteger(this.maxAttempts) || this.maxAttempts < 1 || this.maxAttempts > 5) {
       throw new TypeError('maxAttempts must be an integer between 1 and 5');
     }
-    if (this.baseDelayMs < 0 || this.maxDelayMs < 0 || this.baseDelayMs > this.maxDelayMs) {
+    if (!Number.isFinite(this.baseDelayMs) || !Number.isFinite(this.maxDelayMs) || this.baseDelayMs < 0 || this.maxDelayMs < 0 || this.baseDelayMs > this.maxDelayMs) {
       throw new TypeError('retry delays must be non-negative and ordered');
     }
   }
