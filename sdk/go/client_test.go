@@ -35,6 +35,38 @@ type capturedRequest struct {
 	Body []byte
 }
 
+// TestClientRejectsRedirects keeps bearers and customer data away from redirect targets.
+func TestClientRejectsRedirects(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var redirected atomic.Int32
+			target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				redirected.Add(1)
+				writeJSON(writer, http.StatusCreated, map[string]any{"token": "unexpected", "expires_at": "2026-08-24T20:15:00Z"})
+			}))
+			defer target.Close()
+			injected := &http.Client{}
+			client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Location", target.URL)
+				writer.Header().Set("X-Request-ID", "redirect-request")
+				writer.WriteHeader(status)
+			}), func(config *Config) { config.HTTPClient = injected })
+			_, err := client.CreateCustomerSession(context.Background(), "customer-external")
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.StatusCode != status || apiErr.Retryable || apiErr.RequestID != "redirect-request" {
+				t.Fatalf("redirect error = %v", err)
+			}
+			if redirected.Load() != 0 {
+				t.Fatal("redirect target received an authenticated request")
+			}
+			if injected.CheckRedirect != nil {
+				t.Fatal("injected client's redirect policy was mutated")
+			}
+		})
+	}
+}
+
 // TestCreateCustomerSessionSendsApplicationBearer verifies the host minting contract.
 func TestCreateCustomerSessionSendsApplicationBearer(t *testing.T) {
 	t.Parallel()

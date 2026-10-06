@@ -1,6 +1,11 @@
 plugins {
   kotlin("jvm")
+  `maven-publish`
 }
+
+apply(from = rootProject.file("publishing.gradle.kts"))
+
+java { withSourcesJar() }
 
 kotlin {
   jvmToolchain(17)
@@ -8,7 +13,7 @@ kotlin {
 
 dependencies {
   api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
-  implementation("com.squareup.okhttp3:okhttp:4.12.0")
+  api("com.squareup.okhttp3:okhttp:4.12.0")
   implementation("com.google.code.gson:gson:2.12.1")
 
   testImplementation(kotlin("test"))

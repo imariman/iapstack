@@ -26,6 +26,32 @@ import kotlin.time.Duration.Companion.seconds
 
 class IapStackClientTest {
   @Test
+  fun redirectsNeverReceiveCustomerCredentialsOrPurchaseEvidence() = runBlocking {
+    MockWebServer().use { target ->
+      target.enqueue(jsonResponse(VERIFICATION_JSON))
+      for (status in listOf(302, 307, 308)) {
+        MockWebServer().use { origin ->
+          origin.enqueue(MockResponse().setResponseCode(status)
+            .setHeader("Location", target.url("/capture"))
+            .setHeader("X-Request-ID", "redirect-request"))
+          val client = client(origin)
+          try {
+            val error = assertFailsWith<IapStackApiException> {
+              client.verifyPurchase(purchase())
+            }
+            assertEquals(status, error.statusCode)
+            assertFalse(error.retryable)
+            assertEquals("redirect-request", error.requestId)
+          } finally {
+            client.close()
+          }
+        }
+      }
+      assertEquals(0, target.requestCount)
+    }
+  }
+
+  @Test
   fun verifyPurchaseSendsContractAndDecodesProjections() = runBlocking {
     MockWebServer().use { server ->
       server.enqueue(jsonResponse(VERIFICATION_JSON))
@@ -63,6 +89,24 @@ class IapStackClientTest {
       assertEquals(2, result.results.size)
       assertEquals("customer-internal", result.results[0].customerId)
       client.close()
+    }
+  }
+
+  @Test
+  fun rejectsRestoreResponsesWithMissingOrExtraResults() = runBlocking {
+    for (count in listOf(0, 1, 3)) {
+      MockWebServer().use { server ->
+        val results = List(count) { VERIFICATION_JSON }.joinToString(",")
+        server.enqueue(jsonResponse("""{"results":[$results]}"""))
+        val client = client(server)
+        try {
+          assertFailsWith<IapStackProtocolException> {
+            client.restorePurchases(listOf(purchase(), purchase("pro_monthly")))
+          }
+        } finally {
+          client.close()
+        }
+      }
     }
   }
 

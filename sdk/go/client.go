@@ -16,7 +16,7 @@ import (
 
 const (
 	// sdkVersion identifies this host package in X-IAPStack-SDK.
-	sdkVersion = "0.1.0-dev.1"
+	sdkVersion = "0.1.0-sdk.1"
 	// jsonContentType is the only accepted v1 request and response media type.
 	jsonContentType = "application/json"
 )
@@ -95,6 +95,10 @@ func NewClient(config Config) (*Client, error) {
 		httpClient = &http.Client{}
 		ownsClient = true
 	}
+	// Copy injected clients so enforcing the credential boundary does not mutate
+	// the caller's transport policy for unrelated requests.
+	boundedClient := *httpClient
+	boundedClient.CheckRedirect = rejectRedirect
 	return &Client{
 		baseURL:          parsed,
 		applicationID:    config.ApplicationID,
@@ -102,12 +106,17 @@ func NewClient(config Config) (*Client, error) {
 		timeout:          config.Timeout,
 		retryPolicy:      config.RetryPolicy,
 		maxResponseBytes: config.MaxResponseBytes,
-		httpClient:       httpClient,
+		httpClient:       &boundedClient,
 		ownsClient:       ownsClient,
 		delay:            waitForRetry,
 		jitter:           rand.Float64,
 		now:              time.Now,
 	}, nil
+}
+
+// rejectRedirect keeps credentials and request bodies at the configured endpoint.
+func rejectRedirect(_ *http.Request, _ []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 // WithRequestID attaches one operator-correlatable X-Request-ID value to the call.

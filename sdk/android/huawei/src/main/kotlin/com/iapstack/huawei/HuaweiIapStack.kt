@@ -81,6 +81,9 @@ class HuaweiIapStack(
       }
     }
 
+    // Replace all requested IDs only after every kind was queried and validated.
+    // Missing products are evicted; a failed query leaves earlier choices intact.
+    queriedProducts.keys.removeAll(normalized)
     queriedProducts.putAll(found)
     return HuaweiProductQuery(
       products = normalized.filter(found::containsKey).map { found[it]!! },

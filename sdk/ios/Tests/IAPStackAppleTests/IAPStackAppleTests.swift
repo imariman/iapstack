@@ -142,7 +142,7 @@ final class IAPStackAppleTests: XCTestCase {
     XCTAssertEqual(request.url?.path, "/proxy/v1/applications/application-1/purchases:verify")
     XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer customer-token")
     XCTAssertEqual(request.value(forHTTPHeaderField: "X-Request-ID"), "request-client-1")
-    XCTAssertEqual(request.value(forHTTPHeaderField: "X-IAPStack-SDK"), "ios-swift/0.1.0-dev.1")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "X-IAPStack-SDK"), "ios-swift/0.1.0-sdk.1")
 
     let decoded = try XCTUnwrap(
       request.httpBody.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] },
@@ -876,6 +876,42 @@ final class IAPStackAppleTests: XCTestCase {
       XCTFail("Expected the rejected batch to throw")
     } catch {
       XCTAssertEqual(platform.completedTransactionIds, [])
+    }
+  }
+
+  func testMalformedRestoreResponseDoesNotFinishAnyTransaction() async throws {
+    URLStubProtocol.reset()
+    URLStubProtocol.enqueue { request in
+      let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"])!
+      return (response, Data(#"{"results":[]}"#.utf8))
+    }
+    let customer = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    let platform = FakeApplePlatform(restoreResult: [restoredRow("tx-unfinished", customer: customer, pendingCompletion: true)])
+    let stack = try makeAppleStack(platform: platform)
+    do {
+      _ = try await stack.restorePurchases(externalCustomerId: customer)
+      XCTFail("Expected incomplete restore response rejection")
+    } catch IAPStackSDKError.protocolError { /* No transaction is safe to finish. */ }
+    XCTAssertEqual(platform.completedTransactionIds, [])
+  }
+
+  func testMalformedCompactJWSIsRejectedBeforeSubmission() {
+    for token in ["a..b.c", ".a.b.c", "a.b.c.", "a.b.", "a. .c", "a.b.c\n"] {
+      XCTAssertThrowsError(try ApplePurchaseEvidence(signedTransaction: token, productKind: .nonConsumable))
+      let purchase = ApplePurchase(transactionId: "tx", productId: "premium_lifetime", signedTransaction: token,
+        status: .purchased, pendingCompletion: true, appAccountToken: nil, errorCode: nil)
+      XCTAssertFalse(purchase.canVerify)
+    }
+  }
+
+  func testUnrepresentableTimeoutAndRetryDelaysAreRejectedWithoutTrapping() {
+    for interval in [Double.nan, Double.infinity, -Double.infinity, Double.greatestFiniteMagnitude] {
+      let config = IAPStackConfig(baseUri: URL(string: "https://example.local")!, applicationId: "app",
+        customerToken: "customer-token", timeout: interval)
+      XCTAssertThrowsError(try config.validate())
+      XCTAssertThrowsError(try IAPStackRetryPolicy(baseDelay: interval, maxDelay: interval).validate())
+      XCTAssertThrowsError(try IAPStackRetryPolicy(baseDelay: 0, maxDelay: interval).validate())
     }
   }
 

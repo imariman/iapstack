@@ -1,6 +1,6 @@
 import Foundation
 
-private let sdkVersion = "0.1.0-dev.1"
+private let sdkVersion = "0.1.0-sdk.1"
 
 /// Provider-neutral HTTP client for the IAPStack v1 API.
 public final class IAPStackClient {
@@ -73,7 +73,11 @@ public final class IAPStackClient {
       body: ["purchases": purchases.map { $0.toDictionary() }],
       requestId: requestId,
     )
-    return try RestoreResult.from(json)
+    let result = try RestoreResult.from(json)
+    guard result.results.count == purchases.count else {
+      throw IAPStackSDKError.protocolError(message: "Restore response must contain one result per purchase")
+    }
+    return result
   }
 
   /// Loads the current entitlement snapshot for one external customer.
@@ -418,6 +422,18 @@ private final class BoundedBodyCollector: NSObject, URLSessionDataDelegate, @unc
   func cancel(_ task: URLSessionTask) {
     finish(.failure(CancellationError()))
     task.cancel()
+  }
+
+  /// Never replay customer credentials or signed purchase evidence at a redirect target.
+  /// A per-task delegate also enforces this for caller-injected sessions.
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest,
+    completionHandler: @escaping (URLRequest?) -> Void,
+  ) {
+    completionHandler(nil)
   }
 
   func urlSession(

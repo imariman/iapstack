@@ -51,16 +51,21 @@ the v0.1 release gate or make these packages production releases.
 
 | SDK | Implemented in the repository | Remaining work |
 | --- | --- | --- |
-| [Go trusted host](sdk/go/README.md) | Customer sessions, server-side entitlement lookup, and signed webhook handling | Versioned package release ([#141](https://github.com/imariman/iapstack/issues/141)) |
-| [TypeScript trusted host](sdk/typescript/README.md) | Customer sessions, entitlement lookup, and signed webhook handling for Node backends | npm publication ([#141](https://github.com/imariman/iapstack/issues/141)) |
-| [iOS (Swift)](sdk/ios/README.md) | Provider-neutral HTTP client and StoreKit 2 companion | Full sample app with a StoreKit Configuration file ([#139](https://github.com/imariman/iapstack/issues/139)); Swift Package distribution ([#141](https://github.com/imariman/iapstack/issues/141)) |
-| [Android (Kotlin)](sdk/android/README.md) | HTTP client, real Play Billing/HMS adapters, Android AAR libraries, and a trusted-host example app | Maven publication ([#141](https://github.com/imariman/iapstack/issues/141)) |
-| [React Native](sdk/react-native/README.md) | Provider-neutral HTTP client and signed-evidence envelope helpers | Native bridge and end-to-end examples ([#140](https://github.com/imariman/iapstack/issues/140)); npm publication ([#141](https://github.com/imariman/iapstack/issues/141)) |
+| [Go trusted host](sdk/go/README.md) | Customer sessions, server-side entitlement lookup, and signed webhook handling | First versioned module publication ([#141](https://github.com/imariman/iapstack/issues/141)) |
+| [TypeScript trusted host](sdk/typescript/README.md) | Customer sessions, entitlement lookup, signed webhooks, and installable ESM/type archives | First npm publication ([#141](https://github.com/imariman/iapstack/issues/141)) |
+| [iOS (Swift)](sdk/ios/README.md) | HTTP client, StoreKit 2 companion, runnable sample with StoreKit configuration, root SwiftPM manifest | First SDK version tag ([#141](https://github.com/imariman/iapstack/issues/141)) |
+| [Android (Kotlin)](sdk/android/README.md) | HTTP client, Play Billing/HMS adapters, trusted-host example, and staged Maven binaries/source jars | First GitHub Maven publication ([#141](https://github.com/imariman/iapstack/issues/141)) |
+| [React Native](sdk/react-native/README.md) | HTTP client, native StoreKit/Play/Huawei bridge, native example app and packed companion sources | First npm publication ([#141](https://github.com/imariman/iapstack/issues/141)) |
+
+The [SDK release guide](docs/sdk-releases.md) documents installation, independent
+prerelease versions, package checks, and registry setup. Release automation is
+implemented; package publication still requires registry access and a successful
+release run. Code in this repository does not imply an existing registry release.
 
 The durable application bearer stays on a trusted host backend and must never ship
 in a mobile binary or browser bundle. Mobile clients use short-lived customer
-sessions. React Native evidence helpers assemble payloads; store evidence collection
-still requires native integration.
+sessions. React Native's native bridge delegates evidence collection and transaction
+completion to the same Swift/Kotlin companions used by native apps.
 
 Unity remains deferred until consumable fulfillment exists. Kotlin Multiplatform,
 Capacitor, Cordova, MAUI, web/Stripe billing, and Amazon or Samsung store companions
@@ -398,8 +403,9 @@ credential/evidence and notification contracts, and webhook verification rules a
 - [x] Implement the Kotlin HTTP client and Google Play/Huawei companion coordinators
 - [x] Implement the React Native HTTP client and evidence envelope helpers
 - [x] Implement Android BillingClient/HMS adapters, AAR packaging, and a trusted-host example ([#138](https://github.com/imariman/iapstack/issues/138))
-- [ ] Complete the React Native native bridge ([#140](https://github.com/imariman/iapstack/issues/140))
-- [ ] Add the full Swift sample app ([#139](https://github.com/imariman/iapstack/issues/139)) and React Native end-to-end examples ([#140](https://github.com/imariman/iapstack/issues/140))
+- [x] Complete the React Native native bridge ([#140](https://github.com/imariman/iapstack/issues/140))
+- [x] Add the full Swift sample app ([#139](https://github.com/imariman/iapstack/issues/139)) and React Native native examples ([#140](https://github.com/imariman/iapstack/issues/140))
+- [x] Prepare SDK package artifacts, SwiftPM distribution and independent release automation
 - [ ] Publish versioned host, Android, iOS, and React Native packages ([#141](https://github.com/imariman/iapstack/issues/141))
 - [ ] Add Amazon Appstore and additional store adapters
 - [ ] Support customer migration and alias consolidation

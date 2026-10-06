@@ -10,7 +10,10 @@ Provider-neutral Kotlin HTTP client plus native Google Play and Huawei adapters:
 Requires Android API 26+, Java 17, Android SDK 35. `core` stays a JVM library;
 its `java.time` use is supported by the companions' API 26 minimum.
 Store price micro-units are `Long`, matching the native SDKs.
-Maven publication remains tracked in [#141](https://github.com/imariman/iapstack/issues/141).
+Maven binaries, source jars, dependency metadata and release automation are prepared.
+The first registry publication remains tracked in [#141](https://github.com/imariman/iapstack/issues/141);
+see the [SDK release guide](../../docs/sdk-releases.md) for GitHub Packages installation
+and local staging commands.
 Flutter remains the only v0.1 mobile release gate. Native Android is post-v0.1;
 CI builds and tests it independently, without asserting live store certification.
 

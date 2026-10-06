@@ -18,9 +18,15 @@ a mobile binary, and never persist or log the customer bearer.
 Finish StoreKit transactions only after IAPStack verification succeeds. Keep
 signed JWS strings in memory; do not write them to disk, logs, or analytics.
 
-This drop is the HTTP client and StoreKit companion. A full sample app with a
-StoreKit Configuration file is tracked in [#139](https://github.com/imariman/iapstack/issues/139),
-and Swift Package distribution in [#141](https://github.com/imariman/iapstack/issues/141).
+The runnable [SwiftUI example](example/README.md) includes a shared Xcode scheme,
+a local StoreKit catalog, a sandbox scheme, and trusted-host customer sessions.
+It demonstrates purchases, update listening, failed-verification retries, cancellation,
+restore, and server entitlements. Swift Package distribution is described in the
+[SDK distribution guide](../../docs/sdk-releases.md).
+
+HTTP redirects are returned as non-retryable API errors, including when an existing
+`URLSession` is injected. Credentials and signed evidence are never automatically
+replayed at a redirect target. Configure the final HTTPS API origin directly.
 
 ```swift
 import IAPStackApple
@@ -81,7 +87,8 @@ for await update in updates {
 
 ## Example
 
-See `example/README.md` for a minimal integration layout.
+Open `example/IAPStackExample.xcodeproj` and select `IAPStackExample`. See the
+[example guide](example/README.md) for trusted-host setup, sandbox testing and checks.
 
 ## Testing
 
