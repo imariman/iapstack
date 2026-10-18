@@ -380,7 +380,7 @@ credential/evidence and notification contracts, and webhook verification rules a
 ├── sdk/flutter/           # Provider-neutral and provider-specific Flutter SDKs
 ├── sdk/android/            # Provider-neutral Kotlin HTTP client and Play/Huawei companions
 ├── sdk/ios/                # Provider-neutral Swift HTTP client and StoreKit 2 companion
-├── sdk/react-native/       # Provider-neutral React Native HTTP client
+├── sdk/react-native/       # React Native HTTP client and native StoreKit/Play/Huawei bridge
 ├── sdk/go/                 # Trusted-host Go SDK for sessions, entitlements, and webhooks
 ├── sdk/typescript/         # Trusted-host TypeScript SDK for sessions, entitlements, and webhooks
 ├── contracts/             # Public API and webhook contracts
