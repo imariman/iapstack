@@ -414,6 +414,8 @@ func (service *Service) logImport(
 // safeLogText strips control characters and log-forging punctuation from request-derived values.
 func safeLogText(value string) string {
 	const maxLength = 128
+	value = strings.ReplaceAll(value, "\n", "_")
+	value = strings.ReplaceAll(value, "\r", "_")
 	value = strings.Map(func(character rune) rune {
 		switch {
 		case character >= 'a' && character <= 'z',
