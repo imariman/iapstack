@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#080d17" />
+    <meta name="description" content="Open-source, self-hosted in-app purchase verification and entitlement infrastructure. Built in Go. Store-agnostic. Deployable anywhere." />
+    <meta property="og:title" content="IAPStack — Own your purchase infrastructure" />
+    <meta property="og:description" content="Verify purchases across app stores and turn them into durable entitlements, on infrastructure you control." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://imariman.github.io/iapstack/" />
+    <meta property="og:image" content="https://imariman.github.io/iapstack/iapstack-gopher.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/style.css" />
+    <title>IAPStack — Own your purchase infrastructure</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></symbol>
+      <symbol id="i-github" viewBox="0 0 24 24"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.1-1.3-.4-2.6-1-3.5.3-1 .3-2.1 0-3 0 0-1 0-3 1.5a11 11 0 0 0-6 0C8 2.5 7 2.5 7 2.5c-.3.9-.3 2 0 3A5.3 5.3 0 0 0 6 9c0 3.5 3 5.5 6 5.5-.8.6-1 1.5-1 2.5v5M12 18c-3 .9-3-1.5-4-2" /></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></symbol>
+      <symbol id="i-store" viewBox="0 0 24 24"><path d="M3 9 5 3h14l2 6M5 13v8h14v-8M9 21v-6h6v6" /><path d="M3 9a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0" /></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /><path d="m9 12 2 2 4-5" /></symbol>
+      <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="5" /><path d="m11.5 11.5 8-8M15 8l3 3M17 6l3 3" /></symbol>
+      <symbol id="i-webhook" viewBox="0 0 24 24"><path d="M18 16.5h-5M6.5 13H2M10 4.5l2.5 4.3M13.8 8.8l4.3 7.5M8.5 17l-4-7" /><circle cx="18" cy="16.5" r="3" /><circle cx="8" cy="5" r="3" /><circle cx="7" cy="19" r="3" /></symbol>
+      <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v7c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12v7c0 1.7 4 3 9 3s9-1.3 9-3v-7" /></symbol>
+      <symbol id="i-box" viewBox="0 0 24 24"><path d="m21 8-9-5-9 5 9 5 9-5ZM3 8v8l9 5 9-5V8M12 13v8" /></symbol>
+      <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 9-3 3 3 3M16 9l3 3-3 3M14 5l-4 14" /></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6.1 8a7 7 0 0 1 11.5-2.6L20 8M4 16l2.4 2.6A7 7 0 0 0 17.9 16" /></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" /></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></symbol>
+    </svg>
+
+    <header class="site-header" data-header>
+      <div class="container nav-wrap">
+        <a class="brand" href="#top" aria-label="IAPStack home">
+          <span>IAPStack</span>
+        </a>
+        <nav class="desktop-nav" aria-label="Main navigation">
+          <a href="#features">Features</a>
+          <a href="#architecture">How it works</a>
+          <a href="#quickstart">Quickstart</a>
+          <a href="https://github.com/imariman/iapstack/tree/main/docs">Docs <span aria-hidden="true">↗</span></a>
+        </nav>
+        <div class="nav-actions">
+          <a class="github-link" href="https://github.com/imariman/iapstack" target="_blank" rel="noreferrer" aria-label="IAPStack on GitHub">
+            <svg class="icon"><use href="#i-github" /></svg><span>GitHub</span>
+          </a>
+          <button class="menu-button" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="mobile-menu" data-menu-button>
+            <svg class="icon menu-open"><use href="#i-menu" /></svg>
+            <svg class="icon menu-close"><use href="#i-close" /></svg>
+          </button>
+        </div>
+      </div>
+      <nav class="mobile-nav" id="mobile-menu" aria-label="Mobile navigation" hidden data-mobile-menu>
+        <a href="#features">Features</a><a href="#architecture">How it works</a><a href="#quickstart">Quickstart</a><a href="https://github.com/imariman/iapstack/tree/main/docs">Documentation ↗</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top">
+        <div class="hero-grid container">
+          <div class="hero-copy">
+            <a class="status-badge" href="https://github.com/imariman/iapstack/releases">
+              <span class="status-dot"></span> Open source · Apache 2.0 <span class="badge-divider"></span> Early development <svg class="icon"><use href="#i-arrow" /></svg>
+            </a>
+            <h1>Your purchases.<br />Your rules.<br /><span>Your infrastructure.</span></h1>
+            <p class="hero-lede">The open-source control plane for in-app purchases. Verify transactions across app stores and turn them into durable entitlements — without giving up control.</p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="#quickstart">Start building <svg class="icon"><use href="#i-arrow" /></svg></a>
+              <a class="button button-secondary" href="https://github.com/imariman/iapstack" target="_blank" rel="noreferrer"><svg class="icon"><use href="#i-github" /></svg> View on GitHub</a>
+            </div>
+            <div class="hero-proof" aria-label="Key project properties">
+              <span><svg class="icon"><use href="#i-check" /></svg> Self-hosted</span>
+              <span><svg class="icon"><use href="#i-check" /></svg> Store-agnostic</span>
+              <span><svg class="icon"><use href="#i-check" /></svg> Built in Go</span>
+            </div>
+          </div>
+
+          <div class="hero-visual" aria-label="Purchase verification pipeline illustration">
+            <div class="console-window">
+              <div class="console-topbar">
+                <div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+                <span>purchase.lifecycle</span>
+                <span class="console-state"><i></i> Connected</span>
+              </div>
+              <div class="pipeline">
+                <div class="pipeline-node">
+                  <span class="node-icon store"><svg class="icon"><use href="#i-store" /></svg></span>
+                  <span class="node-copy"><small>01 / SOURCE</small><strong>App stores</strong><em>Purchase evidence</em></span>
+                  <span class="node-index">A</span>
+                </div>
+                <div class="pipeline-connector"><span></span><svg class="icon"><use href="#i-chevron" /></svg></div>
+                <div class="pipeline-node active-node">
+                  <span class="node-icon verify"><svg class="icon"><use href="#i-shield" /></svg></span>
+                  <span class="node-copy"><small>02 / IAPSTACK</small><strong>Verify</strong><em>Authoritative validation</em></span>
+                  <span class="node-check"><svg class="icon"><use href="#i-check" /></svg></span>
+                </div>
+                <div class="pipeline-connector"><span></span><svg class="icon"><use href="#i-chevron" /></svg></div>
+                <div class="pipeline-node">
+                  <span class="node-icon access"><svg class="icon"><use href="#i-key" /></svg></span>
+                  <span class="node-copy"><small>03 / DECISION</small><strong>Entitle</strong><em>Store-neutral access</em></span>
+                  <span class="node-index">B</span>
+                </div>
+              </div>
+              <div class="console-response">
+                <div class="response-heading"><span><i></i> Entitlement active</span><span>200 OK</span></div>
+                <pre><span class="code-muted">{</span>
+  <span class="code-blue">"customer_id"</span>: <span class="code-green">"cus_8f2a"</span>,
+  <span class="code-blue">"entitlement"</span>: <span class="code-green">"pro"</span>,
+  <span class="code-blue">"source"</span>: <span class="code-green">"app_store"</span>,
+  <span class="code-blue">"expires_at"</span>: <span class="code-green">"2027-04-18T..."</span>
+<span class="code-muted">}</span></pre>
+              </div>
+            </div>
+            <div class="floating-chip chip-postgres"><svg class="icon"><use href="#i-database" /></svg><span>PostgreSQL<strong>Durable by design</strong></span></div>
+            <div class="floating-chip chip-webhook"><svg class="icon"><use href="#i-webhook" /></svg><span>Signed webhooks<strong>Delivered</strong></span><svg class="icon tiny-check"><use href="#i-check" /></svg></div>
+          </div>
+        </div>
+        <div class="container store-strip">
+          <span class="store-strip-label">One control plane for</span>
+          <div class="store-names"><span><img class="store-logo app-store-logo" src="/logos/app-store.svg" alt="" width="22" height="22" /> App Store</span><span><img class="store-logo" src="/logos/google-play.svg" alt="" width="21" height="23" /> Google Play</span><span><img class="store-logo appgallery-logo" src="/logos/appgallery.svg" alt="" width="23" height="23" /> AppGallery</span></div>
+          <span class="store-strip-note">Three providers. One model.</span>
+        </div>
+      </section>
+
+      <section class="section final-section mascot-section">
+        <div class="container">
+          <div class="final-card reveal">
+            <div class="final-copy"><span class="eyebrow">Open source. Open infrastructure.</span><h2>Own the access layer.</h2><p>Build your purchase infrastructure on a foundation you can inspect, deploy, and control.</p><div class="hero-actions"><a class="button button-primary" href="https://github.com/imariman/iapstack" target="_blank" rel="noreferrer"><svg class="icon"><use href="#i-github" /></svg> Star on GitHub</a><a class="button button-secondary" href="https://github.com/imariman/iapstack/blob/main/CONTRIBUTING.md">Contribute <svg class="icon"><use href="#i-arrow" /></svg></a></div></div>
+            <div class="mascot-wrap"><img src="/iapstack-gopher.png" alt="IAPStack gopher holding a phone with a verified purchase" width="420" height="384" /></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section features-section" id="features">
+        <div class="container">
+          <div class="section-heading reveal">
+            <div><span class="eyebrow">Less glue. More control.</span><h2>Infrastructure that gets<br />out of your way.</h2></div>
+            <p>Store complexity stays at the edge. Your application gets a clean, durable model for what every customer can access.</p>
+          </div>
+          <div class="feature-grid">
+            <article class="feature-card feature-card-wide reveal">
+              <div class="feature-icon"><svg class="icon"><use href="#i-shield" /></svg></div>
+              <span class="feature-number">01</span><h3>Verification you can trust</h3>
+              <p>Validate purchases against authoritative store APIs. Every entitlement is derived from verified evidence — never a mutable client-side flag.</p>
+              <div class="mini-flow" aria-hidden="true"><span>Receipt</span><i></i><span>Provider API</span><i></i><span class="verified">Verified <svg class="icon"><use href="#i-check" /></svg></span></div>
+            </article>
+            <article class="feature-card reveal">
+              <div class="feature-icon green"><svg class="icon"><use href="#i-key" /></svg></div>
+              <span class="feature-number">02</span><h3>One entitlement model</h3>
+              <p>Ask what a customer can access instead of interpreting receipts, renewals, and store-specific states in your app.</p>
+              <div class="entitlement-tag"><span>pro</span><small>ACTIVE</small></div>
+            </article>
+            <article class="feature-card reveal">
+              <div class="feature-icon amber"><svg class="icon"><use href="#i-refresh" /></svg></div>
+              <span class="feature-number">03</span><h3>Built for real lifecycles</h3>
+              <p>Durable notifications, background reconciliation, and transactional outbox keep access in sync when events are delayed or missed.</p>
+              <div class="event-stack" aria-hidden="true"><span><i></i>renewed</span><span><i></i>reconciled</span><span><i></i>delivered</span></div>
+            </article>
+            <article class="feature-card feature-card-wide reveal">
+              <div class="feature-icon violet"><svg class="icon"><use href="#i-box" /></svg></div>
+              <span class="feature-number">04</span><h3>Your stack. Your deployment.</h3>
+              <p>Run the compact API and worker together or scale them independently. Docker, PostgreSQL, and documented cloud targets. No proprietary control plane.</p>
+              <div class="deploy-targets" aria-label="Deployment options"><span>Docker</span><span>Render</span><span>Fly.io</span><span>Heroku</span><span>+ more</span></div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section architecture-section" id="architecture">
+        <div class="container architecture-grid">
+          <div class="architecture-copy reveal">
+            <span class="eyebrow">A clean boundary</span>
+            <h2>From purchase<br />to permission.</h2>
+            <p>IAPStack sits between app stores and your application, owning the hard parts of purchase lifecycle management.</p>
+            <ol class="architecture-steps">
+              <li class="is-active"><span>01</span><div><strong>Verify at the source</strong><p>Store adapters validate evidence with Apple, Google, or Huawei.</p></div></li>
+              <li><span>02</span><div><strong>Project durable access</strong><p>Transactions and lifecycle evidence become store-neutral entitlements.</p></div></li>
+              <li><span>03</span><div><strong>Deliver to your app</strong><p>Query a versioned API and receive signed outbound webhooks.</p></div></li>
+            </ol>
+          </div>
+          <div class="architecture-diagram reveal">
+            <div class="diagram-label"><span>SYSTEM CONTEXT</span><span>v1</span></div>
+            <div class="diagram-canvas">
+              <div class="diagram-row">
+                <div class="diagram-box"><svg class="icon"><use href="#i-code" /></svg><span>Your application<small>Customer sessions</small></span></div>
+                <div class="diagram-box"><svg class="icon"><use href="#i-store" /></svg><span>App stores<small>Apple · Google · Huawei</small></span></div>
+              </div>
+              <div class="diagram-lines" aria-hidden="true"><span><i>entitlements</i></span><span><i>evidence</i></span></div>
+              <div class="diagram-core"><div class="core-mark">{ia}</div><div><strong>IAPStack</strong><span>API · Worker · Adapters</span></div><small>CONTROL PLANE</small></div>
+              <div class="diagram-lines down" aria-hidden="true"><span><i>read / write</i></span><span><i>outbox</i></span></div>
+              <div class="diagram-row">
+                <div class="diagram-box"><svg class="icon"><use href="#i-database" /></svg><span>PostgreSQL<small>Authoritative state</small></span></div>
+                <div class="diagram-box"><svg class="icon"><use href="#i-webhook" /></svg><span>Your backend<small>Signed webhooks</small></span></div>
+              </div>
+            </div>
+            <div class="diagram-footer"><svg class="icon"><use href="#i-shield" /></svg> Credentials and purchase data stay in your infrastructure.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section quickstart-section" id="quickstart">
+        <div class="container">
+          <div class="section-heading quickstart-heading reveal">
+            <div><span class="eyebrow">Local first</span><h2>Up and running.<br />On your machine.</h2></div>
+            <p>Start the complete local stack with Docker Compose. Generate local-only secrets, launch the services, and check readiness.</p>
+          </div>
+          <div class="quickstart-grid reveal">
+            <div class="terminal-window">
+              <div class="terminal-topbar"><div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div><span>~/iapstack — zsh</span><button class="copy-button" type="button" data-copy-target="install-command" aria-label="Copy installation command"><svg class="icon"><use href="#i-copy" /></svg><span>Copy</span></button></div>
+              <div class="terminal-body">
+                <div class="terminal-line"><span class="line-number">1</span><code id="install-command"><span class="prompt">$</span> git clone https://github.com/imariman/iapstack.git<br /><span class="prompt">$</span> cd iapstack<br /><span class="prompt">$</span> export IAPSTACK_POSTGRES_PASSWORD="$(openssl rand -base64 32)"<br /><span class="prompt">$</span> export IAPSTACK_PROTECTION_ACTIVE_KEY_ID="local-1"<br /><span class="prompt">$</span> export IAPSTACK_PROTECTION_KEYS="{\"local-1\":\"$(openssl rand -base64 32)\"}"<br /><span class="prompt">$</span> export IAPSTACK_PROTECTION_FINGERPRINT_KEY="$(openssl rand -base64 32)"<br /><span class="prompt">$</span> export IAPSTACK_BOOTSTRAP_ADMIN_KEY="$(openssl rand -base64 48)"<br /><span class="prompt">$</span> export IAPSTACK_METRICS_BEARER_TOKEN="$(openssl rand -base64 48)"<br /><span class="prompt">$</span> docker compose -f deploy/compose.yaml up --build -d --wait</code></div>
+                <div class="terminal-output"><span class="line-number">2</span><code><span class="output-muted">✓ Network iapstack_default</span> <span class="output-green">Created</span><br /><span class="output-muted">✓ Container iapstack-postgres</span> <span class="output-green">Healthy</span><br /><span class="output-muted">✓ Container iapstack-api</span> <span class="output-green">Healthy</span></code></div>
+                <div class="terminal-line ready-line"><span class="line-number">3</span><code><span class="prompt">$</span> curl --fail http://127.0.0.1:8080/readyz<br /><span class="output-green">{"status":"ready"}</span><span class="terminal-cursor" aria-hidden="true"></span></code></div>
+              </div>
+            </div>
+            <aside class="quickstart-note">
+              <span class="note-kicker"><svg class="icon"><use href="#i-code" /></svg> Before you start</span>
+              <h3>A few secrets.<br />A real control plane.</h3>
+              <p>The full quickstart includes the required environment variables for database, encryption, admin access, and metrics.</p>
+              <a class="text-link" href="https://github.com/imariman/iapstack#quick-start">Open complete quickstart <svg class="icon"><use href="#i-arrow" /></svg></a>
+              <div class="requirements"><span>REQUIREMENTS</span><div><b>Docker</b><b>Compose</b><b>OpenSSL</b></div></div>
+            </aside>
+          </div>
+          <p class="prerelease-note reveal"><span>!</span><strong>Prerelease software:</strong> the default branch remains in development. Legacy preview releases are not supported for production use. <a href="https://github.com/imariman/iapstack#readme">Read the release status →</a></p>
+        </div>
+      </section>
+
+      <section class="section sdk-section">
+        <div class="container sdk-grid">
+          <div class="sdk-copy reveal"><span class="eyebrow">Meet your stack</span><h2>One backend.<br />The clients you need.</h2><p>Flutter is the v0.1 mobile client. Additional SDKs are implemented in the repository and continue along the release roadmap.</p><a class="text-link" href="https://github.com/imariman/iapstack#sdk-roadmap">Explore the SDK roadmap <svg class="icon"><use href="#i-arrow" /></svg></a></div>
+          <div class="sdk-list reveal">
+            <a href="https://github.com/imariman/iapstack/tree/main/sdk/flutter/iapstack"><span class="sdk-monogram flutter">Fl</span><span><strong>Flutter</strong><small>Provider-neutral + store companions</small></span><em>v0.1 scope</em><svg class="icon"><use href="#i-arrow" /></svg></a>
+            <a href="https://github.com/imariman/iapstack/tree/main/sdk/ios"><span class="sdk-monogram swift">Sw</span><span><strong>Swift</strong><small>StoreKit 2 companion</small></span><em>Roadmap</em><svg class="icon"><use href="#i-arrow" /></svg></a>
+            <a href="https://github.com/imariman/iapstack/tree/main/sdk/android"><span class="sdk-monogram kotlin">Kt</span><span><strong>Kotlin</strong><small>Play Billing + HMS adapters</small></span><em>Roadmap</em><svg class="icon"><use href="#i-arrow" /></svg></a>
+            <a href="https://github.com/imariman/iapstack/tree/main/sdk/typescript"><span class="sdk-monogram typescript">TS</span><span><strong>TypeScript</strong><small>Trusted-host SDK</small></span><em>Roadmap</em><svg class="icon"><use href="#i-arrow" /></svg></a>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-main">
+        <div class="footer-brand"><a class="brand" href="#top"><span>IAPStack</span></a><p>Open-source, self-hosted in-app purchase verification and entitlement infrastructure.</p><span class="footer-license">Apache 2.0 · Built in Go</span></div>
+        <div class="footer-links"><div><strong>Project</strong><a href="#features">Features</a><a href="#architecture">Architecture</a><a href="#quickstart">Quickstart</a></div><div><strong>Resources</strong><a href="https://github.com/imariman/iapstack/tree/main/docs">Documentation</a><a href="https://github.com/imariman/iapstack/blob/main/docs/api-v1.md">API reference</a><a href="https://github.com/imariman/iapstack/tree/main/deploy">Deployment</a></div><div><strong>Community</strong><a href="https://github.com/imariman/iapstack">GitHub</a><a href="https://github.com/imariman/iapstack/issues">Issues</a><a href="https://github.com/imariman/iapstack/blob/main/CONTRIBUTING.md">Contributing</a></div></div>
+      </div>
+      <div class="container footer-bottom"><span>© <span data-year></span> IAPStack contributors.</span><span>Independent implementation. Not affiliated with Apple, Google, or Huawei.</span><a href="#top" aria-label="Back to top">Back to top ↑</a></div>
+    </footer>
+    <div class="toast" role="status" aria-live="polite" data-toast>Command copied to clipboard</div>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
