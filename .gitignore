@@ -20,6 +20,7 @@ profile.cov
 # Dependency directories (remove the comment below to include it)
 # vendor/
 node_modules/
+docs/dist/
 .gradle/
 sdk/android/**/build/
 sdk/ios/.build/
