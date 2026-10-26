@@ -14,7 +14,7 @@ dependencies:
   iapstack:
     path: ../iapstack
   in_app_purchase: ^3.3.1
-  in_app_purchase_storekit: ^0.4.13
+  in_app_purchase_storekit: ^0.4.15
 
 dev_dependencies:
   flutter_test:
