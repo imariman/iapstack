@@ -225,6 +225,7 @@ Configuration is supplied through environment variables:
 | `IAPSTACK_WORKER_MAX_ATTEMPTS` | `12` | Attempts before River discards a retryable job |
 | `IAPSTACK_QUEUE_RETENTION` | `720h` | Retention period for terminal River jobs and durable queue audit records |
 | `IAPSTACK_HTTP_BODY_LIMIT` | `1048576` | Maximum request body size in bytes for JSON and provider notifications |
+| `IAPSTACK_OFFERING_DIRECTORY` | none | Directory of one `{application_id}.json` offering file per application; empty answers `GET /v1/applications/{application_id}/offering` with not-found |
 | `IAPSTACK_PROVIDER_TIMEOUT` | `15s` | Deadline for one outbound store-provider request |
 | `IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS` | `false` | Explicitly permit Huawei provider endpoints on private, loopback, link-local, CGNAT, or benchmark addresses |
 | `IAPSTACK_WEBHOOK_TIMEOUT` | `10s` | Deadline for one outbound application webhook request |

@@ -1,0 +1,107 @@
+# Schema migration for one image digest. Not a Deployment and not a scale target.
+# Apply this Job and wait for Complete before rolling iapstack-api or iapstack-worker.
+# Do not set IAPSTACK_AUTO_MIGRATE. api and worker reject it, and a replica must not migrate.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: iapstack-migrate
+  namespace: iapstack
+  labels:
+    app.kubernetes.io/name: iapstack
+    app.kubernetes.io/component: migrate
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: iapstack
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      hostNetwork: false
+      hostPID: false
+      hostIPC: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          # Replace VERSION with the same immutable digest used by both Deployments.
+          image: ghcr.io/imariman/iapstack:VERSION
+          # Kubernetes command replaces the image ENTRYPOINT (/usr/local/bin/iapstack).
+          command: ["/usr/local/bin/iapstack"]
+          args: ["migrate"]
+          env:
+            - name: IAPSTACK_LOG_LEVEL
+              value: info
+            - name: IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS
+              value: "false"
+            - name: IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS
+              value: "false"
+            # Required shape: sslmode=verify-full and sslrootcert=/etc/iapstack/postgres/ca.crt.
+            # The operator supplies the PostgreSQL endpoint. Do not commit the value.
+            - name: IAPSTACK_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: iapstack-secrets
+                  key: IAPSTACK_DATABASE_URL
+                  optional: false
+            - name: IAPSTACK_PROTECTION_ACTIVE_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: iapstack-secrets
+                  key: IAPSTACK_PROTECTION_ACTIVE_KEY_ID
+                  optional: false
+            - name: IAPSTACK_PROTECTION_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: iapstack-secrets
+                  key: IAPSTACK_PROTECTION_KEYS
+                  optional: false
+            - name: IAPSTACK_PROTECTION_FINGERPRINT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: iapstack-secrets
+                  key: IAPSTACK_PROTECTION_FINGERPRINT_KEY
+                  optional: false
+            - name: IAPSTACK_METRICS_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: iapstack-secrets
+                  key: IAPSTACK_METRICS_BEARER_TOKEN
+                  optional: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: postgres-ca
+              mountPath: /etc/iapstack/postgres
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: postgres-ca
+          secret:
+            secretName: iapstack-secrets
+            defaultMode: 288 # 0440, readable by fsGroup 65532
+            items:
+              - key: postgres-ca.crt
+                path: ca.crt

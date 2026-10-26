@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/imariman/iapstack/internal/auth"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/credentials"
+	"github.com/imariman/iapstack/internal/financialreports"
 	"github.com/imariman/iapstack/internal/jobs"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/persistence/postgres"
@@ -430,12 +432,18 @@ func newAPIIntegrationFixture(t *testing.T) *apiIntegrationFixture {
 	if err != nil {
 		t.Fatalf("NewService() webhooks error = %v", err)
 	}
+	financialReportService, err := financialreports.NewService(
+		database.store, slog.New(slog.DiscardHandler), financialreports.DefaultByteLimit, financialreports.DefaultRowLimit,
+	)
+	if err != nil {
+		t.Fatalf("NewService() financial reports error = %v", err)
+	}
 	api, err := New(Dependencies{
 		Store: database.store, Operations: database.store, Admin: database.store,
 		Authentication: authentication, AdminSessions: adminSessions, CustomerSessions: customerSessions,
 		Credentials: credentialService, Webhooks: webhookService, Verification: verificationService,
 		Huawei: huaweiAdapter, Apple: appleAdapter, GooglePlay: googlePlayAdapter,
-		Protection: keyring, BodyLimit: 1 << 20,
+		Protection: keyring, FinancialReports: financialReportService, BodyLimit: 1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("New() HTTP API error = %v", err)
@@ -614,6 +622,108 @@ func assertAPIIntegrationOverview(t *testing.T, overview adminOverviewResponse) 
 	}
 }
 
+// TestCustomerAliasResolveAndMergeHTTP verifies identity routes, replay, and project scope.
+func TestCustomerAliasResolveAndMergeHTTP(t *testing.T) {
+	fixture := newAPIIntegrationFixture(t)
+	adminBearer := testBootstrapAdminKey
+	fixture.requestJSON(t, http.MethodPut, "/v1/admin/projects/"+apiIntegrationProjectID, adminBearer, map[string]string{}, http.StatusOK, nil)
+	fixture.requestJSON(t, http.MethodPut,
+		"/v1/admin/projects/"+apiIntegrationProjectID+"/applications/"+apiIntegrationApplicationID,
+		adminBearer,
+		applicationRequest{
+			Provider: core.ProviderGooglePlay, Environment: core.EnvironmentTest,
+			ProviderApplicationID: apiIntegrationProviderApplicationID,
+		},
+		http.StatusOK, nil,
+	)
+	fixture.requestJSON(t, http.MethodPut,
+		"/v1/admin/projects/"+apiIntegrationProjectID+"/customers/"+apiIntegrationCustomerID,
+		adminBearer, customerRequest{ExternalID: apiIntegrationExternalCustomerID}, http.StatusOK, nil,
+	)
+	fixture.requestJSON(t, http.MethodPut,
+		"/v1/admin/projects/"+apiIntegrationProjectID+"/customers/http-customer-2",
+		adminBearer, customerRequest{ExternalID: "http-external-customer-2"}, http.StatusOK, nil,
+	)
+	var adminKey map[string]string
+	fixture.requestJSON(t, http.MethodPost, "/v1/admin/api-keys", adminBearer, keyRequest{Role: persistence.APIKeyRoleAdmin}, http.StatusCreated, &adminKey)
+	var applicationKey map[string]string
+	fixture.requestJSON(t, http.MethodPost, "/v1/admin/api-keys", adminBearer, keyRequest{
+		Role: persistence.APIKeyRoleApplication, ProjectID: apiIntegrationProjectID, ApplicationID: apiIntegrationApplicationID,
+	}, http.StatusCreated, &applicationKey)
+
+	aliasPath := "/v1/admin/projects/" + apiIntegrationProjectID + "/customers/" + apiIntegrationCustomerID + "/aliases/auth-user-new"
+	var created customerResolutionResponse
+	fixture.requestJSON(t, http.MethodPut, aliasPath, adminKey["key"], map[string]string{}, http.StatusOK, &created)
+	if created.Match != persistence.CustomerMatchAlias || created.CanonicalCustomerID != apiIntegrationCustomerID || created.ExternalID != "auth-user-new" {
+		t.Fatalf("alias response = %#v", created)
+	}
+	var repeated customerResolutionResponse
+	fixture.requestJSON(t, http.MethodPut, aliasPath, adminKey["key"], map[string]string{}, http.StatusOK, &repeated)
+	if repeated != created {
+		t.Fatalf("repeated alias = %#v, want %#v", repeated, created)
+	}
+	var primary customerResolutionResponse
+	fixture.requestJSON(t, http.MethodPut,
+		"/v1/admin/projects/"+apiIntegrationProjectID+"/customers/"+apiIntegrationCustomerID+"/aliases/"+apiIntegrationExternalCustomerID,
+		adminKey["key"], map[string]string{}, http.StatusOK, &primary,
+	)
+	if primary.Match != persistence.CustomerMatchPrimary {
+		t.Fatalf("primary alias = %#v", primary)
+	}
+	var resolved customerResolutionResponse
+	fixture.requestJSON(t, http.MethodGet,
+		"/v1/applications/"+apiIntegrationApplicationID+"/customer-resolutions/auth-user-new",
+		applicationKey["key"], nil, http.StatusOK, &resolved,
+	)
+	if resolved.Match != persistence.CustomerMatchAlias || resolved.CanonicalCustomerID != apiIntegrationCustomerID {
+		t.Fatalf("application resolution = %#v", resolved)
+	}
+	fixture.requestJSON(t, http.MethodPut, aliasPath, adminBearer, map[string]string{}, http.StatusForbidden, nil)
+	fixture.requestJSON(t, http.MethodPost, "/v1/admin/projects/"+apiIntegrationProjectID+"/customer-merges", applicationKey["key"], customerMergeRequest{
+		IdempotencyKey: "merge-http", CanonicalCustomerID: apiIntegrationCustomerID, SourceCustomerID: "http-customer-2",
+	}, http.StatusUnauthorized, nil)
+	var session customerSessionResponse
+	fixture.requestJSON(t, http.MethodPost, "/v1/applications/"+apiIntegrationApplicationID+"/customer-sessions", applicationKey["key"], customerSessionRequest{
+		ExternalCustomerID: "auth-user-new",
+	}, http.StatusCreated, &session)
+	fixture.requestJSON(t, http.MethodGet,
+		"/v1/applications/"+apiIntegrationApplicationID+"/customer-resolutions/auth-user-new",
+		session.Token, nil, http.StatusUnauthorized, nil,
+	)
+	fixture.requestJSON(t, http.MethodPut, "/v1/admin/projects/project-other/customers/"+apiIntegrationCustomerID+"/aliases/other-alias", adminKey["key"], map[string]string{}, http.StatusNotFound, nil)
+
+	var merged customerMergeResponse
+	fixture.requestJSON(t, http.MethodPost, "/v1/admin/projects/"+apiIntegrationProjectID+"/customer-merges", adminKey["key"], customerMergeRequest{
+		IdempotencyKey: "merge-http", CanonicalCustomerID: apiIntegrationCustomerID, SourceCustomerID: "http-customer-2",
+	}, http.StatusOK, &merged)
+	var replayed customerMergeResponse
+	fixture.requestJSON(t, http.MethodPost, "/v1/admin/projects/"+apiIntegrationProjectID+"/customer-merges", adminKey["key"], customerMergeRequest{
+		IdempotencyKey: "merge-http", CanonicalCustomerID: apiIntegrationCustomerID, SourceCustomerID: "http-customer-2",
+	}, http.StatusOK, &replayed)
+	if merged.ID == "" || replayed.ID != merged.ID || replayed.SourceCustomerID != "http-customer-2" {
+		t.Fatalf("merge replay = %#v, first %#v", replayed, merged)
+	}
+	var mergedResolution customerResolutionResponse
+	fixture.requestJSON(t, http.MethodGet,
+		"/v1/admin/projects/"+apiIntegrationProjectID+"/customer-resolutions/http-external-customer-2",
+		adminKey["key"], nil, http.StatusOK, &mergedResolution,
+	)
+	if mergedResolution.Match != persistence.CustomerMatchMerged || mergedResolution.CanonicalCustomerID != apiIntegrationCustomerID {
+		t.Fatalf("merged resolution = %#v", mergedResolution)
+	}
+	var overview adminOverviewResponse
+	fixture.requestJSON(t, http.MethodGet, "/v1/admin/projects/"+apiIntegrationProjectID+"/overview", adminBearer, nil, http.StatusOK, &overview)
+	var canonical adminCustomerResponse
+	for _, customer := range overview.Customers {
+		if customer.ID == apiIntegrationCustomerID {
+			canonical = customer
+		}
+	}
+	if canonical.AliasCount != 1 || canonical.MergedIntoCustomerID != nil {
+		t.Fatalf("canonical dashboard customer = %#v", canonical)
+	}
+}
+
 // openAPIIntegrationDatabase resets and opens one migrated PostgreSQL fixture.
 func openAPIIntegrationDatabase(t *testing.T) *apiIntegrationDatabase {
 	t.Helper()
@@ -640,6 +750,10 @@ func openAPIIntegrationDatabase(t *testing.T) *apiIntegrationDatabase {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset HTTP integration River schema: %v", err)
 	}
+	if err := postgres.ClearIdentityMigrationGuards(ctx, connection); err != nil {
+		_ = connection.Close(ctx)
+		t.Fatalf("clear identity migration guards: %v", err)
+	}
 	if err := migrator.MigrateTo(ctx, 0); err != nil {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset HTTP integration PostgreSQL: %v", err)
@@ -664,6 +778,9 @@ func openAPIIntegrationDatabase(t *testing.T) *apiIntegrationDatabase {
 		defer cleanupCancel()
 		if err := postgres.RemoveRiver(cleanupCtx, databaseURL); err != nil {
 			t.Errorf("reset HTTP integration River schema during cleanup: %v", err)
+		}
+		if err := postgres.ClearIdentityMigrationGuards(cleanupCtx, connection); err != nil {
+			t.Errorf("clear identity migration guards during cleanup: %v", err)
 		}
 		if err := migrator.MigrateTo(cleanupCtx, 0); err != nil {
 			t.Errorf("reset HTTP integration PostgreSQL during cleanup: %v", err)

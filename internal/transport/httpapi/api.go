@@ -18,6 +18,7 @@ import (
 	"github.com/imariman/iapstack/internal/auth"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/credentials"
+	"github.com/imariman/iapstack/internal/financialreports"
 	"github.com/imariman/iapstack/internal/jobs"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
@@ -45,40 +46,46 @@ const (
 
 // API owns versioned routes and application services without direct database access.
 type API struct {
-	store            persistence.Store
-	operations       persistence.OperationsStore
-	admin            persistence.AdminQueryStore
-	authentication   *auth.Service
-	adminSessions    *auth.AdminSessions
-	customerSessions *auth.CustomerSessions
-	credentials      *credentials.Service
-	webhooks         *webhooks.Service
-	verification     *verification.Service
-	huawei           *huawei.Adapter
-	apple            *apple.Adapter
-	googlePlay       *googleplay.Adapter
-	protection       protection.Service
-	bodyLimit        int64
-	clock            func() time.Time
-	handler          http.Handler
+	store             persistence.Store
+	operations        persistence.OperationsStore
+	admin             persistence.AdminQueryStore
+	authentication    *auth.Service
+	adminSessions     *auth.AdminSessions
+	customerSessions  *auth.CustomerSessions
+	credentials       *credentials.Service
+	webhooks          *webhooks.Service
+	verification      *verification.Service
+	huawei            *huawei.Adapter
+	apple             *apple.Adapter
+	googlePlay        *googleplay.Adapter
+	protection        protection.Service
+	financialReports  *financialreports.Service
+	bodyLimit         int64
+	offeringDirectory string
+	offeringCatalog   persistence.OfferingCatalog
+	clock             func() time.Time
+	handler           http.Handler
 }
 
 // Dependencies contains the services required by the public HTTP contract.
 type Dependencies struct {
-	Store            persistence.Store
-	Operations       persistence.OperationsStore
-	Admin            persistence.AdminQueryStore
-	Authentication   *auth.Service
-	AdminSessions    *auth.AdminSessions
-	CustomerSessions *auth.CustomerSessions
-	Credentials      *credentials.Service
-	Webhooks         *webhooks.Service
-	Verification     *verification.Service
-	Huawei           *huawei.Adapter
-	Apple            *apple.Adapter
-	GooglePlay       *googleplay.Adapter
-	Protection       protection.Service
-	BodyLimit        int64
+	Store             persistence.Store
+	Operations        persistence.OperationsStore
+	Admin             persistence.AdminQueryStore
+	Authentication    *auth.Service
+	AdminSessions     *auth.AdminSessions
+	CustomerSessions  *auth.CustomerSessions
+	Credentials       *credentials.Service
+	Webhooks          *webhooks.Service
+	Verification      *verification.Service
+	Huawei            *huawei.Adapter
+	Apple             *apple.Adapter
+	GooglePlay        *googleplay.Adapter
+	Protection        protection.Service
+	FinancialReports  *financialreports.Service
+	BodyLimit         int64
+	OfferingDirectory string
+	OfferingCatalog   persistence.OfferingCatalog
 }
 
 // errorEnvelope is the stable v1 failure contract.
@@ -210,7 +217,8 @@ func New(dependencies Dependencies) (*API, error) {
 		dependencies.CustomerSessions == nil ||
 		dependencies.Credentials == nil || dependencies.Webhooks == nil || dependencies.Verification == nil ||
 		dependencies.Huawei == nil || dependencies.Apple == nil || dependencies.GooglePlay == nil ||
-		dependencies.Protection == nil || dependencies.BodyLimit <= 0 {
+		dependencies.Protection == nil || dependencies.FinancialReports == nil || dependencies.BodyLimit <= 0 ||
+		(strings.TrimSpace(dependencies.OfferingDirectory) != "" && dependencies.OfferingCatalog == nil) {
 		return nil, errors.New("HTTP API dependencies are incomplete")
 	}
 	api := &API{
@@ -220,16 +228,28 @@ func New(dependencies Dependencies) (*API, error) {
 		credentials:      dependencies.Credentials,
 		webhooks:         dependencies.Webhooks, verification: dependencies.Verification,
 		huawei: dependencies.Huawei, apple: dependencies.Apple, googlePlay: dependencies.GooglePlay,
-		protection: dependencies.Protection,
-		bodyLimit:  dependencies.BodyLimit, clock: time.Now,
+		protection: dependencies.Protection, financialReports: dependencies.FinancialReports,
+		bodyLimit:         dependencies.BodyLimit,
+		offeringDirectory: strings.TrimSpace(dependencies.OfferingDirectory),
+		offeringCatalog:   dependencies.OfferingCatalog,
+		clock:             time.Now,
 	}
 	mux := http.NewServeMux()
 	for _, route := range api.v1Routes() {
-		mux.HandleFunc(route.Method+" "+route.Path, route.Handler)
+		mux.HandleFunc(route.Method+" "+serveMuxPath(route.Path), route.Handler)
 	}
 	mux.HandleFunc("/v1/", api.notFound)
 	api.handler = mux
 	return api, nil
+}
+
+// serveMuxPath rewrites the public supersede custom method into a segment Go's router can match.
+func serveMuxPath(path string) string {
+	const marker = "{import_id}:supersede"
+	if strings.HasSuffix(path, marker) {
+		return strings.TrimSuffix(path, marker) + "{import_id}"
+	}
+	return path
 }
 
 // v1Routes returns the complete machine-checked public operation registry.
@@ -242,18 +262,28 @@ func (api *API) v1Routes() []v1Route {
 		{Method: http.MethodDelete, Path: "/v1/admin/api-keys/{key_id}", OperationID: "revokeApiKey", Handler: api.revokeAPIKey},
 		{Method: http.MethodGet, Path: "/v1/admin/projects", OperationID: "listAdminProjects", Handler: api.adminProjects},
 		{Method: http.MethodGet, Path: "/v1/admin/projects/{project_id}/overview", OperationID: "getAdminProjectOverview", Handler: api.adminProjectOverview},
+		{Method: http.MethodGet, Path: "/v1/admin/projects/{project_id}/financial-reports", OperationID: "listFinancialReports", Handler: api.listFinancialReports},
+		{Method: http.MethodPost, Path: "/v1/admin/projects/{project_id}/financial-reports", OperationID: "uploadFinancialReport", Handler: api.uploadFinancialReport},
+		{Method: http.MethodPost, Path: "/v1/admin/projects/{project_id}/financial-reports/{import_id}:supersede", OperationID: "supersedeFinancialReport", Handler: api.supersedeFinancialReport},
+		{Method: http.MethodPost, Path: "/v1/admin/projects/{project_id}/financial-reports:pull", OperationID: "pullFinancialReport", Handler: api.pullFinancialReport},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}", OperationID: "putAdminProject", Handler: api.putProject},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}", OperationID: "putAdminApplication", Handler: api.putApplication},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/customers/{customer_id}", OperationID: "putAdminCustomer", Handler: api.putCustomer},
+		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/customers/{customer_id}/aliases/{external_id}", OperationID: "putAdminCustomerAlias", Handler: api.putAdminCustomerAlias},
+		{Method: http.MethodGet, Path: "/v1/admin/projects/{project_id}/customer-resolutions/{external_id}", OperationID: "getAdminCustomerResolution", Handler: api.getAdminCustomerResolution},
+		{Method: http.MethodPost, Path: "/v1/admin/projects/{project_id}/customer-merges", OperationID: "postAdminCustomerMerge", Handler: api.postAdminCustomerMerge},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/entitlements/{entitlement_id}", OperationID: "putAdminEntitlement", Handler: api.putEntitlement},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/products/{product_id}", OperationID: "putAdminProduct", Handler: api.putProduct},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}/store-products/{provider_product_id}", OperationID: "putAdminStoreProduct", Handler: api.putStoreProduct},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}/credentials/{kind}", OperationID: "putAdminCredential", Handler: api.putCredential},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}/webhook", OperationID: "putAdminWebhook", Handler: api.putWebhook},
 		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/customer-sessions", OperationID: "createCustomerSession", Handler: api.createCustomerSession},
+		{Method: http.MethodGet, Path: "/v1/applications/{application_id}/offering", OperationID: "getApplicationOffering", Handler: api.getApplicationOffering},
 		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/purchases:verify", OperationID: "verifyPurchase", Handler: api.verifyPurchase},
 		{Method: http.MethodPost, Path: "/v1/applications/{application_id}/purchases:restore", OperationID: "restorePurchases", Handler: api.restorePurchases},
 		{Method: http.MethodGet, Path: "/v1/applications/{application_id}/customers/{external_customer_id}/entitlements", OperationID: "getCustomerEntitlements", Handler: api.customerEntitlements},
+		{Method: http.MethodPut, Path: "/v1/applications/{application_id}/customers/{customer_id}/aliases/{external_id}", OperationID: "putApplicationCustomerAlias", Handler: api.putApplicationCustomerAlias},
+		{Method: http.MethodGet, Path: "/v1/applications/{application_id}/customer-resolutions/{external_id}", OperationID: "getApplicationCustomerResolution", Handler: api.getApplicationCustomerResolution},
 		{Method: http.MethodPost, Path: "/v1/providers/huawei/projects/{project_id}/applications/{application_id}/notifications", OperationID: "acceptHuaweiNotification", Handler: api.huaweiNotification},
 		{Method: http.MethodPost, Path: "/v1/providers/apple/projects/{project_id}/applications/{application_id}/notifications", OperationID: "acceptAppleNotification", Handler: api.appleNotification},
 		{Method: http.MethodPost, Path: "/v1/providers/google-play/projects/{project_id}/applications/{application_id}/notifications", OperationID: "acceptGooglePlayNotification", Handler: api.googlePlayNotification},
@@ -1073,6 +1103,8 @@ func (api *API) writeError(writer http.ResponseWriter, request *http.Request, er
 		status, code, message = http.StatusBadRequest, "invalid_notification", "notification payload is invalid"
 	} else if errors.Is(err, persistence.ErrNotFound) {
 		status, code, message = http.StatusNotFound, "not_found", "the requested resource was not found"
+	} else if errors.Is(err, persistence.ErrEntitlementConflict) {
+		status, code, message = http.StatusConflict, "entitlement_conflict", entitlementConflictMessage
 	} else if errors.Is(err, persistence.ErrConflict) {
 		status, code, message = http.StatusConflict, "conflict", "the request conflicts with current state"
 	} else if errors.Is(err, persistence.ErrUnavailable) {

@@ -46,35 +46,24 @@ func (repository *transaction) Application(
 	return application, nil
 }
 
-// CustomerByExternalID returns one customer by its project-scoped external identity.
+// CustomerByExternalID resolves one external id to its canonical project customer.
 func (repository *transaction) CustomerByExternalID(
 	ctx context.Context,
 	projectID core.ProjectID,
 	externalID string,
 ) (core.Customer, error) {
-	if err := errors.Join(projectID.Validate(), validateText("external customer ID", externalID)); err != nil {
+	resolution, err := repository.ResolveCustomer(ctx, projectID, externalID)
+	if err != nil {
 		return core.Customer{}, err
 	}
-
-	var customerID string
-	err := repository.tx.QueryRow(ctx, `
-		SELECT id
-		FROM customers
-		WHERE project_id = $1 AND external_id = $2
-	`, projectID, externalID).Scan(&customerID)
+	identity, err := repository.customerIdentityByID(ctx, projectID, resolution.CanonicalCustomerID)
 	if err != nil {
-		return core.Customer{}, classifyError("load customer", err)
+		return core.Customer{}, err
 	}
-
-	customer := core.Customer{
-		ID:         core.CustomerID(customerID),
-		ProjectID:  projectID,
-		ExternalID: externalID,
+	if identity.mergedInto != nil {
+		return core.Customer{}, fmt.Errorf("load canonical customer: %w", persistence.ErrConflict)
 	}
-	if err := customer.Validate(); err != nil {
-		return core.Customer{}, fmt.Errorf("validate stored customer: %w", err)
-	}
-	return customer, nil
+	return identity.customer(), nil
 }
 
 // CatalogProducts resolves provider product mappings and their granted entitlements.

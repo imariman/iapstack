@@ -47,7 +47,17 @@ func (repository *transaction) PutCustomer(ctx context.Context, customer core.Cu
 	if err := customer.Validate(); err != nil {
 		return core.Customer{}, err
 	}
-	_, err := repository.tx.Exec(ctx, `
+	if err := repository.lockExternalCustomerID(ctx, customer.ProjectID, customer.ExternalID); err != nil {
+		return core.Customer{}, err
+	}
+	alias, err := repository.customerAliasExists(ctx, customer.ProjectID, customer.ExternalID)
+	if err != nil {
+		return core.Customer{}, err
+	}
+	if alias {
+		return core.Customer{}, fmt.Errorf("put customer: %w", persistence.ErrConflict)
+	}
+	_, err = repository.tx.Exec(ctx, `
 		INSERT INTO customers (id, project_id, external_id)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (project_id, external_id) DO NOTHING
@@ -55,14 +65,7 @@ func (repository *transaction) PutCustomer(ctx context.Context, customer core.Cu
 	if err != nil {
 		return core.Customer{}, classifyError("put customer", err)
 	}
-	stored, err := repository.CustomerByExternalID(ctx, customer.ProjectID, customer.ExternalID)
-	if err != nil {
-		return core.Customer{}, err
-	}
-	if stored.ID != customer.ID {
-		return stored, nil
-	}
-	return stored, nil
+	return repository.customerByExternalIDDirect(ctx, customer.ProjectID, customer.ExternalID)
 }
 
 // PutEntitlementDefinition creates one named entitlement or confirms identical configuration.

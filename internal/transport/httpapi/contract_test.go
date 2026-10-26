@@ -14,6 +14,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/credentials"
+	"github.com/imariman/iapstack/internal/offering"
 	"github.com/imariman/iapstack/internal/persistence"
 )
 
@@ -102,16 +103,21 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 		"VerificationResult":           {"verified_at", "customer_id", "entitlements"},
 		"RestoreResult":                {"results"},
 		"EntitlementSnapshot":          {"customer_id", "entitlements"},
+		"OfferingDocument":             {"schema_version", "application_id", "revision", "offerings"},
+		"Offering":                     {"id", "packages"},
+		"OfferingPackage":              {"id", "store_product_id"},
 		"ErrorEnvelope":                {"error"},
 		"AdminProjectOverview":         {"project", "analytics", "applications", "products", "customers", "recent_transactions", "queues", "recent_webhook_events"},
 		"AdminAnalytics":               {"window_days", "generated_at", "verified_count", "allowed_count", "denied_count", "unresolved_count", "reversed_count", "active_entitlement_count", "revenue", "sandbox_value", "daily_activity"},
-		"AdminRevenue":                 {"status", "recognized_minor_units", "currency", "production_application_count", "test_application_count"},
+		"AdminRevenue":                 {"status", "recognized_minor_units", "currency", "amounts", "uncovered_providers", "production_application_count", "test_application_count"},
 		"AdminSandboxValue":            {"amounts", "transaction_count", "missing_price_count"},
 		"AdminMoney":                   {"milliunits", "currency"},
 		"AdminDailyActivity":           {"date", "verified", "allowed", "denied", "unresolved", "reversed"},
 		"CredentialMetadata":           {"project_id", "application_id", "kind", "content_type", "schema_version", "revision", "created_at", "updated_at"},
 		"ApiKeyCollection":             {"api_keys"},
 		"ApiKey":                       {"id", "role", "created_at", "current"},
+		"CustomerResolution":           {"project_id", "external_id", "canonical_customer_id", "match"},
+		"CustomerMerge":                {"id", "project_id", "canonical_customer_id", "source_customer_id", "idempotency_key", "created_at"},
 	} {
 		schemaReference, exists := document.Components.Schemas[name]
 		if !exists || schemaReference.Value == nil {
@@ -124,6 +130,19 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 			if !containsString(schemaReference.Value.Required, field) {
 				t.Errorf("schema %q property %q is not required", name, field)
 			}
+		}
+	}
+	entitlement := document.Components.Schemas["Entitlement"].Value
+	if _, exists := entitlement.Properties["source_customer_id"]; exists {
+		t.Fatal("public Entitlement schema must not expose source_customer_id")
+	}
+	adminCustomer := document.Components.Schemas["AdminCustomer"].Value
+	for _, field := range []string{"merged_into_customer_id", "alias_count"} {
+		if _, exists := adminCustomer.Properties[field]; !exists {
+			t.Errorf("AdminCustomer is missing optional property %q", field)
+		}
+		if containsString(adminCustomer.Required, field) {
+			t.Errorf("AdminCustomer property %q must stay optional", field)
 		}
 	}
 }
@@ -170,12 +189,24 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 				ProjectID: "project-1", ApplicationID: "application-1", CreatedAt: now, Current: false,
 			}},
 		}},
+		{name: "imported proceeds", schema: "AdminRevenue", value: adminRevenueResponse{
+			Status: persistence.AdminRevenueReportsImported,
+			Amounts: []adminRecognizedAmountResponse{{
+				Provider: core.ProviderAppleAppStore, ReportKind: persistence.FinancialReportKindAppleConsolidated,
+				PeriodStart: "2026-09-28", PeriodEnd: "2026-11-01", Currency: "EUR",
+				AmountDecimal: "-1.25", AmountScale: 2, MinorUnits: func() *int64 { value := int64(-125); return &value }(),
+				CommissionState: persistence.FinancialReportCommissionIncluded,
+				TaxState:        persistence.FinancialReportTaxNotItemized,
+			}},
+			UncoveredProviders: []core.Provider{}, ProductionApplicationCount: 1,
+		}},
 		{name: "project overview", schema: "AdminProjectOverview", value: adminOverviewResponse{
 			Project: adminProjectResponse{ID: "project-1", CreatedAt: now},
 			Analytics: adminAnalyticsResponse{
 				WindowDays: 30, GeneratedAt: now,
 				Revenue: adminRevenueResponse{
 					Status: persistence.AdminRevenueSandboxOnly, RecognizedMinorUnits: &zero,
+					Amounts: []adminRecognizedAmountResponse{}, UncoveredProviders: []core.Provider{},
 				},
 				SandboxValue:  adminSandboxValueResponse{Amounts: []adminMoneyResponse{}},
 				DailyActivity: dailyActivity,
@@ -201,6 +232,15 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 		}},
 		{name: "webhook metadata", schema: "WebhookConfiguration", value: map[string]any{
 			"url": "https://example.com/iapstack/events", "revision": int64(1),
+		}},
+		{name: "offering document", schema: "OfferingDocument", value: offering.Document{
+			SchemaVersion: 1, ApplicationID: "application-1", Revision: "revision-1",
+			Offerings: []offering.Offering{{
+				ID: "default",
+				Packages: []offering.Package{{
+					ID: "monthly", StoreProductID: "premium_monthly", DisplayKey: "premium_monthly",
+				}},
+			}},
 		}},
 	}
 	for _, test := range tests {

@@ -77,6 +77,8 @@ export class EntitlementChange {
   readonly access: string;
   readonly accessReason: string;
   readonly sourceObservationId: string;
+  readonly source?: string;
+  readonly sourceImportId?: string;
   readonly sourceApplicationId: string;
   readonly sourceProductId: string;
   readonly effectiveStartsAt: Date | null;
@@ -93,6 +95,8 @@ export class EntitlementChange {
     access: string;
     accessReason: string;
     sourceObservationId: string;
+    source?: string;
+    sourceImportId?: string;
     sourceApplicationId: string;
     sourceProductId: string;
     effectiveStartsAt?: Date | null;
@@ -108,6 +112,8 @@ export class EntitlementChange {
     this.access = init.access;
     this.accessReason = init.accessReason;
     this.sourceObservationId = init.sourceObservationId;
+    this.source = init.source;
+    this.sourceImportId = init.sourceImportId;
     this.sourceApplicationId = init.sourceApplicationId;
     this.sourceProductId = init.sourceProductId;
     this.effectiveStartsAt = init.effectiveStartsAt ?? null;

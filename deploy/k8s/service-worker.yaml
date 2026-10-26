@@ -1,0 +1,19 @@
+# In-cluster worker probes and /metrics on port 8081. Not an Ingress backend.
+apiVersion: v1
+kind: Service
+metadata:
+  name: iapstack-worker
+  namespace: iapstack
+  labels:
+    app.kubernetes.io/name: iapstack
+    app.kubernetes.io/component: worker
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: iapstack
+    app.kubernetes.io/component: worker
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+      protocol: TCP

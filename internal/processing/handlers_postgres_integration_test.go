@@ -66,6 +66,7 @@ type processingIntegrationAdapter struct {
 	verifyCalls          int
 	reconcileCalls       int
 	postCommitCalls      int
+	reconcileRequest     stores.ReconciliationRequest
 }
 
 type processingIntegrationProtection struct{}
@@ -241,6 +242,109 @@ func TestGooglePlayInboxPersistsReconciliationWithPostgreSQL(t *testing.T) {
 	}
 }
 
+// TestGooglePlayLookupAfterMergeUsesSourceExternalID verifies notification binding stays on the historical customer.
+func TestGooglePlayLookupAfterMergeUsesSourceExternalID(t *testing.T) {
+	database := openProcessingIntegrationDatabase(t)
+	now := time.Date(2026, time.October, 26, 12, 0, 0, 0, time.UTC)
+	application := core.Application{
+		ID: processingIntegrationApplicationID, ProjectID: processingIntegrationProjectID,
+		Store: core.StoreApplication{
+			Provider: core.ProviderGooglePlay, Environment: core.EnvironmentTest, ID: "com.example.iapstack",
+		},
+	}
+	source := core.Customer{
+		ID: processingIntegrationCustomerID, ProjectID: processingIntegrationProjectID,
+		ExternalID: processingIntegrationExternalCustomerID,
+	}
+	seedProcessingIntegrationCatalog(t, database, application, source)
+	queryReference := processingIntegrationReference(t, core.ReferenceQuery, "purchase_token", processingIntegrationPurchaseToken)
+	customerBinding := processingIntegrationReference(
+		t, core.ReferenceCustomerBinding, "obfuscated_external_account_id", processingIntegrationExternalCustomerID,
+	)
+	transactionReference := processingIntegrationReference(t, core.ReferenceTransaction, "order_id", "GPA.1234-5678-9012-34567")
+	protector := processingIntegrationProtection{}
+	adapter := &processingIntegrationAdapter{
+		verificationResult: processingIntegrationResult(
+			t, application, "processing-observation-initial", core.LifecycleActive, core.AccessAllowed,
+			core.AccessReasonPurchaseValid, now, queryReference, customerBinding, transactionReference,
+		),
+		reconciliationResult: processingIntegrationResult(
+			t, application, "processing-observation-renewed", core.LifecycleActive, core.AccessAllowed,
+			core.AccessReasonPurchaseValid, now.Add(time.Minute), queryReference, customerBinding, transactionReference,
+		),
+	}
+	registry, err := stores.NewRegistry(adapter)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	verificationService, err := verification.NewService(
+		database.store, registry, protector, verification.NewDefaultProjector(), processingIntegrationClock{now: now},
+	)
+	if err != nil {
+		t.Fatalf("NewService() verification error = %v", err)
+	}
+	if _, err := verificationService.Verify(database.ctx, verification.Command{
+		ProjectID: processingIntegrationProjectID, ApplicationID: processingIntegrationApplicationID,
+		ExternalCustomerID: processingIntegrationExternalCustomerID,
+		ClaimedProducts:    []core.ProviderProductID{processingIntegrationProviderProductID},
+		ExpectedCustomerBindings: []core.StoreReference{
+			customerBinding,
+		},
+		Evidence: processingIntegrationEvidence(t, "application/json", []byte(`{"purchase_token":"processing-purchase-token-1"}`)),
+	}); err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if err := database.store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		_, putErr := repository.PutCustomer(database.ctx, core.Customer{
+			ID: "processing-customer-canonical", ProjectID: processingIntegrationProjectID, ExternalID: "processing-canonical-external",
+		})
+		return putErr
+	}); err != nil {
+		t.Fatalf("PutCustomer() canonical error = %v", err)
+	}
+	if err := database.store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		result, mergeErr := repository.MergeCustomers(database.ctx, persistence.CustomerMergeWrite{
+			ProjectID: processingIntegrationProjectID, CanonicalCustomerID: "processing-customer-canonical",
+			SourceCustomerID: processingIntegrationCustomerID, IdempotencyKey: "merge-processing-source",
+			ActorKeyID: "processing-admin-key",
+		})
+		if mergeErr != nil {
+			return mergeErr
+		}
+		if result.Replay {
+			t.Fatal("processing merge replayed unexpectedly")
+		}
+		return verification.RefreshCustomerProjection(
+			database.ctx, repository, verification.NewDefaultProjector(), processingIntegrationProjectID,
+			"processing-customer-canonical", now,
+		)
+	}); err != nil {
+		t.Fatalf("MergeCustomers() error = %v", err)
+	}
+
+	processingService, err := New(database.store, protector, verificationService)
+	if err != nil {
+		t.Fatalf("New() processing error = %v", err)
+	}
+	message := saveProcessingIntegrationInbox(t, database, protector, application, now.Add(time.Minute), now.Add(2*time.Minute))
+	if err := processingService.HandleInbox(database.ctx, message); err != nil {
+		t.Fatalf("HandleInbox() after merge error = %v, want completion", err)
+	}
+	if len(adapter.reconcileRequest.ExpectedCustomerBindings) != 1 ||
+		adapter.reconcileRequest.ExpectedCustomerBindings[0].Value() != processingIntegrationExternalCustomerID {
+		t.Fatalf("reconcile bindings = %#v, want source external id", adapter.reconcileRequest.ExpectedCustomerBindings)
+	}
+	var observationCustomer string
+	if err := database.conn.QueryRow(database.ctx, `
+		SELECT customer_id FROM purchase_observations WHERE id = 'processing-observation-initial'
+	`).Scan(&observationCustomer); err != nil {
+		t.Fatalf("read original observation owner: %v", err)
+	}
+	if observationCustomer != processingIntegrationCustomerID {
+		t.Fatalf("original observation customer = %q, want source %q", observationCustomer, processingIntegrationCustomerID)
+	}
+}
+
 // markProcessingIntegrationInboxFailed records an exhausted attempt and finalizes its original River job.
 func markProcessingIntegrationInboxFailed(
 	t *testing.T,
@@ -283,9 +387,10 @@ func (adapter *processingIntegrationAdapter) Verify(
 // Reconcile returns the configured lifecycle state after an RTDN signal.
 func (adapter *processingIntegrationAdapter) Reconcile(
 	_ context.Context,
-	_ stores.ReconciliationRequest,
+	request stores.ReconciliationRequest,
 ) (stores.VerificationResult, error) {
 	adapter.reconcileCalls++
+	adapter.reconcileRequest = request
 	return adapter.reconciliationResult, nil
 }
 
@@ -524,6 +629,10 @@ func openProcessingIntegrationDatabase(t *testing.T) *processingIntegrationDatab
 		_ = connection.Close(ctx)
 		t.Fatalf("reset processing integration River schema: %v", err)
 	}
+	if err := postgres.ClearIdentityMigrationGuards(ctx, connection); err != nil {
+		_ = connection.Close(ctx)
+		t.Fatalf("clear identity migration guards: %v", err)
+	}
 	if err := migrator.MigrateTo(ctx, 0); err != nil {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset processing integration PostgreSQL: %v", err)
@@ -548,6 +657,9 @@ func openProcessingIntegrationDatabase(t *testing.T) *processingIntegrationDatab
 		defer cleanupCancel()
 		if err := postgres.RemoveRiver(cleanupCtx, databaseURL); err != nil {
 			t.Errorf("reset processing integration River schema during cleanup: %v", err)
+		}
+		if err := postgres.ClearIdentityMigrationGuards(cleanupCtx, connection); err != nil {
+			t.Errorf("clear identity migration guards during cleanup: %v", err)
 		}
 		if err := migrator.MigrateTo(cleanupCtx, 0); err != nil {
 			t.Errorf("reset processing integration PostgreSQL during cleanup: %v", err)

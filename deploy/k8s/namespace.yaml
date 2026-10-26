@@ -1,0 +1,7 @@
+# Operator convenience only. This namespace is not a tenant boundary.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: iapstack
+  labels:
+    app.kubernetes.io/name: iapstack

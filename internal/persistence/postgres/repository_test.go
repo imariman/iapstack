@@ -361,7 +361,7 @@ func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
 		t.Fatalf("AdminProjects() counts = %#v, want one application, customer, and product", projects[0])
 	}
 
-	overview, err := store.AdminProjectOverview(database.ctx, core.ProjectID(fixture.projectID))
+	overview, err := store.AdminProjectOverview(database.ctx, core.ProjectID(fixture.projectID), persistence.AdminRevenueQuery{})
 	if err != nil {
 		t.Fatalf("AdminProjectOverview() error = %v", err)
 	}
@@ -404,7 +404,7 @@ func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
 	writes.outbox.AvailableAt = observedAt
 	persistPurchaseWrites(t, database.ctx, store, writes)
 
-	active, err := store.AdminProjectOverview(database.ctx, core.ProjectID(fixture.projectID))
+	active, err := store.AdminProjectOverview(database.ctx, core.ProjectID(fixture.projectID), persistence.AdminRevenueQuery{})
 	if err != nil {
 		t.Fatalf("active AdminProjectOverview() error = %v", err)
 	}
@@ -440,7 +440,7 @@ func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
 	`, fixture.projectID, fixture.applicationID); err != nil {
 		t.Fatalf("seed dashboard webhook metadata: %v", err)
 	}
-	configured, err := store.AdminProjectOverview(database.ctx, core.ProjectID(fixture.projectID))
+	configured, err := store.AdminProjectOverview(database.ctx, core.ProjectID(fixture.projectID), persistence.AdminRevenueQuery{})
 	if err != nil {
 		t.Fatalf("configured AdminProjectOverview() error = %v", err)
 	}
@@ -453,7 +453,7 @@ func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
 	`, fixture.applicationID); err != nil {
 		t.Fatalf("move dashboard application to production: %v", err)
 	}
-	production, err := store.AdminProjectOverview(database.ctx, core.ProjectID(fixture.projectID))
+	production, err := store.AdminProjectOverview(database.ctx, core.ProjectID(fixture.projectID), persistence.AdminRevenueQuery{})
 	if err != nil {
 		t.Fatalf("production AdminProjectOverview() error = %v", err)
 	}
@@ -468,7 +468,7 @@ func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
 		t.Fatalf("production sandbox value = %#v, want no test transaction value", production.Analytics.SandboxValue)
 	}
 
-	_, err = store.AdminProjectOverview(database.ctx, "missing-project")
+	_, err = store.AdminProjectOverview(database.ctx, "missing-project", persistence.AdminRevenueQuery{})
 	if !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatalf("missing AdminProjectOverview() error = %v, want ErrNotFound", err)
 	}
@@ -1266,6 +1266,7 @@ func assertTableCount(t *testing.T, database *testDatabase, table string, expect
 	allowedTables := map[string]struct{}{
 		"application_credentials": {},
 		"customer_entitlements":   {},
+		"customer_merges":         {},
 		"outbox_events":           {},
 		"provider_references":     {},
 		"purchase_evidence":       {},

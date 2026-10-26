@@ -27,6 +27,13 @@ const (
 	QueueOutbox QueueName = "outbox"
 	// QueueReconciliation identifies protected provider reconciliation work.
 	QueueReconciliation QueueName = "reconciliation"
+
+	// SourceKindStoreObservation identifies a projection selected from a purchase observation.
+	SourceKindStoreObservation SourceKind = "store_observation"
+	// SourceKindImport identifies a projection selected from an imported historical grant.
+	SourceKindImport SourceKind = "import"
+	// ImportOriginRevenueCat identifies a one-way RevenueCat historical grant.
+	ImportOriginRevenueCat = "revenuecat"
 )
 
 // Store owns durable storage resources and starts atomic units of work.
@@ -46,6 +53,7 @@ type Transaction interface {
 	PurchaseRepository
 	EntitlementRepository
 	OutboxRepository
+	IdentityRepository
 }
 
 // OperationsStore executes control-plane and durable queue work in atomic units.
@@ -81,8 +89,10 @@ type TransactionFunc func(Transaction) error
 type CatalogRepository interface {
 	// Application returns one application inside its owning project.
 	Application(context.Context, core.ProjectID, core.ApplicationID) (core.Application, error)
-	// CustomerByExternalID returns one customer by its project-scoped external identity.
+	// CustomerByExternalID resolves one external id to its canonical project customer.
 	CustomerByExternalID(context.Context, core.ProjectID, string) (core.Customer, error)
+	// CustomerInClosure reports whether candidate is the canonical customer or merged directly into it.
+	CustomerInClosure(context.Context, core.ProjectID, core.CustomerID, core.CustomerID) (bool, error)
 	// CatalogProducts resolves provider product mappings and their granted entitlements.
 	CatalogProducts(
 		context.Context,
@@ -90,6 +100,13 @@ type CatalogRepository interface {
 		core.ApplicationID,
 		[]core.ProviderProductID,
 	) ([]CatalogProduct, error)
+}
+
+// OfferingCatalog confirms store-product membership for a presentation document.
+// Implementations must not create catalog rows.
+type OfferingCatalog interface {
+	// ConfirmStoreProducts returns nil only when every provider product ID already exists for the application.
+	ConfirmStoreProducts(context.Context, core.ApplicationID, []core.ProviderProductID) error
 }
 
 // CatalogWriter creates idempotent control-plane catalog records.
@@ -128,6 +145,8 @@ type ProviderReferenceRepository interface {
 type EntitlementRepository interface {
 	// LockCustomer serializes entitlement projection work for one customer.
 	LockCustomer(context.Context, core.ProjectID, core.CustomerID) error
+	// LockCustomerClosure serializes one canonical customer and every customer merged directly into it.
+	LockCustomerClosure(context.Context, core.ProjectID, core.CustomerID) error
 	// PutEntitlement creates or replaces one current projection with optimistic versioning.
 	PutEntitlement(context.Context, EntitlementProjection) (EntitlementWriteResult, error)
 	// CustomerEntitlementSources returns the latest observed projection for every customer access source.
@@ -244,13 +263,19 @@ type ObservationWrite struct {
 	References  []ProtectedReference
 }
 
-// EntitlementProjection describes the current access decision derived from one observation.
+// SourceKind identifies whether a projection cites a store observation or an import grant.
+type SourceKind string
+
+// EntitlementProjection describes the current access decision derived from one source.
 type EntitlementProjection struct {
 	ProjectID           core.ProjectID
 	CustomerID          core.CustomerID
 	EntitlementID       core.EntitlementID
+	SourceKind          SourceKind
 	SourceObservationID core.ObservationID
+	SourceImportID      string
 	SourceProductID     core.ProductID
+	SourceCustomerID    core.CustomerID
 	Access              core.AccessStatus
 	AccessReason        core.AccessReason
 	EffectivePeriod     core.EffectivePeriod
@@ -409,11 +434,54 @@ type QueueFailure struct {
 	ErrorCode string
 }
 
+// ImportBatch is one apply of a RevenueCat export, keyed by the operator batch id.
+type ImportBatch struct {
+	ProjectID    core.ProjectID
+	BatchID      string
+	ExportSHA256 [32]byte
+	Format       string
+}
+
+// ImportGrant is one historical access row that is not a purchase observation.
+type ImportGrant struct {
+	ID                 string
+	ProjectID          core.ProjectID
+	CustomerID         core.CustomerID
+	ApplicationID      core.ApplicationID
+	ProductID          core.ProductID
+	EntitlementID      core.EntitlementID
+	Origin             string
+	OriginStore        string
+	Environment        core.Environment
+	Access             core.AccessStatus
+	AccessReason       core.AccessReason
+	EffectivePeriod    core.EffectivePeriod
+	ObservedAt         time.Time
+	ExportSHA256       [32]byte
+	LineageFingerprint [32]byte
+}
+
+// ImportGrantResult reports whether an import grant insert or update changed durable state.
+type ImportGrantResult struct {
+	Inserted bool
+	Updated  bool
+}
+
+// ImportCatalog is the existing project catalog an importer may reference but must not extend.
+type ImportCatalog struct {
+	Applications  []core.Application
+	Products      []core.Product
+	Entitlements  []core.Entitlement
+	StoreProducts []core.StoreProduct
+}
+
 var (
 	// ErrNotFound indicates that a requested durable record does not exist in scope.
 	ErrNotFound = errors.New("persistence record not found")
 	// ErrConflict indicates that an identity or idempotency key belongs to different data.
 	ErrConflict = errors.New("persistence conflict")
+	// ErrEntitlementConflict indicates that two customers both have allowed access to one entitlement.
+	ErrEntitlementConflict = errors.New("the customers have conflicting active entitlements")
 	// ErrUnavailable indicates that durable storage could not complete a transient operation safely.
 	ErrUnavailable = errors.New("persistence unavailable")
 )
@@ -690,17 +758,102 @@ func (write ObservationWrite) Validate() error {
 	return nil
 }
 
-// Validate checks projection scope, source identity, access decision, and effective period.
+// Validate checks projection scope, exactly one source identity, access decision, and effective period.
 func (projection EntitlementProjection) Validate() error {
+	var sourceCustomerError error
+	if projection.SourceCustomerID != "" {
+		sourceCustomerError = projection.SourceCustomerID.Validate()
+	}
 	return errors.Join(
 		projection.ProjectID.Validate(),
 		projection.CustomerID.Validate(),
 		projection.EntitlementID.Validate(),
-		projection.SourceObservationID.Validate(),
+		projection.validateSource(),
 		projection.SourceProductID.Validate(),
+		sourceCustomerError,
 		projection.Access.Validate(),
 		projection.AccessReason.Validate(),
 		projection.EffectivePeriod.Validate(),
+	)
+}
+
+// Normalized fills an omitted source customer and treats an empty source kind as a store observation.
+func (projection EntitlementProjection) Normalized() EntitlementProjection {
+	if projection.SourceCustomerID == "" {
+		projection.SourceCustomerID = projection.CustomerID
+	}
+	if projection.SourceKind == "" {
+		projection.SourceKind = SourceKindStoreObservation
+	}
+	return projection
+}
+
+// validateSource requires the source id that matches the projection source kind.
+func (projection EntitlementProjection) validateSource() error {
+	kind := projection.SourceKind
+	if kind == "" {
+		kind = SourceKindStoreObservation
+	}
+	switch kind {
+	case SourceKindStoreObservation:
+		if projection.SourceImportID != "" {
+			return errors.New("store observation projection cannot cite an import grant")
+		}
+		return projection.SourceObservationID.Validate()
+	case SourceKindImport:
+		if projection.SourceObservationID != "" {
+			return errors.New("import projection cannot cite a purchase observation")
+		}
+		return core.ValidateOpaqueIdentifier("import grant ID", projection.SourceImportID)
+	default:
+		return fmt.Errorf("unsupported entitlement source kind %q", projection.SourceKind)
+	}
+}
+
+// Validate checks one import batch identity and its export fingerprint.
+func (batch ImportBatch) Validate() error {
+	var fingerprintError error
+	if batch.ExportSHA256 == ([32]byte{}) {
+		fingerprintError = errors.New("import batch export fingerprint is required")
+	}
+	if batch.Format != "transactions-csv" && batch.Format != "subscriber-jsonl" {
+		fingerprintError = errors.Join(fingerprintError, fmt.Errorf("unsupported import batch format %q", batch.Format))
+	}
+	return errors.Join(
+		batch.ProjectID.Validate(),
+		core.ValidateOpaqueIdentifier("import batch ID", batch.BatchID),
+		fingerprintError,
+	)
+}
+
+// Validate checks one import grant's catalog identity, access decision, and fingerprints.
+func (grant ImportGrant) Validate() error {
+	var fingerprintError error
+	if grant.ExportSHA256 == ([32]byte{}) || grant.LineageFingerprint == ([32]byte{}) {
+		fingerprintError = errors.New("import grant fingerprints are required")
+	}
+	if grant.Origin != ImportOriginRevenueCat {
+		fingerprintError = errors.Join(fingerprintError, fmt.Errorf("unsupported import origin %q", grant.Origin))
+	}
+	if grant.Environment != core.EnvironmentProduction && grant.Environment != core.EnvironmentSandbox {
+		fingerprintError = errors.Join(fingerprintError, fmt.Errorf("unsupported import environment %q", grant.Environment))
+	}
+	if len(grant.ID) != 36 || grant.ID[:4] != "imp-" {
+		fingerprintError = errors.Join(fingerprintError, errors.New("import grant ID is invalid"))
+	}
+	return errors.Join(
+		core.ValidateOpaqueIdentifier("import grant ID", grant.ID),
+		grant.ProjectID.Validate(),
+		grant.CustomerID.Validate(),
+		grant.ApplicationID.Validate(),
+		grant.ProductID.Validate(),
+		grant.EntitlementID.Validate(),
+		validateText("import origin store", grant.OriginStore),
+		fingerprintError,
+		grant.Access.Validate(),
+		grant.AccessReason.Validate(),
+		grant.EffectivePeriod.Validate(),
+		validateTime("import grant observation time", grant.ObservedAt),
 	)
 }
 

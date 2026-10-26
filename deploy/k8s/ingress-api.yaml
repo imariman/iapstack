@@ -1,0 +1,35 @@
+# Public API host only. Paths are an allow-list so /metrics is not forwarded.
+# No ingressClassName: controller-neutral. Uncomment only to pin a cluster default.
+# /healthz and /readyz are kubelet probes, not published here.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: iapstack-api
+  namespace: iapstack
+  labels:
+    app.kubernetes.io/name: iapstack
+    app.kubernetes.io/component: api
+spec:
+  # ingressClassName: REPLACE
+  tls:
+    - hosts:
+        - api.example.invalid
+      secretName: iapstack-api-tls
+  rules:
+    - host: api.example.invalid
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: iapstack-api
+                port:
+                  number: 8080
+          - path: /dashboard
+            pathType: Prefix
+            backend:
+              service:
+                name: iapstack-api
+                port:
+                  number: 8080

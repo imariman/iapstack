@@ -277,6 +277,42 @@ func TestWebhookVerifierRejectsInvalidEventIDAndPayload(t *testing.T) {
 	}
 }
 
+// TestWebhookVerifierAcceptsImportSchema verifies version 2 only when source is import.
+func TestWebhookVerifierAcceptsImportSchema(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC)
+	verifier := newTestVerifier(t, now, defaultWebhookBodyLimit)
+	defer verifier.Close()
+
+	body := []byte(`{` +
+		`"schema_version":2,` +
+		`"project_id":"project-1",` +
+		`"application_id":"ios-sandbox",` +
+		`"customer_id":"customer-internal",` +
+		`"entitlement_id":"entitlement-1",` +
+		`"entitlement_key":"premium",` +
+		`"access":"allowed",` +
+		`"access_reason":"purchase_valid",` +
+		`"source":"import",` +
+		`"source_import_id":"imp-55555555555555555555555555555555",` +
+		`"source_application_id":"ios-sandbox",` +
+		`"source_product_id":"premium_annual",` +
+		`"version":2` +
+		`}`)
+	event, err := verifier.VerifyRequest(signedWebhookRequest(t, now, body, "event-import"))
+	if err != nil {
+		t.Fatalf("VerifyRequest() error = %v", err)
+	}
+	if event.Change.SchemaVersion != 2 || event.Change.Source != "import" || event.Change.SourceObservationID != "" {
+		t.Fatalf("change = %#v, want import schema", event.Change)
+	}
+	labeled := bytes.ReplaceAll(body, []byte(`"source":"import"`), []byte(`"source":"store"`))
+	if _, err := verifier.VerifyRequest(signedWebhookRequest(t, now, labeled, "event-import-bad")); !webhookCode(err, "invalid_event") {
+		t.Fatalf("store-labeled version 2 error = %v, want invalid_event", err)
+	}
+}
+
 // TestWebhookVerifierAppliesDefaultBounds verifies zero config values become production defaults.
 func TestWebhookVerifierAppliesDefaultBounds(t *testing.T) {
 	t.Parallel()

@@ -71,9 +71,13 @@ func (repository *transaction) SaveEvidence(ctx context.Context, write persisten
 		return 0, err
 	}
 	receivedAt := normalizeTime(write.ReceivedAt)
+	canonicalID, members, err := repository.customerClosure(ctx, write.ProjectID, write.CustomerID)
+	if err != nil {
+		return 0, err
+	}
 
 	var evidenceID int64
-	err := repository.tx.QueryRow(ctx, `
+	err = repository.tx.QueryRow(ctx, `
 		INSERT INTO purchase_evidence (
 			project_id,
 			application_id,
@@ -90,7 +94,7 @@ func (repository *transaction) SaveEvidence(ctx context.Context, write persisten
 	`,
 		write.ProjectID,
 		write.ApplicationID,
-		write.CustomerID,
+		canonicalID,
 		write.Kind,
 		write.ContentType,
 		write.Payload.Ciphertext,
@@ -124,7 +128,7 @@ func (repository *transaction) SaveEvidence(ctx context.Context, write persisten
 		return 0, classifyError("load existing purchase evidence", err)
 	}
 	if storedProjectID != string(write.ProjectID) ||
-		storedCustomerID != string(write.CustomerID) ||
+		!closureContains(members, storedCustomerID) ||
 		storedKind != write.Kind ||
 		storedContentType != write.ContentType {
 		return 0, fmt.Errorf("save purchase evidence: %w", persistence.ErrConflict)
@@ -188,8 +192,18 @@ func (repository *transaction) SaveObservation(
 	if err := write.Validate(); err != nil {
 		return err
 	}
+	_, members, err := repository.customerClosure(ctx, write.ProjectID, write.CustomerID)
+	if err != nil {
+		return err
+	}
+	evidenceCustomerID, err := repository.evidenceCustomerID(ctx, write.EvidenceID, write.ProjectID, members)
+	if err != nil {
+		return err
+	}
+	storedWrite := write
+	storedWrite.CustomerID = core.CustomerID(evidenceCustomerID)
 
-	inserted, err := repository.insertObservation(ctx, write)
+	inserted, err := repository.insertObservation(ctx, storedWrite)
 	if err != nil {
 		return err
 	}
@@ -197,7 +211,7 @@ func (repository *transaction) SaveObservation(
 		if err := repository.enrichObservationPrice(ctx, write); err != nil {
 			return err
 		}
-		matches, err := repository.observationMatches(ctx, write)
+		matches, err := repository.observationMatches(ctx, write, members)
 		if err != nil {
 			return err
 		}
@@ -345,6 +359,7 @@ func (repository *transaction) enrichObservationPrice(
 func (repository *transaction) observationMatches(
 	ctx context.Context,
 	write persistence.ObservationWrite,
+	members []string,
 ) (bool, error) {
 	observation := write.Observation
 	var matches bool
@@ -355,7 +370,7 @@ func (repository *transaction) observationMatches(
 			WHERE id = $1
 				AND project_id = $2
 				AND application_id = $3
-				AND customer_id = $4
+				AND customer_id = ANY($4::text[])
 				AND product_id = $5
 				AND provider_product_id = $6
 				AND product_kind = $7
@@ -384,7 +399,7 @@ func (repository *transaction) observationMatches(
 		observation.ID,
 		write.ProjectID,
 		observation.ApplicationID,
-		write.CustomerID,
+		members,
 		write.ProductID,
 		observation.ProductID,
 		observation.ProductKind,
@@ -408,6 +423,29 @@ func (repository *transaction) observationMatches(
 		return false, classifyError("compare purchase observation", err)
 	}
 	return matches, nil
+}
+
+// evidenceCustomerID returns the stored evidence owner when it belongs to the customer closure.
+func (repository *transaction) evidenceCustomerID(
+	ctx context.Context,
+	evidenceID int64,
+	projectID core.ProjectID,
+	members []string,
+) (string, error) {
+	var storedProjectID string
+	var storedCustomerID string
+	err := repository.tx.QueryRow(ctx, `
+		SELECT project_id, customer_id
+		FROM purchase_evidence
+		WHERE id = $1
+	`, evidenceID).Scan(&storedProjectID, &storedCustomerID)
+	if err != nil {
+		return "", classifyError("load purchase evidence owner", err)
+	}
+	if storedProjectID != string(projectID) || !closureContains(members, storedCustomerID) {
+		return "", fmt.Errorf("save purchase observation: %w", persistence.ErrConflict)
+	}
+	return storedCustomerID, nil
 }
 
 // saveReference stores one protected provider reference and returns its durable identity.

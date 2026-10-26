@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -51,11 +52,27 @@ type adminAnalyticsResponse struct {
 
 // adminRevenueResponse reports authoritative recognized revenue or why it is unavailable.
 type adminRevenueResponse struct {
-	Status                     persistence.AdminRevenueStatus `json:"status"`
-	RecognizedMinorUnits       *int64                         `json:"recognized_minor_units"`
-	Currency                   *string                        `json:"currency"`
-	ProductionApplicationCount int64                          `json:"production_application_count"`
-	TestApplicationCount       int64                          `json:"test_application_count"`
+	Status                     persistence.AdminRevenueStatus  `json:"status"`
+	RecognizedMinorUnits       *int64                          `json:"recognized_minor_units"`
+	Currency                   *string                         `json:"currency"`
+	Amounts                    []adminRecognizedAmountResponse `json:"amounts"`
+	UncoveredProviders         []core.Provider                 `json:"uncovered_providers"`
+	ProductionApplicationCount int64                           `json:"production_application_count"`
+	TestApplicationCount       int64                           `json:"test_application_count"`
+}
+
+// adminRecognizedAmountResponse is one store-reported provider, period, and currency total.
+type adminRecognizedAmountResponse struct {
+	Provider        core.Provider `json:"provider"`
+	ReportKind      string        `json:"report_kind"`
+	PeriodStart     string        `json:"period_start"`
+	PeriodEnd       string        `json:"period_end"`
+	Currency        string        `json:"currency"`
+	AmountDecimal   string        `json:"amount_decimal"`
+	AmountScale     int32         `json:"amount_scale"`
+	MinorUnits      *int64        `json:"minor_units"`
+	CommissionState string        `json:"commission_state"`
+	TaxState        string        `json:"tax_state"`
 }
 
 // adminMoneyResponse reports one non-converted provider-signed amount.
@@ -105,12 +122,14 @@ type adminProductResponse struct {
 
 // adminCustomerResponse reports current access counts without provider references.
 type adminCustomerResponse struct {
-	ID               core.CustomerID `json:"id"`
-	ExternalID       string          `json:"external_id"`
-	EntitlementCount int64           `json:"entitlement_count"`
-	AllowedCount     int64           `json:"allowed_count"`
-	LastObservedAt   *time.Time      `json:"last_observed_at,omitempty"`
-	CreatedAt        time.Time       `json:"created_at"`
+	ID                   core.CustomerID `json:"id"`
+	ExternalID           string          `json:"external_id"`
+	MergedIntoCustomerID *string         `json:"merged_into_customer_id,omitempty"`
+	AliasCount           int64           `json:"alias_count"`
+	EntitlementCount     int64           `json:"entitlement_count"`
+	AllowedCount         int64           `json:"allowed_count"`
+	LastObservedAt       *time.Time      `json:"last_observed_at,omitempty"`
+	CreatedAt            time.Time       `json:"created_at"`
 }
 
 // adminTransactionResponse reports one normalized, secret-free purchase observation.
@@ -174,9 +193,14 @@ func (api *API) adminProjectOverview(writer http.ResponseWriter, request *http.R
 	if !api.requireValidInput(writer, request, projectID.Validate()) {
 		return
 	}
+	query, err := adminRevenueQuery(request)
+	if !api.requireValidInput(writer, request, err) {
+		return
+	}
 	overview, err := api.admin.AdminProjectOverview(
 		request.Context(),
 		projectID,
+		query,
 	)
 	if err != nil {
 		api.writeError(writer, request, err)
@@ -225,6 +249,7 @@ func adminOverviewFromRecord(overview persistence.AdminProjectOverview) adminOve
 	for _, customer := range overview.Customers {
 		response.Customers = append(response.Customers, adminCustomerResponse{
 			ID: customer.ID, ExternalID: customer.ExternalID,
+			MergedIntoCustomerID: customer.MergedIntoCustomerID, AliasCount: customer.AliasCount,
 			EntitlementCount: customer.EntitlementCount, AllowedCount: customer.AllowedCount,
 			LastObservedAt: customer.LastObservedAt, CreatedAt: customer.CreatedAt,
 		})
@@ -263,13 +288,7 @@ func adminAnalyticsFromRecord(analytics persistence.AdminAnalytics) adminAnalyti
 		DeniedCount: analytics.DeniedCount, UnresolvedCount: analytics.UnresolvedCount,
 		ReversedCount:          analytics.ReversedCount,
 		ActiveEntitlementCount: analytics.ActiveEntitlementCount,
-		Revenue: adminRevenueResponse{
-			Status:                     analytics.Revenue.Status,
-			RecognizedMinorUnits:       analytics.Revenue.RecognizedMinorUnits,
-			Currency:                   analytics.Revenue.Currency,
-			ProductionApplicationCount: analytics.Revenue.ProductionApplicationCount,
-			TestApplicationCount:       analytics.Revenue.TestApplicationCount,
-		},
+		Revenue:                adminRevenueFromRecord(analytics.Revenue),
 		SandboxValue: adminSandboxValueResponse{
 			Amounts:           make([]adminMoneyResponse, 0, len(analytics.SandboxValue.Amounts)),
 			TransactionCount:  analytics.SandboxValue.TransactionCount,
@@ -290,4 +309,57 @@ func adminAnalyticsFromRecord(analytics persistence.AdminAnalytics) adminAnalyti
 		})
 	}
 	return response
+}
+
+// adminRevenueFromRecord maps store-reported proceeds without collapsing currencies.
+func adminRevenueFromRecord(revenue persistence.AdminRevenue) adminRevenueResponse {
+	response := adminRevenueResponse{
+		Status:                     revenue.Status,
+		RecognizedMinorUnits:       revenue.RecognizedMinorUnits,
+		Currency:                   revenue.Currency,
+		Amounts:                    make([]adminRecognizedAmountResponse, 0, len(revenue.Amounts)),
+		UncoveredProviders:         append([]core.Provider{}, revenue.UncoveredProviders...),
+		ProductionApplicationCount: revenue.ProductionApplicationCount,
+		TestApplicationCount:       revenue.TestApplicationCount,
+	}
+	if response.UncoveredProviders == nil {
+		response.UncoveredProviders = []core.Provider{}
+	}
+	for _, amount := range revenue.Amounts {
+		response.Amounts = append(response.Amounts, adminRecognizedAmountResponse{
+			Provider: amount.Provider, ReportKind: amount.ReportKind,
+			PeriodStart: amount.PeriodStart.UTC().Format(time.DateOnly),
+			PeriodEnd:   amount.PeriodEnd.UTC().Format(time.DateOnly),
+			Currency:    amount.Currency, AmountDecimal: amount.AmountDecimal,
+			AmountScale: amount.AmountScale, MinorUnits: amount.MinorUnits,
+			CommissionState: amount.CommissionState, TaxState: amount.TaxState,
+		})
+	}
+	return response
+}
+
+// adminRevenueQuery reads the optional financial period filter.
+func adminRevenueQuery(request *http.Request) (persistence.AdminRevenueQuery, error) {
+	startRaw := request.URL.Query().Get("financial_period_start")
+	endRaw := request.URL.Query().Get("financial_period_end")
+	if startRaw == "" && endRaw == "" {
+		return persistence.AdminRevenueQuery{}, nil
+	}
+	if startRaw == "" || endRaw == "" {
+		return persistence.AdminRevenueQuery{}, errors.New("financial period requires both start and end")
+	}
+	start, err := time.Parse(time.DateOnly, startRaw)
+	if err != nil {
+		return persistence.AdminRevenueQuery{}, errors.New("financial period start is invalid")
+	}
+	end, err := time.Parse(time.DateOnly, endRaw)
+	if err != nil {
+		return persistence.AdminRevenueQuery{}, errors.New("financial period end is invalid")
+	}
+	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+	end = time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, time.UTC)
+	if end.Before(start) {
+		return persistence.AdminRevenueQuery{}, errors.New("financial period end is before the start")
+	}
+	return persistence.AdminRevenueQuery{FinancialPeriodStart: &start, FinancialPeriodEnd: &end}, nil
 }

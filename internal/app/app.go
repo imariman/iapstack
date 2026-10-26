@@ -12,6 +12,7 @@ import (
 	"github.com/imariman/iapstack/dashboard"
 	"github.com/imariman/iapstack/internal/auth"
 	"github.com/imariman/iapstack/internal/credentials"
+	"github.com/imariman/iapstack/internal/financialreports"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/persistence/postgres"
 	"github.com/imariman/iapstack/internal/platform/config"
@@ -205,12 +206,19 @@ func runAPI(
 	if err != nil {
 		return err
 	}
+	financialReportService, err := financialreports.NewService(
+		store, logger, financialreports.DefaultByteLimit, financialreports.DefaultRowLimit,
+	)
+	if err != nil {
+		return err
+	}
 	api, err := httpapi.New(httpapi.Dependencies{
 		Store: store, Operations: store, Admin: store, Authentication: authentication,
 		AdminSessions: adminSessions, CustomerSessions: customerSessions,
 		Credentials: credentialService, Webhooks: webhookService,
 		Verification: verificationService, Huawei: huaweiAdapter, Apple: appleAdapter, GooglePlay: googlePlayAdapter,
-		Protection: keyring, BodyLimit: cfg.HTTPBodyLimit,
+		Protection: keyring, FinancialReports: financialReportService, BodyLimit: cfg.HTTPBodyLimit,
+		OfferingDirectory: cfg.OfferingDirectory, OfferingCatalog: store,
 	})
 	if err != nil {
 		return err

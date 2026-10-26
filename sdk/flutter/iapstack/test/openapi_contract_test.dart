@@ -41,6 +41,17 @@ void main() {
         ),
         'getCustomerEntitlements',
       );
+      expect(
+        _operationId(
+          paths,
+          '/v1/applications/{application_id}/offering',
+          'get',
+        ),
+        'getApplicationOffering',
+      );
+      final offering = (paths['/v1/applications/{application_id}/offering']
+          as YamlMap)['get'] as YamlMap;
+      expect(offering['security'], isEmpty);
     });
 
     test('keeps request, response, and error fields consumed by the SDK', () {
@@ -62,6 +73,20 @@ void main() {
         'entitlements',
       });
       _expectRequiredFields(schemas, 'ErrorEnvelope', const <String>{'error'});
+      _expectRequiredFields(schemas, 'OfferingDocument', const <String>{
+        'schema_version',
+        'application_id',
+        'revision',
+        'offerings',
+      });
+      _expectRequiredFields(schemas, 'Offering', const <String>{
+        'id',
+        'packages',
+      });
+      _expectRequiredFields(schemas, 'OfferingPackage', const <String>{
+        'id',
+        'store_product_id',
+      });
       _expectRequiredFields(schemas, 'ApiError', const <String>{
         'code',
         'message',

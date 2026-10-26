@@ -21,6 +21,8 @@ const (
 	logLevelEnvironment = "IAPSTACK_LOG_LEVEL"
 	// databaseURLEnvironment names the PostgreSQL connection setting used by tests.
 	databaseURLEnvironment = "IAPSTACK_DATABASE_URL"
+	// offeringDirectoryEnvironment names the file-based offering directory setting.
+	offeringDirectoryEnvironment = "IAPSTACK_OFFERING_DIRECTORY"
 	// webhookPrivateNetworksEnvironment names the explicit private webhook target opt-in.
 	webhookPrivateNetworksEnvironment = "IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS"
 	// huaweiPrivateNetworksEnvironment names the explicit private Huawei endpoint opt-in.
@@ -101,6 +103,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.HuaweiAllowPrivateNetworks {
 		t.Error("HuaweiAllowPrivateNetworks = true, want secure default false")
 	}
+	if cfg.OfferingDirectory != "" {
+		t.Errorf("OfferingDirectory = %q, want empty", cfg.OfferingDirectory)
+	}
 }
 
 // TestLoadUsesPlatformPort verifies managed platforms can inject their native port.
@@ -150,6 +155,7 @@ func TestLoadOverrides(t *testing.T) {
 		grafanaUsernameEnvironment:        "123456",
 		grafanaTokenEnvironment:           testMetricsBearerToken,
 		telemetryEnvironmentEnvironment:   "sandbox",
+		offeringDirectoryEnvironment:      " /var/iapstack/offerings ",
 	}))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -187,6 +193,22 @@ func TestLoadOverrides(t *testing.T) {
 		cfg.TelemetryEnvironment != "sandbox" {
 		t.Errorf("telemetry configuration = (%q, %q, %q, %q), want configured Grafana values",
 			cfg.TelemetryEndpoint, cfg.TelemetryUsername, cfg.TelemetryToken, cfg.TelemetryEnvironment)
+	}
+	if cfg.OfferingDirectory != "/var/iapstack/offerings" {
+		t.Errorf("OfferingDirectory = %q, want trimmed directory", cfg.OfferingDirectory)
+	}
+}
+
+// TestLoadBlankOfferingDirectoryStaysUnset verifies whitespace does not enable the offering route.
+func TestLoadBlankOfferingDirectoryStaysUnset(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load(env(map[string]string{offeringDirectoryEnvironment: "   "}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.OfferingDirectory != "" {
+		t.Errorf("OfferingDirectory = %q, want empty", cfg.OfferingDirectory)
 	}
 }
 

@@ -65,7 +65,18 @@ func TestDashboardUsesDocumentedAdminOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read embedded app.js: %v", err)
 	}
+	adminCustomer := document.Components.Schemas["AdminCustomer"]
+	if adminCustomer == nil || adminCustomer.Value == nil {
+		t.Fatal("AdminCustomer schema is missing")
+	}
+	for _, field := range []string{"merged_into_customer_id", "alias_count"} {
+		if _, exists := adminCustomer.Value.Properties[field]; !exists {
+			t.Errorf("overview AdminCustomer is missing %q", field)
+		}
+	}
 	for _, fragment := range []string{
+		"merged_into_customer_id",
+		"alias_count",
 		"/v1/admin/dashboard-session", "/v1/admin/api-keys", "/v1/admin/projects", "/overview", "/applications/",
 		"/customers/", "/entitlements/", "/products/", "/store-products/", "/credentials/", "/webhook",
 	} {

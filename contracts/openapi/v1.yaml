@@ -205,6 +205,20 @@ paths:
         - dashboardSession: []
       parameters:
         - $ref: '#/components/parameters/ProjectId'
+        - name: financial_period_start
+          in: query
+          required: false
+          description: Inclusive UTC date that filters which accepted imports may cover production applications. Requires financial_period_end. Does not change the 30-day verification series.
+          schema:
+            type: string
+            format: date
+        - name: financial_period_end
+          in: query
+          required: false
+          description: Inclusive UTC date paired with financial_period_start. A missing period is not treated as zero.
+          schema:
+            type: string
+            format: date
       responses:
         '200':
           description: Bounded operational datasets used by the dashboard
@@ -212,10 +226,156 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AdminProjectOverview'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/financial-reports:
+    get:
+      tags: [Administration]
+      operationId: listFinancialReports
+      summary: List financial report import metadata
+      description: Returns digest, status, period, and accepted decimal amounts. Report bytes and order ids are not returned.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Stored financial report metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinancialReportList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    post:
+      tags: [Administration]
+      operationId: uploadFinancialReport
+      summary: Upload one financial report file
+      description: Apple period and currency come from the file. Google Play and Huawei uploads stay unrecognized until a real fixture is pinned. The raw file is not stored.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/FinancialReportUpload'
+      responses:
+        '200':
+          description: Existing import for the same digest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinancialReport'
+        '201':
+          description: Newly stored import
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinancialReport'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/financial-reports/{import_id}:supersede:
+    post:
+      tags: [Administration]
+      operationId: supersedeFinancialReport
+      summary: Replace the accepted import for one period
+      description: The path import stops counting. The multipart file must parse to an accepted report for the same provider, kind, and period. A non-accepted replacement is refused and the current import is left unchanged.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - name: import_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/Identifier'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/FinancialReportUpload'
+      responses:
+        '200':
+          description: Accepted import that now counts for the period
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinancialReport'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/financial-reports:pull:
+    post:
+      tags: [Administration]
+      operationId: pullFinancialReport
+      summary: Request one provider financial report pull
+      description: Validates the provider, report kind, and period, then refuses the pull until that provider's official parameter contract is pinned. No provider URL is guessed.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FinancialReportPullRequest'
+      responses:
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -288,6 +448,126 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/customers/{customer_id}/aliases/{external_id}:
+    put:
+      tags: [Administration]
+      operationId: putAdminCustomerAlias
+      summary: Attach an additional external id to one canonical customer
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/CustomerId'
+        - $ref: '#/components/parameters/ExternalId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerAliasRequest'
+      responses:
+        '200':
+          description: Canonical resolution for the external id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResolution'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/customer-resolutions/{external_id}:
+    get:
+      tags: [Administration]
+      operationId: getAdminCustomerResolution
+      summary: Resolve an external id to its canonical customer
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ExternalId'
+      responses:
+        '200':
+          description: Canonical resolution for the external id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResolution'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/customer-merges:
+    post:
+      tags: [Administration]
+      operationId: postAdminCustomerMerge
+      summary: Merge one source customer into a canonical customer
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerMergeRequest'
+      responses:
+        '200':
+          description: Stored customer merge audit row
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerMerge'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Identity conflict or conflicting active entitlements
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '413':
           $ref: '#/components/responses/RequestTooLarge'
         '415':
@@ -639,6 +919,112 @@ paths:
           $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /v1/applications/{application_id}/customers/{customer_id}/aliases/{external_id}:
+    put:
+      tags: [Customers]
+      operationId: putApplicationCustomerAlias
+      summary: Attach an additional external id inside the authenticated application project
+      security:
+        - applicationBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ApplicationId'
+        - $ref: '#/components/parameters/CustomerId'
+        - $ref: '#/components/parameters/ExternalId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerAliasRequest'
+      responses:
+        '200':
+          description: Canonical resolution for the external id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResolution'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/applications/{application_id}/customer-resolutions/{external_id}:
+    get:
+      tags: [Customers]
+      operationId: getApplicationCustomerResolution
+      summary: Resolve an external id inside the authenticated application project
+      security:
+        - applicationBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ApplicationId'
+        - $ref: '#/components/parameters/ExternalId'
+      responses:
+        '200':
+          description: Canonical resolution for the external id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResolution'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/applications/{application_id}/offering:
+    get:
+      tags: [Offerings]
+      operationId: getApplicationOffering
+      summary: Read the public offering document for one application
+      description: >-
+        Unauthenticated presentation data. The body is identical for every
+        caller. Query parameters do not select a customer. The document names
+        store products already configured for the application and carries no
+        price, currency, credential, or customer.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ApplicationId'
+      responses:
+        '200':
+          description: Versioned offering document
+          headers:
+            ETag:
+              description: Quoted document revision.
+              required: true
+              schema:
+                type: string
+            Cache-Control:
+              description: Public cache for at most 300 seconds.
+              required: true
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OfferingDocument'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /v1/providers/huawei/projects/{project_id}/applications/{application_id}/notifications:
     post:
       tags: [Huawei notifications]
@@ -837,6 +1223,12 @@ components:
         $ref: '#/components/schemas/Identifier'
     ExternalCustomerId:
       name: external_customer_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Identifier'
+    ExternalId:
+      name: external_id
       in: path
       required: true
       schema:
@@ -1275,6 +1667,52 @@ components:
         product_kind:
           type: string
           enum: [subscription, non_consumable]
+    CustomerAliasRequest:
+      type: object
+      additionalProperties: false
+    CustomerResolution:
+      type: object
+      additionalProperties: false
+      required: [project_id, external_id, canonical_customer_id, match]
+      properties:
+        project_id:
+          $ref: '#/components/schemas/Identifier'
+        external_id:
+          $ref: '#/components/schemas/Identifier'
+        canonical_customer_id:
+          $ref: '#/components/schemas/Identifier'
+        match:
+          type: string
+          enum: [primary, alias, merged]
+    CustomerMergeRequest:
+      type: object
+      additionalProperties: false
+      required: [idempotency_key, canonical_customer_id, source_customer_id]
+      properties:
+        idempotency_key:
+          $ref: '#/components/schemas/Identifier'
+        canonical_customer_id:
+          $ref: '#/components/schemas/Identifier'
+        source_customer_id:
+          $ref: '#/components/schemas/Identifier'
+    CustomerMerge:
+      type: object
+      additionalProperties: false
+      required: [id, project_id, canonical_customer_id, source_customer_id, idempotency_key, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        project_id:
+          $ref: '#/components/schemas/Identifier'
+        canonical_customer_id:
+          $ref: '#/components/schemas/Identifier'
+        source_customer_id:
+          $ref: '#/components/schemas/Identifier'
+        idempotency_key:
+          $ref: '#/components/schemas/Identifier'
+        created_at:
+          type: string
+          format: date-time
     CustomerSessionRequest:
       type: object
       additionalProperties: false
@@ -1399,6 +1837,49 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Entitlement'
+    OfferingDocument:
+      type: object
+      additionalProperties: false
+      required: [schema_version, application_id, revision, offerings]
+      properties:
+        schema_version:
+          type: integer
+          enum: [1]
+        application_id:
+          $ref: '#/components/schemas/Identifier'
+        revision:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._~-]+$'
+        offerings:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Offering'
+    Offering:
+      type: object
+      additionalProperties: false
+      required: [id, packages]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        packages:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/OfferingPackage'
+    OfferingPackage:
+      type: object
+      additionalProperties: false
+      required: [id, store_product_id]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        store_product_id:
+          $ref: '#/components/schemas/Identifier'
+        display_key:
+          $ref: '#/components/schemas/Identifier'
     HuaweiNotificationV2:
       oneOf:
         - $ref: '#/components/schemas/HuaweiOrderNotificationV2'
@@ -1671,20 +2152,31 @@ components:
     AdminRevenue:
       type: object
       additionalProperties: false
-      required: [status, recognized_minor_units, currency, production_application_count, test_application_count]
+      required: [status, recognized_minor_units, currency, amounts, uncovered_providers, production_application_count, test_application_count]
       properties:
         status:
           type: string
-          enum: [sandbox_only, store_reports_required, no_applications]
+          enum: [sandbox_only, store_reports_required, reports_imported, no_applications]
         recognized_minor_units:
           type: integer
           format: int64
           minimum: 0
           nullable: true
+          description: Null for reports_imported and store_reports_required. Zero for sandbox_only and no_applications. Not a converted total and not a sum of purchase prices.
         currency:
           type: string
           pattern: '^[A-Z]{3}$'
           nullable: true
+          description: Null when recognized_minor_units is null, including reports_imported.
+        amounts:
+          type: array
+          description: Store-reported proceeds by provider, period, and currency. Present only for reports_imported; empty otherwise. Currencies are not converted.
+          items:
+            $ref: '#/components/schemas/AdminRecognizedAmount'
+        uncovered_providers:
+          type: array
+          items:
+            type: string
         production_application_count:
           type: integer
           format: int64
@@ -1693,6 +2185,177 @@ components:
           type: integer
           format: int64
           minimum: 0
+    AdminRecognizedAmount:
+      type: object
+      additionalProperties: false
+      required: [provider, report_kind, period_start, period_end, currency, amount_decimal, amount_scale, minor_units, commission_state, tax_state]
+      properties:
+        provider:
+          type: string
+        report_kind:
+          type: string
+          enum: [apple_financial_consolidated, google_play_earnings, huawei_settlement]
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        amount_decimal:
+          type: string
+          pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
+        amount_scale:
+          type: integer
+          minimum: 0
+          maximum: 18
+        minor_units:
+          type: integer
+          format: int64
+          nullable: true
+          description: Populated only when amount_scale matches the checked-in ISO 4217 exponent. Negative values are refunds or returns.
+        commission_state:
+          type: string
+          enum: [included, unknown]
+        tax_state:
+          type: string
+          enum: [not_itemized]
+    FinancialReportUpload:
+      type: object
+      additionalProperties: false
+      required: [provider, report_kind, file]
+      properties:
+        provider:
+          type: string
+          enum: [apple_app_store, google_play, huawei_appgallery]
+        report_kind:
+          type: string
+          enum: [apple_financial_consolidated, google_play_earnings, huawei_settlement]
+        file:
+          type: string
+          format: binary
+        period_start:
+          type: string
+          format: date
+          description: Required for Google Play and Huawei uploads. Ignored and rejected for Apple, whose period comes from the file.
+        period_end:
+          type: string
+          format: date
+    FinancialReportPullRequest:
+      type: object
+      additionalProperties: false
+      required: [provider, report_kind, period_start, period_end]
+      properties:
+        provider:
+          type: string
+          enum: [apple_app_store, google_play, huawei_appgallery]
+        report_kind:
+          type: string
+          enum: [apple_financial_consolidated, google_play_earnings, huawei_settlement]
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+    FinancialReportList:
+      type: object
+      additionalProperties: false
+      required: [financial_reports]
+      properties:
+        financial_reports:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/FinancialReport'
+    FinancialReport:
+      type: object
+      additionalProperties: false
+      required: [id, provider, report_kind, period_start, period_end, source, sha256, byte_size, content_type, parser_version, status, reason, currencies, amounts, covered_application_ids, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        provider:
+          type: string
+          enum: [apple_app_store, google_play, huawei_appgallery]
+        report_kind:
+          type: string
+          enum: [apple_financial_consolidated, google_play_earnings, huawei_settlement]
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        source:
+          type: string
+          enum: [upload, provider_api]
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: SHA-256 digest of the received bytes.
+        byte_size:
+          type: integer
+          format: int64
+          minimum: 1
+        content_type:
+          type: string
+        parser_version:
+          type: string
+        status:
+          type: string
+          enum: [accepted, unrecognized, rejected, superseded]
+        reason:
+          type: string
+          description: Empty when status is accepted.
+        supersedes_import_id:
+          $ref: '#/components/schemas/Identifier'
+        currencies:
+          type: array
+          items:
+            type: string
+            pattern: '^[A-Z]{3}$'
+        amounts:
+          type: array
+          description: Decimal amounts are present only when status is accepted.
+          items:
+            $ref: '#/components/schemas/FinancialReportAmount'
+        covered_application_ids:
+          type: array
+          items:
+            $ref: '#/components/schemas/Identifier'
+        created_at:
+          type: string
+          format: date-time
+    FinancialReportAmount:
+      type: object
+      additionalProperties: false
+      required: [currency, amount_decimal, amount_scale, minor_units, commission_state, tax_state, covered_application_id]
+      properties:
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        amount_decimal:
+          type: string
+          pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
+        amount_scale:
+          type: integer
+          minimum: 0
+          maximum: 18
+        minor_units:
+          type: integer
+          format: int64
+          nullable: true
+        commission_state:
+          type: string
+          enum: [included, unknown]
+        tax_state:
+          type: string
+          enum: [not_itemized]
+        covered_application_id:
+          $ref: '#/components/schemas/Identifier'
     AdminSandboxValue:
       type: object
       additionalProperties: false
@@ -1808,6 +2471,14 @@ components:
           $ref: '#/components/schemas/Identifier'
         external_id:
           $ref: '#/components/schemas/Identifier'
+        merged_into_customer_id:
+          type: string
+          minLength: 1
+          nullable: true
+        alias_count:
+          type: integer
+          format: int64
+          minimum: 0
         entitlement_count:
           type: integer
           format: int64

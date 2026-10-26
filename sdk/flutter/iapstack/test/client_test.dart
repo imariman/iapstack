@@ -633,6 +633,134 @@ void main() {
           throwsA(isA<IapStackTimeoutException>()));
       await transport.aborted.timeout(const Duration(seconds: 1));
     });
+
+    test('fetches an offering without a bearer and remembers the body',
+        () async {
+      late http.Request captured;
+      final client = IapStackClient(
+        _config(),
+        httpClient: MockClient((request) async {
+          captured = request;
+          return http.Response(jsonEncode(_offeringJson), 200);
+        }),
+      );
+
+      final document = await client.getOffering(_fallbackOffering());
+
+      expect(captured.method, 'GET');
+      expect(captured.url.path, '/proxy/v1/applications/application-1/offering');
+      expect(captured.url.query, isEmpty);
+      expect(captured.headers['Authorization'], isNull);
+      expect(document.revision, 'revision-1');
+      expect(document.offerings.single.packages.single.storeProductId,
+          'premium_monthly');
+      expect(document.offerings.single.packages.single.displayKey,
+          'premium_monthly');
+    });
+
+    test(
+        'returns the last offering after a network failure, then the fallback',
+        () async {
+      var mode = 'fail';
+      final client = IapStackClient(
+        _config(),
+        httpClient: MockClient((request) async {
+          if (mode == 'fail') {
+            throw http.ClientException('offline');
+          }
+          if (mode == 'missing') {
+            return http.Response(
+              jsonEncode(<String, Object?>{
+                'error': <String, Object?>{
+                  'code': 'not_found',
+                  'message': 'the requested resource was not found',
+                },
+              }),
+              404,
+            );
+          }
+          if (mode == 'error') {
+            return http.Response(
+              jsonEncode(<String, Object?>{
+                'error': <String, Object?>{
+                  'code': 'internal_error',
+                  'message': 'the request could not be completed',
+                },
+              }),
+              500,
+            );
+          }
+          return http.Response(jsonEncode(_offeringJson), 200);
+        }),
+      );
+      final firstFallback = _fallbackOffering('bundled-a');
+      final secondFallback = _fallbackOffering('bundled-b');
+
+      expect(await client.getOffering(firstFallback), same(firstFallback));
+      expect(await client.getOffering(secondFallback), same(secondFallback));
+
+      mode = 'ok';
+      expect((await client.getOffering(firstFallback)).revision, 'revision-1');
+
+      mode = 'fail';
+      expect(
+          (await client.getOffering(_fallbackOffering('bundled-c'))).revision,
+          'revision-1');
+
+      mode = 'missing';
+      expect(
+          (await client.getOffering(_fallbackOffering('bundled-d'))).revision,
+          'revision-1');
+
+      mode = 'error';
+      await expectLater(
+        client.getOffering(_fallbackOffering('bundled-e')),
+        throwsA(isA<IapStackApiException>()),
+      );
+      mode = 'fail';
+      expect(
+          (await client.getOffering(_fallbackOffering('bundled-f'))).revision,
+          'revision-1');
+    });
+
+    test('an offering failure does not change purchase or entitlement calls',
+        () async {
+      final requests = <http.Request>[];
+      final client = IapStackClient(
+        _config(),
+        httpClient: MockClient((request) async {
+          requests.add(request);
+          if (request.url.path.endsWith('/offering')) {
+            throw http.ClientException('offline');
+          }
+          if (request.url.path.endsWith('/purchases:verify')) {
+            return http.Response(jsonEncode(_verificationJson), 200);
+          }
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'customer_id': 'customer-internal',
+              'entitlements': _verificationJson['entitlements'],
+            }),
+            200,
+          );
+        }),
+      );
+
+      final fallback = _fallbackOffering();
+      expect(await client.getOffering(fallback), same(fallback));
+      final verified = await client.verifyPurchase(_purchase());
+      final snapshot = await client.getEntitlements('customer-external');
+
+      expect(verified.customerId, 'customer-internal');
+      expect(snapshot.customerId, 'customer-internal');
+      expect(requests, hasLength(3));
+      expect(requests[0].headers['Authorization'], isNull);
+      expect(requests[1].headers['Authorization'], 'Bearer customer-token');
+      expect(requests[1].url.path,
+          '/proxy/v1/applications/application-1/purchases:verify');
+      expect(requests[2].headers['Authorization'], 'Bearer customer-token');
+      expect(requests[2].url.path, endsWith('/entitlements'));
+    });
   });
 
   group('IapStackRetryPolicy', () {
@@ -746,6 +874,39 @@ PurchaseSubmission _purchase([String productId = 'premium_lifetime']) =>
         'product_kind': 'non_consumable',
       },
     );
+
+OfferingDocument _fallbackOffering([String revision = 'bundled']) =>
+    OfferingDocument(
+      schemaVersion: 1,
+      applicationId: 'application-1',
+      revision: revision,
+      offerings: <Offering>[
+        Offering(
+          id: 'default',
+          packages: <OfferingPackage>[
+            OfferingPackage(id: 'monthly', storeProductId: 'bundled_monthly'),
+          ],
+        ),
+      ],
+    );
+
+final Map<String, Object?> _offeringJson = <String, Object?>{
+  'schema_version': 1,
+  'application_id': 'application-1',
+  'revision': 'revision-1',
+  'offerings': <Object?>[
+    <String, Object?>{
+      'id': 'default',
+      'packages': <Object?>[
+        <String, Object?>{
+          'id': 'monthly',
+          'store_product_id': 'premium_monthly',
+          'display_key': 'premium_monthly',
+        },
+      ],
+    },
+  ],
+};
 
 final Map<String, Object?> _verificationJson = <String, Object?>{
   'verified_at': '2026-08-24T20:00:00Z',

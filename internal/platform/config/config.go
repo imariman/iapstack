@@ -65,6 +65,7 @@ type Config struct {
 	WorkerMaxAttempts            int
 	QueueRetention               time.Duration
 	HTTPBodyLimit                int64
+	OfferingDirectory            string
 	AuthMaxConcurrentDerivations int
 	ProviderTimeout              time.Duration
 	HuaweiAllowPrivateNetworks   bool
@@ -99,6 +100,7 @@ func Load(getenv func(string) string) (Config, error) {
 		WorkerMaxAttempts:            defaultWorkerMaxAttempts,
 		QueueRetention:               defaultQueueRetention,
 		HTTPBodyLimit:                defaultHTTPBodyLimit,
+		OfferingDirectory:            strings.TrimSpace(getenv("IAPSTACK_OFFERING_DIRECTORY")),
 		AuthMaxConcurrentDerivations: defaultAuthMaxConcurrentDerivations,
 		ProviderTimeout:              defaultProviderTimeout,
 		HuaweiAllowPrivateNetworks:   false,

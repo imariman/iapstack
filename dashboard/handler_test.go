@@ -235,10 +235,49 @@ func TestDashboardRendersTruthfulCommerceAnalytics(t *testing.T) {
 			t.Fatalf("dashboard analytics must not derive revenue from %q", forbidden)
 		}
 	}
-	for _, required := range []string{".commerce-panel", ".activity-chart", ".revenue-badge.reports-required", ".sandbox-value"} {
+	for _, required := range []string{".commerce-panel", ".activity-chart", ".revenue-badge.reports-required", ".revenue-badge.reports-imported", ".sandbox-value"} {
 		if !strings.Contains(string(styles), required) {
 			t.Fatalf("dashboard analytics styles do not contain %q", required)
 		}
+	}
+}
+
+// TestDashboardRevenueCardDistinguishesImportedReports verifies imported proceeds are not labeled sandbox-only.
+func TestDashboardRevenueCardDistinguishesImportedReports(t *testing.T) {
+	t.Parallel()
+
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	source := string(script)
+	revenueStart := strings.Index(source, "function renderRevenue")
+	sandboxLabel := strings.Index(source, `badge.textContent = "Sandbox only"`)
+	imported := strings.Index(source, `revenue.status === "reports_imported"`)
+	if revenueStart < 0 || imported < revenueStart || sandboxLabel < imported {
+		t.Fatal("reports_imported must be handled before the sandbox fall-through")
+	}
+	requiredStart := strings.Index(source, `revenue.status === "store_reports_required"`)
+	requiredEnd := strings.Index(source[requiredStart:], "return;")
+	requiredBranch := source[requiredStart : requiredStart+requiredEnd]
+	if !strings.Contains(requiredBranch, "—") {
+		t.Fatal("store_reports_required does not render an em dash")
+	}
+	cardStart := strings.Index(string(document), `class="revenue-card"`)
+	cardEnd := strings.Index(string(document), `class="sandbox-value"`)
+	card := source[revenueStart:strings.Index(source, "function renderSandboxValue")] + string(document)[cardStart:cardEnd]
+	for _, forbidden := range []string{"estimated", "approximate", "projected", "forecast", "MRR", "ARR"} {
+		if strings.Contains(card, forbidden) {
+			t.Fatalf("revenue card contains %q", forbidden)
+		}
+	}
+	if strings.Contains(source[revenueStart:strings.Index(source, "function renderSandboxValue")], "Sandbox only") &&
+		strings.Index(source, `revenue.status === "reports_imported"`) > strings.Index(source, `badge.textContent = "Sandbox only"`) {
+		t.Fatal("imported reports fall through to Sandbox only")
 	}
 }
 

@@ -39,6 +39,7 @@ func (store *Store) AdminProjects(ctx context.Context) ([]persistence.AdminProje
 func (store *Store) AdminProjectOverview(
 	ctx context.Context,
 	projectID core.ProjectID,
+	query persistence.AdminRevenueQuery,
 ) (persistence.AdminProjectOverview, error) {
 	if err := projectID.Validate(); err != nil {
 		return persistence.AdminProjectOverview{}, err
@@ -46,7 +47,7 @@ func (store *Store) AdminProjectOverview(
 	var overview persistence.AdminProjectOverview
 	err := store.transact(ctx, pgx.RepeatableRead, func(repository *transaction) error {
 		var loadErr error
-		overview, loadErr = repository.adminProjectOverview(ctx, projectID)
+		overview, loadErr = repository.adminProjectOverview(ctx, projectID, query)
 		return loadErr
 	})
 	return overview, err
@@ -92,12 +93,13 @@ func (repository *transaction) adminProjects(ctx context.Context) ([]persistence
 func (repository *transaction) adminProjectOverview(
 	ctx context.Context,
 	projectID core.ProjectID,
+	query persistence.AdminRevenueQuery,
 ) (persistence.AdminProjectOverview, error) {
 	project, err := repository.adminProject(ctx, projectID)
 	if err != nil {
 		return persistence.AdminProjectOverview{}, err
 	}
-	analytics, err := repository.adminAnalytics(ctx, projectID)
+	analytics, err := repository.adminAnalytics(ctx, projectID, query)
 	if err != nil {
 		return persistence.AdminProjectOverview{}, err
 	}
@@ -162,6 +164,7 @@ func (repository *transaction) adminProject(
 func (repository *transaction) adminAnalytics(
 	ctx context.Context,
 	projectID core.ProjectID,
+	query persistence.AdminRevenueQuery,
 ) (persistence.AdminAnalytics, error) {
 	analytics := persistence.AdminAnalytics{WindowDays: adminAnalyticsWindowDays}
 	err := repository.tx.QueryRow(ctx, `
@@ -220,17 +223,17 @@ func (repository *transaction) adminAnalytics(
 		return persistence.AdminAnalytics{}, classifyError("load admin analytics", err)
 	}
 
-	zero := int64(0)
-	switch {
-	case analytics.Revenue.ProductionApplicationCount > 0:
-		analytics.Revenue.Status = persistence.AdminRevenueStoreReportsRequired
-	case analytics.Revenue.TestApplicationCount > 0:
-		analytics.Revenue.Status = persistence.AdminRevenueSandboxOnly
-		analytics.Revenue.RecognizedMinorUnits = &zero
-	default:
-		analytics.Revenue.Status = persistence.AdminRevenueNoApplications
-		analytics.Revenue.RecognizedMinorUnits = &zero
+	revenue, err := repository.adminRecognizedRevenue(
+		ctx,
+		projectID,
+		analytics.Revenue.ProductionApplicationCount,
+		analytics.Revenue.TestApplicationCount,
+		query,
+	)
+	if err != nil {
+		return persistence.AdminAnalytics{}, err
 	}
+	analytics.Revenue = revenue
 
 	sandboxValue, err := repository.adminSandboxValue(ctx, projectID)
 	if err != nil {
@@ -482,17 +485,23 @@ func (repository *transaction) adminCustomers(
 	projectID core.ProjectID,
 ) ([]persistence.AdminCustomer, error) {
 	rows, err := repository.tx.Query(ctx, `
-		SELECT customer.id, customer.external_id, customer.created_at,
+		SELECT customer.id, customer.external_id, customer.merged_into_customer_id, customer.created_at,
 			count(DISTINCT projection.entitlement_id),
 			count(DISTINCT projection.entitlement_id) FILTER (WHERE projection.access_status = 'allowed'),
-			max(observation.observed_at)
+			max(observation.observed_at),
+			(
+				SELECT count(*)
+				FROM customer_aliases AS alias
+				WHERE alias.project_id = customer.project_id
+					AND alias.canonical_customer_id = customer.id
+			)
 		FROM customers AS customer
 		LEFT JOIN customer_entitlements AS projection
 			ON projection.project_id = customer.project_id AND projection.customer_id = customer.id
 		LEFT JOIN purchase_observations AS observation
 			ON observation.project_id = customer.project_id AND observation.customer_id = customer.id
 		WHERE customer.project_id = $1
-		GROUP BY customer.id, customer.external_id, customer.created_at
+		GROUP BY customer.id, customer.external_id, customer.merged_into_customer_id, customer.created_at
 		ORDER BY customer.created_at DESC, customer.id
 		LIMIT $2
 	`, projectID, adminCollectionLimit)
@@ -507,10 +516,12 @@ func (repository *transaction) adminCustomers(
 		if err := rows.Scan(
 			&customer.ID,
 			&customer.ExternalID,
+			&customer.MergedIntoCustomerID,
 			&customer.CreatedAt,
 			&customer.EntitlementCount,
 			&customer.AllowedCount,
 			&customer.LastObservedAt,
+			&customer.AliasCount,
 		); err != nil {
 			return nil, classifyError("scan admin customer", err)
 		}

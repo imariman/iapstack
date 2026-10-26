@@ -111,14 +111,17 @@ over plaintext outside local development.
 The project overview shows application credential/webhook coverage, catalog mappings,
 customer access counts, recent normalized purchase observations, queue outcomes, and
 webhook delivery metadata. Its commerce panel charts the last 30 UTC days of verified
-access outcomes and shows whether authoritative revenue can be calculated. Sandbox
-projects correctly show zero real revenue and separately group provider-signed test
+access outcomes. That chart is daily verification activity, not a financial period.
+Sandbox projects show zero real revenue and separately group provider-signed test
 transaction prices by currency. The test value uses the latest non-reversed snapshot of
 each purchased transaction, never converts currencies, and is not accounting revenue.
 Apple transactions provide this signed price metadata today; older observations report
 missing-price coverage until a fresh verification enriches them. Production projects
-require official store financial reports and never receive a client-price estimate. The
-dashboard never renders protected provider payloads or secrets.
+stay on Reports required until every production application is covered by an accepted
+official store financial report. The revenue card then lists store-reported proceeds
+for each imported period and currency, does not convert currencies, and does not
+calculate tax or commission. Purchase prices are not revenue. The dashboard never
+renders report files, order ids, protected provider payloads, or secrets.
 The access-key workspace lists active and revoked administrator/application key
 metadata, identifies the current stored key, creates one-time administrator bearers,
 and requires explicit confirmation before revocation.
