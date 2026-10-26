@@ -2,6 +2,13 @@ package com.iapstack.googleplay
 
 import android.app.Activity
 import com.android.billingclient.api.*
+import com.google.gson.JsonParser
+import com.iapstack.core.IapStackClient
+import com.iapstack.core.IapStackConfig
+import com.iapstack.core.IapStackRetryPolicy
+import java.net.URI
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.*
@@ -70,6 +77,27 @@ class BillingClientGooglePlayPlatformTest {
     assertEquals("opaque-customer", update.obfuscatedAccountId)
     assertEquals("store-token", update.purchaseToken)
     verifyNoInteractions(billing)
+  }
+
+  @Test fun preservesBillingPurchaseTokenAllTheWayToHttp() = runTest {
+    val token = "opaque.Play-token_with~mixed/chars+=" + "x".repeat(200)
+    val billed = purchase(Purchase.PurchaseState.PURCHASED)
+    `when`(billed.purchaseToken).thenReturn(token)
+    listener.onPurchasesUpdated(result(), listOf(billed))
+    val update = platform.purchaseUpdates.first()
+    assertEquals(token, update.purchaseToken)
+    MockWebServer().use { server ->
+      server.enqueue(MockResponse().setResponseCode(200).setBody("""{"verified_at":"2026-09-29T00:00:00Z","customer_id":"customer","entitlements":[]}"""))
+      val http = IapStackClient(IapStackConfig(URI(server.url("/").toString()), "app", "customer-token", allowInsecureHttp = true,
+        retryPolicy = IapStackRetryPolicy(maxAttempts = 1)))
+      try {
+        withContext(Dispatchers.Default) {
+          GooglePlayIapStack(http, catalog, platform).verifyPurchase("opaque-customer", update)
+        }
+        val body = JsonParser.parseString(server.takeRequest().body.readUtf8()).asJsonObject
+        assertEquals(token, body.getAsJsonObject("evidence").get("purchase_token").asString)
+      } finally { http.close() }
+    }
   }
 
   @Test fun mapsOwnedStatesAndFiltersOtherCustomer() = runTest {
