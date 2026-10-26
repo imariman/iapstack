@@ -73,9 +73,25 @@ does not add a fake-verification or finish-without-verification switch.
 Use **IAPStackExample-Sandbox** for full verification against IAPStack. Its scheme
 has no local StoreKit configuration. Set your own signing team and App Store
 Connect bundle ID, create matching `premium_lifetime` / `premium_monthly` products,
-and configure their IAPStack catalog/entitlement mapping. If you use other product
-IDs, update `PurchaseStore.catalog` and the local StoreKit configuration together.
+and configure the matching IAPStack catalog below. If you use other product IDs,
+update `PurchaseStore.catalog`, the local StoreKit configuration and the IAPStack
+catalog together.
 Run with an Apple sandbox tester and your sandbox-configured IAPStack application.
+
+### Matching IAPStack catalog
+
+`Configuration.storekit`, `PurchaseStore.catalog` and the IAPStack project must
+describe the same products. Create them with the dashboard quick-start dialog or the
+admin API (see [operations](../../../docs/operations.md)):
+
+| Store product ID | StoreKit type | IAPStack product kind | Entitlement key |
+| --- | --- | --- | --- |
+| `premium_lifetime` | Non-Consumable | `non_consumable` | `premium` |
+| `premium_monthly` | Auto-Renewable (group `IAPStack Premium`, P1M) | `subscription` | `premium` |
+
+Map each store product ID to its IAPStack product on the Apple application, and map
+both products to the single `premium` entitlement. The sample lists every returned
+entitlement; `premium` is the key the [SDK README](../README.md) checks for access.
 
 Apple documents the separation in [Testing at all stages of development with
 Xcode and the sandbox](https://developer.apple.com/documentation/storekit/testing-at-all-stages-of-development-with-xcode-and-the-sandbox).

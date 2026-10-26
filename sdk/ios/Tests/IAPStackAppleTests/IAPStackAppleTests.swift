@@ -126,11 +126,13 @@ final class IAPStackAppleTests: XCTestCase {
     )
     let session = makeSession()
     let client = try IAPStackClient(config: config, session: session)
+    // StoreKit 2 JWS segments are base64url, so "-" and "_" must survive encoding unchanged.
+    let signedTransaction = "eyJhbGciOiJFUzI1NiIsIng1YyI6WyJNSUlCIl19.eyJ0cmFuc2FjdGlvbklkIjoiMjAwMDAwMDAwMDAwMDAwMSJ9.MEUCIQ-_x9Zp-Qa_3Kd-0_wJ"
     let purchase = try PurchaseSubmission(
       externalCustomerId: "customer-external",
       claimedProducts: ["premium_lifetime"],
       evidence: [
-        "signed_transaction": "a.b.c",
+        "signed_transaction": signedTransaction,
         "product_kind": "non_consumable",
       ],
     )
@@ -153,6 +155,7 @@ final class IAPStackAppleTests: XCTestCase {
 
     let postedEvidence = decoded["evidence"] as? [String: String]
     XCTAssertEqual(postedEvidence?["product_kind"], "non_consumable")
+    XCTAssertEqual(postedEvidence?["signed_transaction"], signedTransaction)
     XCTAssertEqual(result.customerId, "customer-internal")
     XCTAssertEqual(result.entitlements.first?.key, "premium")
   }
