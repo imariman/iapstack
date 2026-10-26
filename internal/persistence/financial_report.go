@@ -117,3 +117,17 @@ type FinancialReportAmount struct {
 	TaxState             string
 	CoveredApplicationID core.ApplicationID
 }
+
+// FinancialReportKindForProvider returns the report kind required to cover one provider.
+func FinancialReportKindForProvider(provider core.Provider) (string, bool) {
+	switch provider {
+	case core.ProviderAppleAppStore:
+		return FinancialReportKindAppleConsolidated, true
+	case core.ProviderGooglePlay:
+		return FinancialReportKindGoogleEarnings, true
+	case core.ProviderHuaweiAppGallery:
+		return FinancialReportKindHuaweiSettlement, true
+	default:
+		return "", false
+	}
+}

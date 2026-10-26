@@ -135,8 +135,6 @@ func (api *API) postAdminCustomerMerge(writer http.ResponseWriter, request *http
 	slog.Info(
 		"customer merge completed",
 		slog.String("project_id", string(merge.ProjectID)),
-		slog.String("canonical_customer_id", string(merge.CanonicalCustomerID)),
-		slog.String("source_customer_id", string(merge.SourceCustomerID)),
 		slog.String("merge_id", merge.ID),
 	)
 	writeJSON(writer, http.StatusOK, customerMergeFromRecord(merge))

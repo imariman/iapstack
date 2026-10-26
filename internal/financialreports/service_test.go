@@ -212,6 +212,19 @@ func TestFinancialReportSourcesDoNotReadPurchasePrices(t *testing.T) {
 	}
 }
 
+// TestSafeLogTextNeutralizesLogForging verifies request-derived values cannot create log entries.
+func TestSafeLogTextNeutralizesLogForging(t *testing.T) {
+	t.Parallel()
+
+	forged := "customer\r\nlevel=error msg=forged"
+	if got := safeLogText(forged); got != "customer__level_error_msg_forged" || strings.ContainsAny(got, "\r\n") {
+		t.Fatalf("safeLogText() = %q", got)
+	}
+	if got := safeLogText(strings.Repeat("a", 200)); len(got) != 128 {
+		t.Fatalf("safeLogText() length = %d, want 128", len(got))
+	}
+}
+
 // newFinancialService builds a service with a captured logger.
 func newFinancialService(t *testing.T, store persistence.FinancialReportStore, logs *bytes.Buffer) *Service {
 	t.Helper()

@@ -27,8 +27,6 @@ type importRepository interface {
 	persistence.Transaction
 	// PutCustomer creates one external customer or returns the stored row.
 	PutCustomer(context.Context, core.Customer) (core.Customer, error)
-	// PrimaryCustomerByExternalID reads a customer by its own external id and ignores aliases.
-	PrimaryCustomerByExternalID(context.Context, core.ProjectID, string) (core.Customer, error)
 	// EnsureImportBatch stores one export hash or rejects a different hash for the same batch.
 	EnsureImportBatch(context.Context, persistence.ImportBatch) error
 	// UpsertImportGrant inserts or updates one historical grant.
@@ -136,7 +134,7 @@ func applySubscriber(
 		if err != nil {
 			return err
 		}
-		if err := repository.LockCustomer(ctx, input.ProjectID, customer.ID); err != nil {
+		if err := repository.LockCustomerClosure(ctx, input.ProjectID, customer.ID); err != nil {
 			return err
 		}
 		for _, alias := range subscriber.Aliases {
@@ -168,75 +166,39 @@ func applySubscriber(
 				unchanged++
 			}
 		}
-		sources, err := repository.CustomerEntitlementSources(ctx, input.ProjectID, customer.ID)
+		refreshed, err := verification.RefreshCustomerProjectionWithOptions(
+			ctx,
+			repository,
+			verification.NewDefaultProjector(),
+			input.ProjectID,
+			customer.ID,
+			input.Now.UTC(),
+			webhooks,
+		)
 		if err != nil {
 			return err
-		}
-		current, err := repository.CustomerEntitlements(ctx, input.ProjectID, customer.ID)
-		if err != nil {
-			return err
-		}
-		candidates := make([]verification.ProjectionCandidate, 0, len(sources))
-		for _, source := range sources {
-			candidates = append(candidates, verification.ProjectionCandidate{
-				Projection:          source.Projection,
-				SourceApplicationID: source.SourceApplicationID,
-				ObservedAt:          source.ObservedAt,
-			})
-		}
-		projections, err := verification.NewDefaultProjector().Project(current, candidates)
-		if err != nil {
-			return err
-		}
-		changed := 0
-		webhooksEnqueued := 0
-		for _, projection := range projections {
-			projection.ProjectID = input.ProjectID
-			projection.CustomerID = customer.ID
-			if projection.SourceCustomerID == "" {
-				projection.SourceCustomerID = customer.ID
-			}
-			writeResult, writeErr := repository.PutEntitlement(ctx, projection)
-			if writeErr != nil {
-				return writeErr
-			}
-			if !writeResult.Changed {
-				continue
-			}
-			changed++
-			if !webhooks {
-				continue
-			}
-			event, eventErr := verification.EntitlementChangedEvent(writeResult.Entitlement.SourceApplicationID, writeResult.Entitlement, input.Now.UTC())
-			if eventErr != nil {
-				return eventErr
-			}
-			if _, eventErr = repository.SaveOutboxEvent(ctx, event); eventErr != nil {
-				return eventErr
-			}
-			webhooksEnqueued++
 		}
 		target.CustomerID = customer.ID
 		target.Created = created
 		target.Reused = !created
 		target.GrantsUpserted = upserted
 		target.GrantsUnchanged = unchanged
-		target.ProjectionsChanged = changed
-		target.WebhooksEnqueued = webhooksEnqueued
+		target.ProjectionsChanged = refreshed.ProjectionsChanged
+		target.WebhooksEnqueued = refreshed.WebhooksEnqueued
 		return nil
 	})
 }
 
-// importCustomer reuses the stored external id and refuses an id that is already an alias.
+// importCustomer resolves aliases and merges to the canonical customer before writing grants.
 func importCustomer(
 	ctx context.Context,
 	repository importRepository,
 	projectID core.ProjectID,
 	subscriber Subscriber,
 ) (core.Customer, bool, error) {
-	existing, err := repository.PrimaryCustomerByExternalID(ctx, projectID, subscriber.ExternalID)
+	resolution, err := repository.ResolveCustomer(ctx, projectID, subscriber.ExternalID)
 	if err == nil {
-		return existing, false, nil
+		return core.Customer{ID: resolution.CanonicalCustomerID, ProjectID: projectID}, false, nil
 	}
 	if !errors.Is(err, persistence.ErrNotFound) {
 		return core.Customer{}, false, err

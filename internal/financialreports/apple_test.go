@@ -47,6 +47,12 @@ func TestParseAppleConsolidatedSumsExtendedPartnerShare(t *testing.T) {
 	if totals["1000000099/USD"].Amount.String() != "9.99" || totals["1000000002/USD"].Amount.String() != "4.00" {
 		t.Fatalf("parser dropped identifiers before matching: %#v", parsed.Totals)
 	}
+	yenPayload := appleFinancialHeader +
+		"09/28/2026\t11/01/2026\t100\t1\t120.00\t120.00\tJPY\tS\t120.00\tJPY\n"
+	yen, err := ParseAppleConsolidated([]byte(yenPayload), 100)
+	if err != nil || len(yen.Totals) != 1 || yen.Totals[0].MinorUnits == nil || *yen.Totals[0].MinorUnits != 120 {
+		t.Fatalf("JPY 120.00 = (%#v, %v), want 120 minor units", yen.Totals, err)
+	}
 }
 
 // TestParseAppleConsolidatedRejectsWholeFile verifies bad files do not return partial totals.
@@ -83,9 +89,9 @@ func TestParseAppleConsolidatedRejectsWholeFile(t *testing.T) {
 			code: "detailed_report",
 		},
 		{
-			name: "yen scale",
+			name: "yen fractional remainder",
 			payload: appleFinancialHeader +
-				"09/28/2026\t11/01/2026\t100\t1\t120.00\t120.00\tJPY\tS\t120.00\tJPY\n",
+				"09/28/2026\t11/01/2026\t100\t1\t120.50\t120.50\tJPY\tS\t120.50\tJPY\n",
 			code: "minor_unit_scale",
 		},
 	}

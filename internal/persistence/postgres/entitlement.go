@@ -43,7 +43,7 @@ const (
 			ON ce.source_kind = 'import'
 			AND ig.id = ce.source_import_id
 			AND ig.project_id = ce.project_id
-			AND ig.customer_id = ce.customer_id
+			AND ig.customer_id = ce.source_customer_id
 			AND ig.product_id = ce.source_product_id
 			AND ig.entitlement_id = ce.entitlement_id
 		WHERE (
@@ -240,6 +240,10 @@ func (repository *transaction) CustomerEntitlementSources(
 		return nil, err
 	}
 
+	canonicalID, members, err := repository.customerClosure(ctx, projectID, customerID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := repository.tx.Query(ctx, `
 		SELECT project_id, customer_id, entitlement_id, source_kind, source_observation_id,
 			source_import_id, application_id, product_id, access_status, access_reason,
@@ -262,13 +266,7 @@ func (repository *transaction) CustomerEntitlementSources(
 			FROM purchase_observations AS po
 			JOIN product_entitlements AS pe
 				ON pe.project_id = po.project_id AND pe.product_id = po.product_id
-			WHERE po.project_id = $1
-				AND po.customer_id IN (
-					SELECT member.id
-					FROM customers AS member
-					WHERE member.project_id = $1
-						AND (member.id = $2 OR member.merged_into_customer_id = $2)
-				)
+			WHERE po.project_id = $1 AND po.customer_id = ANY($2)
 			ORDER BY pe.entitlement_id, po.application_id, po.product_id,
 				po.observed_at DESC,
 				CASE WHEN po.access_status = 'allowed' THEN 0 ELSE 1 END,
@@ -294,18 +292,12 @@ func (repository *transaction) CustomerEntitlementSources(
 				ig.effective_ends_at,
 				ig.observed_at
 			FROM import_grants AS ig
-			WHERE ig.project_id = $1
-				AND ig.customer_id IN (
-					SELECT member.id
-					FROM customers AS member
-					WHERE member.project_id = $1
-						AND (member.id = $2 OR member.merged_into_customer_id = $2)
-				)
+			WHERE ig.project_id = $1 AND ig.customer_id = ANY($2)
 			ORDER BY ig.entitlement_id, ig.application_id, ig.product_id,
 				ig.observed_at DESC,
 				ig.id ASC
 		) AS imports
-	`, projectID, customerID)
+	`, projectID, members)
 	if err != nil {
 		return nil, classifyError("load customer entitlement sources", err)
 	}
@@ -321,7 +313,7 @@ func (repository *transaction) CustomerEntitlementSources(
 		if err != nil {
 			return nil, err
 		}
-		source.Projection.CustomerID = customerID
+		source.Projection.CustomerID = canonicalID
 		sources = append(sources, source)
 	}
 	if err := rows.Err(); err != nil {

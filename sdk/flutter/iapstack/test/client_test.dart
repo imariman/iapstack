@@ -648,7 +648,8 @@ void main() {
       final document = await client.getOffering(_fallbackOffering());
 
       expect(captured.method, 'GET');
-      expect(captured.url.path, '/proxy/v1/applications/application-1/offering');
+      expect(
+          captured.url.path, '/proxy/v1/applications/application-1/offering');
       expect(captured.url.query, isEmpty);
       expect(captured.headers['Authorization'], isNull);
       expect(document.revision, 'revision-1');
@@ -658,8 +659,7 @@ void main() {
           'premium_monthly');
     });
 
-    test(
-        'returns the last offering after a network failure, then the fallback',
+    test('returns the last offering after a network failure, then the fallback',
         () async {
       var mode = 'fail';
       final client = IapStackClient(

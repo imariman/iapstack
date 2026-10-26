@@ -156,22 +156,29 @@ func (decimal Decimal) ExactInt64() (int64, bool) {
 	return decimal.coefficient.Int64(), true
 }
 
-// MinorUnits returns the coefficient when the scale equals the ISO exponent.
-// A coarser scale returns a nil amount. A finer scale is rejected.
+// MinorUnits returns the integer value at the ISO exponent when it is exact.
+// A coarser scale returns nil; trailing zeros beyond the exponent are discarded.
 func (decimal Decimal) MinorUnits(exponent int32) (*int64, error) {
 	if decimal.coefficient == nil || decimal.scale < 0 || exponent < 0 {
 		return nil, ErrDecimalInvalid
 	}
-	if decimal.scale > exponent {
-		return nil, ErrDecimalScale
-	}
 	if decimal.scale < exponent {
 		return nil, nil
 	}
-	value, ok := decimal.ExactInt64()
-	if !ok {
+	coefficient := new(big.Int).Set(decimal.coefficient)
+	if decimal.scale > exponent {
+		divisor := decimalPow10(decimal.scale - exponent)
+		quotient, remainder := new(big.Int), new(big.Int)
+		quotient.QuoRem(coefficient, divisor, remainder)
+		if remainder.Sign() != 0 {
+			return nil, ErrDecimalScale
+		}
+		coefficient = quotient
+	}
+	if !coefficient.IsInt64() {
 		return nil, ErrDecimalOverflow
 	}
+	value := coefficient.Int64()
 	return &value, nil
 }
 

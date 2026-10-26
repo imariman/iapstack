@@ -536,7 +536,17 @@ func (service *Service) persist(
 ) (Result, error) {
 	verificationResult := Result{VerifiedAt: providerResult.VerifiedAt, Customer: customer}
 	err := service.store.Transact(ctx, func(repository persistence.Transaction) error {
-		if err := repository.LockCustomer(ctx, command.ProjectID, customer.ID); err != nil {
+		resolution, err := repository.ResolveCustomer(ctx, command.ProjectID, command.ExternalCustomerID)
+		if err != nil {
+			if errors.Is(err, persistence.ErrNotFound) {
+				return fmt.Errorf("verification scope changed: %w", persistence.ErrConflict)
+			}
+			return err
+		}
+		if err := repository.LockCustomerClosure(ctx, command.ProjectID, resolution.CanonicalCustomerID); err != nil {
+			if errors.Is(err, persistence.ErrNotFound) {
+				return fmt.Errorf("verification scope changed: %w", persistence.ErrConflict)
+			}
 			return err
 		}
 		currentApplication, err := repository.Application(ctx, command.ProjectID, command.ApplicationID)
@@ -550,7 +560,7 @@ func (service *Service) persist(
 			}
 			return err
 		}
-		if currentApplication != application {
+		if currentApplication != application || currentCustomer.ID != resolution.CanonicalCustomerID {
 			return fmt.Errorf("verification scope changed: %w", persistence.ErrConflict)
 		}
 		if currentCustomer.ID != customer.ID {
@@ -566,20 +576,6 @@ func (service *Service) persist(
 			if !inClosure {
 				return fmt.Errorf("verification scope changed: %w", persistence.ErrConflict)
 			}
-			if err := repository.LockCustomerClosure(ctx, command.ProjectID, currentCustomer.ID); err != nil {
-				return err
-			}
-			reread, rereadErr := repository.CustomerByExternalID(ctx, command.ProjectID, command.ExternalCustomerID)
-			if rereadErr != nil {
-				if errors.Is(rereadErr, persistence.ErrNotFound) {
-					return fmt.Errorf("verification scope changed: %w", persistence.ErrConflict)
-				}
-				return rereadErr
-			}
-			if reread.ID != currentCustomer.ID {
-				return fmt.Errorf("verification scope changed: %w", persistence.ErrConflict)
-			}
-			currentCustomer = reread
 		}
 
 		providerProductIDs := observationProductIDs(providerResult.Observations)
@@ -622,42 +618,17 @@ func (service *Service) persist(
 			}
 		}
 
-		sources, err := repository.CustomerEntitlementSources(ctx, command.ProjectID, currentCustomer.ID)
+		_, err = RefreshCustomerProjectionWithOptions(
+			ctx,
+			repository,
+			service.projector,
+			command.ProjectID,
+			currentCustomer.ID,
+			providerResult.VerifiedAt,
+			true,
+		)
 		if err != nil {
 			return err
-		}
-		candidates := make([]ProjectionCandidate, 0, len(sources))
-		for _, source := range sources {
-			candidates = append(candidates, ProjectionCandidate{
-				Projection:          source.Projection,
-				SourceApplicationID: source.SourceApplicationID,
-				ObservedAt:          source.ObservedAt,
-			})
-		}
-
-		currentEntitlements, err := repository.CustomerEntitlements(ctx, command.ProjectID, currentCustomer.ID)
-		if err != nil {
-			return err
-		}
-		projections, err := service.projector.Project(currentEntitlements, candidates)
-		if err != nil {
-			return err
-		}
-		for _, projection := range projections {
-			writeResult, err := repository.PutEntitlement(ctx, projection)
-			if err != nil {
-				return err
-			}
-			if !writeResult.Changed {
-				continue
-			}
-			event, err := newEntitlementEvent(application.ID, writeResult.Entitlement, providerResult.VerifiedAt)
-			if err != nil {
-				return err
-			}
-			if _, err := repository.SaveOutboxEvent(ctx, event); err != nil {
-				return err
-			}
 		}
 
 		verificationResult.Customer = currentCustomer

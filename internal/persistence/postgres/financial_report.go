@@ -290,7 +290,7 @@ func (repository *transaction) insertFinancialReport(
 	if draft.SupersedesImportID != "" {
 		supersedes = &draft.SupersedesImportID
 	}
-	_, err = repository.tx.Exec(ctx, `
+	command, err := repository.tx.Exec(ctx, `
 		INSERT INTO financial_report_imports (
 			id, project_id, provider, report_kind, period_start, period_end, source,
 			received_sha256, byte_size, content_type, parser_version, status, reason,
@@ -300,21 +300,18 @@ func (repository *transaction) insertFinancialReport(
 			$8, $9, $10, $11, $12, $13,
 			$14
 		)
+		ON CONFLICT (project_id, provider, report_kind, period_start, period_end, received_sha256) DO NOTHING
 	`, importID, draft.ProjectID, draft.Provider, draft.ReportKind, financialDate(draft.PeriodStart), financialDate(draft.PeriodEnd), draft.Source,
 		draft.SHA256[:], draft.ByteSize, draft.ContentType, draft.ParserVersion, draft.Status, draft.Reason, supersedes)
 	if err != nil {
-		switch financialConstraint(err) {
-		case "financial_report_imports_digest_unique":
-			existing, readErr := repository.findFinancialReportByDigest(ctx, draft)
-			if readErr != nil {
-				return persistence.FinancialReport{}, false, readErr
-			}
-			return existing, false, nil
-		case "financial_report_imports_one_accepted_period_idx":
+		if financialConstraint(err) == "financial_report_imports_one_accepted_period_idx" {
 			return persistence.FinancialReport{}, false, persistence.ErrConflict
-		default:
-			return persistence.FinancialReport{}, false, classifyError("insert financial report", err)
 		}
+		return persistence.FinancialReport{}, false, classifyError("insert financial report", err)
+	}
+	if command.RowsAffected() == 0 {
+		existing, readErr := repository.findFinancialReportByDigest(ctx, draft)
+		return existing, false, readErr
 	}
 	if err := repository.insertFinancialReportAmounts(ctx, draft.ProjectID, importID, draft); err != nil {
 		return persistence.FinancialReport{}, false, err
@@ -366,7 +363,7 @@ func (repository *transaction) markFinancialReportSuperseded(ctx context.Context
 	return nil
 }
 
-// insertFinancialReportAmounts matches Apple identifiers to production applications and stores totals.
+// insertFinancialReportAmounts matches provider identifiers to production applications and stores totals.
 func (repository *transaction) insertFinancialReportAmounts(
 	ctx context.Context,
 	projectID core.ProjectID,
@@ -376,7 +373,7 @@ func (repository *transaction) insertFinancialReportAmounts(
 	if draft.Status != persistence.FinancialReportStatusAccepted {
 		return nil
 	}
-	resolved, err := repository.resolveFinancialReportAmounts(ctx, projectID, draft.IdentifierTotals)
+	resolved, err := repository.resolveFinancialReportAmounts(ctx, projectID, draft.Provider, draft.IdentifierTotals)
 	if err != nil {
 		return err
 	}
@@ -391,8 +388,7 @@ func (repository *transaction) insertFinancialReportAmounts(
 				commission_state, tax_state, covered_application_id
 			) VALUES ($1, $2, $3::numeric, $4, $5, $6, $7, $8)
 		`, importID, amount.Currency, amount.AmountDecimal, amount.AmountScale, minor,
-			persistence.FinancialReportCommissionIncluded, persistence.FinancialReportTaxNotItemized,
-			amount.CoveredApplicationID)
+			amount.CommissionState, amount.TaxState, amount.CoveredApplicationID)
 		if err != nil {
 			return classifyError("insert financial report amount", err)
 		}
@@ -400,19 +396,20 @@ func (repository *transaction) insertFinancialReportAmounts(
 	return nil
 }
 
-// resolveFinancialReportAmounts keeps production Apple matches and drops every other identifier.
+// resolveFinancialReportAmounts keeps matching production applications and drops every other identifier.
 func (repository *transaction) resolveFinancialReportAmounts(
 	ctx context.Context,
 	projectID core.ProjectID,
+	provider core.Provider,
 	totals []persistence.FinancialReportIdentifierTotal,
 ) ([]persistence.FinancialReportAmount, error) {
 	rows, err := repository.tx.Query(ctx, `
 		SELECT id, provider_application_id
 		FROM applications
-		WHERE project_id = $1 AND provider = 'apple_app_store' AND environment = 'production'
-	`, projectID)
+		WHERE project_id = $1 AND provider = $2 AND environment = 'production'
+	`, projectID, provider)
 	if err != nil {
-		return nil, classifyError("list production apple applications", err)
+		return nil, classifyError("list production financial report applications", err)
 	}
 	defer rows.Close()
 
@@ -421,12 +418,12 @@ func (repository *transaction) resolveFinancialReportAmounts(
 		var applicationID core.ApplicationID
 		var providerApplicationID string
 		if err := rows.Scan(&applicationID, &providerApplicationID); err != nil {
-			return nil, classifyError("scan production apple application", err)
+			return nil, classifyError("scan production financial report application", err)
 		}
 		matches[providerApplicationID] = append(matches[providerApplicationID], applicationID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, classifyError("iterate production apple applications", err)
+		return nil, classifyError("iterate production financial report applications", err)
 	}
 
 	resolved := map[string]persistence.FinancialReportAmount{}
@@ -840,16 +837,7 @@ func sumRecognizedAmounts(
 
 // financialReportKind returns the report a production provider must have before it is covered.
 func financialReportKind(provider core.Provider) (string, bool) {
-	switch provider {
-	case core.ProviderAppleAppStore:
-		return persistence.FinancialReportKindAppleConsolidated, true
-	case core.ProviderGooglePlay:
-		return persistence.FinancialReportKindGoogleEarnings, true
-	case core.ProviderHuaweiAppGallery:
-		return persistence.FinancialReportKindHuaweiSettlement, true
-	default:
-		return "", false
-	}
+	return persistence.FinancialReportKindForProvider(provider)
 }
 
 // validateFinancialReportDraft rejects imports that cannot be stored safely.
@@ -872,7 +860,7 @@ func validateFinancialReportDraft(draft persistence.FinancialReportDraft) error 
 	}
 	switch draft.Status {
 	case persistence.FinancialReportStatusAccepted:
-		if draft.Reason != "" || draft.Provider != core.ProviderAppleAppStore {
+		if draft.Reason != "" {
 			return validation.Wrap(persistence.ErrFinancialReportNotAccepted)
 		}
 	case persistence.FinancialReportStatusUnrecognized, persistence.FinancialReportStatusRejected, persistence.FinancialReportStatusSuperseded:
@@ -893,13 +881,21 @@ func validateIdentifierTotal(total persistence.FinancialReportIdentifierTotal) e
 	if !currencyCodeValid(total.Currency) {
 		return validation.Wrap(errors.New("financial report currency is invalid"))
 	}
-	if total.MinorUnits != nil {
-		coefficient, ok := total.Amount.ExactInt64()
-		if !ok || coefficient != *total.MinorUnits {
-			return validation.Wrap(errors.New("financial report minor units do not match the decimal"))
-		}
+	if total.MinorUnits != nil && !financialMinorUnitsMatch(total.Amount, *total.MinorUnits) {
+		return validation.Wrap(errors.New("financial report minor units do not match the decimal"))
 	}
 	return nil
+}
+
+// financialMinorUnitsMatch checks a minor-unit integer against exact decimal trailing zeros.
+func financialMinorUnitsMatch(amount persistence.Decimal, minor int64) bool {
+	for exponent := int32(0); exponent <= amount.Scale(); exponent++ {
+		candidate, err := amount.MinorUnits(exponent)
+		if err == nil && candidate != nil && *candidate == minor {
+			return true
+		}
+	}
+	return false
 }
 
 // financialAmountFromTotal copies one matched total into a stored amount row.
@@ -934,11 +930,8 @@ func mergeFinancialAmounts(left, right persistence.FinancialReportAmount) (persi
 	left.AmountDecimal = summed.String()
 	left.AmountScale = summed.Scale()
 	left.MinorUnits = combineMinorUnits(left.MinorUnits, right.MinorUnits)
-	if left.MinorUnits != nil {
-		coefficient, ok := summed.ExactInt64()
-		if !ok || coefficient != *left.MinorUnits {
-			return persistence.FinancialReportAmount{}, validation.Wrap(errors.New("financial report minor units do not match the decimal"))
-		}
+	if left.MinorUnits != nil && !financialMinorUnitsMatch(summed, *left.MinorUnits) {
+		return persistence.FinancialReportAmount{}, validation.Wrap(errors.New("financial report minor units do not match the decimal"))
 	}
 	return left, nil
 }

@@ -168,6 +168,42 @@ func TestApplyIsIdempotentAndLosesToAStoreObservation(t *testing.T) {
 	if len(overview.RecentTransactions) != 1 {
 		t.Fatalf("recent transactions = %#v", overview.RecentTransactions)
 	}
+
+	var sourceCustomerID core.CustomerID
+	if err := connection.QueryRow(ctx, `SELECT id FROM customers WHERE project_id = 'project-rc' AND external_id = 'user-rc'`).Scan(&sourceCustomerID); err != nil {
+		t.Fatalf("read import customer: %v", err)
+	}
+	mustCanonicalID := core.CustomerID("customer-rc-canonical")
+	if _, err := connection.Exec(ctx, `
+		INSERT INTO customers (id, project_id, external_id)
+		VALUES ($1, 'project-rc', 'canonical-rc')
+	`, mustCanonicalID); err != nil {
+		t.Fatalf("insert canonical customer: %v", err)
+	}
+	if err := store.Transact(ctx, func(repository persistence.Transaction) error {
+		_, err := repository.MergeCustomers(ctx, persistence.CustomerMergeWrite{
+			ProjectID: "project-rc", CanonicalCustomerID: mustCanonicalID, SourceCustomerID: sourceCustomerID,
+			IdempotencyKey: "merge-revenuecat-import", ActorKeyID: "admin-key",
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("MergeCustomers() error = %v", err)
+	}
+	afterMerge := moved
+	afterMerge.BatchID = "revenuecat-2026-10-03"
+	if _, err := Apply(ctx, store, afterMerge, false); err != nil {
+		t.Fatalf("Apply() after merge error = %v", err)
+	}
+	var canonicalGrants, canonicalProjections int
+	if err := connection.QueryRow(ctx, `SELECT count(*) FROM import_grants WHERE customer_id = $1`, mustCanonicalID).Scan(&canonicalGrants); err != nil {
+		t.Fatalf("count canonical grants: %v", err)
+	}
+	if err := connection.QueryRow(ctx, `SELECT count(*) FROM customer_entitlements WHERE customer_id = $1`, mustCanonicalID).Scan(&canonicalProjections); err != nil {
+		t.Fatalf("count canonical projections: %v", err)
+	}
+	if canonicalGrants != 1 || canonicalProjections != 1 {
+		t.Fatalf("post-merge grants=%d projections=%d, want one each", canonicalGrants, canonicalProjections)
+	}
 }
 
 // importInput builds one apply request for the seeded catalog.

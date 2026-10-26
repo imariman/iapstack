@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -300,6 +301,77 @@ func TestCustomerClosurePreservesHistoricalOwners(t *testing.T) {
 	}
 	if resolved.ID != "customer-canonical" {
 		t.Fatalf("resolved customer = %q, want customer-canonical", resolved.ID)
+	}
+}
+
+// TestMergeCustomersRefreshesImportBackedProjection verifies historical grant ownership after a merge.
+func TestMergeCustomersRefreshesImportBackedProjection(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	projectID := core.ProjectID(fixture.projectID)
+	canonicalID := core.CustomerID("customer-import-canonical")
+	mustExec(t, database, `
+		INSERT INTO customers (id, project_id, external_id)
+		VALUES ($1, $2, 'import-canonical-external')
+	`, canonicalID, fixture.projectID)
+	observedAt := time.Date(2026, time.October, 26, 0, 0, 0, 0, time.UTC)
+	grant := persistence.ImportGrant{
+		ID: "imp-11111111111111111111111111111111", ProjectID: projectID,
+		CustomerID: core.CustomerID(fixture.customerID), ApplicationID: core.ApplicationID(fixture.applicationID),
+		ProductID: core.ProductID(fixture.productID), EntitlementID: core.EntitlementID(fixture.entitlementID),
+		Origin: persistence.ImportOriginRevenueCat, OriginStore: "app_store", Environment: core.EnvironmentSandbox,
+		Access: core.AccessAllowed, AccessReason: core.AccessReasonPurchaseValid,
+		EffectivePeriod: core.EffectivePeriod{StartsAt: observedAt.Add(-time.Hour)}, ObservedAt: observedAt,
+		ExportSHA256: [32]byte{1}, LineageFingerprint: [32]byte{2},
+	}
+	err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		writer, ok := repository.(interface {
+			UpsertImportGrant(context.Context, persistence.ImportGrant) (persistence.ImportGrantResult, error)
+		})
+		if !ok {
+			return errors.New("import grant writer is unavailable")
+		}
+		_, err := writer.UpsertImportGrant(database.ctx, grant)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("UpsertImportGrant() error = %v", err)
+	}
+	err = store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		if _, err := repository.MergeCustomers(database.ctx, persistence.CustomerMergeWrite{
+			ProjectID: projectID, CanonicalCustomerID: canonicalID,
+			SourceCustomerID: core.CustomerID(fixture.customerID), IdempotencyKey: "merge-import", ActorKeyID: "admin-key",
+		}); err != nil {
+			return err
+		}
+		return verification.RefreshCustomerProjection(
+			database.ctx, repository, verification.NewDefaultProjector(), projectID, canonicalID, observedAt,
+		)
+	})
+	if err != nil {
+		t.Fatalf("import-backed merge error = %v", err)
+	}
+	err = store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		entitlements, err := repository.CustomerEntitlements(database.ctx, projectID, canonicalID)
+		if err != nil {
+			return err
+		}
+		if len(entitlements) != 1 || entitlements[0].Projection.SourceImportID != grant.ID ||
+			entitlements[0].Projection.SourceCustomerID != core.CustomerID(fixture.customerID) {
+			t.Fatalf("canonical import projection = %#v", entitlements)
+		}
+		sources, err := repository.CustomerEntitlementSources(database.ctx, projectID, core.CustomerID(fixture.customerID))
+		if err != nil {
+			return err
+		}
+		if len(sources) != 1 || sources[0].Projection.CustomerID != canonicalID {
+			t.Fatalf("source-customer closure sources = %#v", sources)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read import-backed merge error = %v", err)
 	}
 }
 

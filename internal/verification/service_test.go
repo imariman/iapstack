@@ -1145,6 +1145,46 @@ func newVerificationService(
 	return service
 }
 
+// TestVerificationEventUsesSelectedSourceApplication verifies cross-application projection webhook routing.
+func TestVerificationEventUsesSelectedSourceApplication(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	store := newFakeStore(fixture)
+	other := fixture.result.Observations[0]
+	other.ID = "observation-other"
+	other.ApplicationID = "application-other"
+	store.repository.observations[other.ID] = persistence.ObservationWrite{
+		ProjectID: verificationProjectID, CustomerID: verificationCustomerID,
+		EvidenceID: 1, ProductID: "product-other", Observation: other,
+	}
+	store.repository.catalog["provider-product-other"] = persistence.CatalogProduct{
+		Mapping: core.StoreProduct{
+			ApplicationID: "application-other", ProductID: "product-other", ProviderID: "provider-product-other",
+		},
+		Product: core.Product{
+			ID: "product-other", ProjectID: verificationProjectID,
+			Kind: core.ProductKindNonConsumable, EntitlementIDs: []core.EntitlementID{verificationEntitlementID},
+		},
+		Entitlements: fixture.catalog.Entitlements,
+	}
+	fixture.result.Observations[0].Access = core.AccessDenied
+	fixture.result.Observations[0].AccessReason = core.AccessReasonExpired
+	fixture.result.Observations[0].State = core.LifecycleExpired
+	service := newVerificationService(t, store, &fakeAdapter{result: fixture.result}, &fakeProtector{}, fixture.clock)
+	if _, err := service.Verify(context.Background(), fixture.command); err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if len(store.repository.outbox) != 1 {
+		t.Fatalf("outbox events = %d, want one", len(store.repository.outbox))
+	}
+	for _, event := range store.repository.outbox {
+		if event.ApplicationID != "application-other" || event.AggregateID != verificationCustomerID {
+			t.Fatalf("outbox event = %#v, want selected source application", event)
+		}
+	}
+}
+
 // TestVerificationAcceptsCanonicalResolutionBeforePersist verifies a merge between provider result and commit is not a permanent conflict.
 func TestVerificationAcceptsCanonicalResolutionBeforePersist(t *testing.T) {
 	t.Parallel()

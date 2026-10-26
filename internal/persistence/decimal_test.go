@@ -36,8 +36,12 @@ func TestParseDecimalKeepsExactScale(t *testing.T) {
 	if err != nil || minor == nil || *minor != 250 {
 		t.Fatalf("MinorUnits(2) = (%v, %v), want 250", minor, err)
 	}
-	if _, err := positive.MinorUnits(0); err == nil {
-		t.Fatal("MinorUnits accepted a finer scale than the exponent")
+	wholeYen, err := ParseDecimalMust(t, "120.00").MinorUnits(0)
+	if err != nil || wholeYen == nil || *wholeYen != 120 {
+		t.Fatalf("MinorUnits exact trailing zeros = (%v, %v), want 120", wholeYen, err)
+	}
+	if _, err := ParseDecimalMust(t, "120.50").MinorUnits(0); err == nil {
+		t.Fatal("MinorUnits accepted a non-zero remainder beyond the exponent")
 	}
 	coarser, err := positive.MinorUnits(3)
 	if err != nil || coarser != nil {

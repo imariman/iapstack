@@ -232,6 +232,75 @@ func TestSupersedeReplacesAcceptedPeriodWithoutSumming(t *testing.T) {
 	}
 }
 
+// TestFinancialReportsConcurrentDigestUpload verifies one digest winner without aborted-transaction reads.
+func TestFinancialReportsConcurrentDigestUpload(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	store := openRepositoryStore(t, database.ctx)
+	mustExec(t, database, `INSERT INTO projects (id) VALUES ('project-concurrent-reports')`)
+	insertFinancialApplication(t, database, "app-apple-prod", "project-concurrent-reports", "apple_app_store", "production", "1000000001")
+	service := newFinancialReportService(t, store)
+	type uploadResult struct {
+		id      string
+		created bool
+		err     error
+	}
+	start := make(chan struct{})
+	results := make(chan uploadResult, 4)
+	for range 4 {
+		go func() {
+			<-start
+			report, created, err := service.Upload(database.ctx, financialUpload(
+				"project-concurrent-reports", core.ProviderAppleAppStore,
+				persistence.FinancialReportKindAppleConsolidated, []byte(financialAppleFixture), nil, nil,
+			))
+			results <- uploadResult{id: report.ID, created: created, err: err}
+		}()
+	}
+	close(start)
+	createdCount := 0
+	reportID := ""
+	for range 4 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("concurrent Upload() error = %v", result.err)
+		}
+		if result.created {
+			createdCount++
+		}
+		if reportID == "" {
+			reportID = result.id
+		}
+		if result.id != reportID {
+			t.Fatalf("digest IDs = %q and %q, want one stored report", reportID, result.id)
+		}
+	}
+	if createdCount != 1 {
+		t.Fatalf("created count = %d, want one", createdCount)
+	}
+}
+
+// TestFinancialReportsAcceptExactZeroExponentTrailingZeros verifies JPY amounts keep file scale and minor units.
+func TestFinancialReportsAcceptExactZeroExponentTrailingZeros(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	store := openRepositoryStore(t, database.ctx)
+	mustExec(t, database, `INSERT INTO projects (id) VALUES ('project-yen-reports')`)
+	insertFinancialApplication(t, database, "app-apple-prod", "project-yen-reports", "apple_app_store", "production", "1000000001")
+	service := newFinancialReportService(t, store)
+	fixture := financialAppleHeader +
+		"09/28/2026\t11/01/2026\t1000000001\t1\t120.00\t120.00\tJPY\tS\t120.00\tJPY\n"
+	report, created, err := service.Upload(database.ctx, financialUpload(
+		"project-yen-reports", core.ProviderAppleAppStore,
+		persistence.FinancialReportKindAppleConsolidated, []byte(fixture), nil, nil,
+	))
+	if err != nil || !created || len(report.Amounts) != 1 {
+		t.Fatalf("JPY Upload() = (%#v, %t, %v)", report, created, err)
+	}
+	amount := report.Amounts[0]
+	if amount.AmountDecimal != "120.00" || amount.AmountScale != 2 || amount.MinorUnits == nil || *amount.MinorUnits != 120 {
+		t.Fatalf("JPY amount = %#v, want 120.00 at scale 2 and 120 minor units", amount)
+	}
+}
+
 // newFinancialReportService builds the importer against the integration store.
 func newFinancialReportService(t *testing.T, store *postgres.Store) *financialreports.Service {
 	t.Helper()

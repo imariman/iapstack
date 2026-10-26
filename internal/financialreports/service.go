@@ -173,18 +173,9 @@ func (service *Service) Pull(ctx context.Context, request PullRequest) error {
 	return validation.Wrap(ErrPullUnpinned)
 }
 
-// ReportKind returns the only financial report kind recognized for a purchase provider.
+// ReportKind returns the financial report kind recognized for a purchase provider.
 func ReportKind(provider core.Provider) (string, bool) {
-	switch provider {
-	case core.ProviderAppleAppStore:
-		return persistence.FinancialReportKindAppleConsolidated, true
-	case core.ProviderGooglePlay:
-		return persistence.FinancialReportKindGoogleEarnings, true
-	case core.ProviderHuaweiAppGallery:
-		return persistence.FinancialReportKindHuaweiSettlement, true
-	default:
-		return "", false
-	}
+	return persistence.FinancialReportKindForProvider(provider)
 }
 
 // prepareDraft hashes and parses one upload without retaining the bytes.
@@ -392,15 +383,15 @@ func (service *Service) logImport(
 		return
 	}
 	attributes := []slog.Attr{
-		slog.String("project_id", string(projectID)),
-		slog.String("provider", string(provider)),
-		slog.String("report_kind", kind),
+		slog.String("project_id", safeLogText(string(projectID))),
+		slog.String("provider", safeLogText(string(provider))),
+		slog.String("report_kind", safeLogText(kind)),
 	}
 	if status != "" {
-		attributes = append(attributes, slog.String("status", status))
+		attributes = append(attributes, slog.String("status", safeLogText(status)))
 	}
 	if importID != "" {
-		attributes = append(attributes, slog.String("import_id", importID))
+		attributes = append(attributes, slog.String("import_id", safeLogText(importID)))
 	}
 	if !periodStart.IsZero() {
 		attributes = append(attributes, slog.String("period_start", periodStart.UTC().Format(time.DateOnly)))
@@ -409,15 +400,35 @@ func (service *Service) logImport(
 		attributes = append(attributes, slog.String("period_end", periodEnd.UTC().Format(time.DateOnly)))
 	}
 	if failureCode != "" {
-		attributes = append(attributes, slog.String("failure_code", failureCode))
+		attributes = append(attributes, slog.String("failure_code", safeLogText(failureCode)))
 	}
 	if row > 0 {
 		attributes = append(attributes, slog.Int("row", row))
 	}
 	if column != "" {
-		attributes = append(attributes, slog.String("column", column))
+		attributes = append(attributes, slog.String("column", safeLogText(column)))
 	}
 	service.logger.LogAttrs(ctx, level, "financial report import", attributes...)
+}
+
+// safeLogText strips control characters and log-forging punctuation from request-derived values.
+func safeLogText(value string) string {
+	const maxLength = 128
+	value = strings.Map(func(character rune) rune {
+		switch {
+		case character >= 'a' && character <= 'z',
+			character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9',
+			character == '.', character == '_', character == '-':
+			return character
+		default:
+			return '_'
+		}
+	}, value)
+	if len(value) > maxLength {
+		return value[:maxLength]
+	}
+	return value
 }
 
 // zeroBytes overwrites a temporary decompressed report after parsing.
