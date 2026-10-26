@@ -412,8 +412,14 @@ credential/evidence and notification contracts, and webhook verification rules a
 - [x] Add the full Swift sample app ([#139](https://github.com/imariman/iapstack/issues/139)) and React Native native examples ([#140](https://github.com/imariman/iapstack/issues/140))
 - [x] Prepare SDK package artifacts, SwiftPM distribution and independent release automation
 - [ ] Publish versioned host, Android, iOS, and React Native packages ([#141](https://github.com/imariman/iapstack/issues/141))
+- [x] Support customer migration, alias consolidation, and auditable customer merges
+- [x] Add RevenueCat export planning and historical entitlement imports
+- [x] Add versioned offering documents with application lookup and Flutter fallback support
+- [x] Add financial report persistence and Apple consolidated report imports
+- [x] Add Kubernetes deployment manifests
+- [x] Publish the post-v0.1 feature set as [`v0.2.0-alpha.1`](https://github.com/imariman/iapstack/releases/tag/v0.2.0-alpha.1)
+- [ ] Recognize Google Play and Huawei financial reports with pinned provider fixtures
 - [ ] Add Amazon Appstore and additional store adapters
-- [ ] Support customer migration and alias consolidation
 
 Completed items describe repository implementations, not production release readiness. IAPStack is intended to treat every store as a first-class adapter. Current package capabilities and remaining work are in the [SDK roadmap](#sdk-roadmap).
 
