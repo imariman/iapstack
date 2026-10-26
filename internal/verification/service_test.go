@@ -63,6 +63,7 @@ type fakeAdapter struct {
 type fakeStore struct {
 	repository   *fakeTransaction
 	transactions int
+	prepare      func(int, *fakeTransaction)
 }
 
 // fakeTransaction implements provider-neutral persistence for orchestration unit tests.
@@ -77,6 +78,8 @@ type fakeTransaction struct {
 	entitlements map[core.EntitlementID]persistence.CustomerEntitlement
 	outbox       map[[32]byte]persistence.OutboxEvent
 	failOutbox   bool
+	resolutions  map[string]core.Customer
+	mergedInto   map[core.CustomerID]core.CustomerID
 }
 
 // fakeEntitlementSourceKey identifies one in-memory application-product source and entitlement.
@@ -618,6 +621,9 @@ func (store *fakeStore) Ping(context.Context) error {
 func (store *fakeStore) Transact(_ context.Context, operation persistence.TransactionFunc) error {
 	store.transactions++
 	working := store.repository.clone()
+	if store.prepare != nil {
+		store.prepare(store.transactions, working)
+	}
 	if err := operation(working); err != nil {
 		return err
 	}
@@ -662,10 +668,66 @@ func (repository *fakeTransaction) CustomerByExternalID(
 	projectID core.ProjectID,
 	externalID string,
 ) (core.Customer, error) {
+	if customer, ok := repository.resolutions[externalID]; ok {
+		if customer.ProjectID != projectID {
+			return core.Customer{}, persistence.ErrNotFound
+		}
+		return customer, nil
+	}
 	if repository.customer.ProjectID != projectID || repository.customer.ExternalID != externalID {
 		return core.Customer{}, persistence.ErrNotFound
 	}
 	return repository.customer, nil
+}
+
+// CustomerInClosure reports whether the candidate belongs to the configured merge closure.
+func (repository *fakeTransaction) CustomerInClosure(
+	_ context.Context,
+	projectID core.ProjectID,
+	canonicalID core.CustomerID,
+	candidateID core.CustomerID,
+) (bool, error) {
+	if repository.customer.ProjectID != projectID {
+		return false, nil
+	}
+	if candidateID == canonicalID {
+		return true, nil
+	}
+	return repository.mergedInto[candidateID] == canonicalID, nil
+}
+
+// ResolveCustomer maps the fake external id onto its configured customer.
+func (repository *fakeTransaction) ResolveCustomer(
+	ctx context.Context,
+	projectID core.ProjectID,
+	externalID string,
+) (persistence.CustomerResolution, error) {
+	customer, err := repository.CustomerByExternalID(ctx, projectID, externalID)
+	if err != nil {
+		return persistence.CustomerResolution{}, err
+	}
+	return persistence.CustomerResolution{
+		ProjectID:           projectID,
+		ExternalID:          externalID,
+		CanonicalCustomerID: customer.ID,
+		Match:               persistence.CustomerMatchPrimary,
+	}, nil
+}
+
+// PutCustomerAlias is unused by verification orchestration tests.
+func (repository *fakeTransaction) PutCustomerAlias(
+	context.Context,
+	persistence.CustomerAliasWrite,
+) (persistence.CustomerResolution, error) {
+	return persistence.CustomerResolution{}, persistence.ErrNotFound
+}
+
+// MergeCustomers is unused by verification orchestration tests.
+func (repository *fakeTransaction) MergeCustomers(
+	context.Context,
+	persistence.CustomerMergeWrite,
+) (persistence.CustomerMergeResult, error) {
+	return persistence.CustomerMergeResult{}, persistence.ErrNotFound
 }
 
 // CatalogProducts returns requested mappings in request order.
@@ -744,8 +806,34 @@ func (repository *fakeTransaction) LockCustomer(
 	projectID core.ProjectID,
 	customerID core.CustomerID,
 ) error {
-	if repository.customer.ProjectID != projectID || repository.customer.ID != customerID {
-		return persistence.ErrNotFound
+	if repository.customer.ProjectID == projectID && repository.customer.ID == customerID {
+		return nil
+	}
+	for sourceID, canonicalID := range repository.mergedInto {
+		if repository.customer.ProjectID == projectID && (customerID == sourceID || customerID == canonicalID) {
+			return nil
+		}
+	}
+	return persistence.ErrNotFound
+}
+
+// LockCustomerClosure locks the canonical customer and each configured merge source.
+func (repository *fakeTransaction) LockCustomerClosure(
+	ctx context.Context,
+	projectID core.ProjectID,
+	canonicalID core.CustomerID,
+) error {
+	ids := []core.CustomerID{canonicalID}
+	for sourceID, targetID := range repository.mergedInto {
+		if targetID == canonicalID {
+			ids = append(ids, sourceID)
+		}
+	}
+	sort.Slice(ids, func(left, right int) bool { return ids[left] < ids[right] })
+	for _, id := range ids {
+		if err := repository.LockCustomer(ctx, projectID, id); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -881,6 +969,8 @@ func (repository *fakeTransaction) clone() *fakeTransaction {
 		entitlements: make(map[core.EntitlementID]persistence.CustomerEntitlement, len(repository.entitlements)),
 		outbox:       make(map[[32]byte]persistence.OutboxEvent, len(repository.outbox)),
 		failOutbox:   repository.failOutbox,
+		resolutions:  make(map[string]core.Customer, len(repository.resolutions)),
+		mergedInto:   make(map[core.CustomerID]core.CustomerID, len(repository.mergedInto)),
 	}
 	for key, value := range repository.catalog {
 		clone.catalog[key] = value
@@ -899,6 +989,12 @@ func (repository *fakeTransaction) clone() *fakeTransaction {
 	}
 	for key, value := range repository.outbox {
 		clone.outbox[key] = value
+	}
+	for key, value := range repository.resolutions {
+		clone.resolutions[key] = value
+	}
+	for key, value := range repository.mergedInto {
+		clone.mergedInto[key] = value
 	}
 	return clone
 }
@@ -1047,6 +1143,110 @@ func newVerificationService(
 		t.Fatalf("NewService() error = %v", err)
 	}
 	return service
+}
+
+// TestVerificationEventUsesSelectedSourceApplication verifies cross-application projection webhook routing.
+func TestVerificationEventUsesSelectedSourceApplication(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	store := newFakeStore(fixture)
+	other := fixture.result.Observations[0]
+	other.ID = "observation-other"
+	other.ApplicationID = "application-other"
+	store.repository.observations[other.ID] = persistence.ObservationWrite{
+		ProjectID: verificationProjectID, CustomerID: verificationCustomerID,
+		EvidenceID: 1, ProductID: "product-other", Observation: other,
+	}
+	store.repository.catalog["provider-product-other"] = persistence.CatalogProduct{
+		Mapping: core.StoreProduct{
+			ApplicationID: "application-other", ProductID: "product-other", ProviderID: "provider-product-other",
+		},
+		Product: core.Product{
+			ID: "product-other", ProjectID: verificationProjectID,
+			Kind: core.ProductKindNonConsumable, EntitlementIDs: []core.EntitlementID{verificationEntitlementID},
+		},
+		Entitlements: fixture.catalog.Entitlements,
+	}
+	fixture.result.Observations[0].Access = core.AccessDenied
+	fixture.result.Observations[0].AccessReason = core.AccessReasonExpired
+	fixture.result.Observations[0].State = core.LifecycleExpired
+	service := newVerificationService(t, store, &fakeAdapter{result: fixture.result}, &fakeProtector{}, fixture.clock)
+	if _, err := service.Verify(context.Background(), fixture.command); err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if len(store.repository.outbox) != 1 {
+		t.Fatalf("outbox events = %d, want one", len(store.repository.outbox))
+	}
+	for _, event := range store.repository.outbox {
+		if event.ApplicationID != "application-other" || event.AggregateID != verificationCustomerID {
+			t.Fatalf("outbox event = %#v, want selected source application", event)
+		}
+	}
+}
+
+// TestVerificationAcceptsCanonicalResolutionBeforePersist verifies a merge between provider result and commit is not a permanent conflict.
+func TestVerificationAcceptsCanonicalResolutionBeforePersist(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	store := newFakeStore(fixture)
+	canonical := core.Customer{
+		ID:         "customer-canonical",
+		ProjectID:  verificationProjectID,
+		ExternalID: "external-canonical",
+	}
+	store.prepare = func(transactionNumber int, repository *fakeTransaction) {
+		if transactionNumber < 2 {
+			return
+		}
+		repository.resolutions = map[string]core.Customer{
+			verificationExternalCustomerID: canonical,
+		}
+		repository.mergedInto = map[core.CustomerID]core.CustomerID{
+			verificationCustomerID: canonical.ID,
+		}
+	}
+	service := newVerificationService(t, store, &fakeAdapter{result: fixture.result}, &fakeProtector{}, fixture.clock)
+
+	result, err := service.Verify(context.Background(), fixture.command)
+	if err != nil || errors.Is(err, persistence.ErrConflict) {
+		t.Fatalf("Verify() error = %v, want a completed canonical write", err)
+	}
+	if result.Customer.ID != canonical.ID {
+		t.Fatalf("customer ID = %q, want %q", result.Customer.ID, canonical.ID)
+	}
+	for _, evidence := range store.repository.evidence {
+		if evidence.CustomerID != canonical.ID {
+			t.Fatalf("evidence customer = %q, want canonical %q", evidence.CustomerID, canonical.ID)
+		}
+	}
+}
+
+// TestVerificationRejectsUnrelatedCustomerResolution verifies a customer that resolves elsewhere stays a permanent conflict.
+func TestVerificationRejectsUnrelatedCustomerResolution(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	store := newFakeStore(fixture)
+	store.prepare = func(transactionNumber int, repository *fakeTransaction) {
+		if transactionNumber < 2 {
+			return
+		}
+		repository.resolutions = map[string]core.Customer{
+			verificationExternalCustomerID: {
+				ID:         "customer-other",
+				ProjectID:  verificationProjectID,
+				ExternalID: "external-other",
+			},
+		}
+	}
+	service := newVerificationService(t, store, &fakeAdapter{result: fixture.result}, &fakeProtector{}, fixture.clock)
+
+	_, err := service.Verify(context.Background(), fixture.command)
+	if !errors.Is(err, persistence.ErrConflict) {
+		t.Fatalf("Verify() error = %v, want ErrConflict", err)
+	}
 }
 
 // projectionFor builds one valid test projection with a chosen source and access status.

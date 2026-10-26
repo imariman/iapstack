@@ -271,6 +271,10 @@ func openAppIntegrationDatabase(t *testing.T) *appIntegrationDatabase {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset app integration River schema: %v", err)
 	}
+	if err := postgres.ClearIdentityMigrationGuards(ctx, connection); err != nil {
+		_ = connection.Close(ctx)
+		t.Fatalf("clear identity migration guards: %v", err)
+	}
 	if err := migrator.MigrateTo(ctx, 0); err != nil {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset app integration PostgreSQL: %v", err)
@@ -283,6 +287,9 @@ func openAppIntegrationDatabase(t *testing.T) *appIntegrationDatabase {
 		defer cleanupCancel()
 		if err := postgres.RemoveRiver(cleanupContext, databaseURL); err != nil {
 			t.Errorf("reset app integration River schema during cleanup: %v", err)
+		}
+		if err := postgres.ClearIdentityMigrationGuards(cleanupContext, connection); err != nil {
+			t.Errorf("clear identity migration guards during cleanup: %v", err)
 		}
 		if err := migrator.MigrateTo(cleanupContext, 0); err != nil {
 			t.Errorf("reset app integration PostgreSQL during cleanup: %v", err)

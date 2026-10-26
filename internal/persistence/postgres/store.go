@@ -50,6 +50,8 @@ var (
 	_ persistence.OperationsStore = (*Store)(nil)
 	// transactionContract verifies that transaction implements every repository boundary.
 	_ persistence.Transaction = (*transaction)(nil)
+	// offeringCatalogContract verifies that Store can confirm offering products without a catalog write.
+	_ persistence.OfferingCatalog = (*Store)(nil)
 )
 
 // OpenStore validates configuration, opens a PostgreSQL pool, and verifies connectivity.

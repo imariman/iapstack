@@ -30,6 +30,9 @@ final class IapStackClient {
   final bool _ownsHttpClient;
   final Random _retryRandom;
 
+  /// Last successful offering response body. It is not an application bearer.
+  OfferingDocument? _lastOfferingBody;
+
   /// Verifies one signed store purchase and returns current projections.
   Future<VerificationResult> verifyPurchase(
     PurchaseSubmission purchase, {
@@ -130,6 +133,44 @@ final class IapStackClient {
     return _decode(() => EntitlementSnapshot.fromJson(json));
   }
 
+  /// Loads the public offering document for this application.
+  ///
+  /// The last successful response body is kept only in memory. It is not an
+  /// application bearer and it is not written to disk. A transport failure,
+  /// timeout, or absent route returns that body when one exists, then
+  /// [fallback]. The failure does not change later purchase or entitlement
+  /// calls.
+  Future<OfferingDocument> getOffering(
+    OfferingDocument fallback, {
+    String? requestId,
+  }) async {
+    try {
+      final json = await _request(
+        method: 'GET',
+        path: <String>[
+          'v1',
+          'applications',
+          _config.applicationId,
+          'offering',
+        ],
+        requestId: requestId,
+        authorize: false,
+      );
+      final document = _decode(() => OfferingDocument.fromJson(json));
+      _lastOfferingBody = document;
+      return document;
+    } on IapStackTransportException {
+      return _lastOfferingBody ?? fallback;
+    } on IapStackTimeoutException {
+      return _lastOfferingBody ?? fallback;
+    } on IapStackApiException catch (error) {
+      if (error.statusCode == 404) {
+        return _lastOfferingBody ?? fallback;
+      }
+      rethrow;
+    }
+  }
+
   /// Releases the internally-created HTTP transport.
   void close() {
     if (_ownsHttpClient) {
@@ -142,6 +183,7 @@ final class IapStackClient {
     required List<String> path,
     Map<String, Object?>? body,
     String? requestId,
+    bool authorize = true,
   }) async {
     final uri = _config.baseUri.replace(
       pathSegments: <String>[
@@ -161,6 +203,7 @@ final class IapStackClient {
           body,
           requestId,
           abortTrigger.future,
+          authorize: authorize,
         ).timeout(
           _config.timeout,
           onTimeout: () {
@@ -207,8 +250,9 @@ final class IapStackClient {
     Uri uri,
     Map<String, Object?>? body,
     String? requestId,
-    Future<void> abortTrigger,
-  ) async {
+    Future<void> abortTrigger, {
+    bool authorize = true,
+  }) async {
     final request = http.AbortableRequest(
       method,
       uri,
@@ -217,8 +261,10 @@ final class IapStackClient {
       // Redirects must not forward customer credentials or purchase evidence.
       ..followRedirects = false
       ..headers['Accept'] = 'application/json'
-      ..headers['Authorization'] = 'Bearer ${_config.customerToken}'
       ..headers['X-IAPStack-SDK'] = 'flutter/$_sdkVersion';
+    if (authorize) {
+      request.headers['Authorization'] = 'Bearer ${_config.customerToken}';
+    }
     if (requestId != null && requestId.trim().isNotEmpty) {
       request.headers['X-Request-ID'] = requestId.trim();
     }

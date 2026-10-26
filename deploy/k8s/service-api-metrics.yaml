@@ -1,0 +1,20 @@
+# In-cluster scrape target for API /metrics. Same API pods and port 8080.
+# Not an Ingress backend. The bearer remains required.
+apiVersion: v1
+kind: Service
+metadata:
+  name: iapstack-api-metrics
+  namespace: iapstack
+  labels:
+    app.kubernetes.io/name: iapstack
+    app.kubernetes.io/component: api-metrics
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: iapstack
+    app.kubernetes.io/component: api
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: http
+      protocol: TCP

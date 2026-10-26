@@ -37,6 +37,8 @@ const (
 	customerAggregateType = "customer"
 	// entitlementEventSchemaVersion identifies the initial outbox payload contract.
 	entitlementEventSchemaVersion = 1
+	// entitlementEventSchemaVersionImport identifies an import-backed outbox payload.
+	entitlementEventSchemaVersionImport = 2
 	// outboxIDPrefix distinguishes deterministic outbox identities from other records.
 	outboxIDPrefix = "outbox-"
 )
@@ -113,7 +115,9 @@ type entitlementEventPayload struct {
 	EntitlementKey      string             `json:"entitlement_key"`
 	Access              core.AccessStatus  `json:"access"`
 	AccessReason        core.AccessReason  `json:"access_reason"`
-	SourceObservationID core.ObservationID `json:"source_observation_id"`
+	SourceObservationID core.ObservationID `json:"source_observation_id,omitempty"`
+	Source              string             `json:"source,omitempty"`
+	SourceImportID      string             `json:"source_import_id,omitempty"`
 	SourceApplicationID core.ApplicationID `json:"source_application_id"`
 	SourceProductID     core.ProductID     `json:"source_product_id"`
 	EffectiveStartsAt   *time.Time         `json:"effective_starts_at,omitempty"`
@@ -532,7 +536,17 @@ func (service *Service) persist(
 ) (Result, error) {
 	verificationResult := Result{VerifiedAt: providerResult.VerifiedAt, Customer: customer}
 	err := service.store.Transact(ctx, func(repository persistence.Transaction) error {
-		if err := repository.LockCustomer(ctx, command.ProjectID, customer.ID); err != nil {
+		resolution, err := repository.ResolveCustomer(ctx, command.ProjectID, command.ExternalCustomerID)
+		if err != nil {
+			if errors.Is(err, persistence.ErrNotFound) {
+				return fmt.Errorf("verification scope changed: %w", persistence.ErrConflict)
+			}
+			return err
+		}
+		if err := repository.LockCustomerClosure(ctx, command.ProjectID, resolution.CanonicalCustomerID); err != nil {
+			if errors.Is(err, persistence.ErrNotFound) {
+				return fmt.Errorf("verification scope changed: %w", persistence.ErrConflict)
+			}
 			return err
 		}
 		currentApplication, err := repository.Application(ctx, command.ProjectID, command.ApplicationID)
@@ -541,10 +555,27 @@ func (service *Service) persist(
 		}
 		currentCustomer, err := repository.CustomerByExternalID(ctx, command.ProjectID, command.ExternalCustomerID)
 		if err != nil {
+			if errors.Is(err, persistence.ErrNotFound) {
+				return fmt.Errorf("verification scope changed: %w", persistence.ErrConflict)
+			}
 			return err
 		}
-		if currentApplication != application || currentCustomer != customer {
+		if currentApplication != application || currentCustomer.ID != resolution.CanonicalCustomerID {
 			return fmt.Errorf("verification scope changed: %w", persistence.ErrConflict)
+		}
+		if currentCustomer.ID != customer.ID {
+			inClosure, closureErr := repository.CustomerInClosure(
+				ctx,
+				command.ProjectID,
+				currentCustomer.ID,
+				customer.ID,
+			)
+			if closureErr != nil {
+				return closureErr
+			}
+			if !inClosure {
+				return fmt.Errorf("verification scope changed: %w", persistence.ErrConflict)
+			}
 		}
 
 		providerProductIDs := observationProductIDs(providerResult.Observations)
@@ -562,7 +593,9 @@ func (service *Service) persist(
 			return err
 		}
 
-		evidenceID, err := repository.SaveEvidence(ctx, prepared.evidence)
+		preparedEvidence := prepared.evidence
+		preparedEvidence.CustomerID = currentCustomer.ID
+		evidenceID, err := repository.SaveEvidence(ctx, preparedEvidence)
 		if err != nil {
 			return err
 		}
@@ -578,54 +611,31 @@ func (service *Service) persist(
 			catalogProduct := catalogByProviderID[observation.ProductID]
 			observationWrite := preparedObservation.write
 			observationWrite.EvidenceID = evidenceID
+			observationWrite.CustomerID = currentCustomer.ID
 			observationWrite.ProductID = catalogProduct.Product.ID
 			if err := repository.SaveObservation(ctx, observationWrite); err != nil {
 				return err
 			}
 		}
 
-		sources, err := repository.CustomerEntitlementSources(ctx, command.ProjectID, customer.ID)
+		_, err = RefreshCustomerProjectionWithOptions(
+			ctx,
+			repository,
+			service.projector,
+			command.ProjectID,
+			currentCustomer.ID,
+			providerResult.VerifiedAt,
+			true,
+		)
 		if err != nil {
 			return err
-		}
-		candidates := make([]ProjectionCandidate, 0, len(sources))
-		for _, source := range sources {
-			candidates = append(candidates, ProjectionCandidate{
-				Projection:          source.Projection,
-				SourceApplicationID: source.SourceApplicationID,
-				ObservedAt:          source.ObservedAt,
-			})
 		}
 
-		currentEntitlements, err := repository.CustomerEntitlements(ctx, command.ProjectID, customer.ID)
-		if err != nil {
-			return err
-		}
-		projections, err := service.projector.Project(currentEntitlements, candidates)
-		if err != nil {
-			return err
-		}
-		for _, projection := range projections {
-			writeResult, err := repository.PutEntitlement(ctx, projection)
-			if err != nil {
-				return err
-			}
-			if !writeResult.Changed {
-				continue
-			}
-			event, err := newEntitlementEvent(application.ID, writeResult.Entitlement, providerResult.VerifiedAt)
-			if err != nil {
-				return err
-			}
-			if _, err := repository.SaveOutboxEvent(ctx, event); err != nil {
-				return err
-			}
-		}
-
+		verificationResult.Customer = currentCustomer
 		verificationResult.Entitlements, err = repository.CustomerEntitlements(
 			ctx,
 			command.ProjectID,
-			customer.ID,
+			currentCustomer.ID,
 		)
 		return err
 	})
@@ -685,13 +695,22 @@ func indexCatalogProducts(
 	return catalogByProviderID, nil
 }
 
+// EntitlementChangedEvent builds one idempotent outbox event for a changed projection.
+func EntitlementChangedEvent(
+	applicationID core.ApplicationID,
+	entitlement persistence.CustomerEntitlement,
+	occurredAt time.Time,
+) (persistence.OutboxEvent, error) {
+	return newEntitlementEvent(applicationID, entitlement, occurredAt)
+}
+
 // newEntitlementEvent creates a deterministic outbox event for one changed projection.
 func newEntitlementEvent(
 	applicationID core.ApplicationID,
 	entitlement persistence.CustomerEntitlement,
 	occurredAt time.Time,
 ) (persistence.OutboxEvent, error) {
-	projection := entitlement.Projection
+	projection := entitlement.Projection.Normalized()
 	payloadContract := entitlementEventPayload{
 		SchemaVersion:       entitlementEventSchemaVersion,
 		ProjectID:           projection.ProjectID,
@@ -701,10 +720,16 @@ func newEntitlementEvent(
 		EntitlementKey:      entitlement.Key,
 		Access:              projection.Access,
 		AccessReason:        projection.AccessReason,
-		SourceObservationID: projection.SourceObservationID,
 		SourceApplicationID: entitlement.SourceApplicationID,
 		SourceProductID:     projection.SourceProductID,
 		Version:             entitlement.Version,
+	}
+	if projection.SourceKind == persistence.SourceKindImport {
+		payloadContract.SchemaVersion = entitlementEventSchemaVersionImport
+		payloadContract.Source = string(persistence.SourceKindImport)
+		payloadContract.SourceImportID = projection.SourceImportID
+	} else {
+		payloadContract.SourceObservationID = projection.SourceObservationID
 	}
 	if !projection.EffectivePeriod.StartsAt.IsZero() {
 		startsAt := projection.EffectivePeriod.StartsAt

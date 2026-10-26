@@ -382,6 +382,10 @@ func openVerificationTestDatabase(t *testing.T) *verificationTestDatabase {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset verification River schema: %v", err)
 	}
+	if err := postgres.ClearIdentityMigrationGuards(ctx, connection); err != nil {
+		_ = connection.Close(ctx)
+		t.Fatalf("clear identity migration guards: %v", err)
+	}
 	if err := migrator.MigrateTo(ctx, 0); err != nil {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset verification PostgreSQL: %v", err)
@@ -400,6 +404,9 @@ func openVerificationTestDatabase(t *testing.T) *verificationTestDatabase {
 		defer cleanupCancel()
 		if err := postgres.RemoveRiver(cleanupCtx, databaseURL); err != nil {
 			t.Errorf("reset verification River schema during cleanup: %v", err)
+		}
+		if err := postgres.ClearIdentityMigrationGuards(cleanupCtx, connection); err != nil {
+			t.Errorf("clear identity migration guards during cleanup: %v", err)
 		}
 		if err := migrator.MigrateTo(cleanupCtx, 0); err != nil {
 			t.Errorf("reset verification PostgreSQL during cleanup: %v", err)

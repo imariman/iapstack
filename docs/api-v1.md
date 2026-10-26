@@ -131,9 +131,31 @@ purchase evidence, and webhook bodies. Unknown project scopes return the same
 
 Verification activity is operational data, not a financial ledger. Sandbox-only
 projects report zero real revenue. Projects with production applications report
-`store_reports_required` until authoritative Apple, Google Play, or Huawei financial
-reports are ingested; the API never estimates revenue from client product prices or
-purchase counts.
+`store_reports_required` until every production application is covered by an accepted
+official Apple, Google Play, or Huawei financial report. When that coverage is
+complete the status is `reports_imported`. Recognized amounts are then the
+store-reported proceeds for each imported period and currency, with no currency
+conversion. `recognized_minor_units` and `currency` stay null in that status so a
+single total is not implied. The API never sums `purchase_observations.price_milliunits`
+or client prices into recognized proceeds.
+
+`GET /v1/admin/projects/{project_id}/overview` accepts optional
+`financial_period_start` and `financial_period_end`. Both must be omitted or both
+supplied. They choose which accepted imports may cover the project and do not change
+the 30-day verification series. A missing requested period stays
+`store_reports_required`; it is not treated as zero.
+
+`POST /v1/admin/projects/{project_id}/financial-reports` uploads one file
+(`provider`, `report_kind`, and `file`). Apple period and currency come from the
+consolidated financial report. Google Play earnings and Huawei settlement uploads are
+stored as `unrecognized` with reason `fixture_required` until a real report fixture
+is pinned; those uploads may include the statement period. The raw file is not
+stored. `POST .../financial-reports/{import_id}:supersede` makes a newer accepted
+file the one that counts for that period and refuses a replacement that is not
+accepted. `POST .../financial-reports:pull` validates one provider period and
+refuses the pull until that provider's official parameter contract is pinned. It
+does not guess provider query parameters. `GET .../financial-reports` lists
+metadata only: no report body and no order id.
 
 Application summaries expose only `credential_revision` and `webhook_revision` for
 optimistic dashboard updates. A zero revision means the corresponding configuration

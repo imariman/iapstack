@@ -434,6 +434,15 @@ func (transaction *reconciliationTransaction) SaveReconciliationJob(
 	return job.ID, nil
 }
 
+// CustomerByExternalID leaves scheduling on the job's customer when the external id is not stored.
+func (transaction *reconciliationTransaction) CustomerByExternalID(
+	context.Context,
+	core.ProjectID,
+	string,
+) (core.Customer, error) {
+	return core.Customer{}, persistence.ErrNotFound
+}
+
 // Application verifies scheduling already happened and simulates a retryable provider preparation failure.
 func (transaction *reconciliationTransaction) Application(
 	_ context.Context,

@@ -12,6 +12,8 @@ const (
 	AdminRevenueSandboxOnly AdminRevenueStatus = "sandbox_only"
 	// AdminRevenueStoreReportsRequired means production applications need official financial reports.
 	AdminRevenueStoreReportsRequired AdminRevenueStatus = "store_reports_required"
+	// AdminRevenueReportsImported means every production application is covered by an accepted store report.
+	AdminRevenueReportsImported AdminRevenueStatus = "reports_imported"
 	// AdminRevenueNoApplications means the project has no application scope yet.
 	AdminRevenueNoApplications AdminRevenueStatus = "no_applications"
 )
@@ -21,7 +23,7 @@ type AdminQueryStore interface {
 	// AdminProjects returns bounded project summaries ordered by stable identity.
 	AdminProjects(context.Context) ([]AdminProject, error)
 	// AdminProjectOverview returns one bounded operational snapshot in project scope.
-	AdminProjectOverview(context.Context, core.ProjectID) (AdminProjectOverview, error)
+	AdminProjectOverview(context.Context, core.ProjectID, AdminRevenueQuery) (AdminProjectOverview, error)
 }
 
 // AdminProject summarizes one project without exposing protected configuration.
@@ -76,11 +78,34 @@ type AdminAnalytics struct {
 	DailyActivity          []AdminDailyActivity
 }
 
+// AdminRevenueQuery selects which accepted imports may cover production applications.
+// Zero bounds mean the latest accepted import per provider.
+type AdminRevenueQuery struct {
+	FinancialPeriodStart *time.Time
+	FinancialPeriodEnd   *time.Time
+}
+
+// AdminRecognizedAmount is one store-reported total for a provider, period, and currency.
+type AdminRecognizedAmount struct {
+	Provider        core.Provider
+	ReportKind      string
+	PeriodStart     time.Time
+	PeriodEnd       time.Time
+	Currency        string
+	AmountDecimal   string
+	AmountScale     int32
+	MinorUnits      *int64
+	CommissionState string
+	TaxState        string
+}
+
 // AdminRevenue reports only authoritative real revenue, never client-supplied price estimates.
 type AdminRevenue struct {
 	Status                     AdminRevenueStatus
 	RecognizedMinorUnits       *int64
 	Currency                   *string
+	Amounts                    []AdminRecognizedAmount
+	UncoveredProviders         []core.Provider
 	ProductionApplicationCount int64
 	TestApplicationCount       int64
 }
@@ -119,12 +144,14 @@ type AdminProduct struct {
 
 // AdminCustomer reports current access counts and the last authoritative observation time.
 type AdminCustomer struct {
-	ID               core.CustomerID
-	ExternalID       string
-	EntitlementCount int64
-	AllowedCount     int64
-	LastObservedAt   *time.Time
-	CreatedAt        time.Time
+	ID                   core.CustomerID
+	ExternalID           string
+	MergedIntoCustomerID *string
+	AliasCount           int64
+	EntitlementCount     int64
+	AllowedCount         int64
+	LastObservedAt       *time.Time
+	CreatedAt            time.Time
 }
 
 // AdminTransaction reports one normalized provider observation without protected references.

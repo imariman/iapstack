@@ -324,6 +324,8 @@ function emptyAnalytics() {
       status: "no_applications",
       recognized_minor_units: 0,
       currency: null,
+      amounts: [],
+      uncovered_providers: [],
       production_application_count: 0,
       test_application_count: 0,
     },
@@ -347,25 +349,40 @@ function renderAnalytics(analytics = emptyAnalytics()) {
 
 function renderRevenue(revenue) {
   const badge = document.querySelector("#revenue-status");
+  const number = document.querySelector(".revenue-number");
   badge.className = "revenue-badge";
+  number.classList.remove("revenue-lines");
   setText("revenue-production-apps", formatNumber(revenue.production_application_count));
   setText("revenue-test-apps", formatNumber(revenue.test_application_count));
+
+  if (revenue.status === "reports_imported") {
+    badge.textContent = "Reports imported";
+    badge.classList.add("reports-imported");
+    number.classList.add("revenue-lines");
+    setText("revenue-eyebrow", "Store-reported proceeds");
+    setText("revenue-value", formatImportedProceeds(revenue.amounts));
+    setText("revenue-currency", "not converted");
+    setText(
+      "revenue-note",
+      "Imported store proceeds for the periods shown. Currencies are not converted. Tax is not calculated.",
+    );
+    return;
+  }
 
   if (revenue.status === "store_reports_required") {
     badge.textContent = "Reports required";
     badge.classList.add("reports-required");
+    setText("revenue-eyebrow", "Not calculated");
     setText("revenue-value", "—");
     setText("revenue-currency", "not calculated");
-    setText(
-      "revenue-note",
-      "Official store financial reports are required to calculate proceeds, refunds, tax, and commission.",
-    );
+    setText("revenue-note", storeReportsRequiredNote(revenue));
     return;
   }
 
   if (revenue.status === "no_applications") {
     badge.textContent = "No applications";
     badge.classList.add("no-applications");
+    setText("revenue-eyebrow", "Authoritative total");
     setText("revenue-value", "0");
     setText("revenue-currency", "real revenue");
     setText("revenue-note", "Add an application to start verification activity.");
@@ -373,9 +390,53 @@ function renderRevenue(revenue) {
   }
 
   badge.textContent = "Sandbox only";
+  setText("revenue-eyebrow", "Authoritative total");
   setText("revenue-value", formatRevenue(revenue.recognized_minor_units, revenue.currency));
   setText("revenue-currency", revenue.currency || "real revenue");
   setText("revenue-note", "Test purchases never create real store revenue.");
+}
+
+function formatImportedProceeds(amounts) {
+  if (!Array.isArray(amounts) || amounts.length === 0) return "—";
+  return amounts.map((amount) => {
+    const provider = proceedsProviderName(amount.provider);
+    return `${provider} · ${amount.period_start} – ${amount.period_end} · ${amount.amount_decimal} ${amount.currency}`;
+  }).join("\n");
+}
+
+function proceedsProviderName(provider) {
+  switch (provider) {
+    case "apple_app_store":
+      return "Apple";
+    case "google_play":
+      return "Google Play";
+    case "huawei_appgallery":
+      return "Huawei AppGallery";
+    default:
+      return "Store";
+  }
+}
+
+function storeReportsRequiredNote(revenue) {
+  const lines = ["Official store financial reports are required. Purchase prices are not revenue."];
+  const providers = Array.isArray(revenue.uncovered_providers) ? revenue.uncovered_providers : [];
+  for (const provider of providers) {
+    lines.push(uncoveredProviderSentence(provider));
+  }
+  return lines.join(" ");
+}
+
+function uncoveredProviderSentence(provider) {
+  switch (provider) {
+    case "google_play":
+      return "Google Play has no accepted earnings report.";
+    case "apple_app_store":
+      return "Apple has no accepted financial report.";
+    case "huawei_appgallery":
+      return "Huawei AppGallery has no accepted settlement report.";
+    default:
+      return "A production store has no accepted financial report.";
+  }
 }
 
 function renderSandboxValue(sandboxValue) {
@@ -1108,12 +1169,23 @@ function renderCustomers(customers) {
   for (const customer of customers) {
     const row = document.createElement("tr");
     row.append(
-      compoundCell(customer.external_id, customer.id),
+      compoundCell(customer.external_id, customerIdentityDetail(customer)),
       textCell(`${customer.allowed_count}/${customer.entitlement_count} allowed`),
       textCell(customer.last_observed_at ? formatTime(customer.last_observed_at) : "—"),
     );
     body.append(row);
   }
+}
+
+function customerIdentityDetail(customer) {
+  const details = [customer.id];
+  if (customer.merged_into_customer_id) {
+    details.push(customer.merged_into_customer_id);
+  }
+  if (customer.alias_count) {
+    details.push(String(customer.alias_count));
+  }
+  return details.join(" · ");
 }
 
 function renderWebhooks(events) {

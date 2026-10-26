@@ -1,0 +1,19 @@
+# Only Ingress backend. ClusterIP; do not change this Service into a public LoadBalancer.
+apiVersion: v1
+kind: Service
+metadata:
+  name: iapstack-api
+  namespace: iapstack
+  labels:
+    app.kubernetes.io/name: iapstack
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: iapstack
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

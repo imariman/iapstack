@@ -62,9 +62,13 @@ type EntitlementChange struct {
 	Access string `json:"access"`
 	// AccessReason is the forward-compatible normalized access reason.
 	AccessReason string `json:"access_reason"`
-	// SourceObservationID is the observation that produced this projection.
-	SourceObservationID string `json:"source_observation_id"`
-	// SourceApplicationID is the application that sourced the observation.
+	// SourceObservationID is the observation that produced a schema version 1 projection.
+	SourceObservationID string `json:"source_observation_id,omitempty"`
+	// Source is import for schema version 2 and empty for schema version 1.
+	Source string `json:"source,omitempty"`
+	// SourceImportID is the import grant that produced a schema version 2 projection.
+	SourceImportID string `json:"source_import_id,omitempty"`
+	// SourceApplicationID is the application that sourced the projection.
 	SourceApplicationID string `json:"source_application_id"`
 	// SourceProductID is the product that sourced the observation.
 	SourceProductID string `json:"source_product_id"`
@@ -140,11 +144,22 @@ func (entitlement Entitlement) validate() error {
 
 // validate reports whether an authenticated webhook payload includes required fields.
 func (change EntitlementChange) validate() error {
-	if change.SchemaVersion <= 0 || change.Version < 1 ||
+	if change.Version < 1 ||
 		change.ProjectID == "" || change.ApplicationID == "" || change.CustomerID == "" ||
 		change.EntitlementID == "" || change.EntitlementKey == "" || change.Access == "" ||
-		change.AccessReason == "" || change.SourceObservationID == "" ||
-		change.SourceApplicationID == "" || change.SourceProductID == "" {
+		change.AccessReason == "" || change.SourceApplicationID == "" || change.SourceProductID == "" {
+		return errors.New("webhook event metadata is invalid")
+	}
+	switch change.SchemaVersion {
+	case 1:
+		if change.SourceObservationID == "" {
+			return errors.New("webhook event metadata is invalid")
+		}
+	case 2:
+		if change.Source != "import" || change.SourceImportID == "" || change.SourceObservationID != "" {
+			return errors.New("webhook event metadata is invalid")
+		}
+	default:
 		return errors.New("webhook event metadata is invalid")
 	}
 	return nil

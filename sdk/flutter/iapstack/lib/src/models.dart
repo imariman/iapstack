@@ -158,6 +158,118 @@ final class RestoreResult {
       );
 }
 
+/// Public offering document for one application.
+///
+/// The document names store products. It does not carry a price, currency,
+/// credential, or customer.
+final class OfferingDocument {
+  /// Creates one schema version 1 offering document.
+  OfferingDocument({
+    required this.schemaVersion,
+    required this.applicationId,
+    required this.revision,
+    required List<Offering> offerings,
+  }) : offerings = List<Offering>.unmodifiable(offerings) {
+    if (schemaVersion != 1 ||
+        applicationId.isEmpty ||
+        revision.isEmpty ||
+        offerings.isEmpty) {
+      throw ArgumentError('OfferingDocument is incomplete');
+    }
+  }
+
+  /// Document shape. Only version 1 is accepted.
+  final int schemaVersion;
+
+  /// Application whose configured store products are named.
+  final String applicationId;
+
+  /// Revision token used as the response ETag.
+  final String revision;
+
+  /// Named package groups.
+  final List<Offering> offerings;
+
+  /// Decodes the public v1 offering response.
+  factory OfferingDocument.fromJson(Map<String, Object?> json) {
+    final version = json['schema_version'];
+    if (version is! int || version != 1) {
+      throw const FormatException('schema_version must be 1');
+    }
+    final offerings = _objectList(json, 'offerings')
+        .map(Offering.fromJson)
+        .toList(growable: false);
+    if (offerings.isEmpty) {
+      throw const FormatException('offerings must not be empty');
+    }
+    return OfferingDocument(
+      schemaVersion: version,
+      applicationId: _requiredString(json, 'application_id'),
+      revision: _requiredString(json, 'revision'),
+      offerings: offerings,
+    );
+  }
+}
+
+/// One named group of store packages.
+final class Offering {
+  /// Creates an offering group.
+  Offering({required this.id, required List<OfferingPackage> packages})
+      : packages = List<OfferingPackage>.unmodifiable(packages) {
+    if (id.isEmpty || packages.isEmpty) {
+      throw ArgumentError('Offering is incomplete');
+    }
+  }
+
+  /// Stable offering identifier.
+  final String id;
+
+  /// Packages a client may present.
+  final List<OfferingPackage> packages;
+
+  /// Decodes one offering group.
+  factory Offering.fromJson(Map<String, Object?> json) {
+    final packages = _objectList(json, 'packages')
+        .map(OfferingPackage.fromJson)
+        .toList(growable: false);
+    if (packages.isEmpty) {
+      throw const FormatException('packages must not be empty');
+    }
+    return Offering(id: _requiredString(json, 'id'), packages: packages);
+  }
+}
+
+/// One store product a client may present.
+final class OfferingPackage {
+  /// Creates one offering package.
+  OfferingPackage({
+    required this.id,
+    required this.storeProductId,
+    this.displayKey,
+  }) {
+    if (id.isEmpty || storeProductId.isEmpty) {
+      throw ArgumentError('OfferingPackage is incomplete');
+    }
+  }
+
+  /// Stable package identifier.
+  final String id;
+
+  /// Provider product identifier already configured for the application.
+  final String storeProductId;
+
+  /// Optional client display key. Prices stay on the store.
+  final String? displayKey;
+
+  /// Decodes one offering package.
+  factory OfferingPackage.fromJson(Map<String, Object?> json) =>
+      OfferingPackage(
+        id: _requiredString(json, 'id'),
+        storeProductId: _requiredString(json, 'store_product_id'),
+        displayKey: _optionalNonEmptyString(json, 'display_key'),
+      );
+}
+
 /// Current entitlement snapshot for one external customer.
 final class EntitlementSnapshot {
   /// Creates an immutable entitlement snapshot.
@@ -179,6 +291,17 @@ final class EntitlementSnapshot {
             .map(Entitlement.fromJson)
             .toList(growable: false),
       );
+}
+
+String? _optionalNonEmptyString(Map<String, Object?> json, String key) {
+  if (!json.containsKey(key) || json[key] == null) {
+    return null;
+  }
+  final value = json[key];
+  if (value is! String || value.isEmpty) {
+    throw FormatException('$key must be a non-empty string');
+  }
+  return value;
 }
 
 String _requiredString(Map<String, Object?> json, String key) {

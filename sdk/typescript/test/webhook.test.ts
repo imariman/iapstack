@@ -274,6 +274,39 @@ test('webhook verifier rejects method and content type', async () => {
   verifier.close();
 });
 
+test('webhook verifier accepts an import schema version 2 payload', async () => {
+  const now = new Date('2026-08-31T10:00:00.000Z');
+  const verifier = newTestVerifier(now);
+  const body =
+    '{' +
+    '"schema_version":2,' +
+    '"project_id":"project-1",' +
+    '"application_id":"ios-sandbox",' +
+    '"customer_id":"customer-internal",' +
+    '"entitlement_id":"entitlement-1",' +
+    '"entitlement_key":"premium",' +
+    '"access":"allowed",' +
+    '"access_reason":"purchase_valid",' +
+    '"source":"import",' +
+    '"source_import_id":"imp-55555555555555555555555555555555",' +
+    '"source_application_id":"ios-sandbox",' +
+    '"source_product_id":"premium_annual",' +
+    '"version":2' +
+    '}';
+  const event = await verifier.verifyRequest(signedWebhookRequest(now, body, 'event-import'));
+  assert.equal(event.change.schemaVersion, 2);
+  assert.equal(event.change.source, 'import');
+  assert.equal(event.change.sourceObservationId, '');
+  await assert.rejects(
+    () =>
+      verifier.verifyRequest(
+        signedWebhookRequest(now, body.replace('"source":"import"', '"source":"store"'), 'event-import-bad'),
+      ),
+    (error) => webhookCode(error, 'invalid_event'),
+  );
+  verifier.close();
+});
+
 test('webhook verifier rejects invalid event IDs and payloads', async () => {
   const now = new Date('2026-08-31T10:00:00.000Z');
   const verifier = newTestVerifier(now);

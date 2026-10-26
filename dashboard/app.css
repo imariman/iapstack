@@ -1092,6 +1092,12 @@ button[type="submit"]:disabled::before {
   color: var(--warning);
 }
 
+.revenue-badge.reports-imported {
+  background: var(--accent-soft);
+  border-color: rgba(53, 208, 127, 0.28);
+  color: #78e4a9;
+}
+
 .revenue-badge.no-applications {
   background: var(--primary-soft);
   border-color: rgba(110, 168, 254, 0.24);
@@ -1104,6 +1110,18 @@ button[type="submit"]:disabled::before {
   flex-wrap: wrap;
   gap: 8px;
   margin: 28px 0 8px;
+}
+
+.revenue-number.revenue-lines {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.revenue-number.revenue-lines strong {
+  font-size: 16px;
+  letter-spacing: -0.02em;
+  line-height: 1.45;
+  white-space: pre-line;
 }
 
 .revenue-number strong {

@@ -90,7 +90,8 @@ func (projector *DefaultProjector) Project(
 		}
 		if current, exists := currentByEntitlement[entitlementID]; exists {
 			if currentCandidate, updated := sources[sourceFromCurrent(current)]; updated &&
-				accessStrength(currentCandidate.Projection.Access) == accessStrength(chosen.Projection.Access) {
+				accessStrength(currentCandidate.Projection.Access) == accessStrength(chosen.Projection.Access) &&
+				!importLosesToStore(current.Projection, chosen.Projection) {
 				chosen = currentCandidate
 			}
 		}
@@ -144,11 +145,15 @@ func sourceFromCurrent(current persistence.CustomerEntitlement) projectionSource
 }
 
 // newerSourceCandidate keeps the latest lifecycle state for one application-product source.
+// A store observation outranks an import grant for that same application and product.
 func newerSourceCandidate(candidate, existing ProjectionCandidate) bool {
+	if rank := compareSourceKind(candidate.Projection, existing.Projection); rank != 0 {
+		return rank > 0
+	}
 	if !candidate.ObservedAt.Equal(existing.ObservedAt) {
 		return candidate.ObservedAt.After(existing.ObservedAt)
 	}
-	return candidate.Projection.SourceObservationID < existing.Projection.SourceObservationID
+	return projectionSourceIdentity(candidate.Projection) < projectionSourceIdentity(existing.Projection)
 }
 
 // candidatePreferred deterministically ranks competing new sources for one entitlement.
@@ -158,10 +163,40 @@ func candidatePreferred(candidate, existing ProjectionCandidate) bool {
 	if candidateStrength != existingStrength {
 		return candidateStrength > existingStrength
 	}
+	if rank := compareSourceKind(candidate.Projection, existing.Projection); rank != 0 {
+		return rank > 0
+	}
 	if !candidate.ObservedAt.Equal(existing.ObservedAt) {
 		return candidate.ObservedAt.After(existing.ObservedAt)
 	}
-	return candidate.Projection.SourceObservationID < existing.Projection.SourceObservationID
+	return projectionSourceIdentity(candidate.Projection) < projectionSourceIdentity(existing.Projection)
+}
+
+// compareSourceKind ranks a store observation above an import grant.
+func compareSourceKind(candidate, existing persistence.EntitlementProjection) int {
+	return sourceKindRank(candidate) - sourceKindRank(existing)
+}
+
+// sourceKindRank scores store observations above import grants.
+func sourceKindRank(projection persistence.EntitlementProjection) int {
+	if projection.Normalized().SourceKind == persistence.SourceKindImport {
+		return 1
+	}
+	return 2
+}
+
+// projectionSourceIdentity returns the stable id used to break equal observation times.
+func projectionSourceIdentity(projection persistence.EntitlementProjection) string {
+	if projection.Normalized().SourceKind == persistence.SourceKindImport {
+		return projection.SourceImportID
+	}
+	return string(projection.SourceObservationID)
+}
+
+// importLosesToStore reports that an equal-strength shortcut must not keep an import over a store observation.
+func importLosesToStore(current, chosen persistence.EntitlementProjection) bool {
+	return current.Normalized().SourceKind == persistence.SourceKindImport &&
+		chosen.Normalized().SourceKind == persistence.SourceKindStoreObservation
 }
 
 // preserveIndependentSource keeps stronger or equal access from another internal product.

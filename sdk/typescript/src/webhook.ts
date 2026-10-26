@@ -480,6 +480,24 @@ function decodeEntitlementChange(body: Buffer): EntitlementChange {
   try {
     const schemaVersion = requiredInt(json, 'schema_version');
     const version = requiredInt(json, 'version');
+    let sourceObservationId = '';
+    let source: string | undefined;
+    let sourceImportId: string | undefined;
+    if (schemaVersion === 2) {
+      source = requiredString(json, 'source');
+      sourceImportId = requiredString(json, 'source_import_id');
+      if (source !== 'import') {
+        throw new Error('webhook event metadata is invalid');
+      }
+      const observation = json.source_observation_id;
+      if (typeof observation === 'string' && observation.length > 0) {
+        throw new Error('webhook event metadata is invalid');
+      }
+    } else if (schemaVersion === 1) {
+      sourceObservationId = requiredString(json, 'source_observation_id');
+    } else {
+      throw new Error('webhook event metadata is invalid');
+    }
     const change = new EntitlementChange({
       schemaVersion,
       projectId: requiredString(json, 'project_id'),
@@ -489,7 +507,9 @@ function decodeEntitlementChange(body: Buffer): EntitlementChange {
       entitlementKey: requiredString(json, 'entitlement_key'),
       access: requiredString(json, 'access'),
       accessReason: requiredString(json, 'access_reason'),
-      sourceObservationId: requiredString(json, 'source_observation_id'),
+      sourceObservationId,
+      source,
+      sourceImportId,
       sourceApplicationId: requiredString(json, 'source_application_id'),
       sourceProductId: requiredString(json, 'source_product_id'),
       effectiveStartsAt: optionalDate(json, 'effective_starts_at'),

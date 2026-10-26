@@ -320,11 +320,29 @@ func (service *Service) HandleReconciliation(ctx context.Context, message persis
 	if err := decodeStrict(payload, &scheduled); err != nil {
 		return fmt.Errorf("decode reconciliation request: %w", err)
 	}
+	customerID := message.CustomerID
+	if err := service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		customer, loadErr := repository.CustomerByExternalID(
+			ctx,
+			message.ProjectID,
+			scheduled.Verification.ExternalCustomerID,
+		)
+		if loadErr != nil {
+			if errors.Is(loadErr, persistence.ErrNotFound) {
+				return nil
+			}
+			return loadErr
+		}
+		customerID = customer.ID
+		return nil
+	}); err != nil {
+		return err
+	}
 	if err := service.schedule(
 		ctx,
 		message.ProjectID,
 		message.ApplicationID,
-		message.CustomerID,
+		customerID,
 		scheduled.Verification,
 	); err != nil {
 		return err

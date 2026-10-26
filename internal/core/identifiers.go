@@ -22,6 +22,11 @@ func ValidateExternalCustomerID(value string) error {
 	return validateIdentifier("external customer ID", value)
 }
 
+// ValidateOpaqueIdentifier checks one non-domain identity with the shared identifier rules.
+func ValidateOpaqueIdentifier(name, value string) error {
+	return validateIdentifier(name, value)
+}
+
 // Validate checks that the project ID is present and well formed.
 func (id ProjectID) Validate() error {
 	return validateIdentifier("project ID", string(id))
