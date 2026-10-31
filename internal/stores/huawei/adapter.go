@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/imariman/iapstack/internal/core"
@@ -38,6 +39,8 @@ const (
 	maximumProviderResponse int64 = 2 << 20
 	// defaultTokenURL is Huawei's documented OAuth token service.
 	defaultTokenURL = "https://oauth-login.cloud.huawei.com/oauth2/v3/token" // #nosec G101 -- This is Huawei's public OAuth endpoint, not credential material.
+	// tokenExpiryMargin refreshes a cached OAuth token shortly before Huawei's expires_in.
+	tokenExpiryMargin = 60 * time.Second
 )
 
 // Adapter verifies Huawei evidence using application-scoped credentials and authoritative server APIs.
@@ -46,6 +49,14 @@ type Adapter struct {
 	client               *http.Client
 	clock                func() time.Time
 	allowPrivateNetworks bool
+	tokenMu              sync.Mutex
+	tokens               map[string]cachedAccessToken
+}
+
+// cachedAccessToken is one app-level OAuth token retained until shortly before expires_in.
+type cachedAccessToken struct {
+	token     string
+	expiresAt time.Time
 }
 
 // credentialPayload is the versioned private Huawei application configuration.
@@ -60,9 +71,10 @@ type credentialPayload struct {
 
 // clientEvidence is the signed Huawei purchase returned by the device SDK.
 type clientEvidence struct {
-	PurchaseData string           `json:"purchase_data"`
-	Signature    string           `json:"signature"`
-	ProductKind  core.ProductKind `json:"product_kind"`
+	PurchaseData       string           `json:"purchase_data"`
+	Signature          string           `json:"signature"`
+	SignatureAlgorithm string           `json:"signature_algorithm,omitempty"`
+	ProductKind        core.ProductKind `json:"product_kind"`
 }
 
 // purchaseData contains the Huawei fields required for normalization and consistency checks.
@@ -141,6 +153,7 @@ func New(
 		client:               newProviderClient(timeout, allowPrivateNetworks),
 		clock:                time.Now,
 		allowPrivateNetworks: allowPrivateNetworks,
+		tokens:               make(map[string]cachedAccessToken),
 	}, nil
 }
 
@@ -168,7 +181,7 @@ func (adapter *Adapter) Verify(
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}
-	if err := verifySignature(publicKey, evidence.PurchaseData, evidence.Signature, ""); err != nil {
+	if err := verifySignature(publicKey, evidence.PurchaseData, evidence.Signature, evidence.SignatureAlgorithm); err != nil {
 		return stores.VerificationResult{}, invalid("verify", err)
 	}
 	authoritative, rawArtifact, err := adapter.query(ctx, configuration, submitted, evidence.ProductKind)
@@ -291,10 +304,6 @@ func (adapter *Adapter) query(
 	if productKind == core.ProductKindSubscription && strings.TrimSpace(purchase.SubscriptionID) == "" {
 		return signedData{}, stores.Evidence{}, invalid("query", errors.New("huawei subscription verification requires subscriptionId"))
 	}
-	accessToken, err := adapter.token(ctx, configuration)
-	if err != nil {
-		return signedData{}, stores.Evidence{}, err
-	}
 	endpoint := configuration.OrderURL
 	bodyQuery := providerQuery{PurchaseToken: purchase.PurchaseToken, ProductID: purchase.ProductID}
 	if productKind == core.ProductKindSubscription {
@@ -305,16 +314,28 @@ func (adapter *Adapter) query(
 	if err != nil {
 		return signedData{}, stores.Evidence{}, invalid("query", err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return signedData{}, stores.Evidence{}, invalid("query", err)
-	}
-	request.Header.Set("Authorization", appAccessTokenAuthorization(accessToken))
-	request.Header.Set("Content-Type", "application/json; charset=UTF-8")
-	request.Header.Set("Accept", "application/json")
-	responseBody, status, err := adapter.do(request)
-	if err != nil {
-		return signedData{}, stores.Evidence{}, err
+	var responseBody []byte
+	var status int
+	for attempt := 0; attempt < 2; attempt++ {
+		accessToken, tokenErr := adapter.token(ctx, configuration)
+		if tokenErr != nil {
+			return signedData{}, stores.Evidence{}, tokenErr
+		}
+		request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if requestErr != nil {
+			return signedData{}, stores.Evidence{}, invalid("query", requestErr)
+		}
+		request.Header.Set("Authorization", appAccessTokenAuthorization(accessToken))
+		request.Header.Set("Content-Type", "application/json; charset=UTF-8")
+		request.Header.Set("Accept", "application/json")
+		responseBody, status, err = adapter.do(request)
+		if err != nil {
+			return signedData{}, stores.Evidence{}, err
+		}
+		if status != http.StatusUnauthorized {
+			break
+		}
+		adapter.forgetToken(configuration.ClientID, accessToken)
 	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return signedData{}, stores.Evidence{}, stores.NewFailure(adapter.Provider(), "query", stores.FailureUnauthorized, 0, nil)
@@ -397,32 +418,86 @@ func (result providerResponse) signedPurchase() (signedData, error) {
 	}
 }
 
-// token requests a server-to-server OAuth access token using application credentials.
+// token returns a cached app-level access token, fetching one per client id when needed.
+// The cache is held under tokenMu for the whole fetch so concurrent callers share one request.
 func (adapter *Adapter) token(ctx context.Context, configuration credentialPayload) (string, error) {
+	adapter.tokenMu.Lock()
+	defer adapter.tokenMu.Unlock()
+	if adapter.tokens == nil {
+		adapter.tokens = make(map[string]cachedAccessToken)
+	}
+	now := adapter.now()
+	if cached, ok := adapter.tokens[configuration.ClientID]; ok && cached.token != "" && now.Before(cached.expiresAt) {
+		return cached.token, nil
+	}
+	accessToken, expiresIn, err := adapter.fetchToken(ctx, configuration)
+	if err != nil {
+		return "", err
+	}
+	if expiresAt, ok := tokenCacheExpiry(now, expiresIn); ok {
+		adapter.tokens[configuration.ClientID] = cachedAccessToken{token: accessToken, expiresAt: expiresAt}
+	} else {
+		delete(adapter.tokens, configuration.ClientID)
+	}
+	return accessToken, nil
+}
+
+// fetchToken requests a new OAuth access token and reports its expires_in lifetime.
+func (adapter *Adapter) fetchToken(ctx context.Context, configuration credentialPayload) (string, int64, error) {
 	form := url.Values{}
 	form.Set("grant_type", "client_credentials")
 	form.Set("client_id", configuration.ClientID)
 	form.Set("client_secret", configuration.ClientSecret)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, configuration.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", stores.NewFailure(adapter.Provider(), "token", stores.FailurePermanent, 0, err)
+		return "", 0, stores.NewFailure(adapter.Provider(), "token", stores.FailurePermanent, 0, err)
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	body, status, err := adapter.do(request)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if status == http.StatusTooManyRequests || status >= 500 {
-		return "", stores.NewFailure(adapter.Provider(), "token", stores.FailureTemporary, 0, nil)
+		return "", 0, stores.NewFailure(adapter.Provider(), "token", stores.FailureTemporary, 0, nil)
 	}
 	if status < 200 || status >= 300 {
-		return "", stores.NewFailure(adapter.Provider(), "token", stores.FailureUnauthorized, 0, nil)
+		return "", 0, stores.NewFailure(adapter.Provider(), "token", stores.FailureUnauthorized, 0, nil)
 	}
 	var result tokenResponse
 	if err := decodeStrict(body, &result); err != nil || result.AccessToken == "" {
-		return "", stores.NewFailure(adapter.Provider(), "token", stores.FailureUnauthorized, 0, err)
+		return "", 0, stores.NewFailure(adapter.Provider(), "token", stores.FailureUnauthorized, 0, err)
 	}
-	return result.AccessToken, nil
+	return result.AccessToken, result.ExpiresIn, nil
+}
+
+// forgetToken drops one cached access token after Huawei rejected that exact value.
+func (adapter *Adapter) forgetToken(clientID, accessToken string) {
+	adapter.tokenMu.Lock()
+	defer adapter.tokenMu.Unlock()
+	cached, ok := adapter.tokens[clientID]
+	if ok && cached.token == accessToken {
+		delete(adapter.tokens, clientID)
+	}
+}
+
+// now returns the adapter clock, or the wall clock when a test left it unset.
+func (adapter *Adapter) now() time.Time {
+	if adapter.clock != nil {
+		return adapter.clock()
+	}
+	return time.Now()
+}
+
+// tokenCacheExpiry returns when a cached token must be refreshed, shortly before it expires.
+func tokenCacheExpiry(now time.Time, expiresIn int64) (time.Time, bool) {
+	if expiresIn <= 0 {
+		return time.Time{}, false
+	}
+	lifetime := time.Duration(expiresIn) * time.Second
+	if lifetime <= tokenExpiryMargin || lifetime/time.Second != time.Duration(expiresIn) {
+		return time.Time{}, false
+	}
+	return now.Add(lifetime - tokenExpiryMargin), true
 }
 
 // do executes one bounded provider call and reads no more than the response limit.
@@ -677,7 +752,7 @@ func normalizeState(
 }
 
 // verifySignature validates Huawei's detached SHA-256 RSA signature over exact JSON bytes.
-// An empty algorithm uses SHA256WithRSA. SHA256WithRSA/PSS is accepted when the response names it.
+// An empty algorithm uses SHA256WithRSA. SHA256WithRSA and SHA256WithRSA/PSS are accepted.
 func verifySignature(publicKey *rsa.PublicKey, data, encodedSignature, algorithm string) error {
 	signature, err := base64.StdEncoding.DecodeString(encodedSignature)
 	if err != nil {

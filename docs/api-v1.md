@@ -182,12 +182,13 @@ A purchase item contains an external customer ID, claimed products, optional cus
 ```json
 {
   "purchase_data": "<exact InAppPurchaseData JSON string>",
-  "signature": "<base64 RSA-SHA256 signature>",
+  "signature": "<base64 detached signature>",
+  "signature_algorithm": "SHA256WithRSA",
   "product_kind": "subscription"
 }
 ```
 
-IAPStack verifies the device signature, queries Huawei for current authoritative state, verifies the server response signature, checks application, product, subscription id, price, currency, and token consistency, and commits evidence, projection, and outbox changes atomically. Subscription `purchase_data` must include `subscriptionId`. `applicationId` inside that JSON may be a number.
+`signature_algorithm` is optional. Omitted evidence uses `SHA256WithRSA`. `SHA256WithRSA/PSS` is also accepted. Any other value is rejected with `422 invalid_purchase`. IAPStack verifies the device signature with that algorithm, queries Huawei for current authoritative state, verifies the server response signature, checks application, product, subscription id, price, currency, and token consistency, and commits evidence, projection, and outbox changes atomically. Subscription `purchase_data` must include `subscriptionId`. `applicationId` inside that JSON may be a number.
 
 For v0.1 customer binding, the Huawei `developerPayload` must equal the authenticated request's `external_customer_id`. The API always supplies this as an expected signed binding; a valid purchase cannot be reassigned to a different application customer.
 
@@ -261,7 +262,10 @@ a previously verified purchase and requires the same application, product, and p
 kind. The lookup and inbox insertion share one transaction. Unknown tokens and scope
 mismatches are rejected without durable work; only an unavailable persistence lookup is
 retryable. The worker still queries Huawei's server API before changing access, so
-callback fields never grant access directly.
+callback fields never grant access directly. A subscription notification stored before
+`subscription_id` was recorded uses `subscriptionId` from the stored client purchase
+evidence for that purchase token. When that evidence is missing, the worker retries
+instead of failing the notification permanently.
 
 App Store Server Notifications V2 ingestion is
 `POST /v1/providers/apple/projects/{project_id}/applications/{application_id}/notifications`.

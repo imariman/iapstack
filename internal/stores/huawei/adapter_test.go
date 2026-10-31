@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -549,6 +551,247 @@ func TestAdapterRejectsSubscriptionWithoutSubscriptionID(t *testing.T) {
 		t.Fatal("provider was called without subscriptionId")
 	default:
 	}
+}
+
+// TestAdapterVerifiesDeviceSignatureAlgorithm accepts SHA256WithRSA and SHA256WithRSA/PSS and rejects other values.
+func TestAdapterVerifiesDeviceSignatureAlgorithm(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	purchasedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+	purchase := purchaseData{
+		ApplicationID: "provider-app-1", ProductID: "lifetime", OrderID: "order-1",
+		PurchaseToken: "opaque-purchase-token", PurchaseState: 0,
+		PurchaseTime: purchasedAt.UnixMilli(), Quantity: 1, Currency: "USD", Price: 499,
+	}
+	purchaseJSON, err := json.Marshal(purchase)
+	if err != nil {
+		t.Fatalf("Marshal() purchase error = %v", err)
+	}
+	serverSignature := signFixture(t, privateKey, purchaseJSON)
+	pkcs1 := signFixture(t, privateKey, purchaseJSON)
+	pss := signPSSFixture(t, privateKey, purchaseJSON)
+
+	tests := []struct {
+		name      string
+		algorithm string
+		signature string
+		wantError bool
+	}{
+		{name: "SHA256WithRSA", algorithm: "SHA256WithRSA", signature: pkcs1},
+		{name: "SHA256WithRSA/PSS", algorithm: "SHA256WithRSA/PSS", signature: pss},
+		{name: "unknown", algorithm: "SHA1WithRSA", signature: pkcs1, wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var providerCalls atomic.Int32
+			adapter := newHuaweiAdapter(t, privateKey, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				providerCalls.Add(1)
+				if request.URL.Path == "/token" {
+					writeFixtureJSON(writer, map[string]any{"access_token": "provider-access", "expires_in": 300})
+					return
+				}
+				if request.URL.Path != "/order" {
+					writer.WriteHeader(http.StatusNotFound)
+					return
+				}
+				writeFixtureJSON(writer, map[string]any{
+					"responseCode": "0", "purchaseTokenData": string(purchaseJSON), "dataSignature": serverSignature,
+				})
+			}))
+			evidenceJSON, marshalErr := json.Marshal(clientEvidence{
+				PurchaseData: string(purchaseJSON), Signature: tt.signature,
+				SignatureAlgorithm: tt.algorithm, ProductKind: core.ProductKindNonConsumable,
+			})
+			if marshalErr != nil {
+				t.Fatalf("Marshal() evidence error = %v", marshalErr)
+			}
+			evidence, evidenceErr := stores.NewEvidence(EvidenceContentType, evidenceJSON)
+			if evidenceErr != nil {
+				t.Fatalf("NewEvidence() error = %v", evidenceErr)
+			}
+			_, verifyErr := adapter.Verify(context.Background(), stores.VerificationRequest{
+				Application: huaweiVerificationApplication("provider-app-1"), CustomerID: "customer-1",
+				ClaimedProducts: []core.ProviderProductID{"lifetime"}, Evidence: evidence,
+			})
+			if tt.wantError {
+				var failure *stores.Failure
+				if !errors.As(verifyErr, &failure) || failure.Kind != stores.FailureInvalidEvidence || failure.Retryable() {
+					t.Fatalf("Verify() error = %#v, want non-retryable invalid evidence", verifyErr)
+				}
+				if providerCalls.Load() != 0 {
+					t.Fatalf("provider calls = %d, want 0", providerCalls.Load())
+				}
+				return
+			}
+			if verifyErr != nil {
+				t.Fatalf("Verify() error = %v", verifyErr)
+			}
+			if providerCalls.Load() == 0 {
+				t.Fatal("provider was not called")
+			}
+		})
+	}
+}
+
+// TestAdapterCachesTokenAcrossConcurrentVerify shows two overlapping verifications share one token request.
+func TestAdapterCachesTokenAcrossConcurrentVerify(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	purchasedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+	purchase := purchaseData{
+		ApplicationID: "provider-app-1", ProductID: "lifetime", OrderID: "order-1",
+		PurchaseToken: "opaque-purchase-token", PurchaseState: 0,
+		PurchaseTime: purchasedAt.UnixMilli(), Quantity: 1, Currency: "USD", Price: 499,
+	}
+	purchaseJSON, err := json.Marshal(purchase)
+	if err != nil {
+		t.Fatalf("Marshal() purchase error = %v", err)
+	}
+	signature := signFixture(t, privateKey, purchaseJSON)
+	var tokenRequests atomic.Int32
+	adapter := newHuaweiAdapter(t, privateKey, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			tokenRequests.Add(1)
+			time.Sleep(150 * time.Millisecond)
+			writeFixtureJSON(writer, map[string]any{"access_token": "provider-access", "expires_in": 300})
+		case "/order":
+			if request.Header.Get("Authorization") != appAccessTokenAuthorization("provider-access") {
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			writeFixtureJSON(writer, map[string]any{
+				"responseCode": "0", "purchaseTokenData": string(purchaseJSON), "dataSignature": signature,
+			})
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	request := stores.VerificationRequest{
+		Application: huaweiVerificationApplication("provider-app-1"), CustomerID: "customer-1",
+		ClaimedProducts: []core.ProviderProductID{"lifetime"},
+		Evidence:        signedHuaweiEvidence(t, privateKey, purchaseJSON, core.ProductKindNonConsumable),
+	}
+	var wg sync.WaitGroup
+	errorsSeen := make(chan error, 2)
+	started := make(chan struct{})
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-started
+			result, verifyErr := adapter.Verify(context.Background(), request)
+			if verifyErr != nil {
+				errorsSeen <- verifyErr
+				return
+			}
+			if len(result.Observations) != 1 || result.Observations[0].Access != core.AccessAllowed {
+				errorsSeen <- errors.New("verification did not allow access")
+			}
+		}()
+	}
+	close(started)
+	wg.Wait()
+	close(errorsSeen)
+	for verifyErr := range errorsSeen {
+		t.Fatalf("Verify() error = %v", verifyErr)
+	}
+	if tokenRequests.Load() != 1 {
+		t.Fatalf("token requests = %d, want 1", tokenRequests.Load())
+	}
+}
+
+// TestAdapterRetriesPurchaseOnceAfterUnauthorized drops a rejected token and retries the purchase once.
+func TestAdapterRetriesPurchaseOnceAfterUnauthorized(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	purchasedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+	purchase := purchaseData{
+		ApplicationID: "provider-app-1", ProductID: "lifetime", OrderID: "order-1",
+		PurchaseToken: "opaque-purchase-token", PurchaseState: 0,
+		PurchaseTime: purchasedAt.UnixMilli(), Quantity: 1, Currency: "USD", Price: 499,
+	}
+	purchaseJSON, err := json.Marshal(purchase)
+	if err != nil {
+		t.Fatalf("Marshal() purchase error = %v", err)
+	}
+	signature := signFixture(t, privateKey, purchaseJSON)
+	evidence := signedHuaweiEvidence(t, privateKey, purchaseJSON, core.ProductKindNonConsumable)
+	request := stores.VerificationRequest{
+		Application: huaweiVerificationApplication("provider-app-1"), CustomerID: "customer-1",
+		ClaimedProducts: []core.ProviderProductID{"lifetime"}, Evidence: evidence,
+	}
+
+	t.Run("second attempt succeeds", func(t *testing.T) {
+		var tokenRequests atomic.Int32
+		var orderRequests atomic.Int32
+		adapter := newHuaweiAdapter(t, privateKey, http.HandlerFunc(func(writer http.ResponseWriter, httpRequest *http.Request) {
+			switch httpRequest.URL.Path {
+			case "/token":
+				token := "stale-token"
+				if tokenRequests.Add(1) > 1 {
+					token = "fresh-token"
+				}
+				writeFixtureJSON(writer, map[string]any{"access_token": token, "expires_in": 300})
+			case "/order":
+				attempt := orderRequests.Add(1)
+				want := appAccessTokenAuthorization("stale-token")
+				if attempt > 1 {
+					want = appAccessTokenAuthorization("fresh-token")
+				}
+				if httpRequest.Header.Get("Authorization") != want {
+					writer.WriteHeader(http.StatusForbidden)
+					return
+				}
+				if attempt == 1 {
+					writer.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				writeFixtureJSON(writer, map[string]any{
+					"responseCode": "0", "purchaseTokenData": string(purchaseJSON), "dataSignature": signature,
+				})
+			default:
+				writer.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		if _, verifyErr := adapter.Verify(context.Background(), request); verifyErr != nil {
+			t.Fatalf("Verify() error = %v", verifyErr)
+		}
+		if tokenRequests.Load() != 2 || orderRequests.Load() != 2 {
+			t.Fatalf("token requests = %d, order requests = %d, want 2 and 2", tokenRequests.Load(), orderRequests.Load())
+		}
+	})
+
+	t.Run("second unauthorized stops", func(t *testing.T) {
+		var tokenRequests atomic.Int32
+		var orderRequests atomic.Int32
+		adapter := newHuaweiAdapter(t, privateKey, http.HandlerFunc(func(writer http.ResponseWriter, httpRequest *http.Request) {
+			switch httpRequest.URL.Path {
+			case "/token":
+				tokenRequests.Add(1)
+				writeFixtureJSON(writer, map[string]any{"access_token": "rejected-token", "expires_in": 300})
+			case "/order":
+				orderRequests.Add(1)
+				writer.WriteHeader(http.StatusUnauthorized)
+			default:
+				writer.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		_, verifyErr := adapter.Verify(context.Background(), request)
+		var failure *stores.Failure
+		if !errors.As(verifyErr, &failure) || failure.Kind != stores.FailureUnauthorized {
+			t.Fatalf("Verify() error = %#v, want unauthorized", verifyErr)
+		}
+		if tokenRequests.Load() != 2 || orderRequests.Load() != 2 {
+			t.Fatalf("token requests = %d, order requests = %d, want 2 and 2", tokenRequests.Load(), orderRequests.Load())
+		}
+	})
 }
 
 // TestValidateNotificationCanonicalizesEquivalentPayloads verifies replay identity ignores harmless JSON formatting.

@@ -1645,7 +1645,15 @@ components:
         signature:
           type: string
           minLength: 1
-          description: Base64-encoded detached SHA256WithRSA signature over purchase_data.
+          description: >-
+            Base64-encoded detached signature over purchase_data.
+            The algorithm is signature_algorithm, or SHA256WithRSA when that field is omitted.
+        signature_algorithm:
+          type: string
+          enum: ["SHA256WithRSA", "SHA256WithRSA/PSS"]
+          description: >-
+            Optional device signature algorithm. Defaults to SHA256WithRSA.
+            SHA256WithRSA/PSS is also accepted. Any other value is rejected.
         product_kind:
           type: string
           enum: [subscription, non_consumable]
