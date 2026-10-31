@@ -7,7 +7,8 @@
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:minimatch-shim": "bun scripts/check-minimatch-shim.js"
   },
   "dependencies": {
     "react": "19.2.3",
@@ -40,6 +41,7 @@
     "fast-xml-parser": "^5.7.0",
     "joi": "17.13.9",
     "minimatch": "11.0.3",
+    "//minimatch": "Regenerate patches/minimatch@<pin>.patch whenever this pin changes. patchedDependencies must stay pinned to that exact version.",
     "qs": "6.16.2",
     "zod": "4.6.7"
   },
