@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,6 +27,11 @@ import (
 // fakeCredentialSource returns one opaque Huawei credential fixture.
 type fakeCredentialSource struct {
 	credential stores.Credential
+}
+
+// credentialsByApplication returns one Huawei credential for each application under test.
+type credentialsByApplication struct {
+	credentials map[core.ApplicationID]stores.Credential
 }
 
 // rewriteTransport redirects one public test hostname to a local TLS fixture.
@@ -705,6 +711,109 @@ func TestAdapterCachesTokenAcrossConcurrentVerify(t *testing.T) {
 	}
 }
 
+// TestAdapterIsolatesCachedTokensByClientSecret gives each secret its own token when the client id matches.
+func TestAdapterIsolatesCachedTokensByClientSecret(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	const (
+		clientID = "shared-client"
+		secretA  = "secret-a"
+		secretB  = "secret-b"
+		tokenA   = "access-a"
+		tokenB   = "access-b"
+	)
+	publicKey := publicKeyFixture(t, &privateKey.PublicKey)
+	purchasedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+	purchase := purchaseData{
+		ApplicationID: "provider-app-1", ProductID: "lifetime", OrderID: "order-1",
+		PurchaseToken: "opaque-purchase-token", PurchaseState: 0,
+		PurchaseTime: purchasedAt.UnixMilli(), Quantity: 1, Currency: "USD", Price: 499,
+	}
+	purchaseJSON, err := json.Marshal(purchase)
+	if err != nil {
+		t.Fatalf("Marshal() purchase error = %v", err)
+	}
+	signature := signFixture(t, privateKey, purchaseJSON)
+	var tokenRequests atomic.Int32
+	var authorizations []string
+	var authorizationMu sync.Mutex
+	adapter := newHuaweiAdapterFromSource(t, credentialsByApplication{credentials: map[core.ApplicationID]stores.Credential{
+		"application-a": huaweiTestCredential(t, publicKey, clientID, secretA),
+		"application-b": huaweiTestCredential(t, publicKey, clientID, secretB),
+	}}, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			if parseErr := request.ParseForm(); parseErr != nil || request.PostForm.Get("client_id") != clientID {
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			tokenRequests.Add(1)
+			accessToken := tokenA
+			if request.PostForm.Get("client_secret") == secretB {
+				accessToken = tokenB
+			}
+			writeFixtureJSON(writer, map[string]any{"access_token": accessToken, "expires_in": 300})
+		case "/order":
+			authorizationMu.Lock()
+			authorizations = append(authorizations, request.Header.Get("Authorization"))
+			authorizationMu.Unlock()
+			writeFixtureJSON(writer, map[string]any{
+				"responseCode": "0", "purchaseTokenData": string(purchaseJSON), "dataSignature": signature,
+			})
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	evidence := signedHuaweiEvidence(t, privateKey, purchaseJSON, core.ProductKindNonConsumable)
+	verifications := []struct {
+		applicationID core.ApplicationID
+		accessToken   string
+	}{
+		{applicationID: "application-a", accessToken: tokenA},
+		{applicationID: "application-a", accessToken: tokenA},
+		{applicationID: "application-b", accessToken: tokenB},
+	}
+	for _, verification := range verifications {
+		application := huaweiVerificationApplication("provider-app-1")
+		application.ID = verification.applicationID
+		_, verifyErr := adapter.Verify(context.Background(), stores.VerificationRequest{
+			Application: application, CustomerID: "customer-1",
+			ClaimedProducts: []core.ProviderProductID{"lifetime"}, Evidence: evidence,
+		})
+		if verifyErr != nil {
+			t.Fatalf("Verify(%s) error = %v", verification.applicationID, verifyErr)
+		}
+	}
+	if tokenRequests.Load() != 2 {
+		t.Fatalf("token requests = %d, want 2", tokenRequests.Load())
+	}
+	wantAuthorizations := []string{
+		appAccessTokenAuthorization(tokenA),
+		appAccessTokenAuthorization(tokenA),
+		appAccessTokenAuthorization(tokenB),
+	}
+	if len(authorizations) != len(wantAuthorizations) {
+		t.Fatalf("order authorizations = %#v, want %#v", authorizations, wantAuthorizations)
+	}
+	for index := range wantAuthorizations {
+		if authorizations[index] != wantAuthorizations[index] {
+			t.Fatalf("order authorization %d = %q, want %q", index, authorizations[index], wantAuthorizations[index])
+		}
+	}
+	adapter.tokenMu.Lock()
+	defer adapter.tokenMu.Unlock()
+	if len(adapter.tokens) != 2 {
+		t.Fatalf("cached tokens = %d, want 2", len(adapter.tokens))
+	}
+	for cacheKey := range adapter.tokens {
+		if strings.Contains(cacheKey, secretA) || strings.Contains(cacheKey, secretB) || strings.Contains(cacheKey, clientID) {
+			t.Fatalf("token cache key retains credential material")
+		}
+	}
+}
+
 // TestAdapterRetriesPurchaseOnceAfterUnauthorized drops a rejected token and retries the purchase once.
 func TestAdapterRetriesPurchaseOnceAfterUnauthorized(t *testing.T) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -862,6 +971,19 @@ func (source fakeCredentialSource) Credential(
 	return source.credential, nil
 }
 
+// Credential returns the opaque credential configured for the requested application.
+func (source credentialsByApplication) Credential(
+	_ context.Context,
+	application core.Application,
+	_ stores.CredentialKind,
+) (stores.Credential, error) {
+	credential, ok := source.credentials[application.ID]
+	if !ok {
+		return stores.Credential{}, errors.New("missing huawei credential")
+	}
+	return credential, nil
+}
+
 // mustPurchaseJSON serializes one purchase object with stable JSON object key order.
 func mustPurchaseJSON(t *testing.T, fields map[string]any) []byte {
 	t.Helper()
@@ -872,13 +994,11 @@ func mustPurchaseJSON(t *testing.T, fields map[string]any) []byte {
 	return encoded
 }
 
-// newHuaweiAdapter points one adapter at a TLS stand-in for Huawei's token and purchase APIs.
-func newHuaweiAdapter(t *testing.T, privateKey *rsa.PrivateKey, handler http.Handler) *Adapter {
+// huaweiTestCredential builds one Huawei credential with the supplied client id and secret.
+func huaweiTestCredential(t *testing.T, publicKey, clientID, clientSecret string) stores.Credential {
 	t.Helper()
-	server := httptest.NewTLSServer(handler)
-	t.Cleanup(server.Close)
 	credentialJSON, err := json.Marshal(credentialPayload{
-		ClientID: "client", ClientSecret: "secret", PublicKey: publicKeyFixture(t, &privateKey.PublicKey),
+		ClientID: clientID, ClientSecret: clientSecret, PublicKey: publicKey,
 		TokenURL: "https://provider.example/token", OrderURL: "https://provider.example/order",
 		SubscriptionURL: "https://provider.example/subscription",
 	})
@@ -889,7 +1009,23 @@ func newHuaweiAdapter(t *testing.T, privateKey *rsa.PrivateKey, handler http.Han
 	if err != nil {
 		t.Fatalf("NewCredential() error = %v", err)
 	}
-	adapter, err := New(fakeCredentialSource{credential: credential}, time.Second, false)
+	return credential
+}
+
+// newHuaweiAdapter points one adapter at a TLS stand-in for Huawei's token and purchase APIs.
+func newHuaweiAdapter(t *testing.T, privateKey *rsa.PrivateKey, handler http.Handler) *Adapter {
+	t.Helper()
+	return newHuaweiAdapterFromSource(t, fakeCredentialSource{
+		credential: huaweiTestCredential(t, publicKeyFixture(t, &privateKey.PublicKey), "client", "secret"),
+	}, handler)
+}
+
+// newHuaweiAdapterFromSource points one adapter and its credential source at a TLS stand-in.
+func newHuaweiAdapterFromSource(t *testing.T, source stores.CredentialSource, handler http.Handler) *Adapter {
+	t.Helper()
+	server := httptest.NewTLSServer(handler)
+	t.Cleanup(server.Close)
+	adapter, err := New(source, time.Second, false)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

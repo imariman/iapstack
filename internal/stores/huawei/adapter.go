@@ -335,7 +335,7 @@ func (adapter *Adapter) query(
 		if status != http.StatusUnauthorized {
 			break
 		}
-		adapter.forgetToken(configuration.ClientID, accessToken)
+		adapter.forgetToken(tokenCacheKey(configuration), accessToken)
 	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return signedData{}, stores.Evidence{}, stores.NewFailure(adapter.Provider(), "query", stores.FailureUnauthorized, 0, nil)
@@ -418,16 +418,17 @@ func (result providerResponse) signedPurchase() (signedData, error) {
 	}
 }
 
-// token returns a cached app-level access token, fetching one per client id when needed.
+// token returns a cached app-level access token, fetching one per credential when needed.
 // The cache is held under tokenMu for the whole fetch so concurrent callers share one request.
 func (adapter *Adapter) token(ctx context.Context, configuration credentialPayload) (string, error) {
+	cacheKey := tokenCacheKey(configuration)
 	adapter.tokenMu.Lock()
 	defer adapter.tokenMu.Unlock()
 	if adapter.tokens == nil {
 		adapter.tokens = make(map[string]cachedAccessToken)
 	}
 	now := adapter.now()
-	if cached, ok := adapter.tokens[configuration.ClientID]; ok && cached.token != "" && now.Before(cached.expiresAt) {
+	if cached, ok := adapter.tokens[cacheKey]; ok && cached.token != "" && now.Before(cached.expiresAt) {
 		return cached.token, nil
 	}
 	accessToken, expiresIn, err := adapter.fetchToken(ctx, configuration)
@@ -435,11 +436,27 @@ func (adapter *Adapter) token(ctx context.Context, configuration credentialPaylo
 		return "", err
 	}
 	if expiresAt, ok := tokenCacheExpiry(now, expiresIn); ok {
-		adapter.tokens[configuration.ClientID] = cachedAccessToken{token: accessToken, expiresAt: expiresAt}
+		adapter.tokens[cacheKey] = cachedAccessToken{token: accessToken, expiresAt: expiresAt}
 	} else {
-		delete(adapter.tokens, configuration.ClientID)
+		delete(adapter.tokens, cacheKey)
 	}
 	return accessToken, nil
+}
+
+// tokenCacheKey hashes the token endpoint, client id, and client secret.
+// The returned digest is the cache key, so the raw secret is not retained there.
+func tokenCacheKey(configuration credentialPayload) string {
+	material := make([]byte, 0, len(configuration.TokenURL)+len(configuration.ClientID)+len(configuration.ClientSecret)+2)
+	material = append(material, configuration.TokenURL...)
+	material = append(material, 0)
+	material = append(material, configuration.ClientID...)
+	material = append(material, 0)
+	material = append(material, configuration.ClientSecret...)
+	digest := sha256.Sum256(material)
+	for index := range material {
+		material[index] = 0
+	}
+	return hex.EncodeToString(digest[:])
 }
 
 // fetchToken requests a new OAuth access token and reports its expires_in lifetime.
@@ -471,12 +488,12 @@ func (adapter *Adapter) fetchToken(ctx context.Context, configuration credential
 }
 
 // forgetToken drops one cached access token after Huawei rejected that exact value.
-func (adapter *Adapter) forgetToken(clientID, accessToken string) {
+func (adapter *Adapter) forgetToken(cacheKey, accessToken string) {
 	adapter.tokenMu.Lock()
 	defer adapter.tokenMu.Unlock()
-	cached, ok := adapter.tokens[clientID]
+	cached, ok := adapter.tokens[cacheKey]
 	if ok && cached.token == accessToken {
-		delete(adapter.tokens, clientID)
+		delete(adapter.tokens, cacheKey)
 	}
 }
 
