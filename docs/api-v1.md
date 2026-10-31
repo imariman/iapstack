@@ -51,16 +51,15 @@ The Huawei credential uses schema version 1 and media type `application/vnd.iaps
 
 ```json
 {
-  "client_id": "...",
-  "client_secret": "...",
-  "public_key": "-----BEGIN PUBLIC KEY-----...",
-  "token_url": "https://oauth-login.cloud.huawei.com/oauth2/v3/token",
-  "order_url": "https://<site-specific-order-service>/...",
-  "subscription_url": "https://<site-specific-subscription-service>/..."
+  "client_id": "YOUR_APPGALLERY_CLIENT_ID",
+  "client_secret": "YOUR_APPGALLERY_CLIENT_SECRET",
+  "public_key": "-----BEGIN PUBLIC KEY-----\nYOUR_IAP_PUBLIC_KEY\n-----END PUBLIC KEY-----",
+  "order_url": "https://orders-dre.iap.cloud.huawei.eu/applications/purchases/tokens/verify",
+  "subscription_url": "https://subscr-dre.iap.cloud.huawei.eu/sub/applications/v2/purchases/get"
 }
 ```
 
-Huawei service roots vary by account site and API generation, so the applicable URLs are explicit protected application configuration. Confirm them against the current Huawei console and official documentation.
+Huawei service roots vary by account site. The URLs above are the Germany site. Confirm the site against the current Huawei console. `token_url` is optional and defaults to `https://oauth-login.cloud.huawei.com/oauth2/v3/token`. IAPStack exchanges the client id and secret for an app-level access token and sends `Authorization: Basic` with Base64(`APPAT:` + token). Order verification posts `purchaseToken` and `productId`. Subscription verification posts `purchaseToken` and `subscriptionId`. `subscriptionId` is the subscription instance id inside `InAppPurchaseData`, distinct from the catalog `productId`. The returned `purchaseTokenData` or `inappPurchaseData` is checked with the IAP public key. The response `signatureAlgorithm` selects `SHA256WithRSA` or `SHA256WithRSA/PSS`; when that field is absent, verification uses `SHA256WithRSA`. `InAppPurchaseData.applicationId` is often a JSON number. Set `provider_application_id` to that decimal text.
 
 The initial Apple credential uses kind `apple_app_store_server_api`, schema version 1,
 and media type `application/vnd.iapstack.apple-credentials+json`:
@@ -183,12 +182,13 @@ A purchase item contains an external customer ID, claimed products, optional cus
 ```json
 {
   "purchase_data": "<exact InAppPurchaseData JSON string>",
-  "signature": "<base64 RSA-SHA256 signature>",
+  "signature": "<base64 detached signature>",
+  "signature_algorithm": "SHA256WithRSA",
   "product_kind": "subscription"
 }
 ```
 
-IAPStack verifies the device signature, queries Huawei for current authoritative state, verifies the server response signature, checks application/product/token consistency, and commits evidence, projection, and outbox changes atomically.
+`signature_algorithm` is optional. Omitted evidence uses `SHA256WithRSA`. `SHA256WithRSA/PSS` is also accepted. Any other value is rejected with `422 invalid_purchase`. IAPStack verifies the device signature with that algorithm, queries Huawei for current authoritative state, verifies the server response signature, checks application, product, subscription id, price, currency, and token consistency, and commits evidence, projection, and outbox changes atomically. Subscription `purchase_data` must include `subscriptionId`. `applicationId` inside that JSON may be a number.
 
 For v0.1 customer binding, the Huawei `developerPayload` must equal the authenticated request's `external_customer_id`. The API always supplies this as an expected signed binding; a valid purchase cannot be reassigned to a different application customer.
 
@@ -262,7 +262,10 @@ a previously verified purchase and requires the same application, product, and p
 kind. The lookup and inbox insertion share one transaction. Unknown tokens and scope
 mismatches are rejected without durable work; only an unavailable persistence lookup is
 retryable. The worker still queries Huawei's server API before changing access, so
-callback fields never grant access directly.
+callback fields never grant access directly. A subscription notification stored before
+`subscription_id` was recorded uses `subscriptionId` from the stored client purchase
+evidence for that purchase token. When that evidence is missing, the worker retries
+instead of failing the notification permanently.
 
 App Store Server Notifications V2 ingestion is
 `POST /v1/providers/apple/projects/{project_id}/applications/{application_id}/notifications`.

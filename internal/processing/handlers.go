@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/imariman/iapstack/internal/core"
@@ -30,6 +31,10 @@ const (
 	reconciliationProtectionPurpose = "reconciliation_request"
 	// providerReferencePurpose scopes deterministic lookup fingerprints exactly like verification persistence.
 	providerReferencePurpose = "provider_reference"
+	// purchaseEvidencePurpose authenticates stored client purchase evidence.
+	purchaseEvidencePurpose = "purchase_evidence"
+	// purchaseSubmissionEvidenceKind matches the client evidence kind stored by verification.
+	purchaseSubmissionEvidenceKind = "purchase_submission"
 	// reconciliationInterval schedules daily authoritative lifecycle refreshes.
 	reconciliationInterval = 24 * time.Hour
 )
@@ -172,6 +177,28 @@ func (service *Service) huaweiReconciliationCommand(
 	if err != nil {
 		return verification.ReconciliationCommand{}, err
 	}
+	subscriptionID := notification.SubscriptionID
+	if notification.ProductKind == core.ProductKindSubscription && subscriptionID == "" {
+		subscriptionID, err = service.storedHuaweiSubscriptionID(ctx, message, protected.Fingerprint)
+		if err != nil {
+			return verification.ReconciliationCommand{}, err
+		}
+	}
+	queryReferences := []core.StoreReference{queryReference}
+	if notification.ProductKind == core.ProductKindSubscription {
+		if subscriptionID == "" {
+			return verification.ReconciliationCommand{}, stores.NewFailure(
+				core.ProviderHuaweiAppGallery, "notification_lookup", stores.FailureTemporary, 0, nil,
+			)
+		}
+		subscriptionReference, referenceErr := core.NewStoreReference(
+			core.ReferenceQuery, "subscription_id", subscriptionID,
+		)
+		if referenceErr != nil {
+			return verification.ReconciliationCommand{}, referenceErr
+		}
+		queryReferences = append(queryReferences, subscriptionReference)
+	}
 	customerBinding, err := core.NewStoreReference(
 		core.ReferenceCustomerBinding,
 		"developer_payload",
@@ -191,9 +218,84 @@ func (service *Service) huaweiReconciliationCommand(
 		ExpectedProducts:         []core.ProviderProductID{purchase.ProviderProductID},
 		ExpectedProductKind:      purchase.ProductKind,
 		ExpectedCustomerBindings: []core.StoreReference{customerBinding},
-		QueryReferences:          []core.StoreReference{queryReference},
+		QueryReferences:          queryReferences,
 		Signal:                   signal,
 	}, nil
+}
+
+// storedHuaweiSubscriptionID reads subscriptionId from stored client evidence for one purchase token.
+// Missing or unusable evidence is retryable so older inbox envelopes are not failed permanently.
+func (service *Service) storedHuaweiSubscriptionID(
+	ctx context.Context,
+	message persistence.QueueMessage,
+	fingerprint [32]byte,
+) (string, error) {
+	var evidence persistence.PurchaseEvidenceRecord
+	err := service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var lookupErr error
+		evidence, lookupErr = repository.PurchaseSubmissionByReference(ctx, persistence.ProviderReferenceLookup{
+			ProjectID: message.ProjectID, ApplicationID: message.ApplicationID,
+			Role: core.ReferenceQuery, Kind: "purchase_token", Fingerprint: fingerprint,
+		})
+		return lookupErr
+	})
+	if err != nil {
+		if errors.Is(err, persistence.ErrNotFound) || errors.Is(err, persistence.ErrUnavailable) {
+			return "", stores.NewFailure(
+				core.ProviderHuaweiAppGallery, "notification_lookup", stores.FailureTemporary, 0, err,
+			)
+		}
+		return "", err
+	}
+	if evidenceErr := evidence.Validate(); evidenceErr != nil ||
+		evidence.Kind != purchaseSubmissionEvidenceKind ||
+		evidence.ContentType != huawei.EvidenceContentType {
+		return "", stores.NewFailure(
+			core.ProviderHuaweiAppGallery, "notification_lookup", stores.FailureTemporary, 0, evidenceErr,
+		)
+	}
+	request, err := protection.NewOpenRequest(protection.Scope{
+		ProjectID: message.ProjectID, ApplicationID: message.ApplicationID, Purpose: purchaseEvidencePurpose,
+	}, evidence.Payload)
+	if err != nil {
+		return "", stores.NewFailure(
+			core.ProviderHuaweiAppGallery, "notification_lookup", stores.FailureTemporary, 0, err,
+		)
+	}
+	plaintext, err := service.protection.Open(ctx, request)
+	if err != nil {
+		return "", stores.NewFailure(
+			core.ProviderHuaweiAppGallery, "notification_lookup", stores.FailureTemporary, 0, err,
+		)
+	}
+	defer zero(plaintext)
+	subscriptionID, err := huaweiSubscriptionID(plaintext)
+	if err != nil || subscriptionID == "" {
+		return "", stores.NewFailure(
+			core.ProviderHuaweiAppGallery, "notification_lookup", stores.FailureTemporary, 0, err,
+		)
+	}
+	return subscriptionID, nil
+}
+
+// huaweiSubscriptionID returns subscriptionId from a stored Huawei purchase evidence envelope.
+func huaweiSubscriptionID(evidence []byte) (string, error) {
+	var envelope struct {
+		PurchaseData string `json:"purchase_data"`
+	}
+	if err := json.Unmarshal(evidence, &envelope); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(envelope.PurchaseData) == "" {
+		return "", nil
+	}
+	var purchase struct {
+		SubscriptionID string `json:"subscriptionId"`
+	}
+	if err := json.Unmarshal([]byte(envelope.PurchaseData), &purchase); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(purchase.SubscriptionID), nil
 }
 
 // handleGooglePlayInbox resolves one RTDN token to its verified customer and refreshes Android Publisher state.

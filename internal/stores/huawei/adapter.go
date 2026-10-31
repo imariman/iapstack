@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/imariman/iapstack/internal/core"
@@ -38,6 +39,8 @@ const (
 	maximumProviderResponse int64 = 2 << 20
 	// defaultTokenURL is Huawei's documented OAuth token service.
 	defaultTokenURL = "https://oauth-login.cloud.huawei.com/oauth2/v3/token" // #nosec G101 -- This is Huawei's public OAuth endpoint, not credential material.
+	// tokenExpiryMargin refreshes a cached OAuth token shortly before Huawei's expires_in.
+	tokenExpiryMargin = 60 * time.Second
 )
 
 // Adapter verifies Huawei evidence using application-scoped credentials and authoritative server APIs.
@@ -46,6 +49,14 @@ type Adapter struct {
 	client               *http.Client
 	clock                func() time.Time
 	allowPrivateNetworks bool
+	tokenMu              sync.Mutex
+	tokens               map[string]cachedAccessToken
+}
+
+// cachedAccessToken is one app-level OAuth token retained until shortly before expires_in.
+type cachedAccessToken struct {
+	token     string
+	expiresAt time.Time
 }
 
 // credentialPayload is the versioned private Huawei application configuration.
@@ -60,31 +71,33 @@ type credentialPayload struct {
 
 // clientEvidence is the signed Huawei purchase returned by the device SDK.
 type clientEvidence struct {
-	PurchaseData string           `json:"purchase_data"`
-	Signature    string           `json:"signature"`
-	ProductKind  core.ProductKind `json:"product_kind"`
+	PurchaseData       string           `json:"purchase_data"`
+	Signature          string           `json:"signature"`
+	SignatureAlgorithm string           `json:"signature_algorithm,omitempty"`
+	ProductKind        core.ProductKind `json:"product_kind"`
 }
 
 // purchaseData contains the Huawei fields required for normalization and consistency checks.
 type purchaseData struct {
-	ApplicationID       string `json:"applicationId"`
-	PackageName         string `json:"packageName"`
-	ProductID           string `json:"productId"`
-	OrderID             string `json:"orderId"`
-	PurchaseToken       string `json:"purchaseToken"`
-	PurchaseState       int    `json:"purchaseState"`
-	PurchaseTime        int64  `json:"purchaseTime"`
-	ExpirationDate      int64  `json:"expirationDate"`
-	GraceExpirationTime int64  `json:"graceExpirationTime"`
-	CancellationTime    int64  `json:"cancellationTime"`
-	CancelTime          int64  `json:"cancelTime"`
-	RenewStatus         int    `json:"renewStatus"`
-	RetryFlag           int    `json:"retryFlag"`
-	SubIsValid          bool   `json:"subIsvalid"`
-	DeveloperPayload    string `json:"developerPayload"`
-	Quantity            uint32 `json:"quantity"`
-	Currency            string `json:"currency"`
-	Price               int64  `json:"price"`
+	ApplicationID       huaweiText `json:"applicationId"`
+	PackageName         string     `json:"packageName"`
+	ProductID           string     `json:"productId"`
+	SubscriptionID      string     `json:"subscriptionId,omitempty"`
+	OrderID             string     `json:"orderId"`
+	PurchaseToken       string     `json:"purchaseToken"`
+	PurchaseState       int        `json:"purchaseState"`
+	PurchaseTime        int64      `json:"purchaseTime"`
+	ExpirationDate      int64      `json:"expirationDate"`
+	GraceExpirationTime int64      `json:"graceExpirationTime"`
+	CancellationTime    int64      `json:"cancellationTime"`
+	CancelTime          int64      `json:"cancelTime"`
+	RenewStatus         int        `json:"renewStatus"`
+	RetryFlag           int        `json:"retryFlag"`
+	SubIsValid          bool       `json:"subIsvalid"`
+	DeveloperPayload    string     `json:"developerPayload"`
+	Quantity            uint32     `json:"quantity"`
+	Currency            string     `json:"currency"`
+	Price               int64      `json:"price"`
 }
 
 // providerResponse accepts the documented legacy names used by Huawei order and subscription services.
@@ -97,7 +110,18 @@ type providerResponse struct {
 	InAppPurchaseDataSignature    string `json:"inappPurchaseDataSignature"`
 	SubscriptionPurchaseData      string `json:"subscriptionPurchaseData"`
 	SubscriptionPurchaseSignature string `json:"subscriptionPurchaseSignature"`
+	SignatureAlgorithm            string `json:"signatureAlgorithm"`
 }
+
+// providerQuery is the purchase-token body sent to Huawei's Order or Subscription service.
+type providerQuery struct {
+	PurchaseToken  string `json:"purchaseToken"`
+	ProductID      string `json:"productId,omitempty"`
+	SubscriptionID string `json:"subscriptionId,omitempty"`
+}
+
+// huaweiText stores a Huawei JSON string. InAppPurchaseData encodes applicationId as an integer.
+type huaweiText string
 
 // tokenResponse contains the OAuth bearer fields needed by provider calls.
 type tokenResponse struct {
@@ -105,10 +129,11 @@ type tokenResponse struct {
 	ExpiresIn   int64  `json:"expires_in"`
 }
 
-// signedData pairs authoritative Huawei JSON with its detached signature.
+// signedData pairs authoritative Huawei JSON with its detached signature and algorithm.
 type signedData struct {
 	data      string
 	signature string
+	algorithm string
 }
 
 // New constructs a bounded Huawei AppGallery server adapter under the configured address policy.
@@ -128,6 +153,7 @@ func New(
 		client:               newProviderClient(timeout, allowPrivateNetworks),
 		clock:                time.Now,
 		allowPrivateNetworks: allowPrivateNetworks,
+		tokens:               make(map[string]cachedAccessToken),
 	}, nil
 }
 
@@ -155,14 +181,14 @@ func (adapter *Adapter) Verify(
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}
-	if err := verifySignature(publicKey, evidence.PurchaseData, evidence.Signature); err != nil {
+	if err := verifySignature(publicKey, evidence.PurchaseData, evidence.Signature, evidence.SignatureAlgorithm); err != nil {
 		return stores.VerificationResult{}, invalid("verify", err)
 	}
 	authoritative, rawArtifact, err := adapter.query(ctx, configuration, submitted, evidence.ProductKind)
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}
-	if err := verifySignature(publicKey, authoritative.data, authoritative.signature); err != nil {
+	if err := verifySignature(publicKey, authoritative.data, authoritative.signature, authoritative.algorithm); err != nil {
 		return stores.VerificationResult{}, invalid("verify", err)
 	}
 	var current purchaseData
@@ -184,32 +210,48 @@ func (adapter *Adapter) Reconcile(
 		return stores.VerificationResult{}, invalid("reconcile", err)
 	}
 	token := ""
+	subscriptionID := ""
 	for _, reference := range request.QueryReferences {
-		if reference.Kind == "purchase_token" {
-			token = reference.Value()
-			break
+		switch reference.Kind {
+		case "purchase_token":
+			if token == "" {
+				token = reference.Value()
+			}
+		case "subscription_id":
+			if subscriptionID == "" {
+				subscriptionID = reference.Value()
+			}
 		}
 	}
 	if token == "" || len(request.ExpectedProducts) != 1 {
 		return stores.VerificationResult{}, invalid("reconcile", errors.New("huawei reconciliation requires one product and purchase token"))
 	}
+	if request.ExpectedProductKind == core.ProductKindSubscription && subscriptionID == "" {
+		return stores.VerificationResult{}, invalid("reconcile", errors.New("huawei subscription reconciliation requires subscriptionId"))
+	}
 	configuration, publicKey, err := adapter.configuration(ctx, request.Application)
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}
-	query := purchaseData{ApplicationID: string(request.Application.Store.ID), ProductID: string(request.ExpectedProducts[0]), PurchaseToken: token}
+	query := purchaseData{
+		ApplicationID:  huaweiText(request.Application.Store.ID),
+		ProductID:      string(request.ExpectedProducts[0]),
+		SubscriptionID: subscriptionID,
+		PurchaseToken:  token,
+	}
 	authoritative, rawArtifact, err := adapter.query(ctx, configuration, query, request.ExpectedProductKind)
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}
-	if err := verifySignature(publicKey, authoritative.data, authoritative.signature); err != nil {
+	if err := verifySignature(publicKey, authoritative.data, authoritative.signature, authoritative.algorithm); err != nil {
 		return stores.VerificationResult{}, invalid("reconcile", err)
 	}
 	var current purchaseData
 	if err := json.Unmarshal([]byte(authoritative.data), &current); err != nil {
 		return stores.VerificationResult{}, invalid("reconcile", err)
 	}
-	if current.PurchaseToken != token || current.ProductID != query.ProductID || current.ApplicationID != query.ApplicationID {
+	if current.PurchaseToken != token || current.ProductID != query.ProductID || current.ApplicationID != query.ApplicationID ||
+		(query.SubscriptionID != "" && current.SubscriptionID != query.SubscriptionID) {
 		return stores.VerificationResult{}, invalid("reconcile", errors.New("authoritative Huawei scope mismatch"))
 	}
 	return adapter.result(request.Application, request.ExpectedProductKind, current, rawArtifact)
@@ -259,31 +301,41 @@ func (adapter *Adapter) query(
 	purchase purchaseData,
 	productKind core.ProductKind,
 ) (signedData, stores.Evidence, error) {
-	accessToken, err := adapter.token(ctx, configuration)
-	if err != nil {
-		return signedData{}, stores.Evidence{}, err
+	if productKind == core.ProductKindSubscription && strings.TrimSpace(purchase.SubscriptionID) == "" {
+		return signedData{}, stores.Evidence{}, invalid("query", errors.New("huawei subscription verification requires subscriptionId"))
 	}
 	endpoint := configuration.OrderURL
+	bodyQuery := providerQuery{PurchaseToken: purchase.PurchaseToken, ProductID: purchase.ProductID}
 	if productKind == core.ProductKindSubscription {
 		endpoint = configuration.SubscriptionURL
+		bodyQuery = providerQuery{PurchaseToken: purchase.PurchaseToken, SubscriptionID: purchase.SubscriptionID}
 	}
-	body, err := json.Marshal(map[string]string{
-		"purchaseToken": purchase.PurchaseToken,
-		"productId":     purchase.ProductID,
-	})
+	body, err := json.Marshal(bodyQuery)
 	if err != nil {
 		return signedData{}, stores.Evidence{}, invalid("query", err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return signedData{}, stores.Evidence{}, invalid("query", err)
-	}
-	request.Header.Set("Authorization", "Bearer "+accessToken)
-	request.Header.Set("Content-Type", "application/json; charset=UTF-8")
-	request.Header.Set("Accept", "application/json")
-	responseBody, status, err := adapter.do(request)
-	if err != nil {
-		return signedData{}, stores.Evidence{}, err
+	var responseBody []byte
+	var status int
+	for attempt := 0; attempt < 2; attempt++ {
+		accessToken, tokenErr := adapter.token(ctx, configuration)
+		if tokenErr != nil {
+			return signedData{}, stores.Evidence{}, tokenErr
+		}
+		request, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if requestErr != nil {
+			return signedData{}, stores.Evidence{}, invalid("query", requestErr)
+		}
+		request.Header.Set("Authorization", appAccessTokenAuthorization(accessToken))
+		request.Header.Set("Content-Type", "application/json; charset=UTF-8")
+		request.Header.Set("Accept", "application/json")
+		responseBody, status, err = adapter.do(request)
+		if err != nil {
+			return signedData{}, stores.Evidence{}, err
+		}
+		if status != http.StatusUnauthorized {
+			break
+		}
+		adapter.forgetToken(tokenCacheKey(configuration), accessToken)
 	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return signedData{}, stores.Evidence{}, stores.NewFailure(adapter.Provider(), "query", stores.FailureUnauthorized, 0, nil)
@@ -311,49 +363,158 @@ func (adapter *Adapter) query(
 		}
 		return signedData{}, stores.Evidence{}, stores.NewFailure(adapter.Provider(), "query", kind, 0, nil)
 	}
-	data, signature := result.PurchaseTokenData, result.DataSignature
-	if data == "" {
-		data, signature = result.InAppPurchaseData, result.InAppPurchaseDataSignature
-	}
-	if data == "" {
-		data, signature = result.SubscriptionPurchaseData, result.SubscriptionPurchaseSignature
-	}
-	if data == "" || signature == "" {
-		return signedData{}, stores.Evidence{}, invalid("query", errors.New("huawei response omitted signed purchase data"))
+	signed, err := result.signedPurchase()
+	if err != nil {
+		return signedData{}, stores.Evidence{}, invalid("query", err)
 	}
 	artifact, err := stores.NewEvidence("application/json", responseBody)
 	if err != nil {
 		return signedData{}, stores.Evidence{}, invalid("query", err)
 	}
-	return signedData{data: data, signature: signature}, artifact, nil
+	return signed, artifact, nil
 }
 
-// token requests a server-to-server OAuth access token using application credentials.
+// appAccessTokenAuthorization formats Huawei's app-level access token for Order and Subscription calls.
+// The value is Basic followed by Base64("APPAT:" + accessToken).
+func appAccessTokenAuthorization(accessToken string) string {
+	encoded := base64.StdEncoding.EncodeToString([]byte("APPAT:" + accessToken))
+	return "Basic " + encoded
+}
+
+// signedPurchase selects the signed purchase JSON and the signature that covers those exact bytes.
+func (result providerResponse) signedPurchase() (signedData, error) {
+	switch {
+	case result.PurchaseTokenData != "":
+		if result.DataSignature == "" {
+			return signedData{}, errors.New("huawei response omitted signed purchase data")
+		}
+		return signedData{
+			data: result.PurchaseTokenData, signature: result.DataSignature, algorithm: result.SignatureAlgorithm,
+		}, nil
+	case result.InAppPurchaseData != "":
+		signature := result.InAppPurchaseDataSignature
+		if signature == "" {
+			signature = result.DataSignature
+		}
+		if signature == "" {
+			return signedData{}, errors.New("huawei response omitted signed purchase data")
+		}
+		return signedData{
+			data: result.InAppPurchaseData, signature: signature, algorithm: result.SignatureAlgorithm,
+		}, nil
+	case result.SubscriptionPurchaseData != "":
+		signature := result.SubscriptionPurchaseSignature
+		if signature == "" {
+			signature = result.DataSignature
+		}
+		if signature == "" {
+			return signedData{}, errors.New("huawei response omitted signed purchase data")
+		}
+		return signedData{
+			data: result.SubscriptionPurchaseData, signature: signature, algorithm: result.SignatureAlgorithm,
+		}, nil
+	default:
+		return signedData{}, errors.New("huawei response omitted signed purchase data")
+	}
+}
+
+// token returns a cached app-level access token, fetching one per credential when needed.
+// The cache is held under tokenMu for the whole fetch so concurrent callers share one request.
 func (adapter *Adapter) token(ctx context.Context, configuration credentialPayload) (string, error) {
+	cacheKey := tokenCacheKey(configuration)
+	adapter.tokenMu.Lock()
+	defer adapter.tokenMu.Unlock()
+	if adapter.tokens == nil {
+		adapter.tokens = make(map[string]cachedAccessToken)
+	}
+	now := adapter.now()
+	if cached, ok := adapter.tokens[cacheKey]; ok && cached.token != "" && now.Before(cached.expiresAt) {
+		return cached.token, nil
+	}
+	accessToken, expiresIn, err := adapter.fetchToken(ctx, configuration)
+	if err != nil {
+		return "", err
+	}
+	if expiresAt, ok := tokenCacheExpiry(now, expiresIn); ok {
+		adapter.tokens[cacheKey] = cachedAccessToken{token: accessToken, expiresAt: expiresAt}
+	} else {
+		delete(adapter.tokens, cacheKey)
+	}
+	return accessToken, nil
+}
+
+// tokenCacheKey hashes the token endpoint, client id, and client secret.
+// The returned digest is the cache key, so the raw secret is not retained there.
+func tokenCacheKey(configuration credentialPayload) string {
+	material := make([]byte, 0, len(configuration.TokenURL)+len(configuration.ClientID)+len(configuration.ClientSecret)+2)
+	material = append(material, configuration.TokenURL...)
+	material = append(material, 0)
+	material = append(material, configuration.ClientID...)
+	material = append(material, 0)
+	material = append(material, configuration.ClientSecret...)
+	digest := sha256.Sum256(material)
+	for index := range material {
+		material[index] = 0
+	}
+	return hex.EncodeToString(digest[:])
+}
+
+// fetchToken requests a new OAuth access token and reports its expires_in lifetime.
+func (adapter *Adapter) fetchToken(ctx context.Context, configuration credentialPayload) (string, int64, error) {
 	form := url.Values{}
 	form.Set("grant_type", "client_credentials")
 	form.Set("client_id", configuration.ClientID)
 	form.Set("client_secret", configuration.ClientSecret)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, configuration.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", stores.NewFailure(adapter.Provider(), "token", stores.FailurePermanent, 0, err)
+		return "", 0, stores.NewFailure(adapter.Provider(), "token", stores.FailurePermanent, 0, err)
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	body, status, err := adapter.do(request)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if status == http.StatusTooManyRequests || status >= 500 {
-		return "", stores.NewFailure(adapter.Provider(), "token", stores.FailureTemporary, 0, nil)
+		return "", 0, stores.NewFailure(adapter.Provider(), "token", stores.FailureTemporary, 0, nil)
 	}
 	if status < 200 || status >= 300 {
-		return "", stores.NewFailure(adapter.Provider(), "token", stores.FailureUnauthorized, 0, nil)
+		return "", 0, stores.NewFailure(adapter.Provider(), "token", stores.FailureUnauthorized, 0, nil)
 	}
 	var result tokenResponse
 	if err := decodeStrict(body, &result); err != nil || result.AccessToken == "" {
-		return "", stores.NewFailure(adapter.Provider(), "token", stores.FailureUnauthorized, 0, err)
+		return "", 0, stores.NewFailure(adapter.Provider(), "token", stores.FailureUnauthorized, 0, err)
 	}
-	return result.AccessToken, nil
+	return result.AccessToken, result.ExpiresIn, nil
+}
+
+// forgetToken drops one cached access token after Huawei rejected that exact value.
+func (adapter *Adapter) forgetToken(cacheKey, accessToken string) {
+	adapter.tokenMu.Lock()
+	defer adapter.tokenMu.Unlock()
+	cached, ok := adapter.tokens[cacheKey]
+	if ok && cached.token == accessToken {
+		delete(adapter.tokens, cacheKey)
+	}
+}
+
+// now returns the adapter clock, or the wall clock when a test left it unset.
+func (adapter *Adapter) now() time.Time {
+	if adapter.clock != nil {
+		return adapter.clock()
+	}
+	return time.Now()
+}
+
+// tokenCacheExpiry returns when a cached token must be refreshed, shortly before it expires.
+func tokenCacheExpiry(now time.Time, expiresIn int64) (time.Time, bool) {
+	if expiresIn <= 0 {
+		return time.Time{}, false
+	}
+	lifetime := time.Duration(expiresIn) * time.Second
+	if lifetime <= tokenExpiryMargin || lifetime/time.Second != time.Duration(expiresIn) {
+		return time.Time{}, false
+	}
+	return now.Add(lifetime - tokenExpiryMargin), true
 }
 
 // do executes one bounded provider call and reads no more than the response limit.
@@ -406,7 +567,7 @@ func (adapter *Adapter) result(
 		Milliunits: purchase.Price * 10,
 		Currency:   purchase.Currency,
 	}
-	references := make([]core.StoreReference, 0, 3)
+	references := make([]core.StoreReference, 0, 4)
 	for _, candidate := range []struct {
 		role  core.ReferenceRole
 		kind  string
@@ -414,6 +575,7 @@ func (adapter *Adapter) result(
 	}{
 		{role: core.ReferenceTransaction, kind: "order_id", value: purchase.OrderID},
 		{role: core.ReferenceQuery, kind: "purchase_token", value: purchase.PurchaseToken},
+		{role: core.ReferenceQuery, kind: "subscription_id", value: purchase.SubscriptionID},
 		{role: core.ReferenceCustomerBinding, kind: "developer_payload", value: purchase.DeveloperPayload},
 	} {
 		if candidate.value == "" {
@@ -478,7 +640,7 @@ func observationSnapshotIdentity(
 	return sha256.Sum256([]byte(strings.Join([]string{
 		string(applicationID),
 		string(productKind),
-		purchase.ApplicationID,
+		string(purchase.ApplicationID),
 		purchase.ProductID,
 		purchase.OrderID,
 		purchase.PurchaseToken,
@@ -525,7 +687,7 @@ func parseEvidence(evidence stores.Evidence) (clientEvidence, purchaseData, erro
 
 // validateSubmittedScope checks client claims before any provider network call.
 func validateSubmittedScope(request stores.VerificationRequest, purchase purchaseData) error {
-	if purchase.ApplicationID != string(request.Application.Store.ID) || purchase.ProductID == "" || purchase.PurchaseToken == "" {
+	if string(purchase.ApplicationID) != string(request.Application.Store.ID) || purchase.ProductID == "" || purchase.PurchaseToken == "" {
 		return errors.New("submitted Huawei application or purchase identity mismatch")
 	}
 	if len(request.ClaimedProducts) > 0 {
@@ -539,6 +701,7 @@ func validateSubmittedScope(request stores.VerificationRequest, purchase purchas
 // comparePurchases enforces stable purchase identity across client and authoritative data.
 func comparePurchases(submitted, authoritative purchaseData) error {
 	if submitted.ApplicationID != authoritative.ApplicationID || submitted.ProductID != authoritative.ProductID ||
+		submitted.SubscriptionID != authoritative.SubscriptionID ||
 		submitted.PurchaseToken != authoritative.PurchaseToken || submitted.Price != authoritative.Price ||
 		submitted.Currency != authoritative.Currency {
 		return errors.New("authoritative Huawei purchase does not match submitted evidence")
@@ -605,16 +768,62 @@ func normalizeState(
 	return core.LifecycleActive, core.AccessAllowed, core.AccessReasonPurchaseValid
 }
 
-// verifySignature validates Huawei's detached SHA-256 with RSA signature over exact JSON bytes.
-func verifySignature(publicKey *rsa.PublicKey, data, encodedSignature string) error {
+// verifySignature validates Huawei's detached SHA-256 RSA signature over exact JSON bytes.
+// An empty algorithm uses SHA256WithRSA. SHA256WithRSA and SHA256WithRSA/PSS are accepted.
+func verifySignature(publicKey *rsa.PublicKey, data, encodedSignature, algorithm string) error {
 	signature, err := base64.StdEncoding.DecodeString(encodedSignature)
 	if err != nil {
 		return errors.New("huawei signature is not valid base64")
 	}
+	if strings.TrimSpace(algorithm) == "" {
+		algorithm = "SHA256WithRSA"
+	}
 	digest := sha256.Sum256([]byte(data))
-	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, digest[:], signature); err != nil {
+	switch strings.ToUpper(strings.TrimSpace(algorithm)) {
+	case "SHA256WITHRSA":
+		err = rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, digest[:], signature)
+	case "SHA256WITHRSA/PSS":
+		err = rsa.VerifyPSS(publicKey, crypto.SHA256, digest[:], signature, &rsa.PSSOptions{
+			SaltLength: rsa.PSSSaltLengthAuto,
+			Hash:       crypto.SHA256,
+		})
+	default:
+		return errors.New("unsupported huawei signature algorithm")
+	}
+	if err != nil {
 		return errors.New("huawei signature verification failed")
 	}
+	return nil
+}
+
+// UnmarshalJSON accepts a JSON string or integer and stores its decimal or literal text.
+func (value *huaweiText) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || string(data) == "null" {
+		return errors.New("huawei text value is empty")
+	}
+	if data[0] == '"' {
+		var text string
+		if err := json.Unmarshal(data, &text); err != nil {
+			return err
+		}
+		*value = huaweiText(text)
+		return nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var number json.Number
+	if err := decoder.Decode(&number); err != nil {
+		return errors.New("huawei text value must be a string or integer")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("huawei text value must be a string or integer")
+	}
+	if _, err := number.Int64(); err != nil || strings.HasPrefix(number.String(), "-") {
+		return errors.New("huawei text value must be a string or integer")
+	}
+	*value = huaweiText(number.String())
 	return nil
 }
 

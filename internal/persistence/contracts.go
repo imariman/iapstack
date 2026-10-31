@@ -139,6 +139,8 @@ type PurchaseRepository interface {
 type ProviderReferenceRepository interface {
 	// PurchaseContextByReference returns the latest customer and product bound to one protected reference.
 	PurchaseContextByReference(context.Context, ProviderReferenceLookup) (PurchaseReferenceContext, error)
+	// PurchaseSubmissionByReference returns the latest client purchase submission bound to one protected reference.
+	PurchaseSubmissionByReference(context.Context, ProviderReferenceLookup) (PurchaseEvidenceRecord, error)
 }
 
 // EntitlementRepository stores and reads current customer entitlement projections.
@@ -419,6 +421,13 @@ type PurchaseReferenceContext struct {
 	ProductKind       core.ProductKind
 }
 
+// PurchaseEvidenceRecord is encrypted client purchase evidence bound to a provider reference.
+type PurchaseEvidenceRecord struct {
+	Kind        string
+	ContentType string
+	Payload     protection.Value
+}
+
 // QueueCompletion records one successful terminal job outcome.
 type QueueCompletion struct {
 	Queue       QueueName
@@ -590,6 +599,15 @@ func (purchase PurchaseReferenceContext) Validate() error {
 		purchase.Customer.Validate(),
 		purchase.ProviderProductID.Validate(),
 		purchase.ProductKind.Validate(),
+	)
+}
+
+// Validate checks stored purchase evidence metadata and its protected payload.
+func (record PurchaseEvidenceRecord) Validate() error {
+	return errors.Join(
+		validateText("purchase evidence kind", record.Kind),
+		validateText("purchase evidence content type", record.ContentType),
+		record.Payload.Validate(),
 	)
 }
 
