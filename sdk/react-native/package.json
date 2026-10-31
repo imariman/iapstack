@@ -48,9 +48,9 @@
     "@types/react": "^19.2.0"
   },
   "overrides": {
-    "minimatch": "11.0.3",
-    "//minimatch": "Regenerate patches/minimatch@<pin>.patch whenever this pin changes. patchedDependencies must stay pinned to that exact version."
+    "minimatch": "11.0.3"
   },
+  "//minimatch": "Regenerate patches/minimatch@<pin>.patch whenever this pin changes. patchedDependencies must stay pinned to that exact version.",
   "author": "IAPStack Contributors",
   "react-native": "./src/index.native.ts",
   "files": [
