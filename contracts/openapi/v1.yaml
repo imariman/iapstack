@@ -1517,15 +1517,19 @@ components:
         public_key:
           type: string
           minLength: 1
+          description: PEM or base64 DER RSA IAP public key from AppGallery Connect.
         token_url:
           type: string
           format: uri
+          description: Optional OAuth token URL. Defaults to Huawei's public token endpoint when omitted.
         order_url:
           type: string
           format: uri
+          description: Site-specific Order Service URL for purchase-token verification.
         subscription_url:
           type: string
           format: uri
+          description: Site-specific Subscription Service URL for purchase-token verification.
     GooglePlayCredentialPayload:
       type: object
       additionalProperties: false
@@ -1635,11 +1639,13 @@ components:
         purchase_data:
           type: string
           minLength: 1
-          description: Exact signed InAppPurchaseData JSON string returned by the Huawei SDK.
+          description: >-
+            Exact signed InAppPurchaseData JSON string returned by the Huawei SDK.
+            applicationId may be a JSON number. Subscription purchases include subscriptionId.
         signature:
           type: string
           minLength: 1
-          description: Base64-encoded detached RSA-SHA256 signature.
+          description: Base64-encoded detached SHA256WithRSA signature over purchase_data.
         product_kind:
           type: string
           enum: [subscription, non_consumable]

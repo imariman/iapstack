@@ -172,6 +172,21 @@ func (service *Service) huaweiReconciliationCommand(
 	if err != nil {
 		return verification.ReconciliationCommand{}, err
 	}
+	queryReferences := []core.StoreReference{queryReference}
+	if notification.ProductKind == core.ProductKindSubscription {
+		if notification.SubscriptionID == "" {
+			return verification.ReconciliationCommand{}, stores.NewFailure(
+				core.ProviderHuaweiAppGallery, "notification_lookup", stores.FailureInvalidEvidence, 0, nil,
+			)
+		}
+		subscriptionReference, referenceErr := core.NewStoreReference(
+			core.ReferenceQuery, "subscription_id", notification.SubscriptionID,
+		)
+		if referenceErr != nil {
+			return verification.ReconciliationCommand{}, referenceErr
+		}
+		queryReferences = append(queryReferences, subscriptionReference)
+	}
 	customerBinding, err := core.NewStoreReference(
 		core.ReferenceCustomerBinding,
 		"developer_payload",
@@ -191,7 +206,7 @@ func (service *Service) huaweiReconciliationCommand(
 		ExpectedProducts:         []core.ProviderProductID{purchase.ProviderProductID},
 		ExpectedProductKind:      purchase.ProductKind,
 		ExpectedCustomerBindings: []core.StoreReference{customerBinding},
-		QueryReferences:          []core.StoreReference{queryReference},
+		QueryReferences:          queryReferences,
 		Signal:                   signal,
 	}, nil
 }

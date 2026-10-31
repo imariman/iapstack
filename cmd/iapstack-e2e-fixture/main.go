@@ -42,7 +42,7 @@ const (
 	purchaseToken = "purchase-token-e2e"
 	// orderID is the immutable provider transaction identity used by the gate.
 	orderID = "order-e2e-1"
-	// providerAccessToken is the deterministic bearer issued by the OAuth fixture.
+	// providerAccessToken is the deterministic app-level access token issued by the OAuth fixture.
 	providerAccessToken = "provider-access-e2e"
 	// providerClientID is the application credential accepted by the OAuth fixture.
 	providerClientID = "client-e2e"
@@ -306,9 +306,14 @@ func (service *fixture) token(writer http.ResponseWriter, request *http.Request)
 	writeJSON(writer, http.StatusOK, map[string]any{"access_token": providerAccessToken, "expires_in": 300})
 }
 
+// providerAuthorization formats the app-level access token header Huawei's Order service requires.
+func providerAuthorization(accessToken string) string {
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte("APPAT:"+accessToken))
+}
+
 // order returns the currently authoritative signed lifetime purchase.
 func (service *fixture) order(writer http.ResponseWriter, request *http.Request) {
-	if request.Header.Get("Authorization") != "Bearer "+providerAccessToken {
+	if request.Header.Get("Authorization") != providerAuthorization(providerAccessToken) {
 		writeJSON(writer, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}

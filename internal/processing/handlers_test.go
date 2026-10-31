@@ -85,7 +85,9 @@ func TestHuaweiReconciliationCommandResolvesProtectedPurchaseScope(t *testing.T)
 	}
 	if command.ExternalCustomerID != "account-1" || len(command.ExpectedProducts) != 1 ||
 		command.ExpectedProducts[0] != "premium_monthly" || command.Signal.ContentType != huawei.NotificationContentType ||
-		len(command.QueryReferences) != 1 || command.QueryReferences[0].Value() != "purchase-token-1" ||
+		len(command.QueryReferences) != 2 || command.QueryReferences[0].Value() != "purchase-token-1" ||
+		command.QueryReferences[1].Kind != "subscription_id" ||
+		command.QueryReferences[1].Value() != "1665732615152.08082DFB.3006" ||
 		len(command.ExpectedCustomerBindings) != 1 || command.ExpectedCustomerBindings[0].Value() != "account-1" {
 		t.Fatalf("huaweiReconciliationCommand() = %#v", command)
 	}

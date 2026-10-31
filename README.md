@@ -256,6 +256,23 @@ or `IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS=true` only when the corresponding end
 must run on a trusted internal network, and pair either opt-in with an egress firewall
 or an infrastructure allowlist.
 
+Huawei AppGallery client id, client secret, and IAP public key are stored on the
+application as credential kind `huawei_server_api`. Replace the placeholders below
+with values from AppGallery Connect:
+
+```json
+{
+  "client_id": "YOUR_APPGALLERY_CLIENT_ID",
+  "client_secret": "YOUR_APPGALLERY_CLIENT_SECRET",
+  "public_key": "-----BEGIN PUBLIC KEY-----\nYOUR_IAP_PUBLIC_KEY\n-----END PUBLIC KEY-----",
+  "order_url": "https://orders-dre.iap.cloud.huawei.eu/applications/purchases/tokens/verify",
+  "subscription_url": "https://subscr-dre.iap.cloud.huawei.eu/sub/applications/v2/purchases/get"
+}
+```
+
+`token_url` may be omitted. The [HTTP API guide](docs/api-v1.md) describes the Order
+and Subscription request fields and the signature check.
+
 Start a local PostgreSQL instance and apply every pending migration with:
 
 ```sh

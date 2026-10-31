@@ -66,7 +66,7 @@ func TestFixtureHandlersServeSignedPurchaseAndWebhookJourney(t *testing.T) {
 		"/order",
 		strings.NewReader(`{"purchaseToken":"`+purchaseToken+`","productId":"`+providerProductID+`"}`),
 	)
-	orderRequest.Header.Set("Authorization", "Bearer "+providerAccessToken)
+	orderRequest.Header.Set("Authorization", providerAuthorization(providerAccessToken))
 	orderRequest.Header.Set("Content-Type", "application/json")
 	orderRecorder := httptest.NewRecorder()
 	provider.ServeHTTP(orderRecorder, orderRequest)
