@@ -7,7 +7,8 @@
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:minimatch-shim": "bun scripts/check-minimatch-shim.js"
   },
   "dependencies": {
     "react": "19.2.3",
@@ -34,6 +35,18 @@
     "prettier": "2.8.8",
     "react-test-renderer": "19.2.3",
     "typescript": "^5.8.3"
+  },
+  "overrides": {
+    "body-parser": "1.20.9",
+    "fast-xml-parser": "^5.7.0",
+    "joi": "17.13.9",
+    "minimatch": "11.0.3",
+    "qs": "6.16.2",
+    "zod": "4.6.7"
+  },
+  "//minimatch": "Regenerate patches/minimatch@<pin>.patch whenever this pin changes. patchedDependencies must stay pinned to that exact version.",
+  "patchedDependencies": {
+    "minimatch@11.0.3": "patches/minimatch@11.0.3.patch"
   },
   "engines": {
     "node": ">= 22.11.0"

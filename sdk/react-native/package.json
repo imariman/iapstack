@@ -37,7 +37,8 @@
     "build": "tsc -p tsconfig.build.json",
     "prepare:native": "node scripts/prepare-native.mjs",
     "prepack": "bun run typecheck && bun run build && bun run prepare:native",
-    "prepare:example": "bun run build && bun run prepare:native && node scripts/prepare-example.mjs"
+    "prepare:example": "bun run build && bun run prepare:native && node scripts/prepare-example.mjs",
+    "check:minimatch-shim": "bun scripts/check-minimatch-shim.js"
   },
   "devDependencies": {
     "@types/bun": "1.4.2",
@@ -46,6 +47,10 @@
     "react": "19.2.3",
     "@types/react": "^19.2.0"
   },
+  "overrides": {
+    "minimatch": "11.0.3"
+  },
+  "//minimatch": "Regenerate patches/minimatch@<pin>.patch whenever this pin changes. patchedDependencies must stay pinned to that exact version.",
   "author": "IAPStack Contributors",
   "react-native": "./src/index.native.ts",
   "files": [
@@ -68,5 +73,8 @@
   "publishConfig": {
     "access": "public",
     "tag": "next"
+  },
+  "patchedDependencies": {
+    "minimatch@11.0.3": "patches/minimatch@11.0.3.patch"
   }
 }
