@@ -21,6 +21,7 @@
     "minimatch@11.0.3": "patches/minimatch@11.0.3.patch",
   },
   "overrides": {
+    "//minimatch": "Regenerate patches/minimatch@<pin>.patch whenever this pin changes. patchedDependencies must stay pinned to that exact version.",
     "minimatch": "11.0.3",
   },
   "packages": {

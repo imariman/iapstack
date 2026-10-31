@@ -278,6 +278,18 @@ jobs:
           bun run typecheck
           bun test
 
+      - name: Check minimatch shim
+        working-directory: sdk/react-native
+        run: |
+          bun run check:minimatch-shim
+          if [ ! -f .example-package/package.json ]; then
+            mkdir -p .example-package
+            printf '%s\n' '{"name":"@iapstack/react-native","version":"0.0.0","private":true}' > .example-package/package.json
+          fi
+          cd example
+          bun install --frozen-lockfile
+          bun run check:minimatch-shim
+
   go-sdk:
     name: Go host SDK checks
     runs-on: ubuntu-latest
