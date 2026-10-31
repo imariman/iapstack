@@ -46,6 +46,9 @@
     "react": "19.2.3",
     "@types/react": "^19.2.0"
   },
+  "overrides": {
+    "minimatch": "11.0.3"
+  },
   "author": "IAPStack Contributors",
   "react-native": "./src/index.native.ts",
   "files": [
@@ -68,5 +71,8 @@
   "publishConfig": {
     "access": "public",
     "tag": "next"
+  },
+  "patchedDependencies": {
+    "minimatch@11.0.3": "patches/minimatch@11.0.3.patch"
   }
 }
