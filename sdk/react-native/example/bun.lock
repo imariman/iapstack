@@ -36,7 +36,6 @@
     "minimatch@11.0.3": "patches/minimatch@11.0.3.patch",
   },
   "overrides": {
-    "//minimatch": "Regenerate patches/minimatch@<pin>.patch whenever this pin changes. patchedDependencies must stay pinned to that exact version.",
     "body-parser": "1.20.9",
     "fast-xml-parser": "^5.7.0",
     "joi": "17.13.9",

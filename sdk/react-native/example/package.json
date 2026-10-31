@@ -41,10 +41,10 @@
     "fast-xml-parser": "^5.7.0",
     "joi": "17.13.9",
     "minimatch": "11.0.3",
-    "//minimatch": "Regenerate patches/minimatch@<pin>.patch whenever this pin changes. patchedDependencies must stay pinned to that exact version.",
     "qs": "6.16.2",
     "zod": "4.6.7"
   },
+  "//minimatch": "Regenerate patches/minimatch@<pin>.patch whenever this pin changes. patchedDependencies must stay pinned to that exact version.",
   "patchedDependencies": {
     "minimatch@11.0.3": "patches/minimatch@11.0.3.patch"
   },
