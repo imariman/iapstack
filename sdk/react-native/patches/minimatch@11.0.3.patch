@@ -1,0 +1,40 @@
+diff --git a/dist/commonjs/index.js b/dist/commonjs/index.js
+index eb1c915f43b2debf5faa7ac3a73c262a161c7a4f..a6b9d72d2b499da5b7b125cc7a98151948b503d9 100644
+--- a/dist/commonjs/index.js
++++ b/dist/commonjs/index.js
+@@ -1547,4 +1547,34 @@ Object.defineProperty(exports, "unescape", { enumerable: true, get: function ()
+ exports.minimatch.Minimatch = Minimatch;
+ exports.minimatch.escape = escape_js_1.escape;
+ exports.minimatch.unescape = unescape_js_1.unescape;
++
++// minimatch 3 callers use require("minimatch") as a function. glob 7 also
++// walks Minimatch#set and matches each portion with String.prototype.match.
++// Matching itself still uses minimatch 11.
++class GlobCompatMinimatch extends Minimatch {
++    constructor(pattern, options = {}) {
++        super(pattern, options);
++        for (const row of this.set) {
++            for (const part of row) {
++                if (!part || typeof part === "string" || typeof part === "symbol" || typeof part.test !== "function") {
++                    continue;
++                }
++                if (part._glob == null) {
++                    part._glob = typeof part.pattern === "string" ? part.pattern : "";
++                }
++                if (typeof part[Symbol.match] !== "function") {
++                    Object.defineProperty(part, Symbol.match, {
++                        configurable: true,
++                        value(s) {
++                            return this.test(String(s)) ? [String(s)] : null;
++                        },
++                    });
++                }
++            }
++        }
++    }
++}
++exports.Minimatch = GlobCompatMinimatch;
++exports.minimatch.Minimatch = GlobCompatMinimatch;
++module.exports = Object.assign(exports.minimatch, exports);
+ //# sourceMappingURL=index.js.map
+\ No newline at end of file
