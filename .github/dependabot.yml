@@ -4,11 +4,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 3
     open-pull-requests-limit: 5
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 3
     open-pull-requests-limit: 5
     groups:
       codeql-actions:
@@ -20,6 +24,8 @@ updates:
       - /deploy/e2e
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 3
     open-pull-requests-limit: 5
   - package-ecosystem: pub
     directories:
@@ -32,6 +38,8 @@ updates:
       - /sdk/flutter/iapstack_huawei/example
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 3
     open-pull-requests-limit: 5
   - package-ecosystem: docker-compose
     directories:
@@ -39,4 +47,6 @@ updates:
       - /deploy/coolify
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 3
     open-pull-requests-limit: 5
