@@ -144,15 +144,22 @@ data class GooglePlayProductQuery(
 /**
  * Event name for a purchase listener after the server has answered.
  *
- * `verified` means access was granted, or the server returned a definitive
- * denial. Unresolved payment stays `pending` so an app that unlocks on the
- * event name does not grant access early. The React Native bridge compiles
- * these sources and is the caller.
+ * `verified` means this result granted access, or the server returned a
+ * definitive denial. `pending` means payment is still unresolved. Another
+ * entitlement that already grants access does not rename that purchase to
+ * `verified`, and neither does an empty entitlement list. An app that unlocks
+ * on the event name must not treat the purchase as granted. The React Native
+ * bridge compiles these sources and is the caller.
  */
 internal fun purchaseListenerEventType(entitlements: List<Entitlement>): String {
-  val granted = entitlements.any { it.grantsAccess }
-  val unresolved = entitlements.any { entitlement ->
+  if (entitlements.isEmpty()) {
+    return "pending"
+  }
+  val unresolved = entitlements.filter { entitlement ->
     entitlement.access == "unresolved" || entitlement.reason == "pending_payment"
   }
-  return if (!granted && unresolved) "pending" else "verified"
+  if (unresolved.isNotEmpty() && unresolved.none { it.grantsAccess }) {
+    return "pending"
+  }
+  return "verified"
 }

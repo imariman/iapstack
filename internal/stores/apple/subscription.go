@@ -229,9 +229,17 @@ func normalizeSubscriptionStatus(
 		case endsAt == nil:
 			return core.LifecycleUnresolved, core.AccessUnresolved, core.AccessReasonUnresolved, endsAt, renewal
 		case !endsAt.After(now.Add(-maximumNotificationClockSkew)):
-			// Status remains active while the signed expiry is clearly behind the local clock.
-			// An expiry inside the notification clock-skew window keeps the active or canceled decision below.
+			// Apple still reports this subscription as active, but the signed expiry is
+			// outside the clock-skew window.
 			return core.LifecycleExpired, core.AccessDenied, core.AccessReasonExpired, endsAt, renewal
+		}
+		// Readers and SDKs deny an allowed projection whose end is not after now.
+		// An expiry inside the skew window stays allowed, so publish the signed
+		// expiry plus that allowance. The effective end is then still after now,
+		// and the API, webhooks, and clients keep access until the window closes.
+		if !endsAt.After(now) {
+			adjusted := endsAt.Add(maximumNotificationClockSkew)
+			endsAt = &adjusted
 		}
 		if renewal.Status == core.RenewalDisabled {
 			return core.LifecycleCanceled, core.AccessAllowed, core.AccessReasonCanceledAtPeriodEnd, endsAt, renewal

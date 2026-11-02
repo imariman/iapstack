@@ -21,10 +21,11 @@ published, use the tarball produced by `npm pack` in this directory.
 exhaustive on `verified` and `error` does not compile until it handles `pending`.
 
 A Google Play purchase that is still pending, and a verification the server
-leaves unresolved, arrives as `pending` instead of `verified`. `canVerify` is
-false for those Play updates. Submit a pending purchase only by calling
-`verifyPurchase` yourself. Unlock access from `grantsAccess`, not from the
-event name.
+leaves unresolved, arrives as `pending` instead of `verified`. That stays
+`pending` when another entitlement already grants access. An empty entitlement
+list stays `pending` too. `canVerify` is false for those Play updates. Submit a
+pending purchase only by calling `verifyPurchase` yourself. Unlock access from
+`grantsAccess`, not from the event name.
 
 Requires React Native 0.76+, iOS 15.1+, Swift 6.1 / Xcode 16.3+, Android API 26+,
 Java 17, Kotlin 1.9.24+ and an HTTPS IAPStack deployment. The runnable sample uses React Native 0.84.1
