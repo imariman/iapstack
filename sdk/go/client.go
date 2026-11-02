@@ -16,12 +16,17 @@ import (
 
 const (
 	// sdkVersion identifies this host package in X-IAPStack-SDK.
-	sdkVersion = "0.1.0-sdk.1"
+	sdkVersion = "0.1.0-sdk.2"
 	// jsonContentType is the only accepted v1 request and response media type.
 	jsonContentType = "application/json"
 )
 
 // Client is an application-bearer HTTP client for trusted host backends.
+//
+// Canceling the context passed to a call, including while the client is
+// waiting to retry, returns context.Canceled rather than an earlier attempt's
+// API, timeout, or transport error. A deadline that expires during that wait
+// is a TimeoutError.
 type Client struct {
 	// baseURL is the IAPStack origin, optionally including a reverse-proxy path prefix.
 	baseURL *url.URL
@@ -230,14 +235,17 @@ func (client *Client) request(
 	target := resolveURL(client.baseURL, path...)
 	var last error
 	for attempt := 1; attempt <= client.retryPolicy.MaxAttempts; attempt++ {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, ctx.Err()
+		}
 		response, err := client.attempt(ctx, method, bearer, target, payload, requestID)
 		if err != nil {
 			last = err
 			if !client.shouldRetry(ctx, err, attempt) {
-				return nil, err
+				return nil, retryStopError(ctx, err, false)
 			}
 			if waitErr := client.wait(ctx, attempt, 0); waitErr != nil {
-				return nil, last
+				return nil, retryStopError(ctx, waitErr, true)
 			}
 			continue
 		}
@@ -247,10 +255,10 @@ func (client *Client) request(
 		apiErr := apiErrorFromResponse(response, client.now())
 		last = apiErr
 		if !client.shouldRetry(ctx, apiErr, attempt) {
-			return nil, apiErr
+			return nil, retryStopError(ctx, apiErr, false)
 		}
 		if waitErr := client.wait(ctx, attempt, apiErr.RetryAfter); waitErr != nil {
-			return nil, last
+			return nil, retryStopError(ctx, waitErr, true)
 		}
 	}
 	if last != nil {
@@ -301,6 +309,21 @@ func (client *Client) attempt(
 		return rawResponse{}, &ProtocolError{Message: "IAPStack response exceeded the configured size limit"}
 	}
 	return rawResponse{StatusCode: response.StatusCode, Header: response.Header, Body: body}, nil
+}
+
+// retryStopError chooses the error a stopped retry loop returns.
+// A canceled caller context replaces the attempt or wait error so hosts can
+// tell a user abort from the previous API, timeout, or transport failure.
+// A caller deadline that expires while waiting is a timeout for the same
+// reason. An in-flight deadline already arrives as TimeoutError and is kept.
+func retryStopError(ctx context.Context, err error, waiting bool) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return ctx.Err()
+	}
+	if waiting && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &TimeoutError{Message: "IAPStack request timed out", Cause: ctx.Err()}
+	}
+	return err
 }
 
 // shouldRetry reports whether another attempt is allowed for a retryable failure.

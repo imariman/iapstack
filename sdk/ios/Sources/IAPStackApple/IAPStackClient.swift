@@ -1,6 +1,6 @@
 import Foundation
 
-private let sdkVersion = "0.1.0-sdk.1"
+private let sdkVersion = "0.1.0-sdk.2"
 
 /// Provider-neutral HTTP client for the IAPStack v1 API.
 public final class IAPStackClient {
