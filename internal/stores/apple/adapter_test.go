@@ -452,6 +452,92 @@ func TestNormalizeActiveStatusNearExpiry(t *testing.T) {
 	}
 }
 
+// TestNonGraceObservationIDMatchesHistoricalEncoding pins the id main stored for one active subscription.
+// The effective end equals the transaction expiry, so grace encoding must not change this id.
+func TestNonGraceObservationIDMatchesHistoricalEncoding(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 25, 11, 0, 0, 0, time.UTC)
+	adapter := &Adapter{clock: func() time.Time { return now }}
+	transaction := transactionPayload{
+		OriginalTransactionID: "2000000123456789", TransactionID: "2000000123456790",
+		WebOrderLineItemID: "line-1", BundleID: fixtureBundleID, ProductID: fixtureProductID,
+		PurchaseDate: now.Add(-time.Hour).UnixMilli(), ExpiresDate: now.Add(30 * 24 * time.Hour).UnixMilli(),
+		Quantity: 1, Type: appleSubscriptionType, AppAccountToken: fixtureAccountToken,
+		OwnershipType: applePurchasedOwnership, Environment: "Sandbox",
+	}
+	artifact, err := stores.NewEvidence("application/json", []byte(`{"subscription":"status"}`))
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	result, err := adapter.result(
+		appleApplication(core.EnvironmentSandbox),
+		core.ProductKindSubscription,
+		transaction,
+		artifact,
+		&subscriptionSnapshot{
+			Status: subscriptionStatusActive,
+			Renewal: renewalPayload{
+				AutoRenewStatus: autoRenewDisabled, AutoRenewProductID: fixtureProductID,
+				ProductID: fixtureProductID,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("result() error = %v", err)
+	}
+	const wantID = "app-9c0d08baf30768510ba51102ee28ed08"
+	observation := result.Observations[0]
+	if observation.ID != wantID || observation.PriorSnapshotID != "" {
+		t.Fatalf("observation ID = %q, prior = %q, want %q and no prior id", observation.ID, observation.PriorSnapshotID, wantID)
+	}
+}
+
+// TestMissingGraceEndDoesNotCollideWithBillingRetry keeps a grace period with no grace date distinct
+// from billing retry, which stores the transaction expiry as the effective end.
+func TestMissingGraceEndDoesNotCollideWithBillingRetry(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 28, 18, 0, 0, 0, time.UTC)
+	adapter := &Adapter{clock: func() time.Time { return now }}
+	transaction := transactionPayload{
+		OriginalTransactionID: "2000000723456789", TransactionID: "2000000723456790",
+		BundleID: fixtureBundleID, ProductID: fixtureProductID,
+		PurchaseDate: now.Add(-24 * time.Hour).UnixMilli(), ExpiresDate: now.Add(time.Hour).UnixMilli(),
+		Quantity: 1, Type: appleSubscriptionType, AppAccountToken: fixtureAccountToken,
+		OwnershipType: applePurchasedOwnership, Environment: "Sandbox",
+	}
+	artifact, err := stores.NewEvidence("application/json", []byte(`{"subscription":"status"}`))
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	application := appleApplication(core.EnvironmentSandbox)
+	renewal := renewalPayload{AutoRenewStatus: autoRenewDisabled, ProductID: fixtureProductID}
+	observe := func(status int, graceEndsAt int64) core.PurchaseObservation {
+		t.Helper()
+		result, resultErr := adapter.result(application, core.ProductKindSubscription, transaction, artifact, &subscriptionSnapshot{
+			Status: status,
+			Renewal: renewalPayload{
+				AutoRenewStatus: renewal.AutoRenewStatus, ProductID: renewal.ProductID,
+				GracePeriodExpiresDate: graceEndsAt,
+			},
+		})
+		if resultErr != nil {
+			t.Fatalf("result() error = %v", resultErr)
+		}
+		return result.Observations[0]
+	}
+	billingRetry := observe(subscriptionStatusBillingRetry, 0)
+	missingGrace := observe(subscriptionStatusGracePeriod, 0)
+	if billingRetry.State != core.LifecycleOnHold || missingGrace.State != core.LifecycleOnHold ||
+		billingRetry.EffectivePeriod.EndsAt == nil || missingGrace.EffectivePeriod.EndsAt != nil {
+		t.Fatalf("billing retry = %#v, missing grace = %#v", billingRetry, missingGrace)
+	}
+	if billingRetry.ID == missingGrace.ID {
+		t.Fatal("missing grace end reused the billing-retry observation ID")
+	}
+}
+
 // TestGraceEndChangesObservationIdentity verifies an extended App Store grace period is a new snapshot.
 func TestGraceEndChangesObservationIdentity(t *testing.T) {
 	t.Parallel()
@@ -502,6 +588,11 @@ func TestGraceEndChangesObservationIdentity(t *testing.T) {
 	}
 	if first.ID != replayed.ID {
 		t.Fatalf("unchanged grace observations = (%q, %q), want one identity", first.ID, replayed.ID)
+	}
+	if first.PriorSnapshotID == "" || first.PriorSnapshotID != extended.PriorSnapshotID ||
+		first.PriorSnapshotID == first.ID || extended.PriorSnapshotID == extended.ID {
+		t.Fatalf("prior snapshot IDs = (%q, %q), current IDs = (%q, %q)",
+			first.PriorSnapshotID, extended.PriorSnapshotID, first.ID, extended.ID)
 	}
 }
 

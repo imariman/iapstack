@@ -489,8 +489,23 @@ func (adapter *Adapter) result(
 	identity := observationSnapshotIdentity(
 		application.ID, kind, transaction, state, access, reason, renewal, ownership, quantity, endsAt,
 	)
+	// historicalEnd is the transaction expiry main used for the observation id.
+	// PriorSnapshotID is set only when the current effective end produces a different id.
+	var historicalEnd *time.Time
+	if transaction.ExpiresDate > 0 {
+		value := milliseconds(transaction.ExpiresDate)
+		historicalEnd = &value
+	}
+	priorIdentity := observationSnapshotIdentity(
+		application.ID, kind, transaction, state, access, reason, renewal, ownership, quantity, historicalEnd,
+	)
+	var priorID core.ObservationID
+	if priorIdentity != identity {
+		priorID = core.ObservationID("app-" + hex.EncodeToString(priorIdentity[:16]))
+	}
 	observation := core.PurchaseObservation{
 		ID:              core.ObservationID("app-" + hex.EncodeToString(identity[:16])),
+		PriorSnapshotID: priorID,
 		ApplicationID:   application.ID,
 		Store:           application.Store,
 		ProductID:       core.ProviderProductID(transaction.ProductID),
@@ -681,6 +696,8 @@ func observationSnapshotIdentity(
 }
 
 // snapshotExpiresIdentity encodes the transaction expiry and, when access ends at a different instant, that effective end.
+// A missing effective end with a positive transaction expiry stays distinct from an end equal to that expiry.
+// Grace with no grace date is the missing case. Billing retry stores the transaction expiry.
 func snapshotExpiresIdentity(transactionExpires int64, endsAt *time.Time) string {
 	encoded := strconv.FormatInt(transactionExpires, 10)
 	if endsAt == nil {
