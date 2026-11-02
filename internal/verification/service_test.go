@@ -299,6 +299,26 @@ func TestServiceVerifyPersistsAndReplays(t *testing.T) {
 	}
 }
 
+// TestServiceVerifyCompletesWhenProductGrantsNothing verifies an empty grant set is a completed verification.
+func TestServiceVerifyCompletesWhenProductGrantsNothing(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	fixture.catalog.Entitlements = nil
+	fixture.catalog.Product.EntitlementIDs = nil
+	store := newFakeStore(fixture)
+	service := newVerificationService(t, store, &fakeAdapter{result: fixture.result}, &fakeProtector{}, fixture.clock)
+
+	result, err := service.Verify(context.Background(), fixture.command)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if len(result.Entitlements) != 0 || len(store.repository.observations) != 1 ||
+		len(store.repository.entitlements) != 0 || len(store.repository.outbox) != 0 {
+		t.Fatalf("result entitlements = %#v, repository = %#v, want a saved observation and no grants", result.Entitlements, store.repository)
+	}
+}
+
 // TestServiceReconcileReusesUnchangedObservationProjection verifies provider completion does not churn entitlement events.
 func TestServiceReconcileReusesUnchangedObservationProjection(t *testing.T) {
 	t.Parallel()

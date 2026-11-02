@@ -173,9 +173,10 @@ type keyRequest struct {
 	ApplicationID core.ApplicationID     `json:"application_id,omitempty"`
 }
 
-// apiKeyCollectionResponse contains bounded secret-free administrator key metadata.
+// apiKeyCollectionResponse contains one page of secret-free administrator key metadata.
 type apiKeyCollectionResponse struct {
-	APIKeys []apiKeyResponse `json:"api_keys"`
+	APIKeys       []apiKeyResponse `json:"api_keys"`
+	NextPageToken string           `json:"next_page_token,omitempty"`
 }
 
 // apiKeyResponse describes one API key lifecycle without its bearer or verifier.
@@ -324,22 +325,24 @@ func (api *API) createCustomerSession(writer http.ResponseWriter, request *http.
 	})
 }
 
-// listAPIKeys returns bounded secret-free lifecycle metadata for rotation workflows.
+// listAPIKeys returns one page of secret-free lifecycle metadata for rotation workflows.
 func (api *API) listAPIKeys(writer http.ResponseWriter, request *http.Request) {
 	principal, ok := api.requireAdmin(writer, request)
 	if !ok {
 		return
 	}
-	summaries, err := api.authentication.Keys(request.Context())
+	page, err := api.authentication.Keys(request.Context(), request.URL.Query().Get("page_token"))
 	if err != nil {
 		api.writeError(writer, request, err)
 		return
 	}
-	responses := make([]apiKeyResponse, 0, len(summaries))
-	for _, summary := range summaries {
+	responses := make([]apiKeyResponse, 0, len(page.Keys))
+	for _, summary := range page.Keys {
 		responses = append(responses, apiKeyFromSummary(summary, principal.KeyID))
 	}
-	writeJSON(writer, http.StatusOK, apiKeyCollectionResponse{APIKeys: responses})
+	writeJSON(writer, http.StatusOK, apiKeyCollectionResponse{
+		APIKeys: responses, NextPageToken: page.NextPageToken,
+	})
 }
 
 // ServeHTTP dispatches one versioned API request.

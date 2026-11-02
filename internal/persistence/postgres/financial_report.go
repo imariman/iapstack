@@ -40,6 +40,15 @@ type acceptedFinancialImport struct {
 	CreatedAt   time.Time
 }
 
+// providerCoverage is how one accepted report relates to a provider's production applications.
+// The stored report has no vendor or store-account id, so a missing application cannot be
+// proven to belong to the imported account.
+type providerCoverage struct {
+	matched    bool
+	complete   bool
+	zeroFilled []core.ApplicationID
+}
+
 var (
 	// financialReportStoreContract verifies Store implements financial report persistence.
 	_ persistence.FinancialReportStore = (*Store)(nil)
@@ -576,6 +585,7 @@ func (repository *transaction) adminRecognizedRevenue(
 		TestApplicationCount:       testCount,
 		Amounts:                    []persistence.AdminRecognizedAmount{},
 		UncoveredProviders:         []core.Provider{},
+		ZeroFilledApplicationIDs:   []core.ApplicationID{},
 	}
 	if productionCount == 0 {
 		zero := int64(0)
@@ -610,15 +620,38 @@ func (repository *transaction) adminRecognizedRevenue(
 		return persistence.AdminRevenue{}, err
 	}
 
+	amounts, uncovered, zeroFilled, allCovered := recognizeProviderAmounts(applications, chosen, amountRows)
+	revenue.Amounts = amounts
+	revenue.ZeroFilledApplicationIDs = zeroFilled
+	if !allCovered {
+		revenue.Status = persistence.AdminRevenueStoreReportsRequired
+		revenue.UncoveredProviders = uncovered
+		return revenue, nil
+	}
+	revenue.Status = persistence.AdminRevenueReportsImported
+	return revenue, nil
+}
+
+// recognizeProviderAmounts sums each provider report that matched at least one production application.
+// Currency totals are the imported rows only. A missing sibling is listed as zero-filled and does not
+// change those totals, but it keeps the provider from counting as complete because the report does
+// not record a store account.
+func recognizeProviderAmounts(
+	applications []productionApplication,
+	chosen map[core.Provider]acceptedFinancialImport,
+	amountRows map[string][]persistence.FinancialReportAmount,
+) ([]persistence.AdminRecognizedAmount, []core.Provider, []core.ApplicationID, bool) {
 	providers := productionProviders(applications)
 	amounts := make([]persistence.AdminRecognizedAmount, 0)
 	uncovered := make([]core.Provider, 0)
+	zeroFilled := make([]core.ApplicationID, 0)
 	allCovered := true
 	for _, provider := range providers {
 		kind, known := financialReportKind(provider)
 		report, selected := chosen[provider]
 		rows := amountRows[report.ID]
-		if !known || !selected || report.ReportKind != kind || !coversApplications(applications, provider, rows) {
+		coverage := providerReportCoverage(applications, provider, rows)
+		if !known || !selected || report.ReportKind != kind || !coverage.matched {
 			allCovered = false
 			uncovered = append(uncovered, provider)
 			continue
@@ -630,15 +663,12 @@ func (repository *transaction) adminRecognizedRevenue(
 			continue
 		}
 		amounts = append(amounts, summed...)
+		if !coverage.complete {
+			allCovered = false
+			zeroFilled = append(zeroFilled, coverage.zeroFilled...)
+		}
 	}
-	if !allCovered {
-		revenue.Status = persistence.AdminRevenueStoreReportsRequired
-		revenue.UncoveredProviders = uncovered
-		return revenue, nil
-	}
-	revenue.Status = persistence.AdminRevenueReportsImported
-	revenue.Amounts = amounts
-	return revenue, nil
+	return amounts, uncovered, zeroFilled, allCovered
 }
 
 // productionApplications lists every production application without the dashboard collection cap.
@@ -742,25 +772,43 @@ func productionProviders(applications []productionApplication) []core.Provider {
 	return providers
 }
 
-// coversApplications reports whether every production application for one provider has an amount row.
-func coversApplications(
+// providerReportCoverage classifies one provider's production applications against amount rows.
+// A report that matches none of them does not cover the provider. A report that matches some
+// but not all keeps the matched totals and lists the absent applications as zero-filled.
+func providerReportCoverage(
 	applications []productionApplication,
 	provider core.Provider,
 	amounts []persistence.FinancialReportAmount,
-) bool {
+) providerCoverage {
 	covered := map[core.ApplicationID]struct{}{}
 	for _, amount := range amounts {
 		covered[amount.CoveredApplicationID] = struct{}{}
 	}
+	providerApps := 0
+	matched := 0
+	missing := make([]core.ApplicationID, 0)
 	for _, application := range applications {
 		if application.provider != provider {
 			continue
 		}
-		if _, ok := covered[application.id]; !ok {
-			return false
+		providerApps++
+		if _, ok := covered[application.id]; ok {
+			matched++
+			continue
 		}
+		missing = append(missing, application.id)
 	}
-	return true
+	if providerApps == 0 {
+		return providerCoverage{matched: true, complete: true}
+	}
+	if matched == 0 {
+		return providerCoverage{}
+	}
+	if len(missing) == 0 {
+		return providerCoverage{matched: true, complete: true}
+	}
+	sort.Slice(missing, func(left, right int) bool { return missing[left] < missing[right] })
+	return providerCoverage{matched: true, complete: false, zeroFilled: missing}
 }
 
 // sumRecognizedAmounts totals one provider's covered applications without converting currency.

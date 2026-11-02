@@ -8,6 +8,7 @@ import (
 
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/validation"
 )
 
 const (
@@ -55,14 +56,63 @@ func (repository *transaction) APIKey(ctx context.Context, id string) (persisten
 	return record, nil
 }
 
-// APIKeys returns bounded lifecycle metadata without bearer secrets or verifiers.
-func (repository *transaction) APIKeys(ctx context.Context) ([]persistence.APIKeySummary, error) {
-	rows, err := repository.tx.Query(ctx, `
-		SELECT id, role, project_id, application_id, created_at, revoked_at
-		FROM api_keys
-		ORDER BY created_at DESC, id
-		LIMIT $1
-	`, apiKeyListLimit)
+// APIKeys returns one newest-first page of lifecycle metadata without bearer secrets or verifiers.
+// The page token is the public id of the last key on the previous page.
+func (repository *transaction) APIKeys(ctx context.Context, pageToken string) (persistence.APIKeyPage, error) {
+	var cursorCreatedAt time.Time
+	var cursorID string
+	if pageToken != "" {
+		if err := validateAPIKeyPageToken(pageToken); err != nil {
+			return persistence.APIKeyPage{}, err
+		}
+		err := repository.tx.QueryRow(ctx, `
+			SELECT created_at, id FROM api_keys WHERE id = $1
+		`, pageToken).Scan(&cursorCreatedAt, &cursorID)
+		if err != nil {
+			classified := classifyError("load API key page", err)
+			if errors.Is(classified, persistence.ErrNotFound) {
+				return persistence.APIKeyPage{}, validation.Wrap(errors.New("API key page token is invalid"))
+			}
+			return persistence.APIKeyPage{}, classified
+		}
+	}
+
+	var summaries []persistence.APIKeySummary
+	var err error
+	if pageToken == "" {
+		summaries, err = repository.queryAPIKeySummaries(ctx, `
+			SELECT id, role, project_id, application_id, created_at, revoked_at
+			FROM api_keys
+			ORDER BY created_at DESC, id
+			LIMIT $1
+		`, apiKeyListLimit+1)
+	} else {
+		summaries, err = repository.queryAPIKeySummaries(ctx, `
+			SELECT id, role, project_id, application_id, created_at, revoked_at
+			FROM api_keys
+			WHERE created_at < $1 OR (created_at = $1 AND id > $2)
+			ORDER BY created_at DESC, id
+			LIMIT $3
+		`, cursorCreatedAt, cursorID, apiKeyListLimit+1)
+	}
+	if err != nil {
+		return persistence.APIKeyPage{}, err
+	}
+	page := persistence.APIKeyPage{Keys: summaries}
+	if len(summaries) > apiKeyListLimit {
+		page.Keys = summaries[:apiKeyListLimit]
+		page.NextPageToken = page.Keys[len(page.Keys)-1].ID
+	}
+	return page, nil
+}
+
+// queryAPIKeySummaries reads one bounded API key page.
+func (repository *transaction) queryAPIKeySummaries(
+	ctx context.Context,
+	query string,
+	args ...any,
+) ([]persistence.APIKeySummary, error) {
+	rows, err := repository.tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, classifyError("list API keys", err)
 	}
@@ -80,6 +130,17 @@ func (repository *transaction) APIKeys(ctx context.Context) ([]persistence.APIKe
 		return nil, classifyError("iterate API keys", err)
 	}
 	return summaries, nil
+}
+
+// validateAPIKeyPageToken rejects a page cursor that cannot be a stored key id.
+func validateAPIKeyPageToken(pageToken string) error {
+	if len(pageToken) > 200 {
+		return validation.Wrap(errors.New("API key page token is invalid"))
+	}
+	if err := validateText("API key page token", pageToken); err != nil {
+		return validation.Wrap(err)
+	}
+	return nil
 }
 
 // PutAPIKey creates one API key verifier without storing its bearer secret.
