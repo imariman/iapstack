@@ -890,8 +890,9 @@ func (api *API) verify(
 	if requiresReconciliation(input.Evidence) {
 		// Verify has already committed the purchase in its own transaction. The reconciliation
 		// insert uses the operations store, so it cannot join that commit. A scheduling failure
-		// must not hide the committed snapshot. The counter and log are the recovery signal.
-		if scheduleErr := api.scheduleReconciliation(ctx, principal, result.Customer.ID, input); scheduleErr != nil {
+		// must not hide the committed snapshot. The retry row is what the worker promotes;
+		// the counter and log remain the signal that the first insert did not commit.
+		if scheduleErr := api.scheduleReconciliation(ctx, principal, result.Customer.ID, input, result.PurchaseEvidence); scheduleErr != nil {
 			api.recordReconcileScheduleFailure(principal, result.Customer.ID, application.Store.Provider)
 		}
 	}
@@ -932,11 +933,14 @@ func reconciliationScheduleProvider(provider core.Provider) string {
 }
 
 // scheduleReconciliation stores a protected idempotent daily authoritative refresh request.
+// When that insert or its protection fails, a retry row remains for the worker. The purchase
+// response still succeeds because this runs after verify has committed.
 func (api *API) scheduleReconciliation(
 	ctx context.Context,
 	principal auth.Principal,
 	customerID core.CustomerID,
 	input verificationRequest,
+	purchaseEvidence protection.Value,
 ) error {
 	availableAt := nextReconciliationTime(api.clock().UTC())
 	payload, err := json.Marshal(jobs.ReconciliationPayload{Verification: input, ScheduledFor: availableAt})
@@ -948,18 +952,106 @@ func (api *API) scheduleReconciliation(
 	if err != nil {
 		return err
 	}
-	protected, err := api.protect(ctx, application, reconciliationProtectionPurpose, payload)
-	if err != nil {
-		return err
+	protected, protectErr := api.protect(ctx, application, reconciliationProtectionPurpose, payload)
+	if protectErr != nil {
+		return api.savePurchaseEvidenceScheduleRetry(ctx, principal, customerID, input, purchaseEvidence, availableAt, protectErr)
 	}
-	return api.operations.Operate(ctx, func(repository persistence.OperationsTransaction) error {
-		_, saveErr := repository.SaveReconciliationJob(ctx, persistence.ReconciliationJob{
+	saveErr := api.operations.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		_, err := repository.SaveReconciliationJob(ctx, persistence.ReconciliationJob{
 			ID: deterministicID("reconcile", protected.Fingerprint), ProjectID: principal.ProjectID,
 			ApplicationID: principal.ApplicationID, CustomerID: customerID,
 			Payload: protected, AvailableAt: availableAt,
 		})
-		return saveErr
+		return err
 	})
+	if saveErr == nil {
+		return nil
+	}
+	retryErr := api.saveReconciliationScheduleRetry(ctx, persistence.ReconciliationScheduleRetry{
+		ID:            reconciliationRetryID(persistence.ReconciliationRetryReconciliationRequest, principal, customerID, protected.Fingerprint),
+		ProjectID:     principal.ProjectID,
+		ApplicationID: principal.ApplicationID,
+		CustomerID:    customerID,
+		Kind:          persistence.ReconciliationRetryReconciliationRequest,
+		Payload:       protected,
+		Metadata:      json.RawMessage(`{}`),
+		AvailableAt:   availableAt,
+	})
+	if retryErr != nil {
+		return saveErr
+	}
+	return saveErr
+}
+
+// savePurchaseEvidenceScheduleRetry keeps the already-protected submission when the job payload cannot be protected.
+func (api *API) savePurchaseEvidenceScheduleRetry(
+	ctx context.Context,
+	principal auth.Principal,
+	customerID core.CustomerID,
+	input verificationRequest,
+	purchaseEvidence protection.Value,
+	availableAt time.Time,
+	protectErr error,
+) error {
+	if purchaseEvidence.Validate() != nil {
+		return protectErr
+	}
+	metadata, err := json.Marshal(persistence.ReconciliationScheduleMetadata{
+		ExternalCustomerID: input.ExternalCustomerID,
+		ClaimedProducts:    append([]core.ProviderProductID(nil), input.ClaimedProducts...),
+		CustomerBindings:   scheduleBindings(input.CustomerBindings),
+	})
+	if err != nil {
+		return protectErr
+	}
+	if retryErr := api.saveReconciliationScheduleRetry(ctx, persistence.ReconciliationScheduleRetry{
+		ID:            reconciliationRetryID(persistence.ReconciliationRetryPurchaseEvidence, principal, customerID, purchaseEvidence.Fingerprint),
+		ProjectID:     principal.ProjectID,
+		ApplicationID: principal.ApplicationID,
+		CustomerID:    customerID,
+		Kind:          persistence.ReconciliationRetryPurchaseEvidence,
+		Payload:       purchaseEvidence,
+		Metadata:      metadata,
+		AvailableAt:   availableAt,
+	}); retryErr != nil {
+		return protectErr
+	}
+	return protectErr
+}
+
+// saveReconciliationScheduleRetry persists one worker-owned schedule attempt.
+func (api *API) saveReconciliationScheduleRetry(
+	ctx context.Context,
+	retry persistence.ReconciliationScheduleRetry,
+) error {
+	return api.operations.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		return repository.SaveReconciliationScheduleRetry(ctx, retry)
+	})
+}
+
+// scheduleBindings copies worker bindings into the schedule-retry metadata shape.
+func scheduleBindings(bindings []jobs.Binding) []persistence.ReconciliationScheduleBinding {
+	if len(bindings) == 0 {
+		return nil
+	}
+	copied := make([]persistence.ReconciliationScheduleBinding, 0, len(bindings))
+	for _, binding := range bindings {
+		copied = append(copied, persistence.ReconciliationScheduleBinding{Kind: binding.Kind, Value: binding.Value})
+	}
+	return copied
+}
+
+// reconciliationRetryID is stable for one application, customer, kind, and protected payload.
+func reconciliationRetryID(
+	kind string,
+	principal auth.Principal,
+	customerID core.CustomerID,
+	fingerprint [sha256.Size]byte,
+) string {
+	digest := sha256.Sum256([]byte(strings.Join([]string{
+		kind, string(principal.ProjectID), string(principal.ApplicationID), string(customerID),
+	}, "\x00") + "\x00" + string(fingerprint[:])))
+	return "reconcile-retry-" + hex.EncodeToString(digest[:16])
 }
 
 // requireAdmin authenticates one control-plane bearer.

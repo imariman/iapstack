@@ -473,6 +473,159 @@ func TestVerifyMapsCurrentAppleSubscriptionProduct(t *testing.T) {
 	}
 }
 
+// TestVerifyDeniesPreviousAppleEntitlementAfterUpgrade closes the old key when status moves products.
+// The daily job replays the original monthly claim. Subscription status then returns annual, and the
+// adapter also returns an expired monthly observation. basic must not stay allowed until the old expiry.
+func TestVerifyDeniesPreviousAppleEntitlementAfterUpgrade(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	fixture.application.Store.Provider = core.ProviderAppleAppStore
+	fixture.application.Store.ID = "com.example.iapstack"
+	now := fixture.result.VerifiedAt
+	upgradeAt := now.Add(time.Minute)
+	originalEnd := now.Add(30 * 24 * time.Hour)
+	annualEnd := now.Add(365 * 24 * time.Hour)
+	basic := core.Entitlement{ID: "entitlement-basic", ProjectID: verificationProjectID, Key: "basic"}
+	premium := core.Entitlement{ID: "entitlement-premium", ProjectID: verificationProjectID, Key: "premium"}
+	monthly := appleSubscriptionCatalog("product-monthly", "monthly", basic)
+	annual := appleSubscriptionCatalog("product-annual", "annual", premium)
+	fixture.command.ClaimedProducts = []core.ProviderProductID{"monthly"}
+
+	store := newFakeStore(fixture)
+	store.repository.application = fixture.application
+	store.repository.catalog = map[core.ProviderProductID]persistence.CatalogProduct{
+		"monthly": monthly,
+		"annual":  annual,
+	}
+	monthlyAllowed := appleSubscriptionObservation(
+		fixture.application, "observation-monthly-allowed", "monthly",
+		core.LifecycleActive, core.AccessAllowed, core.AccessReasonPurchaseValid, "active",
+		now.Add(-24*time.Hour), now, &originalEnd,
+	)
+	monthlyClosed := appleSubscriptionObservation(
+		fixture.application, "observation-monthly-upgraded", "monthly",
+		core.LifecycleExpired, core.AccessDenied, core.AccessReasonExpired, "upgraded",
+		now.Add(-24*time.Hour), now.Add(time.Hour), &upgradeAt,
+	)
+	monthlyClosed.Renewal = core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalDisabled}
+	annualActive := appleSubscriptionObservation(
+		fixture.application, "observation-annual-active", "annual",
+		core.LifecycleActive, core.AccessAllowed, core.AccessReasonPurchaseValid, "active",
+		upgradeAt, now.Add(time.Hour), &annualEnd,
+	)
+	first := fixture.result
+	first.Observations = []core.PurchaseObservation{monthlyAllowed}
+	second := fixture.result
+	second.VerifiedAt = now.Add(time.Hour)
+	second.Observations = []core.PurchaseObservation{annualActive, monthlyClosed}
+	adapter := &fakeAdapter{provider: core.ProviderAppleAppStore, result: first}
+	service := newVerificationService(t, store, adapter, &fakeProtector{}, fixture.clock)
+
+	initial, err := service.Verify(context.Background(), fixture.command)
+	if err != nil {
+		t.Fatalf("initial Verify() error = %v", err)
+	}
+	if len(initial.Entitlements) != 1 || initial.Entitlements[0].Key != "basic" ||
+		initial.Entitlements[0].Projection.Access != core.AccessAllowed {
+		t.Fatalf("initial entitlements = %#v, want allowed basic", initial.Entitlements)
+	}
+
+	adapter.result = second
+	upgraded, err := service.Verify(context.Background(), fixture.command)
+	if err != nil {
+		t.Fatalf("upgrade Verify() error = %v", err)
+	}
+	if len(store.repository.observations) != 3 {
+		t.Fatalf("observations = %d, want the original monthly row plus the upgrade pair", len(store.repository.observations))
+	}
+	byKey := map[string]persistence.CustomerEntitlement{}
+	for _, entitlement := range upgraded.Entitlements {
+		byKey[entitlement.Key] = entitlement
+	}
+	closedBasic, ok := byKey["basic"]
+	if !ok || closedBasic.Projection.Access != core.AccessDenied ||
+		closedBasic.Projection.AccessReason != core.AccessReasonExpired ||
+		closedBasic.Projection.SourceProductID != "product-monthly" ||
+		closedBasic.Projection.EffectivePeriod.EndsAt == nil ||
+		!closedBasic.Projection.EffectivePeriod.EndsAt.Equal(upgradeAt) {
+		t.Fatalf("basic = %#v, want denied at the upgrade", closedBasic)
+	}
+	openedPremium, ok := byKey["premium"]
+	if !ok || openedPremium.Projection.Access != core.AccessAllowed ||
+		openedPremium.Projection.SourceProductID != "product-annual" ||
+		openedPremium.Projection.EffectivePeriod.EndsAt == nil ||
+		!openedPremium.Projection.EffectivePeriod.EndsAt.Equal(annualEnd) {
+		t.Fatalf("premium = %#v, want allowed through the annual period", openedPremium)
+	}
+}
+
+// appleSubscriptionCatalog maps one App Store product onto one entitlement key.
+func appleSubscriptionCatalog(
+	productID core.ProductID,
+	providerID core.ProviderProductID,
+	entitlement core.Entitlement,
+) persistence.CatalogProduct {
+	return persistence.CatalogProduct{
+		Mapping: core.StoreProduct{
+			ApplicationID: verificationApplicationID,
+			ProductID:     productID,
+			ProviderID:    providerID,
+		},
+		Product: core.Product{
+			ID:             productID,
+			ProjectID:      verificationProjectID,
+			Kind:           core.ProductKindSubscription,
+			EntitlementIDs: []core.EntitlementID{entitlement.ID},
+		},
+		Entitlements: []core.Entitlement{entitlement},
+	}
+}
+
+// appleSubscriptionObservation builds one subscription snapshot the projector can select.
+func appleSubscriptionObservation(
+	application core.Application,
+	id core.ObservationID,
+	providerProduct core.ProviderProductID,
+	state core.LifecycleState,
+	access core.AccessStatus,
+	reason core.AccessReason,
+	providerState string,
+	startsAt time.Time,
+	observedAt time.Time,
+	endsAt *time.Time,
+) core.PurchaseObservation {
+	reference, err := core.NewStoreReference(core.ReferenceTransaction, "transaction_id", string(id))
+	if err != nil {
+		panic(err)
+	}
+	renewal := core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled}
+	if access != core.AccessAllowed {
+		renewal.Status = core.RenewalDisabled
+	}
+	return core.PurchaseObservation{
+		ID:            id,
+		ApplicationID: application.ID,
+		Store:         application.Store,
+		ProductID:     providerProduct,
+		ProductKind:   core.ProductKindSubscription,
+		State:         state,
+		ProviderState: providerState,
+		Access:        access,
+		AccessReason:  reason,
+		Ownership:     core.OwnershipPurchased,
+		Quantity:      1,
+		OccurredAt:    startsAt,
+		ObservedAt:    observedAt,
+		EffectivePeriod: core.EffectivePeriod{
+			StartsAt: startsAt,
+			EndsAt:   endsAt,
+		},
+		Renewal:    renewal,
+		References: []core.StoreReference{reference},
+	}
+}
+
 // TestVerifyKeepsClaimedProductForOtherProviders rejects a provider product the caller did not claim.
 func TestVerifyKeepsClaimedProductForOtherProviders(t *testing.T) {
 	t.Parallel()

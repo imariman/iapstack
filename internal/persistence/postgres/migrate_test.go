@@ -76,6 +76,7 @@ func TestMigrationLifecycle(t *testing.T) {
 		"customer_aliases",
 		"financial_report_imports",
 		"import_grants",
+		"reconciliation_schedule_retries",
 	}
 	if got, want := len(relations), int(postgres.LatestVersion); got != want {
 		t.Fatalf("migration relation count = %d, want %d", got, want)
@@ -503,7 +504,8 @@ func TestInboxOutboxMigrationConstraints(t *testing.T) {
 
 // TestImportGrantMigrationRefusesDirtyDown verifies version 12 will not drop grants that are still stored.
 func TestImportGrantMigrationRefusesDirtyDown(t *testing.T) {
-	database := openTestDatabase(t, postgres.LatestVersion)
+	const importGrantSchemaVersion int32 = 12
+	database := openTestDatabase(t, importGrantSchemaVersion)
 	fixture := seedCatalog(t, database)
 	fingerprint := bytes.Repeat([]byte{9}, 32)
 	mustExec(t, database, `
@@ -521,14 +523,14 @@ func TestImportGrantMigrationRefusesDirtyDown(t *testing.T) {
 		INSERT INTO import_batches (project_id, batch_id, export_sha256, format)
 		VALUES ($1, 'revenuecat-test', $2, 'transactions-csv')
 	`, fixture.projectID, fingerprint)
-	if err := database.migrator.MigrateTo(database.ctx, postgres.LatestVersion-1); err == nil {
+	if err := database.migrator.MigrateTo(database.ctx, importGrantSchemaVersion-1); err == nil {
 		t.Fatal("MigrateTo(previous) error = nil, want refusal while import grants exist")
 	}
-	assertVersion(t, database, postgres.LatestVersion)
+	assertVersion(t, database, importGrantSchemaVersion)
 	mustExec(t, database, `DELETE FROM import_grants`)
 	mustExec(t, database, `DELETE FROM import_batches`)
-	mustMigrateTo(t, database, postgres.LatestVersion-1)
-	mustMigrateTo(t, database, postgres.LatestVersion)
+	mustMigrateTo(t, database, importGrantSchemaVersion-1)
+	mustMigrateTo(t, database, importGrantSchemaVersion)
 }
 
 // openTestDatabase opens the configured integration database at one schema version.
