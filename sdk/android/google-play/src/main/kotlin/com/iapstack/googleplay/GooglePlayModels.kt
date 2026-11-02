@@ -1,5 +1,7 @@
 package com.iapstack.googleplay
 
+import com.iapstack.core.Entitlement
+
 /**
  * Current state of one Google Play purchase update.
  */
@@ -42,12 +44,16 @@ data class GooglePlayPurchase(
   val errorCode: String? = null,
 ) {
   /**
-   * Whether this update contains evidence that can be sent to IAPStack.
+   * Whether an automatic purchase listener should submit this update.
+   *
+   * Pending payments stay out. Play has not charged the customer, and a
+   * listener that treats verification as unlock would grant access early.
+   * [GooglePlayIapStack.verifyPurchase] still accepts a pending purchase when
+   * the caller submits it explicitly.
    */
   val canVerify: Boolean
     get() = when (status) {
-      GooglePlayPurchaseStatus.PENDING, GooglePlayPurchaseStatus.PURCHASED,
-      GooglePlayPurchaseStatus.RESTORED -> true
+      GooglePlayPurchaseStatus.PURCHASED, GooglePlayPurchaseStatus.RESTORED -> true
       else -> false
     }
 
@@ -134,3 +140,19 @@ data class GooglePlayProductQuery(
   val products: List<GooglePlayProduct>,
   val notFoundProductIds: Set<String>,
 )
+
+/**
+ * Event name for a purchase listener after the server has answered.
+ *
+ * `verified` means access was granted, or the server returned a definitive
+ * denial. Unresolved payment stays `pending` so an app that unlocks on the
+ * event name does not grant access early. The React Native bridge compiles
+ * these sources and is the caller.
+ */
+internal fun purchaseListenerEventType(entitlements: List<Entitlement>): String {
+  val granted = entitlements.any { it.grantsAccess }
+  val unresolved = entitlements.any { entitlement ->
+    entitlement.access == "unresolved" || entitlement.reason == "pending_payment"
+  }
+  return if (!granted && unresolved) "pending" else "verified"
+}

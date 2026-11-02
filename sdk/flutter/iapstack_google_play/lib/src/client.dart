@@ -142,7 +142,11 @@ final class GooglePlayIapStack {
     );
   }
 
-  /// Verifies one pending, completed, or restored purchase with authoritative server state.
+  /// Verifies one purchase with authoritative server state.
+  ///
+  /// A pending purchase is accepted because this call is an explicit submit.
+  /// Automatic listeners should use [GooglePlayPurchase.canVerify] and wait
+  /// until Play reports [GooglePlayPurchaseStatus.purchased].
   Future<VerificationResult> verifyPurchase({
     required String externalCustomerId,
     required GooglePlayPurchase purchase,
@@ -200,7 +204,9 @@ final class GooglePlayIapStack {
     required GooglePlayPurchase purchase,
   }) {
     _validateExternalCustomerId(externalCustomerId);
-    if (!purchase.canVerify) {
+    // Pending is not canVerify. Calling verifyPurchase is the explicit submit.
+    if (purchase.status != GooglePlayPurchaseStatus.pending &&
+        !purchase.canVerify) {
       throw GooglePlayIapStackException(
         code: purchase.status == GooglePlayPurchaseStatus.cancelled
             ? 'purchase_cancelled'

@@ -86,7 +86,7 @@ if let purchase = try await stack.launchPurchase(
 }
 
 // Renewals, Ask to Buy approvals, other devices, and unfinished transactions
-// from earlier launches arrive here.
+// from earlier launches arrive here. Every read shares one StoreKit listener.
 let updates = stack.purchaseUpdates
 
 for await update in updates {

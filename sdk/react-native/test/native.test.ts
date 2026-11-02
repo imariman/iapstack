@@ -75,6 +75,20 @@ test('native verified results become public entitlement and Date models', async 
   expect((await IapStackStore.getEntitlements()).customerId).toBe('internal-id');
   expect(calls[0]).toEqual({operation: 'purchase', args: ['premium', null]});
 });
+test('pending purchase updates stay distinct from verified access', () => {
+  const received: Array<Record<string, unknown>> = [];
+  const listener = IapStackStore.addListener(event => received.push({...event}));
+  callback({type: 'pending', productIds: ['premium', 1]});
+  callback({type: 'pending', result: {customer_id: 'internal-id', verified_at: '2026-10-06T12:00:00Z',
+    entitlements: [{key: 'premium', access: 'unresolved', reason: 'pending_payment', version: 1}]}});
+  callback({type: 'pending', result: {entitlements: 'invalid'}});
+  expect(received[0]).toEqual({type: 'pending', productIds: ['premium']});
+  const pendingResult = received[1]?.result as {entitlements: {grantsAccess: boolean}[]};
+  expect(received[1]?.type).toBe('pending');
+  expect(pendingResult.entitlements[0]?.grantsAccess).toBe(false);
+  expect(received[2]).toEqual({type: 'error', code: 'protocol_error', message: 'Invalid native verification result'});
+  listener.remove();
+});
 test('purchase updates decode and malformed native payloads fail closed', () => {
   const received: unknown[] = [];
   const listener = IapStackStore.addListener(event => received.push(event));

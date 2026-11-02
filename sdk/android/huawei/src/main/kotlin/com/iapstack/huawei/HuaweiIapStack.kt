@@ -101,8 +101,12 @@ class HuaweiIapStack(
     product: HuaweiProduct,
     requestId: String? = null,
   ): VerificationResult {
-    if (externalCustomerId.trim().isEmpty()) {
-      throw IllegalArgumentException("externalCustomerId must not be empty")
+    // The same rule as core verification. A padded id would be charged as
+    // developerPayload and then rejected before an entitlement is written.
+    if (externalCustomerId.isEmpty() || externalCustomerId.trim() != externalCustomerId) {
+      throw IllegalArgumentException(
+        "externalCustomerId must be non-empty without surrounding whitespace",
+      )
     }
     if (queriedProducts[product.id] != product) {
       throw HuaweiIapStackException(

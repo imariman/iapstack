@@ -15,6 +15,17 @@ cd ios && pod install
 Prerelease version: `0.1.0-sdk.2`. The package is ready for release; until it is
 published, use the tarball produced by `npm pack` in this directory.
 
+## Breaking changes in 0.1.0-sdk.2
+
+`StoreEvent` now includes `{type: 'pending'}`. A TypeScript `switch` that was
+exhaustive on `verified` and `error` does not compile until it handles `pending`.
+
+A Google Play purchase that is still pending, and a verification the server
+leaves unresolved, arrives as `pending` instead of `verified`. `canVerify` is
+false for those Play updates. Submit a pending purchase only by calling
+`verifyPurchase` yourself. Unlock access from `grantsAccess`, not from the
+event name.
+
 Requires React Native 0.76+, iOS 15.1+, Swift 6.1 / Xcode 16.3+, Android API 26+,
 Java 17, Kotlin 1.9.24+ and an HTTPS IAPStack deployment. The runnable sample uses React Native 0.84.1
 with the New Architecture. This library uses RN's legacy module interop, not a
@@ -49,10 +60,12 @@ authenticated session transport.
 ```ts
 import {IapStackStore} from '@iapstack/react-native/store';
 
-// Subscribe before configure, including pending purchases completed outside the app.
+// Events that arrive before this subscription are kept until it attaches.
 const subscription = IapStackStore.addListener(event => {
   if (event.type === 'verified') {
     showAccess(event.result.entitlements.some(e => e.key === 'premium' && e.grantsAccess));
+  } else if (event.type === 'pending') {
+    showPendingPayment(); // Do not grant access.
   } else {
     showRecoverableError(event.code); // No raw evidence or bearer in events.
   }

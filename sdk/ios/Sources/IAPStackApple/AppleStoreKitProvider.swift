@@ -5,8 +5,6 @@ import StoreKit
 
 /// StoreKit 2 companion used by default on Apple platforms.
 public final class AppleStoreKitPlatform: AppleIAPPlatform {
-  public init() {}
-
   private actor State {
     var productCache: [String: Product] = [:]
     var pendingTransactions: [String: Transaction] = [:]
@@ -37,29 +35,37 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
     }
   }
 
-  private let state = State()
+  private let state: State
+  private let purchaseUpdateHub: SharedAsyncMulticast<ApplePurchase>
 
-  public var purchaseUpdates: AsyncStream<ApplePurchase> {
-    AsyncStream { continuation in
-      let unfinished = Task.detached { [state] in
-        for await result in Transaction.unfinished {
-          if let mapped = await Self.mapUpdate(result, status: .purchased, state: state) {
-            continuation.yield(mapped)
+  public init() {
+    let state = State()
+    self.state = state
+    // One shared pass. Each pass reads Transaction.unfinished because
+    // Transaction.updates replays those rows only once per process. The dedupe
+    // key is the signed version, so a later refund is not treated as that replay.
+    self.purchaseUpdateHub = SharedAsyncMulticast {
+      let merged = mergeDeduped(
+        unfinished: { AppleStoreKitPlatform.storeTransactions(Transaction.unfinished, state: state) },
+        updates: { AppleStoreKitPlatform.storeTransactions(Transaction.updates, state: state) },
+        id: \.replayKey,
+      )
+      return AsyncStream { continuation in
+        let task = Task {
+          for await update in merged {
+            continuation.yield(update.purchase)
           }
+          continuation.finish()
         }
-      }
-      let updates = Task.detached { [state] in
-        for await result in Transaction.updates {
-          if let mapped = await Self.mapUpdate(result, status: .purchased, state: state) {
-            continuation.yield(mapped)
-          }
+        continuation.onTermination = { _ in
+          task.cancel()
         }
-      }
-      continuation.onTermination = { _ in
-        unfinished.cancel()
-        updates.cancel()
       }
     }
+  }
+
+  public var purchaseUpdates: AsyncStream<ApplePurchase> {
+    purchaseUpdateHub.subscribe()
   }
 
   public func isAvailable() async throws -> Bool {
@@ -233,15 +239,41 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
     )
   }
 
+  private struct MappedUpdate: Sendable {
+    var purchase: ApplePurchase
+    var replayKey: TransactionReplayKey
+  }
+
+  private static func storeTransactions(
+    _ transactions: Transaction.Transactions,
+    state: State,
+  ) -> AsyncStream<MappedUpdate> {
+    AsyncStream { continuation in
+      let task = Task.detached {
+        for await result in transactions {
+          if Task.isCancelled { break }
+          if let mapped = await mapUpdate(result, status: .purchased, state: state) {
+            continuation.yield(mapped)
+          }
+        }
+        continuation.finish()
+      }
+      continuation.onTermination = { _ in
+        task.cancel()
+      }
+    }
+  }
+
   private static func mapUpdate(
     _ result: StoreKit.VerificationResult<Transaction>,
     status: ApplePurchaseStatus,
     state: State,
-  ) async -> ApplePurchase? {
+  ) async -> MappedUpdate? {
     switch result {
     case .verified(let transaction):
+      let transactionId = String(describing: transaction.id)
       let purchase = ApplePurchase(
-        transactionId: String(describing: transaction.id),
+        transactionId: transactionId,
         productId: transaction.productID,
         signedTransaction: result.jwsRepresentation,
         status: status,
@@ -250,16 +282,31 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
         errorCode: nil,
       )
       await state.setPending(transaction, id: purchase.transactionId)
-      return purchase
+      return MappedUpdate(
+        purchase: purchase,
+        replayKey: transactionReplayKey(
+          transactionId: transactionId,
+          signedDate: transaction.signedDate,
+          revocationDate: transaction.revocationDate,
+        ),
+      )
     case .unverified(_, let error):
-      return ApplePurchase(
-        transactionId: "",
-        productId: "",
-        signedTransaction: "",
-        status: .failed,
-        pendingCompletion: false,
-        appAccountToken: nil,
-        errorCode: "\(error)",
+      let description = "\(error)"
+      return MappedUpdate(
+        purchase: ApplePurchase(
+          transactionId: "",
+          productId: "",
+          signedTransaction: "",
+          status: .failed,
+          pendingCompletion: false,
+          appAccountToken: nil,
+          errorCode: description,
+        ),
+        replayKey: transactionReplayKey(
+          transactionId: "unverified:\(description)",
+          signedDate: nil,
+          revocationDate: nil,
+        ),
       )
     }
   }
