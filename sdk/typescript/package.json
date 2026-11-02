@@ -1,6 +1,6 @@
 {
   "name": "@iapstack/host",
-  "version": "0.1.0-sdk.1",
+  "version": "0.1.0-sdk.2",
   "description": "Trusted-host TypeScript client for the IAPStack v1 API.",
   "license": "Apache-2.0",
   "publishConfig": {

@@ -18,7 +18,7 @@ import {
 } from './models.js';
 import { parseRetryAfter } from './retry_after.js';
 
-const SDK_VERSION = '0.1.0-sdk.1';
+const SDK_VERSION = '0.1.0-sdk.2';
 const JSON_CONTENT_TYPE = 'application/json';
 
 export interface RequestOptions {
