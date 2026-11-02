@@ -26,6 +26,9 @@ const (
 	queueCleanupInterval = time.Minute
 	// queueCleanupBatchSize bounds row locks and transaction work per queue and cleanup pass.
 	queueCleanupBatchSize = 1_000
+
+	// terminalAuditRetryDelay keeps a final attempt runnable until its audit row commits.
+	terminalAuditRetryDelay = 15 * time.Second
 )
 
 // Handler processes one durable message without changing queue state directly.
@@ -372,7 +375,7 @@ func (execution *executor) execute(
 	handlerErr := execution.handlers[queue].Handle(ctx, message)
 	if handlerErr == nil {
 		if err := execution.complete(ctx, queue, id); err != nil {
-			return err
+			return execution.auditTransitionError(attempt, maxAttempts, err)
 		}
 		outcome = "completed"
 		return nil
@@ -388,7 +391,7 @@ func (execution *executor) execute(
 		return errors.New(code)
 	}
 	if err := execution.fail(ctx, queue, id, code); err != nil {
-		return err
+		return execution.auditTransitionError(attempt, maxAttempts, err)
 	}
 	if isRetryable(handlerErr) {
 		return errors.New(code)
@@ -411,6 +414,17 @@ func (execution *executor) complete(ctx context.Context, queue persistence.Queue
 	}
 	execution.metrics.ObserveQueueAttempt(string(queue), "completed")
 	return nil
+}
+
+// auditTransitionError preserves River retries when a terminal audit write does not commit.
+// Earlier attempts keep the caller's backoff. The final attempt would otherwise discard
+// the job and leave the outbox or reconciliation row pending, so it is snoozed and the
+// handler runs again until that write commits.
+func (execution *executor) auditTransitionError(attempt, maxAttempts int, err error) error {
+	if attempt < maxAttempts {
+		return err
+	}
+	return river.JobSnooze(terminalAuditRetryDelay)
 }
 
 // fail records one terminal audit outcome after attempts are exhausted or a permanent error occurs.

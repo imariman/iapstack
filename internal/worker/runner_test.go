@@ -16,6 +16,7 @@ import (
 	"github.com/imariman/iapstack/internal/stores"
 	"github.com/imariman/iapstack/internal/webhooks"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 	"go.uber.org/goleak"
 )
 
@@ -372,6 +373,57 @@ func TestExecutorSurfacesTerminalTransitionFailures(t *testing.T) {
 	)
 	if err := failureExecution.execute(context.Background(), persistence.QueueInbox, "message-1", 1, 3); err == nil || err.Error() != "queue_transition_failed" {
 		t.Fatalf("execute() failure transition error = %v", err)
+	}
+}
+
+// TestExecutorSnoozesFinalAuditTransition verifies the last attempt stays runnable until the audit row commits.
+func TestExecutorSnoozesFinalAuditTransition(t *testing.T) {
+	t.Parallel()
+
+	permanent := stores.NewFailure("google_play", "verify", stores.FailureInvalidEvidence, 0, nil)
+	tests := []struct {
+		name          string
+		attempt       int
+		maxAttempts   int
+		completeError error
+		failError     error
+		handlerErr    error
+		wantSnooze    bool
+	}{
+		{name: "final completion", attempt: 3, maxAttempts: 3, completeError: persistence.ErrUnavailable, wantSnooze: true},
+		{name: "only completion attempt", attempt: 1, maxAttempts: 1, completeError: persistence.ErrUnavailable, wantSnooze: true},
+		{name: "final failure", attempt: 3, maxAttempts: 3, failError: persistence.ErrUnavailable, handlerErr: permanent, wantSnooze: true},
+		{name: "final success", attempt: 3, maxAttempts: 3},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			transaction := &executorTransaction{completeError: test.completeError, failError: test.failError}
+			execution := newTestExecutor(transaction, HandlerFunc(func(context.Context, persistence.QueueMessage) error {
+				return test.handlerErr
+			}))
+			err := execution.execute(context.Background(), persistence.QueueOutbox, "event-1", test.attempt, test.maxAttempts)
+			var snooze *river.JobSnoozeError
+			if test.wantSnooze {
+				if !errors.As(err, &snooze) || snooze.Duration != terminalAuditRetryDelay {
+					t.Fatalf("execute() error = %v, want snooze %s", err, terminalAuditRetryDelay)
+				}
+				if len(transaction.completions) != 0 || len(transaction.failures) != 0 {
+					t.Fatalf("terminal outcomes = (%d completions, %d failures), want none",
+						len(transaction.completions), len(transaction.failures))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("execute() error = %v, want completed audit", err)
+			}
+			if len(transaction.completions) != 1 || len(transaction.failures) != 0 {
+				t.Fatalf("terminal outcomes = (%d completions, %d failures), want (1, 0)",
+					len(transaction.completions), len(transaction.failures))
+			}
+		})
 	}
 }
 

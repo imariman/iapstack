@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -44,6 +45,12 @@ const (
 	restoreRequestTimeout = 25 * time.Second
 )
 
+// purchaseVerifier commits one purchase verification and returns its snapshot.
+type purchaseVerifier interface {
+	// Verify persists one purchase and returns the current entitlement snapshot.
+	Verify(context.Context, verification.Command) (verification.Result, error)
+}
+
 // API owns versioned routes and application services without direct database access.
 type API struct {
 	store             persistence.Store
@@ -54,7 +61,7 @@ type API struct {
 	customerSessions  *auth.CustomerSessions
 	credentials       *credentials.Service
 	webhooks          *webhooks.Service
-	verification      *verification.Service
+	verification      purchaseVerifier
 	huawei            *huawei.Adapter
 	apple             *apple.Adapter
 	googlePlay        *googleplay.Adapter
@@ -64,6 +71,7 @@ type API struct {
 	offeringDirectory string
 	offeringCatalog   persistence.OfferingCatalog
 	clock             func() time.Time
+	logger            *slog.Logger
 	handler           http.Handler
 }
 
@@ -233,6 +241,7 @@ func New(dependencies Dependencies) (*API, error) {
 		offeringDirectory: strings.TrimSpace(dependencies.OfferingDirectory),
 		offeringCatalog:   dependencies.OfferingCatalog,
 		clock:             time.Now,
+		logger:            slog.Default(),
 	}
 	mux := http.NewServeMux()
 	for _, route := range api.v1Routes() {
@@ -871,11 +880,28 @@ func (api *API) verify(
 		return verification.Result{}, err
 	}
 	if requiresReconciliation(input.Evidence) {
-		if err := api.scheduleReconciliation(ctx, principal, result.Customer.ID, input); err != nil {
-			return verification.Result{}, err
+		// The purchase, projection, and outbox event are already committed. A scheduling
+		// failure must not turn that success into an HTTP error. The daily job is idempotent,
+		// so a later verify or restore records it again.
+		if scheduleErr := api.scheduleReconciliation(ctx, principal, result.Customer.ID, input); scheduleErr != nil {
+			api.logReconcileScheduleFailure(principal, result.Customer.ID)
 		}
 	}
 	return result, nil
+}
+
+// logReconcileScheduleFailure records a scheduling failure without purchase evidence or error text.
+func (api *API) logReconcileScheduleFailure(principal auth.Principal, customerID core.CustomerID) {
+	logger := api.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Error("schedule purchase reconciliation",
+		slog.String("error_code", "reconciliation_schedule_failed"),
+		slog.String("project_id", string(principal.ProjectID)),
+		slog.String("application_id", string(principal.ApplicationID)),
+		slog.String("customer_id", string(customerID)),
+	)
 }
 
 // scheduleReconciliation stores a protected idempotent daily authoritative refresh request.
