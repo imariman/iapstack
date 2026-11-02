@@ -225,8 +225,13 @@ func normalizeSubscriptionStatus(
 	}
 	switch subscription.Status {
 	case subscriptionStatusActive:
-		if endsAt == nil || !endsAt.After(now) {
+		switch {
+		case endsAt == nil:
 			return core.LifecycleUnresolved, core.AccessUnresolved, core.AccessReasonUnresolved, endsAt, renewal
+		case !endsAt.After(now.Add(-maximumNotificationClockSkew)):
+			// Status remains active while the signed expiry is clearly behind the local clock.
+			// An expiry inside the notification clock-skew window keeps the active or canceled decision below.
+			return core.LifecycleExpired, core.AccessDenied, core.AccessReasonExpired, endsAt, renewal
 		}
 		if renewal.Status == core.RenewalDisabled {
 			return core.LifecycleCanceled, core.AccessAllowed, core.AccessReasonCanceledAtPeriodEnd, endsAt, renewal
