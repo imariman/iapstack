@@ -30,7 +30,12 @@ interface GooglePlayIapPlatform {
   )
 
   /**
-   * Queries currently owned purchases for an application customer binding.
+   * Queries currently owned purchases.
+   *
+   * Return every owned row, including purchases with no account binding or a
+   * different one. [GooglePlayIapStack.restorePurchases] counts those instead
+   * of treating them as an empty restore. [obfuscatedAccountId] is the customer
+   * the caller is restoring; it is not a reason to drop other rows.
    */
   suspend fun ownedPurchases(obfuscatedAccountId: String): List<GooglePlayPurchase>
 }

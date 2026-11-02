@@ -4,6 +4,7 @@ import com.iapstack.core.EntitlementSnapshot
 import com.iapstack.core.IapStackClient
 import com.iapstack.core.PurchaseSubmission
 import com.iapstack.core.RestoreResult
+import com.iapstack.core.RestoreSkipCounts
 import com.iapstack.core.VerificationResult
 
 /**
@@ -136,6 +137,11 @@ class HuaweiIapStack(
 
   /**
    * Restores configured, customer-bound purchases for one customer.
+   *
+   * Hitting [maxRestorePagesPerKind] submits the pages already read and sets
+   * [RestoreResult.pageLimitReached]. It does not discard those purchases.
+   * Unbound, different-customer, and unknown-product rows are counted on
+   * [RestoreResult.skipped] and are not submitted.
    */
   suspend fun restorePurchases(
     externalCustomerId: String,
@@ -153,6 +159,10 @@ class HuaweiIapStack(
     }
     val submissions = mutableListOf<PurchaseSubmission>()
     val evidenceKeys = mutableSetOf<String>()
+    var unbound = 0
+    var differentCustomer = 0
+    var unknownProduct = 0
+    var pageLimitReached = false
 
     for (kind in productKinds) {
       var continuationToken: String? = null
@@ -161,26 +171,26 @@ class HuaweiIapStack(
       do {
         pageCount++
         if (pageCount > maxRestorePagesPerKind) {
-          throw HuaweiIapStackException(
-            code = "restore_page_limit",
-            message = "Huawei restore exceeded the configured page limit",
-          )
+          pageLimitReached = true
+          break
         }
         val page = platform.ownedPurchases(
           productKind = kind,
           continuationToken = continuationToken,
         )
         for (purchase in page.purchases) {
-          val submission = restoreSubmission(
-            externalCustomerId = externalCustomerId,
-            purchase = purchase,
-            productKind = kind,
-          ) ?: continue
-          val evidenceKey = "${kind.name}\u0000${purchase.signature}\u0000${purchase.purchaseData}"
-          if (!evidenceKeys.add(evidenceKey)) {
-            continue
+          when (val row = classifyRestore(externalCustomerId, purchase, kind)) {
+            is HuaweiRestoreRow.Accept -> {
+              val evidenceKey = "${kind.name}\u0000${purchase.signature}\u0000${purchase.purchaseData}"
+              if (evidenceKeys.add(evidenceKey)) {
+                submissions.add(row.submission)
+              }
+            }
+            HuaweiRestoreRow.Unbound -> unbound++
+            HuaweiRestoreRow.DifferentCustomer -> differentCustomer++
+            HuaweiRestoreRow.UnknownProduct -> unknownProduct++
+            HuaweiRestoreRow.Ignore -> Unit
           }
-          submissions.add(submission)
         }
         continuationToken = page.continuationToken
         if (continuationToken != null && !observedContinuationTokens.add(continuationToken)) {
@@ -192,24 +202,16 @@ class HuaweiIapStack(
       } while (continuationToken != null)
     }
 
-    if (submissions.isEmpty()) {
-      return RestoreResult(results = emptyList())
-    }
-
-    val results = mutableListOf<VerificationResult>()
-    var start = 0
-    var batchIndex = 0
-    while (start < submissions.size) {
-      val end = minOf(start + 100, submissions.size)
-      val batch = client.restorePurchases(
-        purchases = submissions.subList(start, end),
-        requestId = batchRequestId(requestId, batchIndex),
-      )
-      results.addAll(batch.results)
-      start = end
-      batchIndex++
-    }
-    return RestoreResult(results = results)
+    return client.restorePurchasesInBatches(
+      purchases = submissions,
+      requestId = requestId,
+      skipped = RestoreSkipCounts(
+        unbound = unbound,
+        differentCustomer = differentCustomer,
+        unknownProduct = unknownProduct,
+      ),
+      pageLimitReached = pageLimitReached,
+    )
   }
 
   /**
@@ -221,30 +223,41 @@ class HuaweiIapStack(
   ): EntitlementSnapshot =
     client.getEntitlements(externalCustomerId, requestId)
 
-  private fun restoreSubmission(
+  private fun classifyRestore(
     externalCustomerId: String,
     purchase: HuaweiSignedPurchase,
     productKind: HuaweiProductKind,
-  ): PurchaseSubmission? {
+  ): HuaweiRestoreRow {
     if (purchase.purchaseData.trim().isEmpty() || purchase.signature.trim().isEmpty()) {
-      return null
+      return HuaweiRestoreRow.Ignore
     }
-    return try {
-      val evidence = HuaweiPurchaseEvidence(
-        purchase = purchase,
-        productKind = productKind,
-      )
-      if (productKinds[evidence.productId] != productKind ||
-        evidence.developerPayload != externalCustomerId
-      ) {
-        return null
-      }
-      evidence.toSubmission(
-        externalCustomerId = externalCustomerId,
-      )
+    val evidence = try {
+      HuaweiPurchaseEvidence(purchase = purchase, productKind = productKind)
+    } catch (_: HuaweiIapStackException) {
+      return HuaweiRestoreRow.Ignore
+    }
+    val payload = try {
+      evidence.developerPayload
     } catch (_: HuaweiIapStackException) {
       null
     }
+    if (payload != null && payload != externalCustomerId) {
+      return HuaweiRestoreRow.DifferentCustomer
+    }
+    val productId = try {
+      evidence.productId
+    } catch (_: HuaweiIapStackException) {
+      null
+    }
+    if (productId == null || productKinds[productId] != productKind) {
+      return HuaweiRestoreRow.UnknownProduct
+    }
+    if (payload == null) {
+      return HuaweiRestoreRow.Unbound
+    }
+    return HuaweiRestoreRow.Accept(
+      evidence.toSubmission(externalCustomerId = externalCustomerId),
+    )
   }
 
   private fun normalizedProductKinds(input: Map<String, HuaweiProductKind>): Map<String, HuaweiProductKind> {
@@ -260,10 +273,10 @@ class HuaweiIapStack(
   }
 }
 
-private fun batchRequestId(requestId: String?, batchIndex: Int): String? {
-  if (requestId == null || requestId.trim().isEmpty()) {
-    return null
-  }
-  val normalized = requestId.trim()
-  return if (batchIndex == 0) normalized else "$normalized-${batchIndex + 1}"
+private sealed interface HuaweiRestoreRow {
+  data class Accept(val submission: PurchaseSubmission) : HuaweiRestoreRow
+  data object Unbound : HuaweiRestoreRow
+  data object DifferentCustomer : HuaweiRestoreRow
+  data object UnknownProduct : HuaweiRestoreRow
+  data object Ignore : HuaweiRestoreRow
 }

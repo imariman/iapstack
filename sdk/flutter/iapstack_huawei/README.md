@@ -3,7 +3,11 @@
 Huawei AppGallery companion for the provider-neutral `iapstack` package. It
 uses Huawei's official `huawei_iap` plugin, preserves exact signed purchase
 strings, handles owned-purchase pagination, deduplicates provider results, and
-batches restore requests to the IAPStack limit of 100.
+batches restore requests to the IAPStack limit of 100. Reaching
+`maxRestorePagesPerKind` still submits the pages already read and sets
+`RestoreResult.pageLimitReached`. Unbound, different-customer, and
+unknown-product rows are counted on `skipped` and are not submitted. A later
+batch failure keeps `committedRestoreResults` on the original IAPStack error.
 
 ```dart
 final backend = IapStackClient(

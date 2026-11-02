@@ -2,7 +2,58 @@ package com.iapstack.core
 
 import kotlin.time.Duration
 
-sealed class IapStackException(message: String, cause: Throwable? = null) : Exception(message, cause)
+sealed class IapStackException(message: String, cause: Throwable? = null) : Exception(message, cause) {
+  /**
+   * Verification rows already accepted when a later restore batch failed.
+   * Empty when this failure happened before any batch succeeded.
+   */
+  var committedRestoreResults: List<VerificationResult> = emptyList()
+    private set
+
+  /**
+   * Store rows that were not submitted, when this failure came from restore.
+   */
+  var restoreSkips: RestoreSkipCounts = RestoreSkipCounts()
+    private set
+
+  /**
+   * True when Huawei restore had already hit its page cap before this failure.
+   */
+  var restorePageLimitReached: Boolean = false
+    private set
+
+  /**
+   * Records restore progress on the failure that interrupted a later batch.
+   * Store companions call this so callers can keep the original exception type.
+   */
+  fun attachPartialRestore(
+    committedResults: List<VerificationResult>,
+    skipped: RestoreSkipCounts,
+    pageLimitReached: Boolean,
+  ) {
+    committedRestoreResults = committedResults
+    restoreSkips = skipped
+    restorePageLimitReached = pageLimitReached
+  }
+}
+
+/**
+ * A restore batch failed after an earlier batch committed, and the failure was
+ * not already an [IapStackException]. [cause] is the batch error.
+ */
+class IapStackIncompleteRestoreException(
+  committedResults: List<VerificationResult>,
+  skipped: RestoreSkipCounts,
+  pageLimitReached: Boolean,
+  cause: Throwable,
+) : IapStackException(
+  cause.message ?: "IAPStack restore committed earlier batches and then failed",
+  cause,
+) {
+  init {
+    attachPartialRestore(committedResults, skipped, pageLimitReached)
+  }
+}
 
 /**
  * Structured v1 API error returned by IAPStack.

@@ -111,6 +111,10 @@ final class AppleIapStack {
   }
 
   /// Restores configured, customer-bound StoreKit history in bounded batches.
+  ///
+  /// Unbound, different-customer, and unknown-product rows are counted on
+  /// [RestoreResult.skipped] and are not submitted. Another customer's rows
+  /// are never verified.
   Future<RestoreResult> restorePurchases({
     required String externalCustomerId,
     String? requestId,
@@ -119,18 +123,37 @@ final class AppleIapStack {
     final purchases = await _platform.restorePurchases();
     final submissions = <PurchaseSubmission>[];
     final observedTransactions = <String>{};
+    var skipped = const RestoreSkipCounts();
     for (final purchase in purchases) {
-      if (!purchase.canVerify ||
-          purchase.appAccountToken?.toLowerCase() != externalCustomerId ||
-          !_productKinds.containsKey(purchase.productId) ||
-          !observedTransactions.add(purchase.transactionId)) {
+      if (!purchase.canVerify) {
+        continue;
+      }
+      final account = purchase.appAccountToken?.toLowerCase();
+      final bound = account != null && account.trim().isNotEmpty;
+      if (bound && account != externalCustomerId) {
+        skipped = skipped.byAdding(differentCustomer: 1);
+        continue;
+      }
+      if (!_productKinds.containsKey(purchase.productId)) {
+        skipped = skipped.byAdding(unknownProduct: 1);
+        continue;
+      }
+      if (!bound) {
+        skipped = skipped.byAdding(unbound: 1);
+        continue;
+      }
+      if (!observedTransactions.add(purchase.transactionId)) {
         continue;
       }
       submissions.add(
         _submission(externalCustomerId: externalCustomerId, purchase: purchase),
       );
     }
-    return _client.restorePurchasesInBatches(submissions, requestId: requestId);
+    return _client.restorePurchasesInBatches(
+      submissions,
+      requestId: requestId,
+      skipped: skipped,
+    );
   }
 
   /// Loads the current IAPStack projection without contacting StoreKit.

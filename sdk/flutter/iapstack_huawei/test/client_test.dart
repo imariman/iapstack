@@ -271,6 +271,11 @@ void main() {
                   _signedPurchase('premium_lifetime',
                       customerId: 'another-customer'),
                   const HuaweiSignedPurchase(purchaseData: '', signature: ''),
+                  HuaweiSignedPurchase(
+                    purchaseData:
+                        '{"productId":"premium_lifetime","purchaseToken":"token-unbound"}',
+                    signature: 'signature-unbound',
+                  ),
                   _signedPurchase('premium_lifetime', customerId: 'customer-1'),
                 ],
               ),
@@ -307,6 +312,10 @@ void main() {
       expect((submission['evidence']! as Map)['purchase_data'],
           _purchaseData('premium_lifetime', customerId: 'customer-1'));
       expect(result.results, hasLength(1));
+      expect(result.skipped.unknownProduct, 1);
+      expect(result.skipped.differentCustomer, 1);
+      expect(result.skipped.unbound, 1);
+      expect(result.pageLimitReached, isFalse);
     });
 
     test('splits more than 100 restored purchases into bounded API batches',
@@ -362,6 +371,107 @@ void main() {
         'sandbox-restore-1-2',
       ]);
       expect(result.results, hasLength(101));
+    });
+
+    test('submits pages already read when the page cap is reached', () async {
+      late List<dynamic> purchases;
+      final platform = _FakePlatform(
+        pages: <HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>{
+          HuaweiProductKind.subscription: Queue<HuaweiOwnedPurchasesPage>.of(
+            <HuaweiOwnedPurchasesPage>[
+              HuaweiOwnedPurchasesPage(
+                purchases: <HuaweiSignedPurchase>[
+                  _signedPurchase('premium_monthly', customerId: 'customer-1'),
+                ],
+                continuationToken: 'next',
+              ),
+              HuaweiOwnedPurchasesPage(
+                purchases: <HuaweiSignedPurchase>[
+                  HuaweiSignedPurchase(
+                    purchaseData: _purchaseData(
+                      'premium_monthly',
+                      customerId: 'customer-1',
+                    ),
+                    signature: 'signature-dropped',
+                  ),
+                ],
+              ),
+            ],
+          ),
+        },
+      );
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async {
+          purchases = (jsonDecode(request.body)
+              as Map<String, dynamic>)['purchases']! as List<dynamic>;
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'results':
+                  List<Object?>.filled(purchases.length, _verificationJson),
+            }),
+            200,
+          );
+        }),
+        productKinds: _productKinds,
+        platform: platform,
+        maxRestorePagesPerKind: 1,
+      );
+
+      final result = await huawei.restorePurchases(
+        externalCustomerId: 'customer-1',
+        productKinds: const <HuaweiProductKind>{
+          HuaweiProductKind.subscription,
+        },
+      );
+
+      expect(platform.restoreCalls, <String>['subscription:']);
+      expect(purchases, hasLength(1));
+      expect(
+        ((purchases.single as Map)['evidence'] as Map)['signature'],
+        'signature-premium_monthly',
+      );
+      expect(result.results, hasLength(1));
+      expect(result.pageLimitReached, isTrue);
+    });
+
+    test('reports a page cap when every collected page was empty', () async {
+      var backendCalled = false;
+      final platform = _FakePlatform(
+        pages: <HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>{
+          HuaweiProductKind.subscription: Queue<HuaweiOwnedPurchasesPage>.of(
+            <HuaweiOwnedPurchasesPage>[
+              HuaweiOwnedPurchasesPage(
+                purchases: const <HuaweiSignedPurchase>[],
+                continuationToken: 'next',
+              ),
+              HuaweiOwnedPurchasesPage(
+                purchases: const <HuaweiSignedPurchase>[],
+              ),
+            ],
+          ),
+        },
+      );
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async {
+          backendCalled = true;
+          return http.Response('{}', 500);
+        }),
+        productKinds: _productKinds,
+        platform: platform,
+        maxRestorePagesPerKind: 1,
+      );
+
+      final result = await huawei.restorePurchases(
+        externalCustomerId: 'customer-1',
+        productKinds: const <HuaweiProductKind>{
+          HuaweiProductKind.subscription,
+        },
+      );
+
+      expect(backendCalled, isFalse);
+      expect(platform.restoreCalls, <String>['subscription:']);
+      expect(result.results, isEmpty);
+      expect(result.pageLimitReached, isTrue);
     });
 
     test('rejects repeated continuation tokens', () async {

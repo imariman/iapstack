@@ -1,5 +1,6 @@
 package com.iapstack.googleplay
 
+import com.iapstack.core.IapStackApiException
 import com.iapstack.core.IapStackClient
 import com.iapstack.core.IapStackConfig
 import com.iapstack.core.IapStackRetryPolicy
@@ -202,8 +203,75 @@ class GooglePlayIapStackTest {
     ),
   )
 
+  @Test
+  fun countsSkippedRestoreRowsWithoutContactingIapStack() = runBlocking {
+    MockWebServer().use { server ->
+      val http = client(server)
+      val googlePlay = googlePlay(
+        platform = FakePlatform(
+          owned = listOf(
+            GooglePlayPurchase("unbound", listOf("premium_lifetime"), GooglePlayPurchaseStatus.PURCHASED, false, null),
+            GooglePlayPurchase("other", listOf("premium_lifetime"), GooglePlayPurchaseStatus.PURCHASED, false, "other-customer"),
+            GooglePlayPurchase("multi", listOf("premium_lifetime", "premium_monthly"), GooglePlayPurchaseStatus.PURCHASED, false, "customer-1"),
+            GooglePlayPurchase("unknown", listOf("legacy_product"), GooglePlayPurchaseStatus.RESTORED, false, "customer-1"),
+            GooglePlayPurchase("pending", listOf("premium_lifetime"), GooglePlayPurchaseStatus.PENDING, false, null),
+            GooglePlayPurchase("", listOf("premium_lifetime"), GooglePlayPurchaseStatus.PURCHASED, false, "customer-1"),
+          ),
+        ),
+        client = http,
+      )
+      val result = googlePlay.restorePurchases("customer-1")
+      assertTrue(result.results.isEmpty())
+      assertEquals(1, result.skipped.unbound)
+      assertEquals(1, result.skipped.differentCustomer)
+      assertEquals(1, result.skipped.multipleProducts)
+      assertEquals(1, result.skipped.unknownProduct)
+      assertEquals(0, server.requestCount)
+      http.close()
+    }
+  }
+
+  @Test
+  fun laterRestoreBatchKeepsCommittedResultsAndSkipCounts() = runBlocking {
+    MockWebServer().use { server ->
+      val rows = List(100) { VERIFICATION_JSON }.joinToString(",")
+      server.enqueue(MockResponse().setBody("""{"results":[$rows]}""").setResponseCode(200))
+      server.enqueue(
+        MockResponse().setResponseCode(422).setBody(
+          """{"error":{"code":"invalid_purchase","message":"rejected","request_id":"request-2"}}""",
+        ),
+      )
+      val http = client(server)
+      val owned = (0 until 101).map { index ->
+        GooglePlayPurchase(
+          "token-$index",
+          listOf("premium_lifetime"),
+          GooglePlayPurchaseStatus.PURCHASED,
+          false,
+          "customer-1",
+        )
+      } + GooglePlayPurchase(
+        "other-token",
+        listOf("premium_lifetime"),
+        GooglePlayPurchaseStatus.PURCHASED,
+        false,
+        "other-customer",
+      )
+      val googlePlay = googlePlay(platform = FakePlatform(owned = owned), client = http)
+      val error = assertFailsWith<IapStackApiException> {
+        googlePlay.restorePurchases("customer-1", requestId = "play-restore")
+      }
+      assertEquals(100, error.committedRestoreResults.size)
+      assertEquals(1, error.restoreSkips.differentCustomer)
+      assertEquals("invalid_purchase", error.code)
+      assertEquals(2, server.requestCount)
+      http.close()
+    }
+  }
+
   class FakePlatform(
     private val available: Boolean = true,
+    private val owned: List<GooglePlayPurchase> = emptyList(),
     var productQuery: GooglePlayProductQuery = GooglePlayProductQuery(emptyList(), emptySet()),
   ) : GooglePlayIapPlatform {
     override val purchaseUpdates: Flow<GooglePlayPurchase> = emptyFlow()
@@ -223,7 +291,7 @@ class GooglePlayIapStackTest {
       launchedAccountId = obfuscatedAccountId
     }
 
-    override suspend fun ownedPurchases(obfuscatedAccountId: String): List<GooglePlayPurchase> = emptyList()
+    override suspend fun ownedPurchases(obfuscatedAccountId: String): List<GooglePlayPurchase> = owned
   }
 
   companion object {

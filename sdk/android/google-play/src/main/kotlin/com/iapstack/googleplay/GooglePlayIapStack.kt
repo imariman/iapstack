@@ -1,10 +1,11 @@
 package com.iapstack.googleplay
 
+import com.iapstack.core.EntitlementSnapshot
 import com.iapstack.core.IapStackClient
 import com.iapstack.core.PurchaseSubmission
 import com.iapstack.core.RestoreResult
+import com.iapstack.core.RestoreSkipCounts
 import com.iapstack.core.VerificationResult
-import com.iapstack.core.EntitlementSnapshot
 
 /**
  * High-level Google Play purchase and restore flows backed by IAPStack.
@@ -150,6 +151,10 @@ class GooglePlayIapStack(
 
   /**
    * Restores configured, customer-bound purchases in bounded IAPStack batches.
+   *
+   * Rows for another customer, an unbound legacy purchase, an unknown product,
+   * or more than one product id are counted on [RestoreResult.skipped] and are
+   * not submitted. Another customer's rows are never verified.
    */
   suspend fun restorePurchases(
     externalCustomerId: String,
@@ -159,41 +164,50 @@ class GooglePlayIapStack(
     val ownedPurchases = platform.ownedPurchases(obfuscatedAccountId = externalCustomerId)
     val submissions = mutableListOf<PurchaseSubmission>()
     val observedTokens = mutableSetOf<String>()
+    var unbound = 0
+    var differentCustomer = 0
+    var unknownProduct = 0
+    var multipleProducts = 0
     for (purchase in ownedPurchases) {
       if (purchase.status != GooglePlayPurchaseStatus.PURCHASED &&
         purchase.status != GooglePlayPurchaseStatus.RESTORED
       ) {
         continue
       }
-      if (purchase.purchaseToken.trim().isEmpty() ||
-        purchase.obfuscatedAccountId != externalCustomerId ||
-        purchase.productIds.size != 1
-      ) {
+      val account = purchase.obfuscatedAccountId
+      val bound = !account.isNullOrBlank()
+      if (bound && account != externalCustomerId) {
+        differentCustomer++
         continue
       }
-      val productId = purchase.productIds.single()
-      if (!productKinds.containsKey(productId) || !observedTokens.add(purchase.purchaseToken)) {
+      if (purchase.productIds.size > 1) {
+        multipleProducts++
+        continue
+      }
+      val productId = purchase.productIds.singleOrNull()
+      if (productId == null || !productKinds.containsKey(productId)) {
+        unknownProduct++
+        continue
+      }
+      if (!bound) {
+        unbound++
+        continue
+      }
+      if (purchase.purchaseToken.isBlank() || !observedTokens.add(purchase.purchaseToken)) {
         continue
       }
       submissions.add(submission(externalCustomerId = externalCustomerId, purchase = purchase))
     }
-    if (submissions.isEmpty()) {
-      return RestoreResult(results = emptyList())
-    }
-
-    val results = mutableListOf<VerificationResult>()
-    var batchIndex = 0
-    while (batchIndex * 100 < submissions.size) {
-      val start = batchIndex * 100
-      val end = minOf(start + 100, submissions.size)
-      val batch = client.restorePurchases(
-        purchases = submissions.subList(start, end),
-        requestId = batchRequestId(requestId, batchIndex),
-      )
-      results.addAll(batch.results)
-      batchIndex++
-    }
-    return RestoreResult(results = results.toList())
+    return client.restorePurchasesInBatches(
+      purchases = submissions,
+      requestId = requestId,
+      skipped = RestoreSkipCounts(
+        unbound = unbound,
+        differentCustomer = differentCustomer,
+        unknownProduct = unknownProduct,
+        multipleProducts = multipleProducts,
+      ),
+    )
   }
 
   /**
@@ -263,18 +277,6 @@ class GooglePlayIapStack(
       throw IllegalArgumentException(
         "externalCustomerId must be non-empty, at most 64 characters, and have no surrounding whitespace",
       )
-    }
-  }
-
-  private fun batchRequestId(requestId: String?, batchIndex: Int): String? {
-    if (requestId == null || requestId.trim().isEmpty()) {
-      return null
-    }
-    val normalized = requestId.trim()
-    return if (batchIndex == 0) {
-      normalized
-    } else {
-      "$normalized-${batchIndex + 1}"
     }
   }
 

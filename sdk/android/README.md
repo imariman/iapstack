@@ -79,12 +79,20 @@ scope.launch {
 val offers = play.queryProducts(catalog.keys)
 // Display returned prices, base plans, offer IDs, and pricing phases for selection.
 play.launchPurchase(session.externalCustomerId, offers.products.first())
-play.restorePurchases(session.externalCustomerId)
+val restored = play.restorePurchases(session.externalCustomerId)
 val snapshot = play.getEntitlements(session.externalCustomerId)
 ```
 
 The exact opaque customer ID (max 64 characters, no email or other PII) becomes
-`obfuscatedAccountId`. Subscription and one-time offers retain their offer tokens.
+`obfuscatedAccountId`. `restorePurchases` counts rows it does not submit:
+`skipped.unbound`, `skipped.differentCustomer`, `skipped.unknownProduct`, and
+`skipped.multipleProducts`. Another customer's purchases are never verified.
+The Billing adapter returns every owned row so those counts are visible. If a
+later batch of 100 fails, the thrown `IapStackException` keeps
+`committedRestoreResults` for the batches already accepted. Reload entitlements
+before treating that failure as "nothing restored."
+
+Subscription and one-time offers retain their offer tokens.
 Query immediately before selection/checkout; do not persist product details.
 `purchaseUpdates` queues callbacks received before collection and has one consumer.
 Own one adapter per active session. Supply the current foreground Activity;
@@ -150,8 +158,11 @@ The customer ID becomes `developerPayload`. The adapter forwards the exact
 signed `InAppPurchaseData` string and detached signature, including original
 whitespace and escapes. Validation may inspect JSON but never rewrites evidence.
 Owned queries preserve continuation tokens, normalize an empty terminal token,
-and reject mismatched data/signature arrays. The coordinator bounds pagination,
-filters customer/catalog mismatches, and submits batches to the server.
+and reject mismatched data/signature arrays. The coordinator bounds pagination per product kind. Reaching that cap submits
+the pages already read and sets `RestoreResult.pageLimitReached` instead of
+throwing `restore_page_limit`. Customer and catalog mismatches are counted on
+`skipped` and are not submitted. A later batch failure keeps
+`committedRestoreResults` on the thrown `IapStackException`.
 
 ## Build and tests
 

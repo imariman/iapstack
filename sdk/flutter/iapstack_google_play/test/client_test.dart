@@ -429,6 +429,12 @@ void main() {
                 obfuscatedAccountId: 'customer-1',
               ),
               _purchase('premium_lifetime', token: 'configured-token'),
+              GooglePlayPurchase(
+                purchaseToken: 'legacy-unbound',
+                productIds: const <String>['premium_lifetime'],
+                status: GooglePlayPurchaseStatus.purchased,
+                isAcknowledged: false,
+              ),
             ],
           ),
         );
@@ -446,6 +452,11 @@ void main() {
           'configured-token',
         );
         expect(result.results, hasLength(1));
+        expect(result.skipped.unknownProduct, 1);
+        expect(result.skipped.differentCustomer, 1);
+        expect(result.skipped.multipleProducts, 1);
+        expect(result.skipped.unbound, 1);
+        expect(result.pageLimitReached, isFalse);
       },
     );
 

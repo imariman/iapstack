@@ -59,6 +59,38 @@ public enum IAPStackSDKError: Error, LocalizedError, Sendable {
   }
 }
 
+/// A later restore batch failed after earlier batches were accepted.
+///
+/// `underlying` is the batch error. `committedResults` are the verification rows
+/// the server already accepted. The first batch's failure is thrown unchanged
+/// when nothing was skipped and nothing was committed.
+public struct IAPStackIncompleteRestoreError: Error, LocalizedError {
+  /// Creates a partial restore failure.
+  public init(
+    committedResults: [VerificationResult],
+    skipped: RestoreSkipCounts,
+    underlying: any Error,
+  ) {
+    self.committedResults = committedResults
+    self.skipped = skipped
+    self.underlying = underlying
+  }
+
+  /// Verification rows already accepted by IAPStack.
+  public let committedResults: [VerificationResult]
+
+  /// Store rows that were not submitted before the failure.
+  public let skipped: RestoreSkipCounts
+
+  /// The batch error.
+  public let underlying: any Error
+
+  /// Returns a redacted summary that does not include the server message.
+  public var errorDescription: String? {
+    "IAPStack restore committed \(committedResults.count) purchases before a later batch failed"
+  }
+}
+
 /// Reports cancellation from Swift concurrency or from a cancelled `URLSessionTask`.
 func isCancellation(_ error: (any Error)?) -> Bool {
   error is CancellationError || (error as? URLError)?.code == .cancelled

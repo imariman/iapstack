@@ -97,7 +97,21 @@ for await update in updates {
     )
   }
 }
+
+let restored = try await stack.restorePurchases(externalCustomerId: customerId)
+if restored.skipped.total > 0 {
+  // A clean restore has skipped.total == 0. Do not treat a partial miss as "nothing to restore."
+}
 ```
+
+`restorePurchases` counts rows it does not submit. `skipped.unbound` is a legacy
+purchase with no `appAccountToken`, `skipped.differentCustomer` is another
+customer's transaction (never sent), and `skipped.unknownProduct` is missing
+from `productKinds`. Pending and duplicate transactions are omitted from the
+counts. A failure of the first batch is thrown unchanged. If a later batch
+fails, catch `IAPStackIncompleteRestoreError`: `committedResults` were already
+accepted and their unfinished StoreKit transactions were finished. Reload
+entitlements after that error before showing a failed restore.
 
 ## Example
 

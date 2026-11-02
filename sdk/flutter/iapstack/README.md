@@ -26,6 +26,14 @@ in memory only, then uses that body and the caller-supplied fallback when the
 network fails or the route is absent. That failure does not change purchase or
 entitlement calls, and the client never stores a durable application bearer.
 
+`restorePurchasesInBatches` sends at most 100 purchases per request. If a later
+batch fails, the original `IapStackApiException`, transport, timeout, or
+protocol error is thrown with `committedRestoreResults` set to the batches
+already accepted. `restoreSkips` and `restorePageLimitReached` are filled by
+the store companions. A failure of the first batch, with no skips and no page
+cap, is the same error as before. Reload entitlements after a partial restore
+before showing it as a total failure.
+
 Authenticate the user in your trusted host backend, then call
 `POST /v1/applications/{application_id}/customer-sessions` there with the durable
 application bearer. Return only the resulting short-lived customer token to the

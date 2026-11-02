@@ -100,7 +100,7 @@ class BillingClientGooglePlayPlatformTest {
     }
   }
 
-  @Test fun mapsOwnedStatesAndFiltersOtherCustomer() = runTest {
+  @Test fun mapsOwnedStatesAndKeepsOtherCustomerRows() = runTest {
     doAnswer {
       it.getArgument<PurchasesResponseListener>(1).onQueryPurchasesResponse(result(),
         listOf(purchase(Purchase.PurchaseState.PURCHASED), purchase(Purchase.PurchaseState.PENDING),
@@ -108,8 +108,9 @@ class BillingClientGooglePlayPlatformTest {
       null
     }.`when`(billing).queryPurchasesAsync(any(QueryPurchasesParams::class.java), any(PurchasesResponseListener::class.java))
     val owned = platform.ownedPurchases("opaque-customer")
-    assertEquals(4, owned.size) // Both INAPP and SUBS queried.
+    assertEquals(6, owned.size) // Both INAPP and SUBS, including the other customer.
     assertEquals(setOf(GooglePlayPurchaseStatus.RESTORED, GooglePlayPurchaseStatus.PENDING), owned.map { it.status }.toSet())
+    assertEquals(2, owned.count { it.obfuscatedAccountId == "other-customer" })
     verify(billing, times(2)).queryPurchasesAsync(any(QueryPurchasesParams::class.java), any(PurchasesResponseListener::class.java))
     verify(billing, never()).acknowledgePurchase(any(AcknowledgePurchaseParams::class.java), any(AcknowledgePurchaseResponseListener::class.java))
     verify(billing, never()).consumeAsync(any(ConsumeParams::class.java), any(ConsumeResponseListener::class.java))

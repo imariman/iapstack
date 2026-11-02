@@ -140,14 +140,16 @@ class BillingClientGooglePlayPlatform internal constructor(
 
   override suspend fun ownedPurchases(obfuscatedAccountId: String): List<GooglePlayPurchase> =
     withContext(Dispatchers.Main.immediate) {
+      require(obfuscatedAccountId.isNotBlank()) { "obfuscatedAccountId must not be blank" }
       connect()
+      // Keep unbound and other-customer rows. GooglePlayIapStack counts them.
       catalog.values.toSet().flatMap { kind ->
         request<List<Purchase>> { reply ->
           billing.queryPurchasesAsync(QueryPurchasesParams.newBuilder().setProductType(kind.billingType).build()) {
               result, purchases -> reply(runCatching { checkResult(result); purchases })
           }
         }.map { it.toModel(restored = true) }
-      }.filter { it.obfuscatedAccountId == obfuscatedAccountId }
+      }
     }
 
   private suspend fun connect() = connection.withLock {

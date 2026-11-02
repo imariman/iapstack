@@ -99,9 +99,12 @@ limit, and keep it stable across purchase, verification, and restore.
 
 ## Restore
 
-Restore queries current subscription and in-app ownership, requires the exact
-account binding on every returned purchase, deduplicates purchase tokens, and
-sends IAPStack restore batches of at most 100:
+Restore queries current subscription and in-app ownership, deduplicates
+purchase tokens, and sends IAPStack restore batches of at most 100. Rows for
+another customer, an unbound legacy purchase, an unknown product, or more than
+one product id are counted on `RestoreResult.skipped` and are not submitted.
+Another customer's purchases are never verified. If a later batch fails, the
+original IAPStack error carries `committedRestoreResults`.
 
 ```dart
 await googlePlay.restorePurchases(

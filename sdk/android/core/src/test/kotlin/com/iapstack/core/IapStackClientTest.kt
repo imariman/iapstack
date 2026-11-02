@@ -88,6 +88,39 @@ class IapStackClientTest {
 
       assertEquals(2, result.results.size)
       assertEquals("customer-internal", result.results[0].customerId)
+      assertEquals(0, result.skipped.total)
+      assertFalse(result.pageLimitReached)
+      client.close()
+    }
+  }
+
+  @Test
+  fun laterRestoreBatchKeepsCommittedResultsOnTheOriginalError() = runBlocking {
+    MockWebServer().use { server ->
+      val rows = List(100) { VERIFICATION_JSON }.joinToString(",")
+      server.enqueue(jsonResponse("""{"results":[$rows]}"""))
+      server.enqueue(
+        jsonResponse(
+          """{"error":{"code":"invalid_purchase","message":"rejected","request_id":"request-2"}}""",
+          422,
+        ),
+      )
+      val client = client(server)
+      val error = assertFailsWith<IapStackApiException> {
+        client.restorePurchasesInBatches(
+          purchases = List(101) { index -> purchase("product-$index") },
+          requestId = " restore-partial ",
+          skipped = RestoreSkipCounts(unknownProduct = 2),
+          pageLimitReached = true,
+        )
+      }
+      assertEquals("invalid_purchase", error.code)
+      assertEquals(100, error.committedRestoreResults.size)
+      assertEquals(2, error.restoreSkips.unknownProduct)
+      assertTrue(error.restorePageLimitReached)
+      assertEquals(2, server.requestCount)
+      assertEquals("restore-partial", server.takeRequest().getHeader("X-Request-ID"))
+      assertEquals("restore-partial-2", server.takeRequest().getHeader("X-Request-ID"))
       client.close()
     }
   }

@@ -97,7 +97,10 @@ public final class AppleIAPStack {
   /// Restores StoreKit history and verifies one bounded set per API request.
   ///
   /// Unfinished StoreKit rows are finished after the batch that carried them
-  /// verifies.
+  /// verifies. Unbound, different-customer, and unknown-product rows are counted
+  /// on `RestoreResult.skipped` and are not submitted. Another customer's rows
+  /// are never verified. If a later batch fails, finished transactions stay
+  /// finished and the error is `IAPStackIncompleteRestoreError`.
   public func restorePurchases(
     externalCustomerId: String,
     requestId: String? = nil,
@@ -107,9 +110,22 @@ public final class AppleIAPStack {
     var accepted: [ApplePurchase] = []
     var submissions: [PurchaseSubmission] = []
     var seen: Set<String> = []
+    var unbound = 0
+    var differentCustomer = 0
+    var unknownProduct = 0
     for purchase in purchases where purchase.canVerify {
       let appAccount = purchase.appAccountToken?.lowercased()
-      if appAccount != externalCustomerId || !productKinds.keys.contains(purchase.productId) {
+      let bound = appAccount?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+      if bound, let appAccount, appAccount != externalCustomerId {
+        differentCustomer += 1
+        continue
+      }
+      if !productKinds.keys.contains(purchase.productId) {
+        unknownProduct += 1
+        continue
+      }
+      if !bound {
+        unbound += 1
         continue
       }
       if seen.contains(purchase.transactionId) {
@@ -119,24 +135,37 @@ public final class AppleIAPStack {
       submissions.append(try submission(externalCustomerId: externalCustomerId, purchase: purchase))
       accepted.append(purchase)
     }
-    if submissions.isEmpty {
-      return RestoreResult(results: [])
-    }
+    let skipped = RestoreSkipCounts(
+      unbound: unbound,
+      differentCustomer: differentCustomer,
+      unknownProduct: unknownProduct,
+    )
     var results: [VerificationResult] = []
     for start in stride(from: 0, to: submissions.count, by: 100) {
       let end = min(start + 100, submissions.count)
       let batch = Array(submissions[start..<end])
       let batchRequestId = batchRequestId(base: requestId, index: start / 100)
-      results.append(contentsOf: try await client.restorePurchases(
-        batch,
-        requestId: batchRequestId,
-      ).results)
-      // The server answers 200 only after every item in the batch verified.
-      for purchase in accepted[start..<end] where purchase.pendingCompletion {
-        try await platform.completePurchase(purchase)
+      do {
+        results.append(contentsOf: try await client.restorePurchases(
+          batch,
+          requestId: batchRequestId,
+        ).results)
+        // The server answers 200 only after every item in the batch verified.
+        for purchase in accepted[start..<end] where purchase.pendingCompletion {
+          try await platform.completePurchase(purchase)
+        }
+      } catch {
+        if error is CancellationError || (results.isEmpty && skipped.total == 0) {
+          throw error
+        }
+        throw IAPStackIncompleteRestoreError(
+          committedResults: results,
+          skipped: skipped,
+          underlying: error,
+        )
       }
     }
-    return RestoreResult(results: results)
+    return RestoreResult(results: results, skipped: skipped)
   }
 
   /// Loads entitlement projections directly from IAPStack.

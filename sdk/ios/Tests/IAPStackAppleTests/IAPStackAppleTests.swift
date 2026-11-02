@@ -869,7 +869,84 @@ final class IAPStackAppleTests: XCTestCase {
     let result = try await stack.restorePurchases(externalCustomerId: customer)
 
     XCTAssertEqual(result.results.count, 2)
+    XCTAssertEqual(result.skipped.differentCustomer, 1)
+    XCTAssertEqual(result.skipped.unbound, 0)
+    XCTAssertEqual(result.skipped.unknownProduct, 0)
+    XCTAssertFalse(result.pageLimitReached)
     XCTAssertEqual(platform.completedTransactionIds, ["tx-unfinished"])
+  }
+
+  func testRestoreCountsSkippedRowsWithoutSubmittingThem() async throws {
+    let customer = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    let other = "9b2c1f64-1c7e-4c55-9a51-0c6f1d7e2a10"
+    let platform = FakeApplePlatform(restoreResult: [
+      ApplePurchase(
+        transactionId: "unbound", productId: "premium_lifetime", signedTransaction: "a.b.c",
+        status: .restored, pendingCompletion: false, appAccountToken: nil, errorCode: nil),
+      ApplePurchase(
+        transactionId: "other", productId: "premium_lifetime", signedTransaction: "a.b.c",
+        status: .restored, pendingCompletion: true, appAccountToken: other, errorCode: nil),
+      ApplePurchase(
+        transactionId: "unknown", productId: "legacy_product", signedTransaction: "a.b.c",
+        status: .restored, pendingCompletion: false, appAccountToken: customer, errorCode: nil),
+      ApplePurchase(
+        transactionId: "pending", productId: "premium_lifetime", signedTransaction: "a.b.c",
+        status: .pending, pendingCompletion: false, appAccountToken: nil, errorCode: nil),
+    ])
+    let stack = try makeAppleStack(platform: platform)
+
+    let result = try await stack.restorePurchases(externalCustomerId: customer)
+
+    XCTAssertTrue(result.results.isEmpty)
+    XCTAssertEqual(result.skipped.unbound, 1)
+    XCTAssertEqual(result.skipped.differentCustomer, 1)
+    XCTAssertEqual(result.skipped.unknownProduct, 1)
+    XCTAssertEqual(platform.completedTransactionIds, [])
+  }
+
+  func testLaterRestoreBatchFailureKeepsCommittedResultsAndFinishesOnlyThoseRows() async throws {
+    URLStubProtocol.reset()
+    let row = #"{"verified_at": "2026-09-10T12:00:00Z", "customer_id": "customer-internal", "entitlements": []}"#
+    let success = #"{"results":[\#(Array(repeating: row, count: 100).joined(separator: ","))]}"#
+    URLStubProtocol.enqueue { request in
+      let response = HTTPURLResponse(
+        url: request.url!, statusCode: 200, httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"])!
+      return (response, Data(success.utf8))
+    }
+    URLStubProtocol.enqueue { request in
+      let response = HTTPURLResponse(
+        url: request.url!, statusCode: 400, httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"])!
+      let body = #"{"error": {"code": "invalid_request", "message": "rejected", "request_id": "request-2"}}"#
+      return (response, Data(body.utf8))
+    }
+    let customer = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    let rows = (0..<101).map { index in
+      restoredRow("tx-\(index)", customer: customer, pendingCompletion: true)
+    } + [
+      ApplePurchase(
+        transactionId: "other", productId: "premium_lifetime", signedTransaction: "a.b.c",
+        status: .restored, pendingCompletion: true,
+        appAccountToken: "9b2c1f64-1c7e-4c55-9a51-0c6f1d7e2a10", errorCode: nil),
+    ]
+    let platform = FakeApplePlatform(restoreResult: rows)
+    let stack = try makeAppleStack(platform: platform)
+
+    do {
+      _ = try await stack.restorePurchases(externalCustomerId: customer)
+      XCTFail("expected the second batch to fail")
+    } catch let error as IAPStackIncompleteRestoreError {
+      XCTAssertEqual(error.committedResults.count, 100)
+      XCTAssertEqual(error.skipped.differentCustomer, 1)
+      guard case let IAPStackSDKError.apiError(_, code, _, _, _, _) = error.underlying else {
+        return XCTFail("expected api error, got \(error.underlying)")
+      }
+      XCTAssertEqual(code, "invalid_request")
+    }
+    XCTAssertEqual(platform.completedTransactionIds.count, 100)
+    XCTAssertFalse(platform.completedTransactionIds.contains("tx-100"))
+    XCTAssertFalse(platform.completedTransactionIds.contains("other"))
   }
 
   func testRestoreDoesNotFinishRowsWhenBatchFails() async throws {
