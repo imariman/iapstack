@@ -36,6 +36,13 @@ type capturedRequest struct {
 	Body []byte
 }
 
+// backoffDeadline is a context whose deadline begins when expire is called.
+type backoffDeadline struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
 // TestClientRejectsRedirects keeps bearers and customer data away from redirect targets.
 func TestClientRejectsRedirects(t *testing.T) {
 	t.Parallel()
@@ -813,21 +820,18 @@ func assertCallerCanceled(t *testing.T, err error) {
 	}
 }
 
-// backoffDeadline is a context whose deadline begins when expire is called.
-type backoffDeadline struct {
-	context.Context
-	done chan struct{}
-	once sync.Once
-}
-
+// newBackoffDeadline returns a context that stays active until expire is called.
 func newBackoffDeadline() *backoffDeadline {
 	return &backoffDeadline{Context: context.Background(), done: make(chan struct{})}
 }
 
+// Deadline reports that this test context has no fixed deadline time.
 func (deadline *backoffDeadline) Deadline() (time.Time, bool) { return time.Time{}, false }
 
+// Done closes when expire is called.
 func (deadline *backoffDeadline) Done() <-chan struct{} { return deadline.done }
 
+// Err returns context.DeadlineExceeded after expire, and nil before it.
 func (deadline *backoffDeadline) Err() error {
 	select {
 	case <-deadline.done:
@@ -837,6 +841,7 @@ func (deadline *backoffDeadline) Err() error {
 	}
 }
 
+// expire marks the caller deadline as exceeded.
 func (deadline *backoffDeadline) expire() {
 	deadline.once.Do(func() { close(deadline.done) })
 }
