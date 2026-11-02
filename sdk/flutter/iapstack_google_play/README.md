@@ -49,6 +49,10 @@ final googlePlay = GooglePlayIapStack(
 );
 
 final purchaseSubscription = googlePlay.purchaseUpdates.listen((purchase) async {
+  if (!purchase.canVerify) {
+    // Pending payments are not access. Wait for purchased.
+    return;
+  }
   final result = await googlePlay.verifyPurchase(
     externalCustomerId: currentOpaqueCustomerId,
     purchase: purchase,

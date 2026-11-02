@@ -49,10 +49,12 @@ authenticated session transport.
 ```ts
 import {IapStackStore} from '@iapstack/react-native/store';
 
-// Subscribe before configure, including pending purchases completed outside the app.
+// Events that arrive before this subscription are kept until it attaches.
 const subscription = IapStackStore.addListener(event => {
   if (event.type === 'verified') {
     showAccess(event.result.entitlements.some(e => e.key === 'premium' && e.grantsAccess));
+  } else if (event.type === 'pending') {
+    showPendingPayment(); // Do not grant access.
   } else {
     showRecoverableError(event.code); // No raw evidence or bearer in events.
   }

@@ -16,6 +16,7 @@ export default function App() {
   useEffect(() => {
     const events = IapStackStore.addListener(event => {
       if (event.type === 'error') setMessage(`Purchase update: ${event.code}. Refresh session and restore to retry.`);
+      else if (event.type === 'pending') setMessage('Payment pending. Access stays locked until it clears.');
       else setMessage(`Verified: ${event.result.entitlements.filter(e => e.grantsAccess).map(e => e.key).join(', ') || 'No access granted'}`);
     });
     const foreground = AppState.addEventListener('change', state => {

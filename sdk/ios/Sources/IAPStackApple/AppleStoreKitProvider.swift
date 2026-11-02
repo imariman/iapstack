@@ -5,8 +5,6 @@ import StoreKit
 
 /// StoreKit 2 companion used by default on Apple platforms.
 public final class AppleStoreKitPlatform: AppleIAPPlatform {
-  public init() {}
-
   private actor State {
     var productCache: [String: Product] = [:]
     var pendingTransactions: [String: Transaction] = [:]
@@ -37,29 +35,35 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
     }
   }
 
-  private let state = State()
+  private let state: State
+  private let purchaseUpdateHub: SharedAsyncMulticast<ApplePurchase>
 
-  public var purchaseUpdates: AsyncStream<ApplePurchase> {
-    AsyncStream { continuation in
-      let unfinished = Task.detached { [state] in
-        for await result in Transaction.unfinished {
-          if let mapped = await Self.mapUpdate(result, status: .purchased, state: state) {
-            continuation.yield(mapped)
+  public init() {
+    let state = State()
+    self.state = state
+    // Transaction.updates already emits unfinished transactions on its first
+    // pass. A second sequence, or a second read of this property, would verify
+    // the same transaction twice. Readers share one pass until the last one leaves.
+    self.purchaseUpdateHub = SharedAsyncMulticast {
+      AsyncStream { continuation in
+        let task = Task.detached {
+          for await result in Transaction.updates {
+            if Task.isCancelled { break }
+            if let mapped = await AppleStoreKitPlatform.mapUpdate(result, status: .purchased, state: state) {
+              continuation.yield(mapped)
+            }
           }
+          continuation.finish()
         }
-      }
-      let updates = Task.detached { [state] in
-        for await result in Transaction.updates {
-          if let mapped = await Self.mapUpdate(result, status: .purchased, state: state) {
-            continuation.yield(mapped)
-          }
+        continuation.onTermination = { _ in
+          task.cancel()
         }
-      }
-      continuation.onTermination = { _ in
-        unfinished.cancel()
-        updates.cancel()
       }
     }
+  }
+
+  public var purchaseUpdates: AsyncStream<ApplePurchase> {
+    purchaseUpdateHub.subscribe()
   }
 
   public func isAvailable() async throws -> Bool {

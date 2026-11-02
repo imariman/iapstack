@@ -18,6 +18,8 @@ class IAPStackModule(private val context: ReactApplicationContext) :
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private var session: Session? = null
   private var listeners = 0
+  private val eventGate = Any()
+  private val eventBuffer = StoreEventBuffer<Map<String, Any?>>()
   // JS-driven HTTP calls share one pool and dispatcher instead of leaking one per call.
   private val transport = lazy { OkHttpClient() }
 
@@ -123,8 +125,15 @@ class IAPStackModule(private val context: ReactApplicationContext) :
       val job = scope.launch {
         companion.purchaseUpdates.collect { purchase ->
           try {
+            if (purchase.status == GooglePlayPurchaseStatus.PENDING) {
+              emit(next, mapOf("type" to "pending", "productIds" to purchase.productIds))
+              return@collect
+            }
             val result = companion.verifyPurchase(next.customer, purchase)
-            emit(next, mapOf("type" to "verified", "result" to verification(result)))
+            emit(next, mapOf(
+              "type" to purchaseListenerEventType(result.entitlements),
+              "result" to verification(result),
+            ))
           } catch (error: CancellationException) { throw error
           } catch (error: Exception) { emit(next, errorEvent(error)) }
         }
@@ -197,8 +206,16 @@ class IAPStackModule(private val context: ReactApplicationContext) :
     Arguments.makeNativeMap(mapOf("customer_id" to result.customerId, "entitlements" to result.entitlements.map(::entitlement)))
   }
   @ReactMethod fun dispose(promise: Promise) { scope.launch { clearSession(); promise.resolve(null) } }
-  @ReactMethod fun addListener(eventName: String) { listeners++ }
-  @ReactMethod fun removeListeners(count: Double) { listeners = maxOf(0, listeners - count.toInt()) }
+  @ReactMethod fun addListener(eventName: String) {
+    val pending = synchronized(eventGate) {
+      listeners++
+      if (listeners == 1 && context.hasActiveReactInstance()) eventBuffer.drain() else emptyList()
+    }
+    pending.forEach(::deliver)
+  }
+  @ReactMethod fun removeListeners(count: Double) {
+    synchronized(eventGate) { listeners = maxOf(0, listeners - count.toInt()) }
+  }
   override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
     session?.huaweiPlatform?.onActivityResult(requestCode, resultCode, data)
   }
@@ -218,7 +235,12 @@ class IAPStackModule(private val context: ReactApplicationContext) :
     context.removeActivityEventListener(this); context.removeLifecycleEventListener(this)
     super.invalidate()
   }
-  private fun clearSession() { val old = session; session = null; old?.close() }
+  private fun clearSession() {
+    val old = session
+    session = null
+    synchronized(eventGate) { eventBuffer.clear() }
+    old?.close()
+  }
   private fun operation(promise: Promise, action: suspend (Session) -> Any?) {
     scope.launch {
       val captured = session
@@ -237,10 +259,21 @@ class IAPStackModule(private val context: ReactApplicationContext) :
     }
   }
   private fun emit(captured: Session, event: Map<String, Any?>) {
-    if (session === captured && listeners > 0 && context.hasActiveReactInstance()) {
-      context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-        .emit("IAPStackStoreUpdate", Arguments.makeNativeMap(event))
+    if (session !== captured) return
+    val pending = synchronized(eventGate) {
+      val live = listeners > 0 && context.hasActiveReactInstance()
+      if (!live) {
+        eventBuffer.enqueue(event)
+        emptyList()
+      } else {
+        eventBuffer.drain() + event
+      }
     }
+    pending.forEach(::deliver)
+  }
+  private fun deliver(event: Map<String, Any?>) {
+    context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+      .emit("IAPStackStoreUpdate", Arguments.makeNativeMap(event))
   }
   private fun reject(promise: Promise, error: Exception) {
     val event = errorEvent(error)

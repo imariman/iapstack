@@ -89,8 +89,9 @@ Query immediately before selection/checkout; do not persist product details.
 `purchaseUpdates` queues callbacks received before collection and has one consumer.
 Own one adapter per active session. Supply the current foreground Activity;
 call `platform.close()` when the session ends and `client.close()` when done.
-A billing disconnect fails in-flight work with `billing_service_disconnected`;
-the next operation reconnects. Catalog queries and checkout selection are serialized;
+A billing disconnect fails in-flight work with retryable `billing_service_disconnected`
+and starts one reconnect. The next operation connects again if that reconnect has not
+finished. Catalog queries and checkout selection are serialized;
 failed queries never publish partial selections. Unfetched products with `PRODUCT_NOT_FOUND`
 or `NO_ELIGIBLE_OFFER` are unavailable for this query, while other statuses throw
 `product_query_failed_<status>` so callers can report or retry the failure.

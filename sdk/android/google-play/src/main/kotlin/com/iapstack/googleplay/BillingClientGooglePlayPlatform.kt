@@ -6,9 +6,13 @@ import com.android.billingclient.api.*
 import java.io.Closeable
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -44,6 +48,10 @@ class BillingClientGooglePlayPlatform internal constructor(
   override val purchaseUpdates = updates.receiveAsFlow()
   private val pending = ConcurrentHashMap.newKeySet<CompletableDeferred<*>>()
   private val connection = Mutex()
+  private val reconnectLock = Any()
+  private val reconnectParent = SupervisorJob()
+  private val reconnectScope = CoroutineScope(reconnectParent + Dispatchers.Main.immediate)
+  private var reconnectJob: Job? = null
   private val selectionOperations = Mutex()
   private val selections = mutableMapOf<String, Pair<GooglePlayProduct, ProductDetails>>()
   @Volatile private var closed = false
@@ -152,17 +160,44 @@ class BillingClientGooglePlayPlatform internal constructor(
 
   private suspend fun connect() = connection.withLock {
     checkOpen()
-    if (!billing.isReady) {
-      request<Unit> { reply ->
-        billing.startConnection(object : BillingClientStateListener {
-          override fun onBillingSetupFinished(result: BillingResult) {
-            reply(runCatching { checkResult(result) })
+    if (!billing.isReady) openConnectionLocked()
+  }
+
+  /** Caller holds [connection]. */
+  private suspend fun openConnectionLocked() {
+    request<Unit> { reply ->
+      billing.startConnection(object : BillingClientStateListener {
+        override fun onBillingSetupFinished(result: BillingResult) {
+          reply(runCatching { checkResult(result) })
+        }
+        override fun onBillingServiceDisconnected() {
+          if (closed) return
+          val error = billingError(BillingClient.BillingResponseCode.SERVICE_DISCONNECTED)
+          pending.forEach { it.completeExceptionally(error) }
+          scheduleReconnect()
+        }
+      })
+    }
+  }
+
+  /**
+   * One reconnect after a drop. In-flight calls already failed with
+   * [billingError]; their Billing callbacks belong to the old connection.
+   * A second disconnect while this attempt is running does not start another.
+   */
+  private fun scheduleReconnect() {
+    if (closed) return
+    synchronized(reconnectLock) {
+      if (closed || reconnectJob?.isActive == true) return
+      reconnectJob = reconnectScope.launch {
+        try {
+          connection.withLock {
+            if (closed || billing.isReady) return@withLock
+            openConnectionLocked()
           }
-          override fun onBillingServiceDisconnected() {
-            val error = billingError(BillingClient.BillingResponseCode.SERVICE_DISCONNECTED)
-            pending.forEach { it.completeExceptionally(error) }
-          }
-        })
+        } catch (_: GooglePlayIapStackException) {
+          // The next public call connects again.
+        }
       }
     }
   }
@@ -188,6 +223,7 @@ class BillingClientGooglePlayPlatform internal constructor(
   override fun close() {
     if (closed) return
     closed = true
+    reconnectParent.cancel()
     pending.forEach { it.completeExceptionally(GooglePlayIapStackException("platform_closed", "Google Play adapter is closed")) }
     billing.endConnection()
     updates.close()
@@ -209,6 +245,7 @@ private fun billingError(code: Int) = GooglePlayIapStackException(
   },
   message = "Google Play Billing request failed (code $code)",
   userCancelled = code == BillingClient.BillingResponseCode.USER_CANCELED,
+  retryable = code == BillingClient.BillingResponseCode.SERVICE_DISCONNECTED,
 )
 
 private fun Purchase.toModel(restored: Boolean) = GooglePlayPurchase(
