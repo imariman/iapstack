@@ -211,7 +211,7 @@ class IapStackClientTest {
 
       client.getEntitlements("customer-external")
 
-      assertEquals("react-native/0.1.0-sdk.2", server.takeRequest().getHeader("X-IAPStack-SDK"))
+      assertEquals("react-native/0.1.0-sdk.3", server.takeRequest().getHeader("X-IAPStack-SDK"))
       client.close()
     }
   }
