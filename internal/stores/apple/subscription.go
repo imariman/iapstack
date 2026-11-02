@@ -237,6 +237,7 @@ func normalizeSubscriptionStatus(
 		// An expiry inside the skew window stays allowed, so publish the signed
 		// expiry plus that allowance. The effective end is then still after now,
 		// and the API, webhooks, and clients keep access until the window closes.
+		// One second before expiry publishes the signed end; one second after publishes end+5m. That asymmetry is intended.
 		if !endsAt.After(now) {
 			adjusted := endsAt.Add(maximumNotificationClockSkew)
 			endsAt = &adjusted

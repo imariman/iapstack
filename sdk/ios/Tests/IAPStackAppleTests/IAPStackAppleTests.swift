@@ -144,7 +144,7 @@ final class IAPStackAppleTests: XCTestCase {
     XCTAssertEqual(request.url?.path, "/proxy/v1/applications/application-1/purchases:verify")
     XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer customer-token")
     XCTAssertEqual(request.value(forHTTPHeaderField: "X-Request-ID"), "request-client-1")
-    XCTAssertEqual(request.value(forHTTPHeaderField: "X-IAPStack-SDK"), "ios-swift/0.1.0-sdk.2")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "X-IAPStack-SDK"), "ios-swift/0.1.0-sdk.3")
 
     let decoded = try XCTUnwrap(
       request.httpBody.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] },
@@ -263,7 +263,7 @@ final class IAPStackAppleTests: XCTestCase {
     URLStubProtocol.reset()
     let captured = Counter()
     URLStubProtocol.enqueue { request in
-      if request.value(forHTTPHeaderField: "X-IAPStack-SDK") == "react-native/0.1.0-sdk.2" { captured.increment() }
+      if request.value(forHTTPHeaderField: "X-IAPStack-SDK") == "react-native/0.1.0-sdk.3" { captured.increment() }
       let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
         headerFields: ["Content-Type": "application/json"])!
       return (response, Data(#"{"customer_id":"customer-internal","entitlements":[]}"#.utf8))
