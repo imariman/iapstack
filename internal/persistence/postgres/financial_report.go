@@ -610,6 +610,24 @@ func (repository *transaction) adminRecognizedRevenue(
 		return persistence.AdminRevenue{}, err
 	}
 
+	amounts, uncovered, allCovered := recognizeProviderAmounts(applications, chosen, amountRows)
+	revenue.Amounts = amounts
+	if !allCovered {
+		revenue.Status = persistence.AdminRevenueStoreReportsRequired
+		revenue.UncoveredProviders = uncovered
+		return revenue, nil
+	}
+	revenue.Status = persistence.AdminRevenueReportsImported
+	return revenue, nil
+}
+
+// recognizeProviderAmounts sums each covered provider and keeps those totals when another provider is not covered.
+// Currency totals are the imported rows only. A quiet application does not add a zero row or another currency.
+func recognizeProviderAmounts(
+	applications []productionApplication,
+	chosen map[core.Provider]acceptedFinancialImport,
+	amountRows map[string][]persistence.FinancialReportAmount,
+) ([]persistence.AdminRecognizedAmount, []core.Provider, bool) {
 	providers := productionProviders(applications)
 	amounts := make([]persistence.AdminRecognizedAmount, 0)
 	uncovered := make([]core.Provider, 0)
@@ -631,14 +649,7 @@ func (repository *transaction) adminRecognizedRevenue(
 		}
 		amounts = append(amounts, summed...)
 	}
-	if !allCovered {
-		revenue.Status = persistence.AdminRevenueStoreReportsRequired
-		revenue.UncoveredProviders = uncovered
-		return revenue, nil
-	}
-	revenue.Status = persistence.AdminRevenueReportsImported
-	revenue.Amounts = amounts
-	return revenue, nil
+	return amounts, uncovered, allCovered
 }
 
 // productionApplications lists every production application without the dashboard collection cap.
@@ -742,7 +753,11 @@ func productionProviders(applications []productionApplication) []core.Provider {
 	return providers
 }
 
-// coversApplications reports whether every production application for one provider has an amount row.
+// coversApplications reports whether an accepted report covers one provider.
+// A production application missing from the report is zero proceeds when at least one
+// production application of that provider matched. That omission does not change the
+// summed currency totals. A report that matches none of the provider's production
+// applications does not cover the provider.
 func coversApplications(
 	applications []productionApplication,
 	provider core.Provider,
@@ -752,15 +767,21 @@ func coversApplications(
 	for _, amount := range amounts {
 		covered[amount.CoveredApplicationID] = struct{}{}
 	}
+	providerApps := 0
+	matched := 0
 	for _, application := range applications {
 		if application.provider != provider {
 			continue
 		}
-		if _, ok := covered[application.id]; !ok {
-			return false
+		providerApps++
+		if _, ok := covered[application.id]; ok {
+			matched++
 		}
 	}
-	return true
+	if providerApps == 0 {
+		return true
+	}
+	return matched > 0
 }
 
 // sumRecognizedAmounts totals one provider's covered applications without converting currency.

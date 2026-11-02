@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/persistence/postgres"
 	"github.com/imariman/iapstack/internal/protection"
+	"github.com/imariman/iapstack/internal/validation"
 )
 
 const (
@@ -143,15 +145,15 @@ func TestAPIKeyLifecycleListsAndRevokesWithoutLosingFinalAdmin(t *testing.T) {
 		t.Fatalf("PutAPIKey() error = %v", err)
 	}
 
-	var listed []persistence.APIKeySummary
+	var listed persistence.APIKeyPage
 	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
 		var err error
-		listed, err = repository.APIKeys(database.ctx)
+		listed, err = repository.APIKeys(database.ctx, "")
 		return err
 	}); err != nil {
 		t.Fatalf("APIKeys() error = %v", err)
 	}
-	if len(listed) != len(records) || listed[0].ID != "application-key-1" {
+	if len(listed.Keys) != len(records) || listed.Keys[0].ID != "application-key-1" || listed.NextPageToken != "" {
 		t.Fatalf("APIKeys() = %#v, want three newest-first summaries", listed)
 	}
 
@@ -341,6 +343,121 @@ func TestCatalogRepositories(t *testing.T) {
 	})
 	if !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatalf("unknown CatalogProducts() error = %v, want ErrNotFound", err)
+	}
+}
+
+// TestCatalogProductsReturnMappedProductWithNoGrants verifies a store product is not hidden when it grants nothing.
+func TestCatalogProductsReturnMappedProductWithNoGrants(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	mustExec(t, database, `
+		INSERT INTO products (id, project_id, kind)
+		VALUES ('product-empty', $1, 'consumable')
+	`, fixture.projectID)
+	mustExec(t, database, `
+		INSERT INTO store_products (project_id, application_id, product_id, provider_product_id)
+		VALUES ($1, $2, 'product-empty', 'empty-provider-product')
+	`, fixture.projectID, fixture.applicationID)
+	store := openRepositoryStore(t, database.ctx)
+
+	err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		products, err := repository.CatalogProducts(
+			database.ctx,
+			core.ProjectID(fixture.projectID),
+			core.ApplicationID(fixture.applicationID),
+			[]core.ProviderProductID{
+				core.ProviderProductID(fixture.providerProductID),
+				"empty-provider-product",
+			},
+		)
+		if err != nil {
+			return err
+		}
+		if len(products) != 2 {
+			t.Fatalf("catalog products = %#v, want the granted product and the empty grant set", products)
+		}
+		if len(products[0].Entitlements) != 1 || products[0].Product.ID != core.ProductID(fixture.productID) {
+			t.Fatalf("granted product = %#v", products[0])
+		}
+		if products[1].Product.ID != "product-empty" || products[1].Product.Kind != core.ProductKindConsumable ||
+			len(products[1].Entitlements) != 0 || len(products[1].Product.EntitlementIDs) != 0 ||
+			products[1].Mapping.ProviderID != "empty-provider-product" {
+			t.Fatalf("empty grant product = %#v, want the mapping with no entitlements", products[1])
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Transact() error = %v", err)
+	}
+}
+
+// TestAPIKeyPagesExposeKeysBeyondTheNewestPage verifies older keys stay listable and revocable.
+func TestAPIKeyPagesExposeKeysBeyondTheNewestPage(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	store := openRepositoryStore(t, database.ctx)
+	base := time.Now().UTC().Add(-400 * time.Minute).Truncate(time.Microsecond)
+	const total = 201
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		for index := 0; index < total; index++ {
+			createdAt := base.Add(time.Duration(index) * time.Minute)
+			if index <= 1 {
+				createdAt = base
+			}
+			id := fmt.Sprintf("key-%03d", index)
+			if err := repository.PutAPIKey(database.ctx, apiKeyRecord(
+				id, persistence.APIKeyRoleAdmin, "", "", createdAt,
+			)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("PutAPIKey() error = %v", err)
+	}
+
+	var first persistence.APIKeyPage
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var err error
+		first, err = repository.APIKeys(database.ctx, "")
+		return err
+	}); err != nil {
+		t.Fatalf("APIKeys() first page error = %v", err)
+	}
+	if len(first.Keys) != 200 || first.Keys[0].ID != "key-200" || first.NextPageToken != "key-000" ||
+		first.Keys[len(first.Keys)-1].ID != "key-000" {
+		t.Fatalf("first page = %d keys, first %s, last %s, token %s",
+			len(first.Keys), first.Keys[0].ID, first.Keys[len(first.Keys)-1].ID, first.NextPageToken)
+	}
+
+	var second persistence.APIKeyPage
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var err error
+		second, err = repository.APIKeys(database.ctx, first.NextPageToken)
+		return err
+	}); err != nil {
+		t.Fatalf("APIKeys() second page error = %v", err)
+	}
+	if len(second.Keys) != 1 || second.Keys[0].ID != "key-001" || second.NextPageToken != "" {
+		t.Fatalf("second page = %#v, want key-001 and no further page", second)
+	}
+	revokedAt := time.Now().UTC().Truncate(time.Microsecond)
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		revoked, err := repository.RevokeAPIKey(database.ctx, second.Keys[0].ID, revokedAt)
+		if err != nil {
+			return err
+		}
+		if revoked.RevokedAt == nil || !revoked.RevokedAt.Equal(revokedAt) {
+			t.Fatalf("revoked older key = %#v", revoked)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("RevokeAPIKey() older key error = %v", err)
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		_, err := repository.APIKeys(database.ctx, "missing-key")
+		return err
+	}); !errors.Is(err, validation.ErrInvalid) {
+		t.Fatalf("APIKeys() invalid token error = %v, want ErrInvalid", err)
 	}
 }
 

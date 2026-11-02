@@ -364,7 +364,7 @@ function renderRevenue(revenue) {
     setText("revenue-currency", "not converted");
     setText(
       "revenue-note",
-      "Imported store proceeds for the periods shown. Currencies are not converted. Tax is not calculated.",
+      "Imported store proceeds for the periods shown. A production application omitted from a report that matches another application of the same provider is zero for that period and is not listed. Currencies are not converted. Tax is not calculated.",
     );
     return;
   }
@@ -372,10 +372,19 @@ function renderRevenue(revenue) {
   if (revenue.status === "store_reports_required") {
     badge.textContent = "Reports required";
     badge.classList.add("reports-required");
-    setText("revenue-eyebrow", "Not calculated");
-    setText("revenue-value", "—");
-    setText("revenue-currency", "not calculated");
-    setText("revenue-note", storeReportsRequiredNote(revenue));
+    const coveredAmounts = Array.isArray(revenue.amounts) ? revenue.amounts : [];
+    if (coveredAmounts.length === 0) {
+      setText("revenue-eyebrow", "Not calculated");
+      setText("revenue-value", "—");
+      setText("revenue-currency", "not calculated");
+      setText("revenue-note", storeReportsRequiredNote(revenue));
+      return;
+    }
+    number.classList.add("revenue-lines");
+    setText("revenue-eyebrow", "Covered store proceeds");
+    setText("revenue-value", formatImportedProceeds(coveredAmounts));
+    setText("revenue-currency", "not converted");
+    setText("revenue-note", coveredProviderProceedsNote(revenue));
     return;
   }
 
@@ -415,6 +424,17 @@ function proceedsProviderName(provider) {
     default:
       return "Store";
   }
+}
+
+function coveredProviderProceedsNote(revenue) {
+  const lines = [
+    "Store-reported proceeds for providers with an accepted report. Providers without a report are not included, so this is not a complete project total. Purchase prices are not revenue.",
+  ];
+  const providers = Array.isArray(revenue.uncovered_providers) ? revenue.uncovered_providers : [];
+  for (const provider of providers) {
+    lines.push(uncoveredProviderSentence(provider));
+  }
+  return lines.join(" ");
 }
 
 function storeReportsRequiredNote(revenue) {
@@ -962,16 +982,37 @@ async function openAPIKeyManager() {
   await loadAPIKeys();
 }
 
-// loadAPIKeys refreshes bounded secret-free lifecycle metadata from the admin API.
+// loadAPIKeys refreshes secret-free lifecycle metadata, following pages so older keys stay revocable.
 async function loadAPIKeys(successMessage = "") {
   elements.apiKeyMessage.textContent = "Loading access keys…";
   elements.apiKeyMessage.className = "form-message working";
   elements.createAdminKey.disabled = true;
   try {
-    const response = await apiRequest("/v1/admin/api-keys");
-    state.apiKeys = response.api_keys || [];
+    const keys = [];
+    const seenTokens = new Set();
+    let pageToken = "";
+    const maxPages = 50;
+    for (let page = 0; page < maxPages; page += 1) {
+      const path = pageToken
+        ? `/v1/admin/api-keys?page_token=${encodeURIComponent(pageToken)}`
+        : "/v1/admin/api-keys";
+      const response = await apiRequest(path);
+      keys.push(...(response.api_keys || []));
+      const nextToken = response.next_page_token || "";
+      if (!nextToken || seenTokens.has(nextToken)) {
+        pageToken = "";
+        break;
+      }
+      seenTokens.add(nextToken);
+      pageToken = nextToken;
+    }
+    state.apiKeys = keys;
     renderAPIKeys();
-    setFormMessage(elements.apiKeyMessage, successMessage, successMessage ? "success" : "error");
+    if (pageToken) {
+      setFormMessage(elements.apiKeyMessage, "Older keys remain beyond the loaded pages.", "error");
+    } else {
+      setFormMessage(elements.apiKeyMessage, successMessage, successMessage ? "success" : "error");
+    }
   } catch (error) {
     if (error.status === 401) {
       if (elements.apiKeyDialog.open) elements.apiKeyDialog.close();

@@ -10,9 +10,12 @@ import (
 const (
 	// AdminRevenueSandboxOnly means every configured application is non-production.
 	AdminRevenueSandboxOnly AdminRevenueStatus = "sandbox_only"
-	// AdminRevenueStoreReportsRequired means production applications need official financial reports.
+	// AdminRevenueStoreReportsRequired means at least one production provider has no accepted covering report.
+	// Amounts, when present, are the covered providers' store-reported proceeds and are not a project total.
 	AdminRevenueStoreReportsRequired AdminRevenueStatus = "store_reports_required"
-	// AdminRevenueReportsImported means every production application is covered by an accepted store report.
+	// AdminRevenueReportsImported means every production provider is covered by an accepted store report.
+	// An application omitted from a report that matched another application of the same provider is zero
+	// proceeds for that period and does not change the currency totals of applications that appear.
 	AdminRevenueReportsImported AdminRevenueStatus = "reports_imported"
 	// AdminRevenueNoApplications means the project has no application scope yet.
 	AdminRevenueNoApplications AdminRevenueStatus = "no_applications"

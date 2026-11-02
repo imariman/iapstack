@@ -147,8 +147,21 @@ func TestOverviewRecognizedProceedsStaySeparateFromPurchasePrices(t *testing.T) 
 	if err != nil {
 		t.Fatalf("partial AdminProjectOverview() error = %v", err)
 	}
-	if partial.Analytics.Revenue.Status != persistence.AdminRevenueStoreReportsRequired || len(partial.Analytics.Revenue.Amounts) != 0 {
-		t.Fatalf("partial revenue = %#v, want store_reports_required without amounts", partial.Analytics.Revenue)
+	if partial.Analytics.Revenue.Status != persistence.AdminRevenueStoreReportsRequired ||
+		partial.Analytics.Revenue.RecognizedMinorUnits != nil || partial.Analytics.Revenue.Currency != nil ||
+		len(partial.Analytics.Revenue.UncoveredProviders) != 1 ||
+		partial.Analytics.Revenue.UncoveredProviders[0] != core.ProviderGooglePlay {
+		t.Fatalf("partial revenue = %#v, want store_reports_required with Google uncovered", partial.Analytics.Revenue)
+	}
+	partialSeen := map[string]string{}
+	for _, amount := range partial.Analytics.Revenue.Amounts {
+		partialSeen[amount.Currency] = amount.AmountDecimal
+		if amount.Provider != core.ProviderAppleAppStore {
+			t.Fatalf("partial amount = %#v, want only covered Apple proceeds", amount)
+		}
+	}
+	if partialSeen["USD"] != "2.50" || partialSeen["EUR"] != "-1.25" || len(partial.Analytics.Revenue.Amounts) != 2 {
+		t.Fatalf("partial amounts = %#v, want unchanged Apple USD 2.50 and EUR -1.25", partial.Analytics.Revenue.Amounts)
 	}
 	if _, err := database.conn.Exec(database.ctx, `DELETE FROM applications WHERE id = 'app-google-prod'`); err != nil {
 		t.Fatalf("remove google application: %v", err)
@@ -175,6 +188,21 @@ func TestOverviewRecognizedProceedsStaySeparateFromPurchasePrices(t *testing.T) 
 	}
 	if covered.Analytics.SandboxValue.TransactionCount != 1 || covered.Analytics.SandboxValue.Amounts[0].Milliunits != 4990 {
 		t.Fatalf("sandbox value changed: %#v", covered.Analytics.SandboxValue)
+	}
+
+	insertFinancialApplication(t, database, "app-apple-quiet", fixture.projectID, "apple_app_store", "production", "1000000003")
+	quiet, err := store.AdminProjectOverview(database.ctx, core.ProjectID(fixture.projectID), persistence.AdminRevenueQuery{})
+	if err != nil {
+		t.Fatalf("quiet AdminProjectOverview() error = %v", err)
+	}
+	quietSeen := map[string]string{}
+	for _, amount := range quiet.Analytics.Revenue.Amounts {
+		quietSeen[amount.Currency] = amount.AmountDecimal
+	}
+	if quiet.Analytics.Revenue.Status != persistence.AdminRevenueReportsImported ||
+		len(quiet.Analytics.Revenue.UncoveredProviders) != 0 ||
+		quietSeen["USD"] != "2.50" || quietSeen["EUR"] != "-1.25" || len(quiet.Analytics.Revenue.Amounts) != 2 {
+		t.Fatalf("quiet revenue = %#v, want the same Apple totals with the silent app covered as zero", quiet.Analytics.Revenue)
 	}
 
 	otherStart := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

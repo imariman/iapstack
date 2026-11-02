@@ -267,6 +267,9 @@ func TestDashboardRevenueCardDistinguishesImportedReports(t *testing.T) {
 	if !strings.Contains(requiredBranch, "—") {
 		t.Fatal("store_reports_required does not render an em dash")
 	}
+	if !strings.Contains(source, "not a complete project total") || !strings.Contains(source, "is zero for that period") {
+		t.Fatal("recognized proceeds must describe partial coverage and quiet applications")
+	}
 	cardStart := strings.Index(string(document), `class="revenue-card"`)
 	cardEnd := strings.Index(string(document), `class="sandbox-value"`)
 	card := source[revenueStart:strings.Index(source, "function renderSandboxValue")] + string(document)[cardStart:cardEnd]

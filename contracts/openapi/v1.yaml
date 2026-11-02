@@ -66,17 +66,28 @@ paths:
     get:
       tags: [Administration]
       operationId: listApiKeys
-      summary: List bounded secret-free API key lifecycle metadata
+      summary: List one page of secret-free API key lifecycle metadata
       security:
         - adminBearer: []
         - dashboardSession: []
+      parameters:
+        - name: page_token
+          in: query
+          required: false
+          description: Public id of the last key on the previous page. Omit it to list the newest keys.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
       responses:
         '200':
-          description: API keys ordered newest first, including revoked metadata
+          description: One page of API keys ordered newest first, including revoked metadata. At most 200 keys are returned.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiKeyCollection'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':
@@ -1365,6 +1376,11 @@ components:
           maxItems: 200
           items:
             $ref: '#/components/schemas/ApiKey'
+        next_page_token:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Present when older keys exist. Pass it as page_token to list the next older page. Absent on the last page.
     ApiKey:
       type: object
       additionalProperties: false
@@ -2170,7 +2186,15 @@ components:
           description: Null when recognized_minor_units is null, including reports_imported.
         amounts:
           type: array
-          description: Store-reported proceeds by provider, period, and currency. Present only for reports_imported; empty otherwise. Currencies are not converted.
+          description: >
+            Store-reported proceeds by provider, period, and currency. Currencies are not
+            converted, and these figures are not a single project total. Populated for
+            reports_imported. Also populated for store_reports_required when at least one
+            provider is covered; those amounts exclude uncovered providers. Empty when no
+            provider is covered. A production application omitted from an accepted report
+            is zero for that period when another production application of the same provider
+            matched, and that omission does not add or change a currency row. A report that
+            matches none of a provider's production applications does not cover that provider.
           items:
             $ref: '#/components/schemas/AdminRecognizedAmount'
         uncovered_providers:

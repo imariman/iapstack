@@ -189,6 +189,12 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 				ProjectID: "project-1", ApplicationID: "application-1", CreatedAt: now, Current: false,
 			}},
 		}},
+		{name: "API key page", schema: "ApiKeyCollection", value: apiKeyCollectionResponse{
+			APIKeys: []apiKeyResponse{{
+				ID: "0123456789abcdef01234567", Role: persistence.APIKeyRoleAdmin, CreatedAt: now, Current: true,
+			}},
+			NextPageToken: "0123456789abcdef01234567",
+		}},
 		{name: "imported proceeds", schema: "AdminRevenue", value: adminRevenueResponse{
 			Status: persistence.AdminRevenueReportsImported,
 			Amounts: []adminRecognizedAmountResponse{{
