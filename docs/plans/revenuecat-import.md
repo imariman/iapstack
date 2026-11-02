@@ -77,7 +77,7 @@ Subscriber fields read from [Customer Info Model](https://www.revenuecat.com/doc
 - `subscriptions.<product_identifier>` including `store`, `is_sandbox`, `expires_date`, `grace_period_expires_date`, `purchase_date`, `original_purchase_date`, `refunded_at`, `unsubscribe_detected_at`, `billing_issues_detected_at`, `ownership_type`, `store_transaction_id`, `auto_resume_date`
 - `non_subscriptions.<product_identifier>[]` including `id`, `is_sandbox`, `purchase_date`, `store`
 
-Join each entitlement to the subscription or non-subscription with the same `product_identifier`. If that identifier appears in both collections, refuse the subscriber. If it appears in neither, refuse that entitlement.
+Join each entitlement to the subscription or non-subscription with the same `product_identifier`. If that identifier appears in both collections, refuse the subscriber. If it appears in neither, refuse that entitlement. When several non-subscription purchases share the product, keep the purchase with the latest parsed `purchase_date`. Compare those instants, not the raw strings. A `purchase_date` that does not parse fails that line. Equal instants keep the earlier purchase in the array. An empty `purchase_date` loses to a parsed one.
 
 `request_date` on a wrapped v1 document is the observation time for those grants. It is not a verification time.
 
@@ -144,11 +144,12 @@ Evaluate each grouped lineage at the command clock. Group key is canonical exter
 Transactions feed:
 
 - `refunded_at` set: `denied` / `refunded`. Do this even if `effective_end_time` is still in the future. The feed says `refunded_at` is not set for App Store upgrade partial refunds, so a set value is a real refund. Record `refund_end_disagreement` on the report when the effective end is still future, and still deny.
-- `effective_end_time` null and `is_auto_renewable` false: durable grant. `allowed` / `purchase_valid`. No end. The mapped product must be `non_consumable`. A subscription product here is `product_kind_mismatch`.
+- `effective_end_time` null and `is_auto_renewable` false: durable grant. `allowed` / `purchase_valid` when the clock is at or after `start_time`. No end. The mapped product must be `non_consumable`. A subscription product here is `product_kind_mismatch`.
 - `effective_end_time` null and `is_auto_renewable` true: `missing_effective_end`. Do not grant an open subscription.
 - Clock at or after `effective_end_time`: `denied`. Reason `paused` when `auto_resume_time` is after the clock, else `billing_issue` when `billing_issues_detected_at` is set, else `expired`.
-- Clock before `effective_end_time`: `allowed`. Reason `grace_period` when `grace_period_end_time` is after the clock and `end_time` is null or the clock is at or after `end_time`. Else `canceled_at_period_end` when `unsubscribe_detected_at` is set. Else `purchase_valid`. End is `effective_end_time`.
-- `end_time` before `start_time` is legal on the feed for an invalid Play transaction. Do not grant from that pair. Use `effective_end_time`. If that is also missing, `missing_effective_end`.
+- Clock before `effective_end_time` and at or after `start_time`: `allowed`. Reason `grace_period` when `grace_period_end_time` is after the clock and `end_time` is null or the clock is at or after `end_time`. Else `canceled_at_period_end` when `unsubscribe_detected_at` is set. Else `purchase_valid`. End is `effective_end_time`.
+- Clock before `start_time`, including a durable grant: `denied` / `provider_decision`. Keep the start and, when the period is coherent, the end. The public read path and SDKs treat `effective_starts_at` as informational and grant any `allowed` projection immediately, so the import must not emit `allowed` before the period starts. The denial stands until a later import runs at or after the start. Refunds, expiry, pause, and billing issues keep their own reasons.
+- `end_time` before `start_time` is legal on the feed for an invalid Play transaction. Do not grant from that pair. Use `effective_end_time`. If that is also missing, or the effective end is not after the start on a row that would otherwise be allowed, `missing_effective_end`. Do not rewrite that invalid pair into a not-yet-started denial.
 
 Subscriber JSON uses the same reasons. The access boundary is `grace_period_expires_date` when it is strictly after `expires_date`, otherwise `expires_date`. A null `expires_date` is durable only when the matched purchase is a non-subscription and the mapped product is `non_consumable`. A null end on a subscription object is `missing_effective_end`.
 
@@ -158,11 +159,11 @@ Do not add an access reason named `import`. The `customer_entitlements` check co
 
 ### How long it lasts
 
-The stored `access` is the decision at import time. `effective_ends_at` is the boundary above, or null for a durable non-consumable.
+The stored `access` is the decision at import time. `effective_ends_at` is the boundary above, or null for a durable non-consumable. A start still in the future stays `denied` after the clock passes it; import again at or after the start to allow that lineage.
 
 `entitlementResponses` in `internal/transport/httpapi/api.go` already denies an `allowed` projection at `effective_ends_at` without writing a new version. `TestEntitlementResponsesFailClosedAtEffectiveEnd` covers that. Imported subscriptions use the same read path. No expiry worker is added. No `entitlement.changed` webhook is emitted merely because the clock passed the end. That matches store-backed projections today.
 
-A durable grant stays `allowed` with a null end until a later import of the same lineage changes it, or a real store observation for that same application and product supersedes it.
+A durable grant that is already `allowed` stays `allowed` with a null end until a later import of the same lineage changes it, or a real store observation for that same application and product supersedes it.
 
 ### What a later store notification does
 
