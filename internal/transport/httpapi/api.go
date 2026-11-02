@@ -22,6 +22,7 @@ import (
 	"github.com/imariman/iapstack/internal/financialreports"
 	"github.com/imariman/iapstack/internal/jobs"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/platform/metrics"
 	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/stores"
 	"github.com/imariman/iapstack/internal/stores/apple"
@@ -67,6 +68,7 @@ type API struct {
 	googlePlay        *googleplay.Adapter
 	protection        protection.Service
 	financialReports  *financialreports.Service
+	metrics           *metrics.Registry
 	bodyLimit         int64
 	offeringDirectory string
 	offeringCatalog   persistence.OfferingCatalog
@@ -77,20 +79,22 @@ type API struct {
 
 // Dependencies contains the services required by the public HTTP contract.
 type Dependencies struct {
-	Store             persistence.Store
-	Operations        persistence.OperationsStore
-	Admin             persistence.AdminQueryStore
-	Authentication    *auth.Service
-	AdminSessions     *auth.AdminSessions
-	CustomerSessions  *auth.CustomerSessions
-	Credentials       *credentials.Service
-	Webhooks          *webhooks.Service
-	Verification      *verification.Service
-	Huawei            *huawei.Adapter
-	Apple             *apple.Adapter
-	GooglePlay        *googleplay.Adapter
-	Protection        protection.Service
-	FinancialReports  *financialreports.Service
+	Store            persistence.Store
+	Operations       persistence.OperationsStore
+	Admin            persistence.AdminQueryStore
+	Authentication   *auth.Service
+	AdminSessions    *auth.AdminSessions
+	CustomerSessions *auth.CustomerSessions
+	Credentials      *credentials.Service
+	Webhooks         *webhooks.Service
+	Verification     *verification.Service
+	Huawei           *huawei.Adapter
+	Apple            *apple.Adapter
+	GooglePlay       *googleplay.Adapter
+	Protection       protection.Service
+	FinancialReports *financialreports.Service
+	// Metrics counts operational failures. Nil skips those counters.
+	Metrics           *metrics.Registry
 	BodyLimit         int64
 	OfferingDirectory string
 	OfferingCatalog   persistence.OfferingCatalog
@@ -237,6 +241,7 @@ func New(dependencies Dependencies) (*API, error) {
 		webhooks:         dependencies.Webhooks, verification: dependencies.Verification,
 		huawei: dependencies.Huawei, apple: dependencies.Apple, googlePlay: dependencies.GooglePlay,
 		protection: dependencies.Protection, financialReports: dependencies.FinancialReports,
+		metrics:           dependencies.Metrics,
 		bodyLimit:         dependencies.BodyLimit,
 		offeringDirectory: strings.TrimSpace(dependencies.OfferingDirectory),
 		offeringCatalog:   dependencies.OfferingCatalog,
@@ -880,18 +885,22 @@ func (api *API) verify(
 		return verification.Result{}, err
 	}
 	if requiresReconciliation(input.Evidence) {
-		// The purchase, projection, and outbox event are already committed. A scheduling
-		// failure must not turn that success into an HTTP error. The daily job is idempotent,
-		// so a later verify or restore records it again.
+		// Verify has already committed the purchase in its own transaction. The reconciliation
+		// insert uses the operations store, so it cannot join that commit. A scheduling failure
+		// must not hide the committed snapshot. The counter and log are the recovery signal.
 		if scheduleErr := api.scheduleReconciliation(ctx, principal, result.Customer.ID, input); scheduleErr != nil {
-			api.logReconcileScheduleFailure(principal, result.Customer.ID)
+			api.recordReconcileScheduleFailure(principal, result.Customer.ID, application.Store.Provider)
 		}
 	}
 	return result, nil
 }
 
-// logReconcileScheduleFailure records a scheduling failure without purchase evidence or error text.
-func (api *API) logReconcileScheduleFailure(principal auth.Principal, customerID core.CustomerID) {
+// recordReconcileScheduleFailure counts and logs one missed daily refresh without purchase evidence.
+func (api *API) recordReconcileScheduleFailure(
+	principal auth.Principal,
+	customerID core.CustomerID,
+	provider core.Provider,
+) {
 	logger := api.logger
 	if logger == nil {
 		logger = slog.Default()
@@ -902,6 +911,21 @@ func (api *API) logReconcileScheduleFailure(principal auth.Principal, customerID
 		slog.String("application_id", string(principal.ApplicationID)),
 		slog.String("customer_id", string(customerID)),
 	)
+	if api.metrics == nil {
+		return
+	}
+	api.metrics.ObserveVerification(reconciliationScheduleProvider(provider), "reconciliation_schedule_failed")
+}
+
+// reconciliationScheduleProvider keeps the schedule-failure counter on the closed provider set.
+func reconciliationScheduleProvider(provider core.Provider) string {
+	switch provider {
+	case core.ProviderAppleAppStore, core.ProviderGooglePlay, core.ProviderHuaweiAppGallery,
+		core.ProviderAmazonAppstore, core.ProviderSamsungGalaxyStore:
+		return string(provider)
+	default:
+		return "unknown"
+	}
 }
 
 // scheduleReconciliation stores a protected idempotent daily authoritative refresh request.

@@ -17,6 +17,7 @@ import (
 	"github.com/imariman/iapstack/internal/auth"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/platform/metrics"
 	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/verification"
 )
@@ -100,6 +101,7 @@ func TestVerifyReturnsSnapshotWhenReconciliationSchedulingFails(t *testing.T) {
 				t.Fatalf("operations calls = %d, want 2", operations.calls)
 			}
 			assertScheduleFailureLog(t, logs, verifier.result.Customer.ID)
+			assertScheduleFailureMetric(t, api.metrics, 2)
 		})
 	}
 }
@@ -129,6 +131,7 @@ func TestVerifySchedulesSubscriptionReconciliation(t *testing.T) {
 	if strings.Contains(logs.String(), "reconciliation_schedule_failed") {
 		t.Fatalf("successful schedule logged a failure: %s", logs.String())
 	}
+	assertNoScheduleFailureMetric(t, api.metrics)
 }
 
 // TestVerifyLeavesNonSubscriptionAndVerificationErrorsUnscheduled verifies only a successful subscription verify is scheduled.
@@ -156,6 +159,7 @@ func TestVerifyLeavesNonSubscriptionAndVerificationErrorsUnscheduled(t *testing.
 	if strings.Contains(logs.String(), "reconciliation_schedule_failed") || strings.Contains(logs.String(), verifySchedulePurchaseToken) {
 		t.Fatalf("failed verification log leaked schedule or evidence data: %s", logs.String())
 	}
+	assertNoScheduleFailureMetric(t, failing.metrics)
 }
 
 // TestPurchaseEndpointsReturnCommittedSnapshotsWhenSchedulingFails verifies verify and restore stay HTTP 200.
@@ -195,6 +199,7 @@ func TestPurchaseEndpointsReturnCommittedSnapshotsWhenSchedulingFails(t *testing
 		}
 		assertNoPurchaseSecrets(t, recorder.Body.String())
 		assertScheduleFailureLog(t, logs, verifier.result.Customer.ID)
+		assertScheduleFailureMetric(t, api.metrics, 1)
 	})
 
 	t.Run("restore", func(t *testing.T) {
@@ -232,6 +237,7 @@ func TestPurchaseEndpointsReturnCommittedSnapshotsWhenSchedulingFails(t *testing
 			}
 		}
 		assertNoPurchaseSecrets(t, recorder.Body.String())
+		assertScheduleFailureMetric(t, api.metrics, 2)
 	})
 
 	t.Run("verification failure", func(t *testing.T) {
@@ -254,6 +260,7 @@ func TestPurchaseEndpointsReturnCommittedSnapshotsWhenSchedulingFails(t *testing
 			t.Fatalf("failed verification schedule calls = (protect %d, operate %d), want none", protector.calls, operations.calls)
 		}
 		assertNoPurchaseSecrets(t, recorder.Body.String())
+		assertNoScheduleFailureMetric(t, api.metrics)
 	})
 }
 
@@ -324,6 +331,7 @@ func newVerifyScheduleAPI(verifyErr, protectErr, saveErr error) (
 		operations:   operations,
 		verification: verifier,
 		protection:   protector,
+		metrics:      metrics.New(),
 		bodyLimit:    1 << 20,
 		clock:        func() time.Time { return verifyScheduleNow },
 		logger:       slog.New(slog.NewJSONHandler(logs, nil)),
@@ -425,6 +433,41 @@ func assertScheduleFailureLog(t *testing.T, logs *bytes.Buffer, customerID core.
 		t.Fatalf("schedule log = %s, want safe reconciliation_schedule_failed record", text)
 	}
 	assertNoPurchaseSecrets(t, text)
+}
+
+// assertScheduleFailureMetric checks the bounded reconciliation schedule counter.
+func assertScheduleFailureMetric(t *testing.T, registry *metrics.Registry, count int) {
+	t.Helper()
+
+	text := scheduleMetricText(t, registry)
+	want := fmt.Sprintf(
+		`iapstack_verifications_total{provider="google_play",outcome="reconciliation_schedule_failed"} %d`,
+		count,
+	)
+	if !strings.Contains(text, want) {
+		t.Fatalf("metrics = %s, want %s", text, want)
+	}
+}
+
+// assertNoScheduleFailureMetric verifies a successful or rejected verify did not count a missed schedule.
+func assertNoScheduleFailureMetric(t *testing.T, registry *metrics.Registry) {
+	t.Helper()
+
+	text := scheduleMetricText(t, registry)
+	if strings.Contains(text, `outcome="reconciliation_schedule_failed"`) {
+		t.Fatalf("metrics counted a schedule failure\n%s", text)
+	}
+}
+
+// scheduleMetricText renders one registry snapshot for schedule-failure assertions.
+func scheduleMetricText(t *testing.T, registry *metrics.Registry) string {
+	t.Helper()
+
+	var output bytes.Buffer
+	if err := registry.WritePrometheus(&output); err != nil {
+		t.Fatalf("WritePrometheus() error = %v", err)
+	}
+	return output.String()
 }
 
 // assertNoPurchaseSecrets rejects evidence and scheduling secrets in one observable string.
