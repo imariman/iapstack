@@ -94,10 +94,11 @@ final class IapStackClient {
   /// Each batch after the first gets `requestId` with a `-2`, `-3`, ... suffix so
   /// operators can correlate the calls. An empty list returns an empty result
   /// without contacting IAPStack. [skipped] and [pageLimitReached] are copied
-  /// onto that result. If a later batch fails, the same exception type is
-  /// thrown again with [IapStackException.committedRestoreResults] set to the
-  /// batches already accepted. A failure of the first batch is rethrown
-  /// unchanged when [skipped] is empty and [pageLimitReached] is false.
+  /// onto that result. If a later batch fails after an earlier one succeeded,
+  /// the same exception type is thrown again with
+  /// [IapStackException.committedRestoreResults] set to the batches already
+  /// accepted. A failure before any batch succeeds is rethrown unchanged, even
+  /// when [skipped] or [pageLimitReached] is set.
   Future<RestoreResult> restorePurchasesInBatches(
     List<PurchaseSubmission> purchases, {
     String? requestId,
@@ -116,7 +117,7 @@ final class IapStackClient {
         );
         results.addAll(batch.results);
       } catch (error) {
-        if (results.isEmpty && skipped.total == 0 && !pageLimitReached) {
+        if (results.isEmpty) {
           rethrow;
         }
         throw _withRestoreProgress(

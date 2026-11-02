@@ -509,7 +509,9 @@ void main() {
       expect(calls, 2);
     });
 
-    test('a failed first restore batch still reports skips', () async {
+    test(
+        'a failed first restore batch keeps the original error when rows were skipped',
+        () async {
       final client = IapStackClient(
         _config(retryPolicy: const IapStackRetryPolicy(maxAttempts: 1)),
         httpClient: MockClient((request) async => http.Response(
@@ -527,7 +529,8 @@ void main() {
       await expectLater(
         client.restorePurchasesInBatches(
           <PurchaseSubmission>[_purchase()],
-          skipped: const RestoreSkipCounts(unbound: 3),
+          skipped: const RestoreSkipCounts(unbound: 3, differentCustomer: 1),
+          pageLimitReached: true,
         ),
         throwsA(
           isA<IapStackApiException>()
@@ -537,7 +540,14 @@ void main() {
                 'committedRestoreResults',
                 isEmpty,
               )
-              .having((error) => error.restoreSkips.unbound, 'unbound', 3),
+              .having((error) => error.restoreSkips.total, 'skipped', 0)
+              .having(
+                (error) => error.restorePageLimitReached,
+                'restorePageLimitReached',
+                isFalse,
+              )
+              .having((error) => error, 'type',
+                  isNot(isA<IapStackIncompleteRestoreException>())),
         ),
       );
     });

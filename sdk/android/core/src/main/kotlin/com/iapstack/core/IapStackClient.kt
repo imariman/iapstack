@@ -35,7 +35,7 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 
-private const val SDK_VERSION = "0.1.0-sdk.1"
+private const val SDK_VERSION = "0.1.0-sdk.2"
 private val JSON_MEDIA_TYPE = "application/json".toMediaType()
 private val DELAY_SECONDS = Regex("^\\d{1,9}$")
 private val IMF_FIXDATE = Regex(
@@ -169,8 +169,10 @@ class IapStackClient(
    * Verifies any number of purchases in order, in batches of 100.
    *
    * An empty list does not contact IAPStack. Each batch after the first suffixes
-   * [requestId] with `-2`, `-3`, and so on. When a later batch fails, earlier
-   * results stay on the thrown [IapStackException.committedRestoreResults].
+   * [requestId] with `-2`, `-3`, and so on. When a later batch fails after an
+   * earlier one succeeded, those results stay on
+   * [IapStackException.committedRestoreResults]. A failure before any batch
+   * succeeds is the original error, including when [skipped] is non-empty.
    * Cancellation is not rewritten.
    */
   suspend fun restorePurchasesInBatches(
@@ -193,12 +195,14 @@ class IapStackClient(
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (error: IapStackException) {
-        if (results.isNotEmpty() || pageLimitReached || skipped.total > 0) {
+        // Attach progress only after a batch has committed. A first-batch
+        // failure stays the original error so callers still match it.
+        if (results.isNotEmpty()) {
           error.attachPartialRestore(results.toList(), skipped, pageLimitReached)
         }
         throw error
       } catch (error: Exception) {
-        if (results.isEmpty() && !pageLimitReached && skipped.total == 0) {
+        if (results.isEmpty()) {
           throw error
         }
         throw IapStackIncompleteRestoreException(

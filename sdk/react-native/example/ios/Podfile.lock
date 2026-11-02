@@ -3,7 +3,7 @@ PODS:
   - hermes-engine (250829098.0.9):
     - hermes-engine/Pre-built (= 250829098.0.9)
   - hermes-engine/Pre-built (250829098.0.9)
-  - IAPStackReactNative (0.1.0-sdk.1):
+  - IAPStackReactNative (0.1.0-sdk.2):
     - React-Core
   - RCTDeprecation (0.84.1)
   - RCTRequired (0.84.1)

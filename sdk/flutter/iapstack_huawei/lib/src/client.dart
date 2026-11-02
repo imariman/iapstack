@@ -164,6 +164,8 @@ final class HuaweiIapStack {
   ///
   /// Hitting [maxRestorePagesPerKind] submits the pages already read and sets
   /// [RestoreResult.pageLimitReached]. It does not discard those purchases.
+  /// That result cannot be resumed: the next restore reads the first pages
+  /// again. Raise [maxRestorePagesPerKind] to include older rows.
   /// Unbound, different-customer, and unknown-product rows are counted on
   /// [RestoreResult.skipped] and are not submitted.
   Future<RestoreResult> restorePurchases({

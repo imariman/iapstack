@@ -155,7 +155,9 @@ public final class AppleIAPStack {
           try await platform.completePurchase(purchase)
         }
       } catch {
-        if error is CancellationError || (results.isEmpty && skipped.total == 0) {
+        // A first-batch failure stays the original error, even when rows were
+        // skipped. Wrapping it would hide a network or API failure.
+        if error is CancellationError || results.isEmpty {
           throw error
         }
         throw IAPStackIncompleteRestoreError(

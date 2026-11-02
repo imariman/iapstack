@@ -144,7 +144,7 @@ final class IAPStackAppleTests: XCTestCase {
     XCTAssertEqual(request.url?.path, "/proxy/v1/applications/application-1/purchases:verify")
     XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer customer-token")
     XCTAssertEqual(request.value(forHTTPHeaderField: "X-Request-ID"), "request-client-1")
-    XCTAssertEqual(request.value(forHTTPHeaderField: "X-IAPStack-SDK"), "ios-swift/0.1.0-sdk.1")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "X-IAPStack-SDK"), "ios-swift/0.1.0-sdk.2")
 
     let decoded = try XCTUnwrap(
       request.httpBody.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] },
@@ -263,7 +263,7 @@ final class IAPStackAppleTests: XCTestCase {
     URLStubProtocol.reset()
     let captured = Counter()
     URLStubProtocol.enqueue { request in
-      if request.value(forHTTPHeaderField: "X-IAPStack-SDK") == "react-native/0.1.0-sdk.1" { captured.increment() }
+      if request.value(forHTTPHeaderField: "X-IAPStack-SDK") == "react-native/0.1.0-sdk.2" { captured.increment() }
       let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
         headerFields: ["Content-Type": "application/json"])!
       return (response, Data(#"{"customer_id":"customer-internal","entitlements":[]}"#.utf8))
@@ -901,6 +901,42 @@ final class IAPStackAppleTests: XCTestCase {
     XCTAssertEqual(result.skipped.unbound, 1)
     XCTAssertEqual(result.skipped.differentCustomer, 1)
     XCTAssertEqual(result.skipped.unknownProduct, 1)
+    XCTAssertEqual(platform.completedTransactionIds, [])
+  }
+
+  func testFirstRestoreBatchFailureWithSkippedRowsKeepsTheOriginalError() async throws {
+    URLStubProtocol.reset()
+    URLStubProtocol.enqueue { request in
+      let response = HTTPURLResponse(
+        url: request.url!, statusCode: 400, httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"])!
+      let body = #"{"error": {"code": "invalid_request", "message": "rejected", "request_id": "request-1"}}"#
+      return (response, Data(body.utf8))
+    }
+    let customer = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    let platform = FakeApplePlatform(restoreResult: [
+      restoredRow("tx-valid", customer: customer, pendingCompletion: true),
+      ApplePurchase(
+        transactionId: "unbound", productId: "premium_lifetime", signedTransaction: "a.b.c",
+        status: .restored, pendingCompletion: true, appAccountToken: nil, errorCode: nil),
+      ApplePurchase(
+        transactionId: "other", productId: "premium_lifetime", signedTransaction: "a.b.c",
+        status: .restored, pendingCompletion: true,
+        appAccountToken: "9b2c1f64-1c7e-4c55-9a51-0c6f1d7e2a10", errorCode: nil),
+      ApplePurchase(
+        transactionId: "unknown", productId: "legacy_product", signedTransaction: "a.b.c",
+        status: .restored, pendingCompletion: false, appAccountToken: customer, errorCode: nil),
+    ])
+    let stack = try makeAppleStack(platform: platform)
+
+    do {
+      _ = try await stack.restorePurchases(externalCustomerId: customer)
+      XCTFail("expected the first batch to fail")
+    } catch is IAPStackIncompleteRestoreError {
+      XCTFail("a first-batch failure must stay the original error")
+    } catch let IAPStackSDKError.apiError(_, code, _, _, _, _) {
+      XCTAssertEqual(code, "invalid_request")
+    }
     XCTAssertEqual(platform.completedTransactionIds, [])
   }
 

@@ -160,9 +160,12 @@ whitespace and escapes. Validation may inspect JSON but never rewrites evidence.
 Owned queries preserve continuation tokens, normalize an empty terminal token,
 and reject mismatched data/signature arrays. The coordinator bounds pagination per product kind. Reaching that cap submits
 the pages already read and sets `RestoreResult.pageLimitReached` instead of
-throwing `restore_page_limit`. Customer and catalog mismatches are counted on
-`skipped` and are not submitted. A later batch failure keeps
-`committedRestoreResults` on the thrown `IapStackException`.
+throwing `restore_page_limit`. The result cannot be resumed: the next restore
+reads those same first pages again. Raise `maxRestorePagesPerKind` to include
+older rows. Customer and catalog mismatches are counted on
+`skipped` and are not submitted. A later batch failure, after an earlier batch
+succeeded, keeps `committedRestoreResults` on the thrown `IapStackException`.
+A failure before any batch succeeds is the original error.
 
 ## Build and tests
 

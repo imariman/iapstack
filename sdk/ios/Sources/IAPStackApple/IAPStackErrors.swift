@@ -62,8 +62,8 @@ public enum IAPStackSDKError: Error, LocalizedError, Sendable {
 /// A later restore batch failed after earlier batches were accepted.
 ///
 /// `underlying` is the batch error. `committedResults` are the verification rows
-/// the server already accepted. The first batch's failure is thrown unchanged
-/// when nothing was skipped and nothing was committed.
+/// the server already accepted. A failure before any batch succeeds is thrown
+/// unchanged, even when some store rows were skipped.
 public struct IAPStackIncompleteRestoreError: Error, LocalizedError {
   /// Creates a partial restore failure.
   public init(
