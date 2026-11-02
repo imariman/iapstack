@@ -445,10 +445,25 @@ func subscriberGrantRow(
 		row.missingPurchase = true
 		return row, 0, nil
 	}
+	// Purchase dates are instants. String order picks the wrong row when an export
+	// mixes shapes: 'T' sorts after a space, and 'Z' sorts after a fractional '.'.
 	selected := purchases[0]
+	selectedAt, selectedSet, err := parseExportTime(selected.PurchaseDate)
+	if err != nil {
+		return sourceRow{}, 0, fmt.Errorf("line %d: %w", line, err)
+	}
 	for _, purchase := range purchases[1:] {
-		if purchase.PurchaseDate > selected.PurchaseDate {
+		candidateAt, candidateSet, parseErr := parseExportTime(purchase.PurchaseDate)
+		if parseErr != nil {
+			return sourceRow{}, 0, fmt.Errorf("line %d: %w", line, parseErr)
+		}
+		if !candidateSet {
+			continue
+		}
+		if !selectedSet || candidateAt.After(selectedAt) {
 			selected = purchase
+			selectedAt = candidateAt
+			selectedSet = true
 		}
 	}
 	filled, err := fillSubscriberPurchase(&row, selected.Store, selected.IsSandbox, selected.PurchaseDate, expiresDate, graceDate, "", "", "", "", false)
