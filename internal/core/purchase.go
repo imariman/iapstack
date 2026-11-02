@@ -135,6 +135,10 @@ type PurchaseObservation struct {
 	EffectivePeriod EffectivePeriod
 	Renewal         Renewal
 	References      []StoreReference
+	// PriorSnapshotID is an older identity for this same logical snapshot.
+	// Persistence reuses that stored row when the snapshot still matches, so an
+	// identity encoding change does not duplicate an unchanged observation.
+	PriorSnapshotID ObservationID
 }
 
 // Validate checks that the lifecycle state belongs to the normalized state vocabulary.
@@ -266,8 +270,13 @@ func (observation PurchaseObservation) Validate() error {
 	if observation.Price != nil {
 		priceError = observation.Price.Validate()
 	}
+	var priorIDError error
+	if observation.PriorSnapshotID != "" {
+		priorIDError = observation.PriorSnapshotID.Validate()
+	}
 	if err := errors.Join(
 		observation.ID.Validate(),
+		priorIDError,
 		observation.ApplicationID.Validate(),
 		observation.Store.Validate(),
 		observation.ProductID.Validate(),
