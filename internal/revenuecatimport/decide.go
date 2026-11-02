@@ -83,5 +83,12 @@ func decideAccess(row sourceRow, kind core.ProductKind, kindKnown bool, now time
 		}
 		decision.end = nil
 	}
+	// Readers treat effective_starts_at as informational and grant any allowed
+	// projection immediately. Store a future start as denied so access waits
+	// for a later import at or after that instant.
+	if decision.access == core.AccessAllowed && now.Before(decision.start) {
+		decision.access = core.AccessDenied
+		decision.reason = core.AccessReasonProviderDecision
+	}
 	return decision
 }

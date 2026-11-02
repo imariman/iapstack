@@ -159,21 +159,132 @@ func TestNormalizeSubscriptionLifecycle(t *testing.T) {
 	}
 }
 
-// TestComparePurchasesRejectsPriceMismatch prevents client/server signed amount drift.
-func TestComparePurchasesRejectsPriceMismatch(t *testing.T) {
+// TestComparePurchasesAllowsAuthoritativePriceChange keeps purchase identity while accepting a server price change.
+func TestComparePurchasesAllowsAuthoritativePriceChange(t *testing.T) {
 	submitted := purchaseData{
 		ApplicationID: "provider-app-1", ProductID: "lifetime", PurchaseToken: "token-1",
 		Currency: "USD", Price: 499,
 	}
 	authoritative := submitted
-	authoritative.Price = 599
-	if err := comparePurchases(submitted, authoritative); err == nil {
-		t.Fatal("comparePurchases() price mismatch error = nil, want rejection")
-	}
-	authoritative = submitted
+	authoritative.Price = 799
 	authoritative.Currency = "EUR"
-	if err := comparePurchases(submitted, authoritative); err == nil {
-		t.Fatal("comparePurchases() currency mismatch error = nil, want rejection")
+	if err := comparePurchases(submitted, authoritative); err != nil {
+		t.Fatalf("comparePurchases() price change error = %v", err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*purchaseData)
+	}{
+		{name: "application", mutate: func(purchase *purchaseData) { purchase.ApplicationID = "other-app" }},
+		{name: "product", mutate: func(purchase *purchaseData) { purchase.ProductID = "other" }},
+		{name: "token", mutate: func(purchase *purchaseData) { purchase.PurchaseToken = "other-token" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mismatch := authoritative
+			test.mutate(&mismatch)
+			if err := comparePurchases(submitted, mismatch); err == nil {
+				t.Fatal("comparePurchases() identity mismatch error = nil, want rejection")
+			}
+		})
+	}
+	invalid := authoritative
+	invalid.Price = -1
+	if err := comparePurchases(submitted, invalid); err == nil {
+		t.Fatal("comparePurchases() invalid price error = nil, want rejection")
+	}
+}
+
+// TestAdapterKeepsAuthoritativePriceAfterChange stores the server price when the client receipt has the original price.
+func TestAdapterKeepsAuthoritativePriceAfterChange(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	purchasedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+	submitted := purchaseData{
+		ApplicationID: "provider-app-1", ProductID: "lifetime", OrderID: "order-1",
+		PurchaseToken: "opaque-purchase-token", PurchaseState: 0,
+		PurchaseTime: purchasedAt.UnixMilli(), Quantity: 1, Currency: "USD", Price: 499,
+	}
+	authoritative := submitted
+	authoritative.Price = 799
+	authoritative.Currency = "EUR"
+	submittedJSON, err := json.Marshal(submitted)
+	if err != nil {
+		t.Fatalf("Marshal() submitted purchase error = %v", err)
+	}
+	authoritativeJSON, err := json.Marshal(authoritative)
+	if err != nil {
+		t.Fatalf("Marshal() authoritative purchase error = %v", err)
+	}
+	submittedSignature := signFixture(t, privateKey, submittedJSON)
+	authoritativeSignature := signFixture(t, privateKey, authoritativeJSON)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			writeFixtureJSON(writer, map[string]any{"access_token": "provider-access", "expires_in": 300})
+		case "/order":
+			if request.Header.Get("Authorization") != "Bearer provider-access" {
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			writeFixtureJSON(writer, map[string]any{
+				"responseCode": "0", "purchaseTokenData": string(authoritativeJSON), "dataSignature": authoritativeSignature,
+			})
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	credentialJSON, err := json.Marshal(credentialPayload{
+		ClientID: "client", ClientSecret: "secret", PublicKey: publicKeyFixture(t, &privateKey.PublicKey),
+		TokenURL: "https://provider.example/token", OrderURL: "https://provider.example/order",
+		SubscriptionURL: "https://provider.example/subscription",
+	})
+	if err != nil {
+		t.Fatalf("Marshal() credential error = %v", err)
+	}
+	credential, err := stores.NewCredential(CredentialKind, CredentialContentType, CredentialSchemaVersion, credentialJSON)
+	if err != nil {
+		t.Fatalf("NewCredential() error = %v", err)
+	}
+	adapter, err := New(fakeCredentialSource{credential: credential}, time.Second, false)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	adapter.client = server.Client()
+	serverURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("Parse() server URL error = %v", err)
+	}
+	adapter.client.Transport = rewriteTransport{destination: serverURL, next: adapter.client.Transport}
+	evidenceJSON, err := json.Marshal(clientEvidence{
+		PurchaseData: string(submittedJSON), Signature: submittedSignature, ProductKind: core.ProductKindNonConsumable,
+	})
+	if err != nil {
+		t.Fatalf("Marshal() evidence error = %v", err)
+	}
+	evidence, err := stores.NewEvidence(EvidenceContentType, evidenceJSON)
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	request := stores.VerificationRequest{
+		Application: core.Application{ID: "application-1", ProjectID: "project-1", Store: core.StoreApplication{
+			Provider: core.ProviderHuaweiAppGallery, Environment: core.EnvironmentSandbox, ID: "provider-app-1",
+		}},
+		CustomerID: "customer-1", ClaimedProducts: []core.ProviderProductID{"lifetime"}, Evidence: evidence,
+	}
+	result, err := adapter.Verify(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if err := result.ValidateForVerification(request); err != nil {
+		t.Fatalf("ValidateForVerification() error = %v", err)
+	}
+	price := result.Observations[0].Price
+	if price == nil || price.Milliunits != 7990 || price.Currency != "EUR" {
+		t.Fatalf("observation price = %#v, want authoritative 7990 EUR", price)
 	}
 }
 

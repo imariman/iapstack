@@ -8,13 +8,15 @@ import (
 
 // Report is the secret-free summary of one dry-run or apply.
 type Report struct {
-	DryRun       bool      `json:"dry_run"`
-	ProjectID    string    `json:"project_id"`
-	BatchID      string    `json:"batch_id,omitempty"`
-	ExportSHA256 string    `json:"export_sha256,omitempty"`
-	Format       string    `json:"format"`
-	Counts       Counts    `json:"counts"`
-	Failures     []Failure `json:"failures"`
+	DryRun                  bool       `json:"dry_run"`
+	ProjectID               string     `json:"project_id"`
+	BatchID                 string     `json:"batch_id,omitempty"`
+	ExportSHA256            string     `json:"export_sha256,omitempty"`
+	Format                  string     `json:"format"`
+	Counts                  Counts     `json:"counts"`
+	NotYetStartedEarliestAt *time.Time `json:"not_yet_started_earliest_at,omitempty"`
+	Warning                 string     `json:"warning,omitempty"`
+	Failures                []Failure  `json:"failures"`
 }
 
 // Counts are the operator-facing totals. They never include receipts or prices.
@@ -32,6 +34,8 @@ type Counts struct {
 	Failed                int `json:"failed"`
 	RefundEndDisagreement int `json:"refund_end_disagreement"`
 	TrialPeriods          int `json:"trial_periods"`
+	// NotYetStarted counts grants stored denied because their start is still in the future.
+	NotYetStarted int `json:"not_yet_started"`
 }
 
 // Failure identifies one subscriber or grant the import refused.

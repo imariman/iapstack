@@ -68,7 +68,9 @@ func parseExportTime(value string) (time.Time, bool, error) {
 	if value == "" {
 		return time.Time{}, false, nil
 	}
-	if len(value) >= 12 && value[10] == ' ' && value[12] == ':' {
+	// A single-digit hour is "YYYY-MM-DD H:MM:SS". Index 12 is the colon, so the
+	// value must be at least 13 bytes. "2024-01-01 9" is 12 bytes and is invalid.
+	if len(value) >= 13 && value[10] == ' ' && value[12] == ':' {
 		value = value[:11] + "0" + value[11:]
 	}
 	for _, layout := range []string{

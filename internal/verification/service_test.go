@@ -7,6 +7,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +52,7 @@ type fakeProtector struct {
 
 // fakeAdapter returns one configured provider result or failure.
 type fakeAdapter struct {
+	provider        core.Provider
 	result          stores.VerificationResult
 	err             error
 	calls           int
@@ -401,6 +403,88 @@ func TestServiceRejectsCatalogMismatchBeforeWrites(t *testing.T) {
 	assertNoDurableWrites(t, store.repository)
 }
 
+// TestVerifyMapsCurrentAppleSubscriptionProduct persists an upgraded App Store product from the same lineage.
+func TestVerifyMapsCurrentAppleSubscriptionProduct(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	fixture.application.Store.Provider = core.ProviderAppleAppStore
+	fixture.application.Store.ID = "com.example.iapstack"
+	const (
+		upgradedProviderProduct = "provider-product-annual"
+		upgradedProduct         = "product-annual"
+	)
+	annual := fixture.catalog
+	annual.Mapping.ProviderID = upgradedProviderProduct
+	annual.Product.ID = upgradedProduct
+	annual.Product.Kind = core.ProductKindSubscription
+	end := fixture.result.VerifiedAt.Add(30 * 24 * time.Hour)
+	observation := &fixture.result.Observations[0]
+	observation.Store = fixture.application.Store
+	observation.ProductID = upgradedProviderProduct
+	observation.ProductKind = core.ProductKindSubscription
+	observation.EffectivePeriod.EndsAt = &end
+	observation.Renewal = core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled}
+	store := newFakeStore(fixture)
+	store.repository.catalog[upgradedProviderProduct] = annual
+	service := newVerificationService(
+		t,
+		store,
+		&fakeAdapter{provider: core.ProviderAppleAppStore, result: fixture.result},
+		&fakeProtector{},
+		fixture.clock,
+	)
+
+	result, err := service.Verify(context.Background(), fixture.command)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if len(store.repository.observations) != 1 {
+		t.Fatalf("observations = %d, want 1", len(store.repository.observations))
+	}
+	for _, write := range store.repository.observations {
+		if write.ProductID != upgradedProduct || write.Observation.ProductID != upgradedProviderProduct {
+			t.Fatalf("stored observation = (%q, %q), want catalog product %q",
+				write.ProductID, write.Observation.ProductID, upgradedProduct)
+		}
+	}
+	if len(result.Entitlements) != 1 || result.Entitlements[0].Projection.SourceProductID != upgradedProduct {
+		t.Fatalf("entitlements = %#v, want source product %q", result.Entitlements, upgradedProduct)
+	}
+}
+
+// TestVerifyKeepsClaimedProductForOtherProviders rejects a provider product the caller did not claim.
+func TestVerifyKeepsClaimedProductForOtherProviders(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	fixture.result.Observations[0].ProductID = "provider-product-other"
+	store := newFakeStore(fixture)
+	service := newVerificationService(t, store, &fakeAdapter{result: fixture.result}, &fakeProtector{}, fixture.clock)
+	if _, err := service.Verify(context.Background(), fixture.command); err == nil || !strings.Contains(err.Error(), "expected product") {
+		t.Fatalf("Verify() error = %v, want claimed product mismatch", err)
+	}
+	assertNoDurableWrites(t, store.repository)
+
+	fixture = newVerificationFixture(t)
+	fixture.application.Store.Provider = core.ProviderAppleAppStore
+	fixture.application.Store.ID = "com.example.iapstack"
+	fixture.result.Observations[0].Store = fixture.application.Store
+	fixture.result.Observations[0].ProductID = "provider-product-other"
+	store = newFakeStore(fixture)
+	service = newVerificationService(
+		t,
+		store,
+		&fakeAdapter{provider: core.ProviderAppleAppStore, result: fixture.result},
+		&fakeProtector{},
+		fixture.clock,
+	)
+	if _, err := service.Verify(context.Background(), fixture.command); err == nil || !strings.Contains(err.Error(), "expected product") {
+		t.Fatalf("Verify() non-subscription error = %v, want claimed product mismatch", err)
+	}
+	assertNoDurableWrites(t, store.repository)
+}
+
 // TestServiceRejectsUnknownClaimBeforeProviderCall verifies catalog fail-fast behavior.
 func TestServiceRejectsUnknownClaimBeforeProviderCall(t *testing.T) {
 	t.Parallel()
@@ -582,6 +666,9 @@ func (protector *fakeProtector) Protect(
 
 // Provider identifies the provider implemented by the fake adapter.
 func (adapter *fakeAdapter) Provider() core.Provider {
+	if adapter.provider != "" {
+		return adapter.provider
+	}
 	return core.ProviderHuaweiAppGallery
 }
 
