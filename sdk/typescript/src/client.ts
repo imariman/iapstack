@@ -1,5 +1,6 @@
 import { resolveConfig, type Config, type ResolvedConfig, validateBearer } from './config.js';
 import {
+  AbortError,
   APIError,
   ProtocolError,
   TimeoutError,
@@ -22,6 +23,7 @@ const JSON_CONTENT_TYPE = 'application/json';
 
 export interface RequestOptions {
   requestId?: string;
+  /** Aborts the in-flight attempt and any retry wait. The rejection is an AbortError. */
   signal?: AbortSignal;
 }
 
@@ -153,6 +155,9 @@ export class Client {
     const target = resolveUrl(this.#config.baseUrl, path);
     let last: unknown;
     for (let attempt = 1; attempt <= this.#config.retryPolicy.maxAttempts; attempt += 1) {
+      if (options.signal?.aborted) {
+        throw abortError(options.signal);
+      }
       try {
         const response = await this.attempt(
           method,
@@ -171,6 +176,9 @@ export class Client {
           throw apiError;
         }
       } catch (error) {
+        if (options.signal?.aborted) {
+          throw abortError(options.signal, error);
+        }
         last = error;
         if (!this.shouldRetry(error, attempt, options.signal)) {
           throw decodeCaught(error);
@@ -179,7 +187,10 @@ export class Client {
       try {
         const retryAfterMs = last instanceof APIError ? last.retryAfterMs : undefined;
         await this.wait(attempt, options.signal, retryAfterMs);
-      } catch {
+      } catch (error) {
+        if (options.signal?.aborted) {
+          throw abortError(options.signal, error);
+        }
         throw decodeCaught(last);
       }
     }
@@ -229,13 +240,11 @@ export class Client {
       const text = await readLimitedBody(response, this.#config.maxResponseBytes);
       return { status: response.status, headers: response.headers, body: text };
     } catch (error) {
-      if (error instanceof ProtocolError || error instanceof APIError) {
+      if (error instanceof ProtocolError || error instanceof APIError || error instanceof AbortError) {
         throw error;
       }
       if (signal?.aborted) {
-        throw new TransportError('IAPStack request failed before a response was received', {
-          cause: error,
-        });
+        throw abortError(signal, error);
       }
       if (isAbortError(error)) {
         throw new TimeoutError('IAPStack request timed out', { cause: error });
@@ -344,11 +353,23 @@ function parseJsonObject(raw: string): Record<string, unknown> {
   return payload as Record<string, unknown>;
 }
 
-function decodeCaught(error: unknown): Error {
-  if (error instanceof ProtocolError || error instanceof APIError) {
-    return error;
+function abortError(signal: AbortSignal | undefined, cause?: unknown): AbortError {
+  if (cause instanceof AbortError) {
+    return cause;
   }
-  if (error instanceof TimeoutError || error instanceof TransportError) {
+  return new AbortError('IAPStack request was aborted', {
+    cause: signal?.reason ?? cause,
+  });
+}
+
+function decodeCaught(error: unknown): Error {
+  if (
+    error instanceof ProtocolError ||
+    error instanceof APIError ||
+    error instanceof AbortError ||
+    error instanceof TimeoutError ||
+    error instanceof TransportError
+  ) {
     return error;
   }
   if (error instanceof Error) {

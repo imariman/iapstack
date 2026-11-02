@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -434,6 +435,141 @@ func TestClientRejectsOversizedAndInvalidJSON(t *testing.T) {
 	}
 }
 
+// TestClientCancelDuringBackoffReturnsContextCanceled verifies a caller cancel
+// during the retry wait is not reported as the previous API error.
+func TestClientCancelDuringBackoffReturnsContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		attempts.Add(1)
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
+			"error": map[string]any{
+				"code":       "provider_unavailable",
+				"message":    "provider is unavailable",
+				"request_id": "request-backoff",
+			},
+		})
+	}), func(config *Config) {
+		config.RetryPolicy = RetryPolicy{MaxAttempts: 3, BaseDelay: time.Hour, MaxDelay: time.Hour}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.delay = func(waitCtx context.Context, _ time.Duration) error {
+		cancel()
+		return waitForRetry(waitCtx, time.Hour)
+	}
+
+	_, err := client.CreateCustomerSession(ctx, "customer-external")
+	assertCallerCanceled(t, err)
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts.Load())
+	}
+}
+
+// TestClientCancelDuringAttemptReturnsContextCanceled verifies an in-flight
+// caller cancel is not reported as a timeout or transport failure.
+func TestClientCancelDuringAttemptReturnsContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{})
+	var attempts atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if attempts.Add(1) == 1 {
+			close(entered)
+		}
+		select {
+		case <-request.Context().Done():
+		case <-time.After(3 * time.Second):
+		}
+	}), func(config *Config) {
+		config.Timeout = 5 * time.Second
+		config.RetryPolicy = RetryPolicy{MaxAttempts: 2, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.CreateCustomerSession(ctx, "customer-external")
+		errCh <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not reach the test server")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		assertCallerCanceled(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled request did not return")
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts.Load())
+	}
+}
+
+// TestClientDeadlineDuringBackoffReturnsTimeout verifies a caller deadline that
+// expires during the retry wait is not reported as the previous API error.
+func TestClientDeadlineDuringBackoffReturnsTimeout(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		attempts.Add(1)
+		writeJSON(writer, http.StatusTooManyRequests, map[string]any{
+			"error": map[string]any{"code": "rate_limited", "message": "slow down"},
+		})
+	}), func(config *Config) {
+		config.RetryPolicy = RetryPolicy{MaxAttempts: 3, BaseDelay: time.Hour, MaxDelay: time.Hour}
+	})
+	deadline := newBackoffDeadline()
+	client.delay = func(waitCtx context.Context, _ time.Duration) error {
+		deadline.expire()
+		return waitForRetry(waitCtx, time.Hour)
+	}
+
+	_, err := client.CreateCustomerSession(deadline, "customer-external")
+	var timeoutErr *TimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("error = %v, want TimeoutError", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || timeoutErr.Unwrap() != context.DeadlineExceeded {
+		t.Fatalf("timeout cause = %v, want context.DeadlineExceeded", timeoutErr.Unwrap())
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		t.Fatalf("deadline reported the previous API error: %v", err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts.Load())
+	}
+}
+
+// TestClientCanceledContextDoesNotSend verifies an already canceled call returns
+// context.Canceled without an HTTP attempt.
+func TestClientCanceledContextDoesNotSend(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	client := newTestClient(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		attempts.Add(1)
+		writeJSON(writer, http.StatusCreated, map[string]any{
+			"token":      "iaps_customer",
+			"expires_at": "2026-08-24T20:15:00Z",
+		})
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := client.CreateCustomerSession(ctx, "customer-external")
+	assertCallerCanceled(t, err)
+	if attempts.Load() != 0 {
+		t.Fatalf("attempts = %d, want 0", attempts.Load())
+	}
+}
+
 // TestClientTurnsAttemptDeadlineIntoTimeout verifies abortable per-attempt timeouts.
 func TestClientTurnsAttemptDeadlineIntoTimeout(t *testing.T) {
 
@@ -660,6 +796,49 @@ func TestRetryPolicyAppliesFullJitterWithinCap(t *testing.T) {
 	if _, err := policy.DelayAfter(1, 1.1); err == nil {
 		t.Fatal("DelayAfter() accepted an out-of-range jitter value")
 	}
+}
+
+// assertCallerCanceled requires a user abort, not a stale attempt error.
+func assertCallerCanceled(t *testing.T, err error) {
+	t.Helper()
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	var apiErr *APIError
+	var timeoutErr *TimeoutError
+	var transportErr *TransportError
+	if errors.As(err, &apiErr) || errors.As(err, &timeoutErr) || errors.As(err, &transportErr) {
+		t.Fatalf("cancellation reported as %T: %v", err, err)
+	}
+}
+
+// backoffDeadline is a context whose deadline begins when expire is called.
+type backoffDeadline struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newBackoffDeadline() *backoffDeadline {
+	return &backoffDeadline{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (deadline *backoffDeadline) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+func (deadline *backoffDeadline) Done() <-chan struct{} { return deadline.done }
+
+func (deadline *backoffDeadline) Err() error {
+	select {
+	case <-deadline.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (deadline *backoffDeadline) expire() {
+	deadline.once.Do(func() { close(deadline.done) })
 }
 
 // newTestClient starts an HTTP test origin with Flutter-like proxy prefix defaults.

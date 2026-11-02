@@ -1,10 +1,13 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { inspect } from 'node:util';
 import { setRetrySeamsForTesting } from '../src/client';
 import { parseRetryAfter } from '../src/retry_after';
 import { resolveConfig } from '../src/config';
 import {
+  AbortError,
   APIError,
   Client,
   Entitlement,
@@ -400,6 +403,163 @@ test('client rejects oversized and invalid JSON as protocol errors', async () =>
     () => invalid.createCustomerSession('customer-external'),
     (error) => error instanceof ProtocolError,
   );
+});
+
+function listen(handler: http.RequestListener): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = http.createServer(handler);
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address() as AddressInfo;
+      resolve({
+        url: `http://127.0.0.1:${address.port}/proxy`,
+        close: () =>
+          new Promise((done) => {
+            // Bun rejects close() after closeAllConnections() stops the server.
+            server.closeAllConnections();
+            try {
+              server.close(() => done());
+            } catch {
+              done();
+            }
+          }),
+      });
+    });
+  });
+}
+
+function assertAbort(error: unknown): boolean {
+  assert.ok(error instanceof AbortError);
+  assert.equal(error.name, 'AbortError');
+  assert.equal(error instanceof APIError, false);
+  assert.equal(error instanceof TimeoutError, false);
+  assert.equal(error instanceof TransportError, false);
+  assert.equal(error.message.includes('private'), false);
+  return true;
+}
+
+test('abort during retry backoff rejects with AbortError', async () => {
+  let attempts = 0;
+  const server = await listen((_request, response) => {
+    attempts += 1;
+    response.writeHead(503, { 'content-type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        error: {
+          code: 'provider_unavailable',
+          message: 'provider is unavailable',
+          request_id: 'request-backoff',
+        },
+      }),
+    );
+  });
+  let markWaiting: () => void = () => {};
+  const waiting = new Promise<void>((resolve) => {
+    markWaiting = resolve;
+  });
+  const controller = new AbortController();
+  try {
+    const client = new Client({
+      baseUrl: server.url,
+      applicationId: 'application-1',
+      applicationToken: testApplicationToken,
+      timeoutMs: 1000,
+      allowInsecureHttp: true,
+      retryPolicy: new RetryPolicy({ maxAttempts: 3, baseDelayMs: 60_000, maxDelayMs: 60_000 }),
+    });
+    setRetrySeamsForTesting(client, {
+      random: () => 1,
+      delay: (_ms, signal) => {
+        markWaiting();
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+          }, 60_000);
+          const onAbort = () => {
+            clearTimeout(timer);
+            const reason = signal?.reason;
+            reject(reason instanceof Error ? reason : new Error('aborted'));
+          };
+          if (signal?.aborted) {
+            onAbort();
+            return;
+          }
+          signal?.addEventListener('abort', onAbort, { once: true });
+        });
+      },
+    });
+
+    const pending = client.createCustomerSession('customer-external', { signal: controller.signal });
+    await waiting;
+    controller.abort(new Error('private abort reason'));
+    await assert.rejects(pending, assertAbort);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(attempts, 1);
+  } finally {
+    await server.close();
+  }
+});
+
+test('aborting an in-flight fetch rejects with AbortError', async () => {
+  let attempts = 0;
+  let markStarted: () => void = () => {};
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const server = await listen((request) => {
+    attempts += 1;
+    markStarted();
+    request.on('close', () => {});
+  });
+  const controller = new AbortController();
+  try {
+    const client = new Client({
+      baseUrl: server.url,
+      applicationId: 'application-1',
+      applicationToken: testApplicationToken,
+      timeoutMs: 5000,
+      allowInsecureHttp: true,
+      retryPolicy: new RetryPolicy({ maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 }),
+    });
+    setRetrySeamsForTesting(client, { delay: async () => {} });
+    const pending = client.createCustomerSession('customer-external', { signal: controller.signal });
+    await started;
+    controller.abort(new Error('private abort reason'));
+    await assert.rejects(pending, assertAbort);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(attempts, 1);
+  } finally {
+    controller.abort();
+    await server.close();
+  }
+});
+
+test('an already aborted call rejects with AbortError before sending', async () => {
+  let attempts = 0;
+  const server = await listen((_request, response) => {
+    attempts += 1;
+    response.writeHead(201, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ token: 'iaps_customer', expires_at: '2026-08-24T20:15:00Z' }));
+  });
+  const controller = new AbortController();
+  controller.abort();
+  try {
+    const client = new Client({
+      baseUrl: server.url,
+      applicationId: 'application-1',
+      applicationToken: testApplicationToken,
+      allowInsecureHttp: true,
+      retryPolicy: new RetryPolicy({ maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 }),
+    });
+    await assert.rejects(
+      client.createCustomerSession('customer-external', { signal: controller.signal }),
+      assertAbort,
+    );
+    assert.equal(attempts, 0);
+  } finally {
+    await server.close();
+  }
 });
 
 test('client turns an attempt deadline into TimeoutError', async () => {

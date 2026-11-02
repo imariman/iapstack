@@ -659,7 +659,8 @@ void main() {
           'premium_monthly');
     });
 
-    test('returns the last offering after a network failure, then the fallback',
+    test(
+        'uses the cached offering after transport failures and drops it on 404',
         () async {
       var mode = 'fail';
       final client = IapStackClient(
@@ -708,9 +709,15 @@ void main() {
           'revision-1');
 
       mode = 'missing';
-      expect(
-          (await client.getOffering(_fallbackOffering('bundled-d'))).revision,
-          'revision-1');
+      final removed = _fallbackOffering('bundled-d');
+      expect(await client.getOffering(removed), same(removed));
+
+      mode = 'fail';
+      final afterRemoval = _fallbackOffering('bundled-after-404');
+      expect(await client.getOffering(afterRemoval), same(afterRemoval));
+
+      mode = 'ok';
+      expect((await client.getOffering(firstFallback)).revision, 'revision-1');
 
       mode = 'error';
       await expectLater(
