@@ -83,12 +83,30 @@ func Plan(input Input) (Result, error) {
 			if grant.Reason == core.AccessReasonRefunded && grant.EndsAt != nil && grant.EndsAt.After(input.Now) {
 				result.Report.Counts.RefundEndDisagreement++
 			}
+			if grantNotYetStarted(grant, input.Now) {
+				result.Report.Counts.NotYetStarted++
+				start := grant.StartsAt.UTC()
+				if result.Report.NotYetStartedEarliestAt == nil || start.Before(result.Report.NotYetStartedEarliestAt.UTC()) {
+					result.Report.NotYetStartedEarliestAt = &start
+				}
+			}
 		}
+	}
+	if result.Report.Counts.NotYetStarted > 0 && result.Report.NotYetStartedEarliestAt != nil {
+		result.Report.Warning = "re-import at or after " + result.Report.NotYetStartedEarliestAt.UTC().Format(time.RFC3339)
 	}
 	if result.Report.Failures == nil {
 		result.Report.Failures = []Failure{}
 	}
 	return result, nil
+}
+
+// grantNotYetStarted reports a grant denied only because its period has not started.
+func grantNotYetStarted(grant Grant, now time.Time) bool {
+	return grant.Access == core.AccessDenied &&
+		grant.Reason == core.AccessReasonProviderDecision &&
+		!grant.StartsAt.IsZero() &&
+		now.Before(grant.StartsAt)
 }
 
 // planSubscriber maps one canonical customer and refuses the subscriber when any grant fails.
