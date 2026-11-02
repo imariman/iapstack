@@ -159,10 +159,11 @@ final class IapStackClient {
   /// Loads the public offering document for this application.
   ///
   /// The last successful response body is kept only in memory. It is not an
-  /// application bearer and it is not written to disk. A transport failure,
-  /// timeout, or absent route returns that body when one exists, then
-  /// [fallback]. The failure does not change later purchase or entitlement
-  /// calls.
+  /// application bearer and it is not written to disk. A transport failure or
+  /// timeout returns that body when one exists, then [fallback]. HTTP 404
+  /// means the offering is gone: the cached body is cleared and [fallback] is
+  /// returned, so a withdrawn document is not shown again. The failure does
+  /// not change later purchase or entitlement calls.
   Future<OfferingDocument> getOffering(
     OfferingDocument fallback, {
     String? requestId,
@@ -188,7 +189,8 @@ final class IapStackClient {
       return _lastOfferingBody ?? fallback;
     } on IapStackApiException catch (error) {
       if (error.statusCode == 404) {
-        return _lastOfferingBody ?? fallback;
+        _lastOfferingBody = null;
+        return fallback;
       }
       rethrow;
     }

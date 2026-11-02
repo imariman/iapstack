@@ -26,10 +26,16 @@ final class IAPStackStore: RCTEventEmitter {
   }
   private var session: Session?
   private var listening = false
+  private let pendingEvents = StoreEventBuffer<[String: Any]>(limit: 32)
   override static func requiresMainQueueSetup() -> Bool { true }
   override var methodQueue: DispatchQueue! { DispatchQueue.main }
   override func supportedEvents() -> [String]! { ["IAPStackStoreUpdate"] }
-  override func startObserving() { listening = true }
+  override func startObserving() {
+    listening = true
+    for body in pendingEvents.drain() {
+      sendEvent(withName: "IAPStackStoreUpdate", body: body)
+    }
+  }
   override func stopObserving() { listening = false }
 
   /// Exchanges a separate host login for a short-lived customer session through the canonical loader.
@@ -187,6 +193,7 @@ final class IAPStackStore: RCTEventEmitter {
   private func clearSession() {
     let old = session
     session = nil
+    pendingEvents.clear()
     old?.cancel()
   }
   private func operation(_ resolve: @escaping RCTPromiseResolveBlock, _ reject: @escaping RCTPromiseRejectBlock,
@@ -208,7 +215,12 @@ final class IAPStackStore: RCTEventEmitter {
     current.tasks[id] = task
   }
   private func emit(_ current: Session, _ body: [String: Any]) {
-    if session === current && listening { sendEvent(withName: "IAPStackStoreUpdate", body: body) }
+    guard session === current else { return }
+    if listening {
+      sendEvent(withName: "IAPStackStoreUpdate", body: body)
+    } else {
+      pendingEvents.enqueue(body)
+    }
   }
 }
 

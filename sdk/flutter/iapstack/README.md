@@ -23,8 +23,10 @@ final offering = await client.getOffering(bundledOffering);
 
 `getOffering` is unauthenticated. It remembers the last successful response body
 in memory only, then uses that body and the caller-supplied fallback when the
-network fails or the route is absent. That failure does not change purchase or
-entitlement calls, and the client never stores a durable application bearer.
+network fails or the attempt times out. HTTP 404 clears that memory and returns
+the fallback, so a removed offering is not shown again. That failure does not
+change purchase or entitlement calls, and the client never stores a durable
+application bearer.
 
 `restorePurchasesInBatches` sends at most 100 purchases per request. If a later
 batch fails after an earlier one succeeded, the original `IapStackApiException`,

@@ -46,23 +46,33 @@ class BillingClientGooglePlayPlatformTest {
   @Test fun reconnectsAfterDisconnectAndFailsInflightRequests() = runTest {
     `when`(billing.isReady).thenReturn(false)
     var connections = 0
-    lateinit var state: BillingClientStateListener
+    val states = mutableListOf<BillingClientStateListener>()
     doAnswer {
       connections++
-      state = it.getArgument(0)
-      if (connections == 1) state.onBillingServiceDisconnected()
-      else state.onBillingSetupFinished(result())
+      val listener = it.getArgument<BillingClientStateListener>(0)
+      states.add(listener)
+      if (connections == 1) listener.onBillingServiceDisconnected()
+      else {
+        `when`(billing.isReady).thenReturn(true)
+        listener.onBillingSetupFinished(result())
+      }
       null
     }.`when`(billing).startConnection(any(BillingClientStateListener::class.java))
     assertFalse(platform.isAvailable())
+    assertEquals(2, connections)
     assertTrue(platform.isAvailable())
     assertEquals(2, connections)
-    `when`(billing.isReady).thenReturn(true)
     val waiting = async(start = CoroutineStart.UNDISPATCHED) { runCatching { platform.queryProducts(setOf("lifetime")) } }
-    state.onBillingServiceDisconnected()
-    assertEquals("billing_service_disconnected", (waiting.await().exceptionOrNull() as GooglePlayIapStackException).code)
+    // Play clears isReady before it reports the drop.
+    `when`(billing.isReady).thenReturn(false)
+    states[1].onBillingServiceDisconnected()
+    val error = waiting.await().exceptionOrNull() as GooglePlayIapStackException
+    assertEquals("billing_service_disconnected", error.code)
+    assertTrue(error.retryable)
+    assertEquals(3, connections)
     // A callback from the old connection cannot complete an already failed request.
-    state.onBillingSetupFinished(result())
+    states[1].onBillingSetupFinished(result())
+    assertTrue(platform.isAvailable())
   }
 
   @Test fun emitsCancellationAndPendingUpdatesWithoutAcknowledgement() = runTest {
@@ -74,6 +84,7 @@ class BillingClientGooglePlayPlatformTest {
     listener.onPurchasesUpdated(result(), listOf(pending))
     val update = platform.purchaseUpdates.first()
     assertEquals(GooglePlayPurchaseStatus.PENDING, update.status)
+    assertFalse(update.canVerify)
     assertEquals("opaque-customer", update.obfuscatedAccountId)
     assertEquals("store-token", update.purchaseToken)
     verifyNoInteractions(billing)

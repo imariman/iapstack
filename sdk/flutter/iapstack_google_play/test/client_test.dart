@@ -309,6 +309,37 @@ void main() {
       expect(result.entitlements.single.grantsAccess, isTrue);
     });
 
+    test('submits a pending purchase only when the caller asks', () async {
+      final pending = _purchase(
+        'premium_lifetime',
+        token: 'pending-token',
+        status: GooglePlayPurchaseStatus.pending,
+      );
+      expect(pending.canVerify, isFalse);
+      late Map<String, Object?> requestJson;
+      final googlePlay = GooglePlayIapStack(
+        client: _backend((request) async {
+          requestJson = (jsonDecode(request.body) as Map)
+              .cast<String, Object?>();
+          return http.Response(jsonEncode(_verificationJson), 200);
+        }),
+        productKinds: const <String, GooglePlayProductKind>{
+          'premium_lifetime': GooglePlayProductKind.nonConsumable,
+        },
+        platform: _FakePlatform(),
+      );
+
+      await googlePlay.verifyPurchase(
+        externalCustomerId: 'customer-1',
+        purchase: pending,
+      );
+
+      expect(requestJson['evidence'], <String, Object?>{
+        'purchase_token': 'pending-token',
+        'product_kind': 'non_consumable',
+      });
+    });
+
     test(
       'rejects a mismatched account binding before contacting IAPStack',
       () async {

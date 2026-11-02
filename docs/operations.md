@@ -53,7 +53,9 @@ the database because IAPStack returns it only once.
   timestamps, and deduplicate the authenticated `IAPStack-Event-ID` before applying an
   event.
 
-Use `GET /v1/admin/api-keys` to inspect secret-free lifecycle metadata and
+Use `GET /v1/admin/api-keys` to inspect secret-free lifecycle metadata. Each response
+contains at most 200 keys, newest first. Follow `next_page_token` as `page_token`
+until it is absent so an older key remains available to revoke. Use
 `DELETE /v1/admin/api-keys/{key_id}` to revoke a stored key. Revocation is idempotent,
 authentication reads `revoked_at` on every request, and no process restart is required.
 The API rejects revocation of the key authenticating the current request and preserves
@@ -117,9 +119,16 @@ transaction prices by currency. The test value uses the latest non-reversed snap
 each purchased transaction, never converts currencies, and is not accounting revenue.
 Apple transactions provide this signed price metadata today; older observations report
 missing-price coverage until a fresh verification enriches them. Production projects
-stay on Reports required until every production application is covered by an accepted
-official store financial report. The revenue card then lists store-reported proceeds
-for each imported period and currency, does not convert currencies, and does not
+stay on Reports required until every production application appears in its provider's
+accepted official store financial report. A file does not name its store account. If
+it includes one production application and omits another of the same provider, the
+card keeps the imported currency totals, lists the omitted application ids, and stays
+on Reports required. Those omitted applications are counted as zero, which can mean
+no sales or a separate account whose report was not imported. When some providers
+have no report, the card lists the matched proceeds and names the providers that
+still need a report. Those lines are not a complete project total. When every
+production application is present in its provider's report, the card lists each
+imported period and currency. The card does not convert currencies and does not
 calculate tax or commission. Purchase prices are not revenue. The dashboard never
 renders report files, order ids, protected provider payloads, or secrets.
 The access-key workspace lists active and revoked administrator/application key

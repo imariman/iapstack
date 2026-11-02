@@ -109,7 +109,7 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 		"ErrorEnvelope":                {"error"},
 		"AdminProjectOverview":         {"project", "analytics", "applications", "products", "customers", "recent_transactions", "queues", "recent_webhook_events"},
 		"AdminAnalytics":               {"window_days", "generated_at", "verified_count", "allowed_count", "denied_count", "unresolved_count", "reversed_count", "active_entitlement_count", "revenue", "sandbox_value", "daily_activity"},
-		"AdminRevenue":                 {"status", "recognized_minor_units", "currency", "amounts", "uncovered_providers", "production_application_count", "test_application_count"},
+		"AdminRevenue":                 {"status", "recognized_minor_units", "currency", "amounts", "uncovered_providers", "zero_filled_application_ids", "production_application_count", "test_application_count"},
 		"AdminSandboxValue":            {"amounts", "transaction_count", "missing_price_count"},
 		"AdminMoney":                   {"milliunits", "currency"},
 		"AdminDailyActivity":           {"date", "verified", "allowed", "denied", "unresolved", "reversed"},
@@ -189,6 +189,12 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 				ProjectID: "project-1", ApplicationID: "application-1", CreatedAt: now, Current: false,
 			}},
 		}},
+		{name: "API key page", schema: "ApiKeyCollection", value: apiKeyCollectionResponse{
+			APIKeys: []apiKeyResponse{{
+				ID: "0123456789abcdef01234567", Role: persistence.APIKeyRoleAdmin, CreatedAt: now, Current: true,
+			}},
+			NextPageToken: "0123456789abcdef01234567",
+		}},
 		{name: "imported proceeds", schema: "AdminRevenue", value: adminRevenueResponse{
 			Status: persistence.AdminRevenueReportsImported,
 			Amounts: []adminRecognizedAmountResponse{{
@@ -198,7 +204,20 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 				CommissionState: persistence.FinancialReportCommissionIncluded,
 				TaxState:        persistence.FinancialReportTaxNotItemized,
 			}},
-			UncoveredProviders: []core.Provider{}, ProductionApplicationCount: 1,
+			UncoveredProviders: []core.Provider{}, ZeroFilledApplicationIDs: []core.ApplicationID{},
+			ProductionApplicationCount: 1,
+		}},
+		{name: "one imported app of two", schema: "AdminRevenue", value: adminRevenueResponse{
+			Status: persistence.AdminRevenueStoreReportsRequired,
+			Amounts: []adminRecognizedAmountResponse{{
+				Provider: core.ProviderAppleAppStore, ReportKind: persistence.FinancialReportKindAppleConsolidated,
+				PeriodStart: "2026-09-28", PeriodEnd: "2026-11-01", Currency: "USD",
+				AmountDecimal: "2.50", AmountScale: 2, MinorUnits: func() *int64 { value := int64(250); return &value }(),
+				CommissionState: persistence.FinancialReportCommissionIncluded,
+				TaxState:        persistence.FinancialReportTaxNotItemized,
+			}},
+			UncoveredProviders: []core.Provider{}, ZeroFilledApplicationIDs: []core.ApplicationID{"app-apple-other"},
+			ProductionApplicationCount: 2,
 		}},
 		{name: "project overview", schema: "AdminProjectOverview", value: adminOverviewResponse{
 			Project: adminProjectResponse{ID: "project-1", CreatedAt: now},
@@ -207,6 +226,7 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 				Revenue: adminRevenueResponse{
 					Status: persistence.AdminRevenueSandboxOnly, RecognizedMinorUnits: &zero,
 					Amounts: []adminRecognizedAmountResponse{}, UncoveredProviders: []core.Provider{},
+					ZeroFilledApplicationIDs: []core.ApplicationID{},
 				},
 				SandboxValue:  adminSandboxValueResponse{Amounts: []adminMoneyResponse{}},
 				DailyActivity: dailyActivity,

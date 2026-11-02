@@ -1,6 +1,7 @@
 export { Client, type RequestOptions } from './client.js';
 export type { Config, FetchFn } from './config.js';
 export {
+  AbortError,
   APIError,
   ProtocolError,
   TimeoutError,

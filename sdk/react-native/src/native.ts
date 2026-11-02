@@ -40,6 +40,7 @@ export interface StoreConfiguration {
 }
 export type StoreEvent =
   | {type: 'verified'; result: VerificationResult}
+  | {type: 'pending'; productIds?: string[]; result?: VerificationResult}
   | {type: 'error'; code: string; message: string};
 
 export interface CustomerSession {
@@ -132,7 +133,7 @@ export const IapStackStore = {
     }
     return nativeModule().queryProducts(productIds);
   },
-  /** Apple/Huawei return verification. Play returns null after opening checkout; listen for verified/error events. */
+  /** Apple/Huawei return verification. Play returns null after opening checkout; listen for verified, pending, or error events. */
   async purchase(selectionKey: string, requestId?: string): Promise<VerificationResult | null> {
     const result = await nativeModule().purchase(selectionKey, requestId ?? null);
     return result === null ? null : decode(() => decodeVerificationResult(result));
@@ -145,25 +146,48 @@ export const IapStackStore = {
     const result = await nativeModule().getEntitlements(requestId ?? null);
     return decode(() => decodeEntitlementSnapshot(result));
   },
-  /** Subscribe before configure; updates are verified natively even when JS has no listener. */
+  /** Events that arrive before a listener attaches are kept until one does. */
   addListener(listener: (event: StoreEvent) => void): {remove(): void} {
     return new NativeEventEmitter(nativeModule()).addListener('IAPStackStoreUpdate', (event: {
-      type: string; result: Record<string, unknown>; code: string; message: string;
+      type: string; result?: Record<string, unknown>; code?: string; message?: string; productIds?: unknown;
     }) => {
       if (event.type === 'verified') {
         let result: VerificationResult;
-        try { result = decode(() => decodeVerificationResult(event.result)); }
-        catch {
+        try {
+          const raw = event.result;
+          if (!raw) throw new TypeError('missing result');
+          result = decode(() => decodeVerificationResult(raw));
+        } catch {
           listener({type: 'error', code: 'protocol_error', message: 'Invalid native verification result'});
           return;
         }
         // App callback failures are app errors, not malformed native responses.
         listener({type: 'verified', result});
+      } else if (event.type === 'pending') {
+        const productIds = pendingProductIds(event.productIds);
+        const raw = event.result;
+        if (raw == null) {
+          listener(productIds === undefined ? {type: 'pending'} : {type: 'pending', productIds});
+          return;
+        }
+        try {
+          const result = decode(() => decodeVerificationResult(raw));
+          listener(productIds === undefined
+            ? {type: 'pending', result}
+            : {type: 'pending', productIds, result});
+        } catch {
+          listener({type: 'error', code: 'protocol_error', message: 'Invalid native verification result'});
+        }
       } else if (event.type === 'error') {
-        listener({type: 'error', code: event.code, message: event.message});
+        listener({type: 'error', code: event.code ?? 'native_error', message: event.message ?? 'IAPStack operation failed'});
       }
     });
   },
   /** Cancels native work and releases the customer bearer. Restore after interrupted checkout. */
   dispose(): Promise<void> { return nativeModule().dispose(); },
 };
+
+function pendingProductIds(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((id): id is string => typeof id === 'string' && id.length > 0);
+}

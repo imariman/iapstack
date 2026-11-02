@@ -91,6 +91,20 @@ class HuaweiIapStackTest {
   }
 
   @Test
+  fun rejectsPaddedCustomerIdBeforeCharging() = runBlocking {
+    val platform = FakePlatform(products = listOf(monthlyProduct()))
+    val huawei = HuaweiIapStack(unusedClient(), productKinds, platform)
+    val product = huawei.queryProducts(setOf("premium_monthly")).products.single()
+    for (customerId in listOf(" customer-1", "customer-1 ", " customer-1 ", " ")) {
+      val error = assertFailsWith<IllegalArgumentException> {
+        huawei.purchaseAndVerify(customerId, product)
+      }
+      assertTrue(error.message!!.contains("whitespace"))
+    }
+    assertNull(platform.purchasedProductId)
+  }
+
+  @Test
   fun exposesSandboxEligibilityBeforePurchase() = runBlocking {
     val expected = HuaweiSandboxStatus(
       isSandboxUser = true,

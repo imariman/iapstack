@@ -67,6 +67,7 @@ func (repository *transaction) CustomerByExternalID(
 }
 
 // CatalogProducts resolves provider product mappings and their granted entitlements.
+// A mapped product with no grants is returned with an empty entitlement list.
 func (repository *transaction) CatalogProducts(
 	ctx context.Context,
 	projectID core.ProjectID,
@@ -91,9 +92,9 @@ func (repository *transaction) CatalogProducts(
 		FROM store_products AS sp
 		JOIN products AS p
 			ON p.id = sp.product_id AND p.project_id = sp.project_id
-		JOIN product_entitlements AS pe
+		LEFT JOIN product_entitlements AS pe
 			ON pe.product_id = p.id AND pe.project_id = p.project_id
-		JOIN entitlements AS e
+		LEFT JOIN entitlements AS e
 			ON e.id = pe.entitlement_id AND e.project_id = pe.project_id
 		WHERE sp.project_id = $1
 			AND sp.application_id = $2
@@ -110,8 +111,8 @@ func (repository *transaction) CatalogProducts(
 		var providerProductID string
 		var productID string
 		var productKind string
-		var entitlementID string
-		var entitlementKey string
+		var entitlementID *string
+		var entitlementKey *string
 		if err := rows.Scan(
 			&providerProductID,
 			&productID,
@@ -132,17 +133,25 @@ func (repository *transaction) CatalogProducts(
 					ProviderID:    providerID,
 				},
 				Product: core.Product{
-					ID:        core.ProductID(productID),
-					ProjectID: projectID,
-					Kind:      core.ProductKind(productKind),
+					ID:             core.ProductID(productID),
+					ProjectID:      projectID,
+					Kind:           core.ProductKind(productKind),
+					EntitlementIDs: []core.EntitlementID{},
 				},
+				Entitlements: []core.Entitlement{},
 			}
 			productsByProviderID[providerID] = catalogProduct
 		}
+		if entitlementID == nil && entitlementKey == nil {
+			continue
+		}
+		if entitlementID == nil || entitlementKey == nil {
+			return nil, fmt.Errorf("stored catalog entitlement for %q is incomplete", providerProductID)
+		}
 		entitlement := core.Entitlement{
-			ID:        core.EntitlementID(entitlementID),
+			ID:        core.EntitlementID(*entitlementID),
 			ProjectID: projectID,
-			Key:       entitlementKey,
+			Key:       *entitlementKey,
 		}
 		catalogProduct.Product.EntitlementIDs = append(catalogProduct.Product.EntitlementIDs, entitlement.ID)
 		catalogProduct.Entitlements = append(catalogProduct.Entitlements, entitlement)
@@ -161,11 +170,7 @@ func (repository *transaction) CatalogProducts(
 				persistence.ErrNotFound,
 			)
 		}
-		if err := errors.Join(
-			catalogProduct.Mapping.Validate(),
-			catalogProduct.Product.Validate(),
-			validateEntitlements(catalogProduct.Entitlements),
-		); err != nil {
+		if err := validateLoadedCatalogProduct(*catalogProduct); err != nil {
 			return nil, fmt.Errorf("validate stored catalog product %q: %w", providerProductID, err)
 		}
 		products = append(products, *catalogProduct)
@@ -195,6 +200,24 @@ func validateCatalogProductIDs(
 		productIDs = append(productIDs, string(providerProductID))
 	}
 	return productIDs, nil
+}
+
+// validateLoadedCatalogProduct checks a stored mapping and allows a product that grants nothing.
+// Writers still reject an empty grant set; callers decide what an empty read means.
+func validateLoadedCatalogProduct(product persistence.CatalogProduct) error {
+	if len(product.Entitlements) == 0 {
+		return errors.Join(
+			product.Mapping.Validate(),
+			product.Product.ID.Validate(),
+			product.Product.ProjectID.Validate(),
+			product.Product.Kind.Validate(),
+		)
+	}
+	return errors.Join(
+		product.Mapping.Validate(),
+		product.Product.Validate(),
+		validateEntitlements(product.Entitlements),
+	)
 }
 
 // validateEntitlements checks every entitlement loaded with a catalog product.

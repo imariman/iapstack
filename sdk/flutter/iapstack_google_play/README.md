@@ -1,5 +1,12 @@
 # IAPStack Google Play Flutter SDK
 
+## Breaking changes in 0.1.0-sdk.2
+
+`GooglePlayPurchase.canVerify` is false for `GooglePlayPurchaseStatus.pending`.
+A listener that verified every update, including pending ones, now skips them.
+`verifyPurchase` still submits a pending purchase when you call it. Do not
+unlock access until `grantsAccess` is true.
+
 Google Play Billing companion for the provider-neutral `iapstack` package. It
 uses Flutter's official `in_app_purchase` implementation, maps Play Billing
 products and purchase updates into redacted models, binds checkout to an opaque
@@ -49,6 +56,10 @@ final googlePlay = GooglePlayIapStack(
 );
 
 final purchaseSubscription = googlePlay.purchaseUpdates.listen((purchase) async {
+  if (!purchase.canVerify) {
+    // Pending payments are not access. Wait for purchased.
+    return;
+  }
   final result = await googlePlay.verifyPurchase(
     externalCustomerId: currentOpaqueCustomerId,
     purchase: purchase,

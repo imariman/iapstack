@@ -98,6 +98,40 @@ void main() {
       ]);
     });
 
+    test('rejects a padded customer id before opening Huawei purchase UI',
+        () async {
+      final platform = _FakePlatform(
+        purchaseResult:
+            _signedPurchase('premium_monthly', customerId: 'customer-1'),
+      );
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async => http.Response('{}', 500)),
+        productKinds: _productKinds,
+        platform: platform,
+      );
+      final product = (await huawei.queryProducts(
+        const <String>{'premium_monthly'},
+      ))
+          .products
+          .single;
+
+      for (final customerId in <String>[
+        ' customer-1',
+        'customer-1 ',
+        ' customer-1 ',
+        ' ',
+      ]) {
+        await expectLater(
+          huawei.purchaseAndVerify(
+            externalCustomerId: customerId,
+            product: product,
+          ),
+          throwsArgumentError,
+        );
+      }
+      expect(platform.purchaseCalls, 0);
+    });
+
     test('evicts requested products when a re-query fails part-way', () async {
       final platform = _FakePlatform(
         purchaseResult:

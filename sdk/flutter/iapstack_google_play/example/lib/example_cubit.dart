@@ -214,6 +214,12 @@ final class ExampleCubit extends Cubit<ExampleState> {
       _emitFailure('Google Play reported a purchase error$suffix.');
       return;
     }
+    if (!purchase.canVerify) {
+      _emitReady(
+        'Payment is pending. Access stays locked until Google Play completes it.',
+      );
+      return;
+    }
     final requestId = _requestIdFactory('verify');
     _emitLoading('Verifying the Google Play purchase with IAPStack…');
     try {
@@ -222,11 +228,8 @@ final class ExampleCubit extends Cubit<ExampleState> {
         purchase: purchase,
         requestId: requestId,
       );
-      final message = purchase.status == GooglePlayPurchaseStatus.pending
-          ? 'Pending purchase recorded; entitlement remains authoritative on IAPStack.'
-          : 'Purchase verified and acknowledged by IAPStack.';
       _emitReady(
-        message,
+        'Purchase verified and acknowledged by IAPStack.',
         entitlements: result.entitlements,
         requestId: requestId,
       );

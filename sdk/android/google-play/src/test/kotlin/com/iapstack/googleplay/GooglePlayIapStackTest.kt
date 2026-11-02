@@ -1,5 +1,6 @@
 package com.iapstack.googleplay
 
+import com.iapstack.core.Entitlement
 import com.iapstack.core.IapStackApiException
 import com.iapstack.core.IapStackClient
 import com.iapstack.core.IapStackConfig
@@ -134,6 +135,41 @@ class GooglePlayIapStackTest {
       assertTrue(body.contains("\"purchase_token\":\"token-abc\""))
       assertTrue(body.contains("\"product_kind\":\"non_consumable\""))
       assertTrue(result.entitlements.single().grantsAccess)
+      client.close()
+    }
+  }
+
+  @Test
+  fun pendingPurchaseIsNotAutoVerifiableButCanBeSubmittedExplicitly() = runBlocking {
+    val pending = GooglePlayPurchase(
+      purchaseToken = "pending-token",
+      productIds = listOf("premium_lifetime"),
+      status = GooglePlayPurchaseStatus.PENDING,
+      isAcknowledged = false,
+      obfuscatedAccountId = "customer-1",
+    )
+    assertFalse(pending.canVerify)
+    assertTrue(GooglePlayPurchase(
+      purchaseToken = "token",
+      productIds = listOf("premium_lifetime"),
+      status = GooglePlayPurchaseStatus.PURCHASED,
+      isAcknowledged = false,
+    ).canVerify)
+    assertEquals("pending", purchaseListenerEventType(listOf(
+      Entitlement("premium", "unresolved", "pending_payment", 1),
+    )))
+    assertEquals("verified", purchaseListenerEventType(listOf(
+      Entitlement("premium", "allowed", "purchase_valid", 1),
+    )))
+    assertEquals("verified", purchaseListenerEventType(listOf(
+      Entitlement("premium", "denied", "refunded", 1),
+    )))
+    MockWebServer().use { server ->
+      server.enqueue(MockResponse().setBody(VERIFICATION_JSON).setResponseCode(200))
+      val client = client(server)
+      val googlePlay = googlePlay(client = client)
+      googlePlay.verifyPurchase("customer-1", pending)
+      assertTrue(server.takeRequest().body.readUtf8().contains("\"purchase_token\":\"pending-token\""))
       client.close()
     }
   }
