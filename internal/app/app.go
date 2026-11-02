@@ -217,7 +217,8 @@ func runAPI(
 		AdminSessions: adminSessions, CustomerSessions: customerSessions,
 		Credentials: credentialService, Webhooks: webhookService,
 		Verification: verificationService, Huawei: huaweiAdapter, Apple: appleAdapter, GooglePlay: googlePlayAdapter,
-		Protection: keyring, FinancialReports: financialReportService, BodyLimit: cfg.HTTPBodyLimit,
+		Protection: keyring, FinancialReports: financialReportService, Metrics: metricRegistry,
+		BodyLimit:         cfg.HTTPBodyLimit,
 		OfferingDirectory: cfg.OfferingDirectory, OfferingCatalog: store,
 	})
 	if err != nil {

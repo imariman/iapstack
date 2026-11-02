@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/imariman/iapstack/internal/stores"
 	"github.com/imariman/iapstack/internal/webhooks"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 	"go.uber.org/goleak"
 )
 
@@ -193,7 +195,7 @@ func TestExecutorRecordsSuccessfulCompletion(t *testing.T) {
 	execution := newTestExecutor(transaction, HandlerFunc(func(context.Context, persistence.QueueMessage) error {
 		return nil
 	}))
-	if err := execution.execute(context.Background(), persistence.QueueOutbox, "event-1", 1, 3); err != nil {
+	if err := execution.execute(context.Background(), persistence.QueueOutbox, "event-1", 1, 3, 0); err != nil {
 		t.Fatalf("execute() error = %v", err)
 	}
 	if len(transaction.completions) != 1 || len(transaction.failures) != 0 {
@@ -208,7 +210,7 @@ func TestExecutorLeavesRetryableAttemptToRiver(t *testing.T) {
 	execution := newTestExecutor(transaction, HandlerFunc(func(context.Context, persistence.QueueMessage) error {
 		return stores.NewFailure("huawei_appgallery", "verify", stores.FailureTemporary, 0, nil)
 	}))
-	if err := execution.execute(context.Background(), persistence.QueueInbox, "message-1", 1, 3); err == nil {
+	if err := execution.execute(context.Background(), persistence.QueueInbox, "message-1", 1, 3, 0); err == nil {
 		t.Fatal("execute() error = nil, want River retry signal")
 	}
 	if len(transaction.completions) != 0 || len(transaction.failures) != 0 {
@@ -235,7 +237,7 @@ func TestExecutorRetriesUnavailableHandlerStorageForEveryQueue(t *testing.T) {
 			execution := newTestExecutor(transaction, HandlerFunc(func(context.Context, persistence.QueueMessage) error {
 				return errors.Join(errors.New("persist verification"), persistence.ErrUnavailable)
 			}))
-			if err := execution.execute(context.Background(), queue, "record-1", 1, 3); err == nil {
+			if err := execution.execute(context.Background(), queue, "record-1", 1, 3, 0); err == nil {
 				t.Fatal("execute() error = nil, want River retry signal")
 			}
 			if len(transaction.completions) != 0 || len(transaction.failures) != 0 {
@@ -252,7 +254,7 @@ func TestExecutorRetriesWebhookDependencyFailures(t *testing.T) {
 	execution := newTestExecutor(transaction, HandlerFunc(func(context.Context, persistence.QueueMessage) error {
 		return &webhooks.DeliveryError{Code: "webhook_endpoint_unavailable", CanRetry: true}
 	}))
-	err := execution.execute(context.Background(), persistence.QueueOutbox, "event-1", 1, 3)
+	err := execution.execute(context.Background(), persistence.QueueOutbox, "event-1", 1, 3, 0)
 	if err == nil || err.Error() != "webhook_endpoint_unavailable" {
 		t.Fatalf("execute() error = %v, want webhook_endpoint_unavailable retry signal", err)
 	}
@@ -268,7 +270,7 @@ func TestExecutorRecordsPermanentFailure(t *testing.T) {
 	execution := newTestExecutor(transaction, HandlerFunc(func(context.Context, persistence.QueueMessage) error {
 		return stores.NewFailure("huawei_appgallery", "verify", stores.FailureInvalidEvidence, 0, nil)
 	}))
-	if err := execution.execute(context.Background(), persistence.QueueReconciliation, "job-1", 1, 3); err == nil {
+	if err := execution.execute(context.Background(), persistence.QueueReconciliation, "job-1", 1, 3, 0); err == nil {
 		t.Fatal("execute() error = nil, want River cancellation signal")
 	}
 	if len(transaction.failures) != 1 || transaction.failures[0].ErrorCode != "provider_invalid_evidence" {
@@ -300,7 +302,7 @@ func TestExecutorHandlesLoadAndTerminalStates(t *testing.T) {
 				handlerCalls++
 				return nil
 			}))
-			err := execution.execute(context.Background(), persistence.QueueInbox, "message-1", 1, 3)
+			err := execution.execute(context.Background(), persistence.QueueInbox, "message-1", 1, 3, 0)
 			if test.wantError == "" {
 				if err != nil {
 					t.Fatalf("execute() error = %v", err)
@@ -326,7 +328,7 @@ func TestExecutorHandlesCancellationAndExhaustedRetries(t *testing.T) {
 		cancelledTransaction,
 		HandlerFunc(func(context.Context, persistence.QueueMessage) error { return context.Canceled }),
 	)
-	if err := cancelledExecution.execute(cancelledContext, persistence.QueueInbox, "message-1", 1, 3); !errors.Is(err, context.Canceled) {
+	if err := cancelledExecution.execute(cancelledContext, persistence.QueueInbox, "message-1", 1, 3, 0); !errors.Is(err, context.Canceled) {
 		t.Fatalf("execute() cancellation error = %v", err)
 	}
 	if len(cancelledTransaction.failures) != 0 {
@@ -340,7 +342,7 @@ func TestExecutorHandlesCancellationAndExhaustedRetries(t *testing.T) {
 			return stores.NewFailure("google_play", "verify", stores.FailureTemporary, 0, nil)
 		}),
 	)
-	err := exhaustedExecution.execute(context.Background(), persistence.QueueInbox, "message-1", 3, 3)
+	err := exhaustedExecution.execute(context.Background(), persistence.QueueInbox, "message-1", 3, 3, 0)
 	if err == nil || !strings.Contains(err.Error(), "provider_temporary") {
 		t.Fatalf("execute() exhausted retry error = %v", err)
 	}
@@ -359,7 +361,7 @@ func TestExecutorSurfacesTerminalTransitionFailures(t *testing.T) {
 		completionTransaction,
 		HandlerFunc(func(context.Context, persistence.QueueMessage) error { return nil }),
 	)
-	if err := completionExecution.execute(context.Background(), persistence.QueueInbox, "message-1", 1, 3); err == nil || err.Error() != "queue_transition_failed" {
+	if err := completionExecution.execute(context.Background(), persistence.QueueInbox, "message-1", 1, 3, 0); err == nil || err.Error() != "queue_transition_failed" {
 		t.Fatalf("execute() completion transition error = %v", err)
 	}
 
@@ -370,8 +372,151 @@ func TestExecutorSurfacesTerminalTransitionFailures(t *testing.T) {
 			return stores.NewFailure("google_play", "verify", stores.FailureInvalidEvidence, 0, nil)
 		}),
 	)
-	if err := failureExecution.execute(context.Background(), persistence.QueueInbox, "message-1", 1, 3); err == nil || err.Error() != "queue_transition_failed" {
+	if err := failureExecution.execute(context.Background(), persistence.QueueInbox, "message-1", 1, 3, 0); err == nil || err.Error() != "queue_transition_failed" {
 		t.Fatalf("execute() failure transition error = %v", err)
+	}
+}
+
+// TestExecutorSnoozesFinalAuditTransition verifies the last attempt stays runnable until the audit row commits.
+func TestExecutorSnoozesFinalAuditTransition(t *testing.T) {
+	t.Parallel()
+
+	permanent := stores.NewFailure("google_play", "verify", stores.FailureInvalidEvidence, 0, nil)
+	tests := []struct {
+		name          string
+		attempt       int
+		maxAttempts   int
+		completeError error
+		failError     error
+		handlerErr    error
+		wantSnooze    bool
+	}{
+		{name: "final completion", attempt: 3, maxAttempts: 3, completeError: persistence.ErrUnavailable, wantSnooze: true},
+		{name: "only completion attempt", attempt: 1, maxAttempts: 1, completeError: persistence.ErrUnavailable, wantSnooze: true},
+		{name: "final failure", attempt: 3, maxAttempts: 3, failError: persistence.ErrUnavailable, handlerErr: permanent, wantSnooze: true},
+		{name: "final success", attempt: 3, maxAttempts: 3},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			transaction := &executorTransaction{completeError: test.completeError, failError: test.failError}
+			execution := newTestExecutor(transaction, HandlerFunc(func(context.Context, persistence.QueueMessage) error {
+				return test.handlerErr
+			}))
+			err := execution.execute(context.Background(), persistence.QueueOutbox, "event-1", test.attempt, test.maxAttempts, 0)
+			var snooze *river.JobSnoozeError
+			if test.wantSnooze {
+				if !errors.As(err, &snooze) || snooze.Duration != terminalAuditRetryDelay {
+					t.Fatalf("execute() error = %v, want snooze %s", err, terminalAuditRetryDelay)
+				}
+				if len(transaction.completions) != 0 || len(transaction.failures) != 0 {
+					t.Fatalf("terminal outcomes = (%d completions, %d failures), want none",
+						len(transaction.completions), len(transaction.failures))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("execute() error = %v, want completed audit", err)
+			}
+			if len(transaction.completions) != 1 || len(transaction.failures) != 0 {
+				t.Fatalf("terminal outcomes = (%d completions, %d failures), want (1, 0)",
+					len(transaction.completions), len(transaction.failures))
+			}
+		})
+	}
+}
+
+// TestExecutorCapsTerminalAuditSnoozes verifies a stuck audit write stops retrying and does not call the handler again.
+func TestExecutorCapsTerminalAuditSnoozes(t *testing.T) {
+	t.Parallel()
+
+	secret := "db-secret-do-not-log"
+	tests := []struct {
+		name         string
+		snoozes      int
+		wantSnooze   bool
+		wantLevel    string
+		wantCode     string
+		wantHandlers int
+	}{
+		{
+			name: "below cap", snoozes: maximumTerminalAuditSnoozes - 1, wantSnooze: true,
+			wantLevel: "WARN", wantCode: "queue_transition_failed", wantHandlers: 1,
+		},
+		{
+			name: "at cap", snoozes: maximumTerminalAuditSnoozes,
+			wantLevel: "ERROR", wantCode: "terminal_audit_write_failed",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var logs bytes.Buffer
+			handlerCalls := 0
+			transaction := &executorTransaction{completeError: errors.New(secret)}
+			execution := newTestExecutor(transaction, HandlerFunc(func(context.Context, persistence.QueueMessage) error {
+				handlerCalls++
+				return nil
+			}))
+			execution.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+			err := execution.execute(
+				context.Background(), persistence.QueueOutbox, "event-1", 3, 3, test.snoozes,
+			)
+			var snooze *river.JobSnoozeError
+			if test.wantSnooze {
+				if !errors.As(err, &snooze) || snooze.Duration != terminalAuditRetryDelay {
+					t.Fatalf("execute() error = %v, want snooze %s", err, terminalAuditRetryDelay)
+				}
+			} else if err == nil || err.Error() != "terminal_audit_write_failed" || errors.As(err, &snooze) {
+				t.Fatalf("execute() error = %v, want terminal_audit_write_failed", err)
+			}
+			if handlerCalls != test.wantHandlers {
+				t.Fatalf("handler calls = %d, want %d", handlerCalls, test.wantHandlers)
+			}
+			if len(transaction.completions) != 0 {
+				t.Fatalf("completions = %d, want 0", len(transaction.completions))
+			}
+			text := logs.String()
+			if !strings.Contains(text, `"level":"`+test.wantLevel+`"`) ||
+				!strings.Contains(text, `"error_code":"`+test.wantCode+`"`) ||
+				!strings.Contains(text, `"message_id":"event-1"`) ||
+				strings.Contains(text, secret) {
+				t.Fatalf("transition log = %s", text)
+			}
+			var output bytes.Buffer
+			if err := execution.metrics.WritePrometheus(&output); err != nil {
+				t.Fatalf("WritePrometheus() error = %v", err)
+			}
+			metric := `iapstack_queue_attempts_total{queue="outbox",outcome="terminal_audit_write_failed"} 1`
+			if test.wantSnooze && strings.Contains(output.String(), metric) {
+				t.Fatalf("snooze recorded a give-up metric\n%s", output.String())
+			}
+			if !test.wantSnooze && !strings.Contains(output.String(), metric) {
+				t.Fatalf("metrics omitted give-up counter\n%s", output.String())
+			}
+		})
+	}
+}
+
+// TestSnoozeCountReadsRiverMetadata verifies only a non-negative snoozes field advances the cap.
+func TestSnoozeCountReadsRiverMetadata(t *testing.T) {
+	t.Parallel()
+
+	if got := snoozeCount(nil); got != 0 {
+		t.Fatalf("snoozeCount(nil) = %d", got)
+	}
+	if got := snoozeCount([]byte(`{"snoozes":7,"other":1}`)); got != 7 {
+		t.Fatalf("snoozeCount() = %d, want 7", got)
+	}
+	if got := snoozeCount([]byte(`not-json`)); got != 0 {
+		t.Fatalf("snoozeCount(invalid) = %d, want 0", got)
+	}
+	if got := snoozeCount([]byte(`{"snoozes":-3}`)); got != 0 {
+		t.Fatalf("snoozeCount(negative) = %d, want 0", got)
 	}
 }
 

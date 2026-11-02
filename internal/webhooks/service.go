@@ -177,14 +177,17 @@ func (service *Service) Deliver(ctx context.Context, message persistence.QueueMe
 		return &DeliveryError{Code: "webhook_transport_error", CanRetry: true}
 	}
 	defer response.Body.Close()
+	// Read only a bounded prefix, then classify the status that was already received.
+	// A large 408, 429, or 5xx page must stay retryable. An oversized 2xx is terminal
+	// because the application may already have applied the event.
 	responseBytes, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, maximumResponseBytes+1))
 	if readErr != nil {
 		return &DeliveryError{Code: "webhook_response_error", CanRetry: true}
 	}
-	if responseBytes > maximumResponseBytes {
-		return &DeliveryError{Code: "webhook_response_too_large", CanRetry: false}
-	}
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		if responseBytes > maximumResponseBytes {
+			return &DeliveryError{Code: "webhook_response_too_large", CanRetry: false}
+		}
 		return nil
 	}
 	if response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500 {
