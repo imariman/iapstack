@@ -127,18 +127,18 @@ func (service *Service) Create(ctx context.Context, principal Principal) (string
 	return bearerPrefix + id + "." + base64.RawURLEncoding.EncodeToString(secret), nil
 }
 
-// Keys returns bounded API key lifecycle metadata without bearer secrets or verifiers.
-func (service *Service) Keys(ctx context.Context) ([]persistence.APIKeySummary, error) {
-	var summaries []persistence.APIKeySummary
+// Keys returns one page of API key lifecycle metadata without bearer secrets or verifiers.
+func (service *Service) Keys(ctx context.Context, pageToken string) (persistence.APIKeyPage, error) {
+	var page persistence.APIKeyPage
 	err := service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
 		var loadErr error
-		summaries, loadErr = repository.APIKeys(ctx)
+		page, loadErr = repository.APIKeys(ctx, pageToken)
 		return loadErr
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list API keys: %w", err)
+		return persistence.APIKeyPage{}, fmt.Errorf("list API keys: %w", err)
 	}
-	return summaries, nil
+	return page, nil
 }
 
 // Revoke idempotently disables one stored API key at the service clock time.

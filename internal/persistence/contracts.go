@@ -165,8 +165,10 @@ type OutboxRepository interface {
 type OperationsRepository interface {
 	// APIKey returns one non-revoked API key verifier by public identity.
 	APIKey(context.Context, string) (APIKeyRecord, error)
-	// APIKeys returns a bounded secret-free API key lifecycle collection.
-	APIKeys(context.Context) ([]APIKeySummary, error)
+	// APIKeys returns one newest-first page of secret-free API key lifecycle metadata.
+	// An empty page token selects the newest page. A token must be the public id of a stored key
+	// and selects the next older page after that key.
+	APIKeys(context.Context, string) (APIKeyPage, error)
 	// PutAPIKey creates one API key verifier without storing the bearer secret.
 	PutAPIKey(context.Context, APIKeyRecord) error
 	// RevokeAPIKey idempotently disables one key while preserving the final active administrator.
@@ -338,6 +340,14 @@ type APIKeySummary struct {
 	ApplicationID core.ApplicationID
 	CreatedAt     time.Time
 	RevokedAt     *time.Time
+}
+
+// APIKeyPage is one bounded page of secret-free API key lifecycle metadata.
+type APIKeyPage struct {
+	Keys []APIKeySummary
+	// NextPageToken is the public id of the last key on this page when older keys remain.
+	// It is empty on the last page.
+	NextPageToken string
 }
 
 // WebhookEndpointWrite describes protected application delivery configuration.

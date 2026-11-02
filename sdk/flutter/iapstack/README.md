@@ -23,8 +23,10 @@ final offering = await client.getOffering(bundledOffering);
 
 `getOffering` is unauthenticated. It remembers the last successful response body
 in memory only, then uses that body and the caller-supplied fallback when the
-network fails or the route is absent. That failure does not change purchase or
-entitlement calls, and the client never stores a durable application bearer.
+network fails or the attempt times out. HTTP 404 clears that memory and returns
+the fallback, so a removed offering is not shown again. That failure does not
+change purchase or entitlement calls, and the client never stores a durable
+application bearer.
 
 Authenticate the user in your trusted host backend, then call
 `POST /v1/applications/{application_id}/customer-sessions` there with the durable
