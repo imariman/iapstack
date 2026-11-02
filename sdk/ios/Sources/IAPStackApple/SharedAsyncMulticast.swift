@@ -1,10 +1,35 @@
 import Foundation
 
-/// Yields `unfinished`, then `updates`, dropping only the first `updates` copy
-/// of an id that came from `unfinished` in this pass.
+/// Identity of one signed StoreKit transaction.
 ///
-/// `Transaction.updates` replays unfinished transactions once per process. A
-/// later refund, revocation, or upgrade of that same id is delivered.
+/// A replay is the same id, `signedDate`, and `revocationDate`. Apple signs a
+/// new payload for a refund, revocation, or other update, so `signedDate`
+/// moves and `revocationDate` is set. The id alone stays the same.
+struct TransactionReplayKey: Hashable, Sendable {
+  var transactionId: String
+  var signedDate: Date?
+  var revocationDate: Date?
+}
+
+func transactionReplayKey(
+  transactionId: String,
+  signedDate: Date?,
+  revocationDate: Date?,
+) -> TransactionReplayKey {
+  TransactionReplayKey(
+    transactionId: transactionId,
+    signedDate: signedDate,
+    revocationDate: revocationDate,
+  )
+}
+
+/// Yields `unfinished`, then `updates`.
+///
+/// An `updates` element is dropped only when its key equals one read from
+/// `unfinished` in this pass. That match is forgotten, so a later element with
+/// a different signed version is delivered. On a later pass StoreKit does not
+/// replay unfinished rows on `updates`; a refund of that id has a new
+/// `signedDate` and `revocationDate`, so it is not the replay key.
 func mergeDeduped<Element: Sendable, ID: Hashable & Sendable>(
   unfinished: @escaping @Sendable () -> AsyncStream<Element>,
   updates: @escaping @Sendable () -> AsyncStream<Element>,
@@ -22,6 +47,8 @@ func mergeDeduped<Element: Sendable, ID: Hashable & Sendable>(
       guard !Task.isCancelled else { return }
       for await element in updates() {
         if Task.isCancelled { return }
+        // Same signed version as an unfinished row: the process replay.
+        // A refund or revocation is a new signature and is not removed here.
         if replay.remove(id(element)) != nil {
           continue
         }

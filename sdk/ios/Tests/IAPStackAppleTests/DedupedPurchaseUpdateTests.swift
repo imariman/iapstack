@@ -50,6 +50,30 @@ final class DedupedPurchaseUpdateTests: XCTestCase {
       ],
     )
   }
+
+  func testSecondPassDeliversRevocationWhenUpdatesDoesNotReplay() async {
+    let signed = Date(timeIntervalSince1970: 1_700_000_000)
+    let revokedAt = Date(timeIntervalSince1970: 1_700_086_400)
+    let original = transactionReplayKey(
+      transactionId: "tx-1",
+      signedDate: signed,
+      revocationDate: nil,
+    )
+    let revoked = transactionReplayKey(
+      transactionId: "tx-1",
+      signedDate: revokedAt,
+      revocationDate: revokedAt,
+    )
+    let values = await collect(
+      mergeDeduped(
+        unfinished: { finite([original]) },
+        updates: { finite([revoked]) },
+        id: { $0 },
+      ),
+    )
+
+    XCTAssertEqual(values, [original, revoked])
+  }
 }
 
 private struct Delivery: Equatable, Sendable {
