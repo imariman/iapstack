@@ -169,7 +169,7 @@ func (adapter *Adapter) Verify(
 	if err != nil {
 		return stores.VerificationResult{}, invalid("verify", err)
 	}
-	if err := validateTransactionScope(request, configuration.bundleID, evidence.ProductKind, submitted); err != nil {
+	if err := validateTransactionScope(request, configuration.bundleID, evidence.ProductKind, submitted, true); err != nil {
 		return stores.VerificationResult{}, invalid("verify", err)
 	}
 	if evidence.ProductKind == core.ProductKindSubscription {
@@ -179,7 +179,7 @@ func (adapter *Adapter) Verify(
 		if queryErr != nil {
 			return stores.VerificationResult{}, queryErr
 		}
-		if err := validateTransactionScope(request, configuration.bundleID, evidence.ProductKind, transaction); err != nil {
+		if err := validateTransactionScope(request, configuration.bundleID, evidence.ProductKind, transaction, false); err != nil {
 			return stores.VerificationResult{}, invalid("verify", err)
 		}
 		if transaction.OriginalTransactionID != submitted.OriginalTransactionID ||
@@ -201,7 +201,7 @@ func (adapter *Adapter) Verify(
 	if err != nil {
 		return stores.VerificationResult{}, invalid("verify", err)
 	}
-	if err := validateTransactionScope(request, configuration.bundleID, evidence.ProductKind, authoritative); err != nil {
+	if err := validateTransactionScope(request, configuration.bundleID, evidence.ProductKind, authoritative, true); err != nil {
 		return stores.VerificationResult{}, invalid("verify", err)
 	}
 	if err := compareTransactions(submitted, authoritative); err != nil {
@@ -255,7 +255,7 @@ func (adapter *Adapter) Reconcile(
 		ClaimedProducts: request.ExpectedProducts, ExpectedCustomerBindings: request.ExpectedCustomerBindings,
 		Evidence: stores.Evidence{},
 	}
-	if err := validateTransactionScope(verificationRequest, configuration.bundleID, productKind, authoritative); err != nil {
+	if err := validateTransactionScope(verificationRequest, configuration.bundleID, productKind, authoritative, true); err != nil {
 		return stores.VerificationResult{}, invalid("reconcile", err)
 	}
 	if productKind == core.ProductKindSubscription {
@@ -265,7 +265,7 @@ func (adapter *Adapter) Reconcile(
 		if queryErr != nil {
 			return stores.VerificationResult{}, queryErr
 		}
-		if err := validateTransactionScope(verificationRequest, configuration.bundleID, productKind, transaction); err != nil {
+		if err := validateTransactionScope(verificationRequest, configuration.bundleID, productKind, transaction, false); err != nil {
 			return stores.VerificationResult{}, invalid("reconcile", err)
 		}
 		if err := validateRenewalScope(request.Application, transaction, renewal); err != nil {
@@ -447,6 +447,9 @@ func (adapter *Adapter) result(
 		state, access, reason, endsAt, renewal = normalizeSubscriptionStatus(
 			transaction, *subscription, observedAt,
 		)
+		if subscription.Status == subscriptionStatusActive && transaction.ExpiresDate <= 0 {
+			return stores.VerificationResult{}, invalid("normalize", errors.New("apple active subscription expiry is missing"))
+		}
 	}
 	quantity := transaction.Quantity
 	if quantity == 0 {
@@ -483,7 +486,9 @@ func (adapter *Adapter) result(
 		}
 		references = append(references, reference)
 	}
-	identity := observationSnapshotIdentity(application.ID, kind, transaction, state, access, reason, renewal, ownership, quantity)
+	identity := observationSnapshotIdentity(
+		application.ID, kind, transaction, state, access, reason, renewal, ownership, quantity, endsAt,
+	)
 	observation := core.PurchaseObservation{
 		ID:              core.ObservationID("app-" + hex.EncodeToString(identity[:16])),
 		ApplicationID:   application.ID,
@@ -547,11 +552,14 @@ func parseEvidence(evidence stores.Evidence) (clientEvidence, error) {
 }
 
 // validateTransactionScope checks application, environment, product, type, and customer binding claims.
+// requireClaimedProduct is set for the submitted or stored transaction. Subscription status may name
+// the current product in that lineage, so the historical claim is not applied to it.
 func validateTransactionScope(
 	request stores.VerificationRequest,
 	bundleID string,
 	expectedKind core.ProductKind,
 	transaction transactionPayload,
+	requireClaimedProduct bool,
 ) error {
 	if transaction.TransactionID == "" || transaction.OriginalTransactionID == "" || transaction.ProductID == "" ||
 		transaction.BundleID != bundleID || transaction.BundleID != string(request.Application.Store.ID) {
@@ -565,7 +573,8 @@ func validateTransactionScope(
 	if err != nil || actualKind != expectedKind {
 		return errors.New("apple transaction product kind mismatch")
 	}
-	if len(request.ClaimedProducts) > 0 && (len(request.ClaimedProducts) != 1 || string(request.ClaimedProducts[0]) != transaction.ProductID) {
+	if requireClaimedProduct && len(request.ClaimedProducts) > 0 &&
+		(len(request.ClaimedProducts) != 1 || string(request.ClaimedProducts[0]) != transaction.ProductID) {
 		return errors.New("apple transaction product does not match claim")
 	}
 	if transaction.AppAccountToken == "" {
@@ -641,6 +650,7 @@ func providerState(transaction transactionPayload, state core.LifecycleState) st
 }
 
 // observationSnapshotIdentity hashes access-affecting fields while leaving enrichable signed pricing outside identity.
+// A grace end that differs from the transaction expiry is part of that identity, so a changed grace period is a new observation.
 func observationSnapshotIdentity(
 	applicationID core.ApplicationID,
 	kind core.ProductKind,
@@ -651,6 +661,7 @@ func observationSnapshotIdentity(
 	renewal core.Renewal,
 	ownership core.Ownership,
 	quantity uint32,
+	endsAt *time.Time,
 ) [sha256.Size]byte {
 	revocationReason := ""
 	if transaction.RevocationReason != nil {
@@ -659,7 +670,7 @@ func observationSnapshotIdentity(
 	return sha256.Sum256([]byte(strings.Join([]string{
 		string(applicationID), string(kind), transaction.OriginalTransactionID, transaction.TransactionID,
 		transaction.WebOrderLineItemID, transaction.BundleID, transaction.ProductID,
-		strconv.FormatInt(transaction.PurchaseDate, 10), strconv.FormatInt(transaction.ExpiresDate, 10),
+		strconv.FormatInt(transaction.PurchaseDate, 10), snapshotExpiresIdentity(transaction.ExpiresDate, endsAt),
 		strconv.FormatUint(uint64(quantity), 10), transaction.Type, transaction.AppAccountToken,
 		transaction.OwnershipType, revocationReason,
 		strconv.FormatInt(transaction.RevocationDate, 10), strconv.FormatBool(transaction.IsUpgraded),
@@ -667,6 +678,22 @@ func observationSnapshotIdentity(
 		string(renewal.Status), string(renewal.NextProductID), optionalTimeIdentity(renewal.NextRenewalAt),
 		string(ownership),
 	}, "\x00")))
+}
+
+// snapshotExpiresIdentity encodes the transaction expiry and, when access ends at a different instant, that effective end.
+func snapshotExpiresIdentity(transactionExpires int64, endsAt *time.Time) string {
+	encoded := strconv.FormatInt(transactionExpires, 10)
+	if endsAt == nil {
+		if transactionExpires <= 0 {
+			return encoded
+		}
+		return encoded + "\x1f"
+	}
+	millis := endsAt.UTC().UnixMilli()
+	if millis == transactionExpires {
+		return encoded
+	}
+	return encoded + "\x1f" + strconv.FormatInt(millis, 10)
 }
 
 // optionalTimeIdentity encodes one optional UTC time without introducing wall-clock formatting differences.
