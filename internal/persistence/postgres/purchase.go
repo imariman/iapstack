@@ -256,6 +256,11 @@ func (repository *transaction) SaveObservation(
 	}
 	storedWrite := write
 	storedWrite.CustomerID = core.CustomerID(evidenceCustomerID)
+	storedWrite, err = repository.reuseMatchingSnapshot(ctx, storedWrite, members)
+	if err != nil {
+		return err
+	}
+	write.Observation.ID = storedWrite.Observation.ID
 
 	inserted, err := repository.insertObservation(ctx, storedWrite)
 	if err != nil {
@@ -293,6 +298,31 @@ func (repository *transaction) SaveObservation(
 		}
 	}
 	return nil
+}
+
+// reuseMatchingSnapshot keeps an unchanged snapshot on its previously stored id.
+// Apple grace observations minted before the effective end joined the identity hash
+// still carry that older id. Reusing it avoids a duplicate row and outbox event when
+// the grace end has not changed. A different end does not match, so the new id is saved.
+func (repository *transaction) reuseMatchingSnapshot(
+	ctx context.Context,
+	write persistence.ObservationWrite,
+	members []string,
+) (persistence.ObservationWrite, error) {
+	priorID := write.Observation.PriorSnapshotID
+	if priorID == "" || priorID == write.Observation.ID {
+		return write, nil
+	}
+	candidate := write
+	candidate.Observation.ID = priorID
+	matches, err := repository.observationMatches(ctx, candidate, members)
+	if err != nil {
+		return persistence.ObservationWrite{}, err
+	}
+	if matches {
+		write.Observation.ID = priorID
+	}
+	return write, nil
 }
 
 // refreshObservationTime records the freshest authoritative sighting of an identical logical snapshot.

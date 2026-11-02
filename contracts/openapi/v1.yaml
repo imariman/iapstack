@@ -66,17 +66,28 @@ paths:
     get:
       tags: [Administration]
       operationId: listApiKeys
-      summary: List bounded secret-free API key lifecycle metadata
+      summary: List one page of secret-free API key lifecycle metadata
       security:
         - adminBearer: []
         - dashboardSession: []
+      parameters:
+        - name: page_token
+          in: query
+          required: false
+          description: Public id of the last key on the previous page. Omit it to list the newest keys.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
       responses:
         '200':
-          description: API keys ordered newest first, including revoked metadata
+          description: One page of API keys ordered newest first, including revoked metadata. At most 200 keys are returned.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiKeyCollection'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':
@@ -1365,6 +1376,11 @@ components:
           maxItems: 200
           items:
             $ref: '#/components/schemas/ApiKey'
+        next_page_token:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Present when older keys exist. Pass it as page_token to list the next older page. Absent on the last page.
     ApiKey:
       type: object
       additionalProperties: false
@@ -2166,7 +2182,7 @@ components:
     AdminRevenue:
       type: object
       additionalProperties: false
-      required: [status, recognized_minor_units, currency, amounts, uncovered_providers, production_application_count, test_application_count]
+      required: [status, recognized_minor_units, currency, amounts, uncovered_providers, zero_filled_application_ids, production_application_count, test_application_count]
       properties:
         status:
           type: string
@@ -2184,13 +2200,32 @@ components:
           description: Null when recognized_minor_units is null, including reports_imported.
         amounts:
           type: array
-          description: Store-reported proceeds by provider, period, and currency. Present only for reports_imported; empty otherwise. Currencies are not converted.
+          description: >
+            Store-reported proceeds by provider, period, and currency. Currencies are not
+            converted, and these figures are not a single project total. Populated for
+            reports_imported. Also populated for store_reports_required when at least one
+            provider is covered; those amounts exclude uncovered providers and do not add a
+            row for an application the report omitted. Empty when no provider is covered.
+            A report that matches none of a provider's production applications does not
+            cover that provider. An omitted sibling is listed in zero_filled_application_ids
+            and does not change these currency totals.
           items:
             $ref: '#/components/schemas/AdminRecognizedAmount'
         uncovered_providers:
           type: array
           items:
             type: string
+        zero_filled_application_ids:
+          type: array
+          description: >
+            Production applications absent from an accepted report that matched another
+            application of the same provider. They are counted as zero and are not given a
+            currency row, so matched totals are unchanged. The report does not record a
+            store account, so this list can mean no sales or a separate account whose
+            report was not imported. Status stays store_reports_required while the list
+            is non-empty.
+          items:
+            $ref: '#/components/schemas/Identifier'
         production_application_count:
           type: integer
           format: int64

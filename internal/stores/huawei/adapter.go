@@ -699,11 +699,12 @@ func validateSubmittedScope(request stores.VerificationRequest, purchase purchas
 }
 
 // comparePurchases enforces stable purchase identity across client and authoritative data.
+// The observation keeps the authoritative price and currency. A subscription price change
+// must not make the original client receipt fail verification.
 func comparePurchases(submitted, authoritative purchaseData) error {
 	if submitted.ApplicationID != authoritative.ApplicationID || submitted.ProductID != authoritative.ProductID ||
 		submitted.SubscriptionID != authoritative.SubscriptionID ||
-		submitted.PurchaseToken != authoritative.PurchaseToken || submitted.Price != authoritative.Price ||
-		submitted.Currency != authoritative.Currency {
+		submitted.PurchaseToken != authoritative.PurchaseToken {
 		return errors.New("authoritative Huawei purchase does not match submitted evidence")
 	}
 	return validatePurchasePrice(authoritative)

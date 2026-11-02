@@ -243,6 +243,68 @@ func TestDeliverSignsAndClassifiesResponses(t *testing.T) {
 	}
 }
 
+// TestDeliverClassifiesOversizedResponsesByStatus verifies body size does not hide the HTTP status.
+func TestDeliverClassifiesOversizedResponsesByStatus(t *testing.T) {
+	t.Parallel()
+
+	oversized := bytes.Repeat([]byte("x"), int(maximumResponseBytes)+1)
+	bounded := bytes.Repeat([]byte("y"), int(maximumResponseBytes))
+	tests := []struct {
+		name      string
+		status    int
+		body      []byte
+		wantCode  string
+		wantRetry bool
+	}{
+		{name: "bounded success", status: http.StatusOK, body: bounded},
+		{name: "oversized success", status: http.StatusOK, body: oversized, wantCode: "webhook_response_too_large"},
+		{name: "oversized created", status: http.StatusCreated, body: oversized, wantCode: "webhook_response_too_large"},
+		{name: "oversized timeout", status: http.StatusRequestTimeout, body: oversized, wantCode: "webhook_retryable_status", wantRetry: true},
+		{name: "oversized rate limit", status: http.StatusTooManyRequests, body: oversized, wantCode: "webhook_retryable_status", wantRetry: true},
+		{name: "oversized server error", status: http.StatusInternalServerError, body: oversized, wantCode: "webhook_retryable_status", wantRetry: true},
+		{name: "oversized bad gateway", status: http.StatusBadGateway, body: oversized, wantCode: "webhook_retryable_status", wantRetry: true},
+		{name: "oversized rejection", status: http.StatusBadRequest, body: oversized, wantCode: "webhook_rejected"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(test.status)
+				_, _ = writer.Write(test.body)
+			}))
+			defer server.Close()
+
+			protected := protection.Value{Ciphertext: []byte("ciphertext"), KeyID: "key-1"}
+			protected.Fingerprint = sha256.Sum256([]byte("secret"))
+			service := &Service{
+				store: &fakeOperationsStore{endpoint: persistence.WebhookEndpointRecord{
+					ProjectID: "project-1", ApplicationID: "application-1", URL: server.URL,
+					Secret: protected, Revision: 1, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+				}},
+				protection: fakeProtection{secret: []byte("signing-secret")},
+				client:     server.Client(), clock: func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+				allowPrivateNetworks: true,
+			}
+			err := service.Deliver(context.Background(), persistence.QueueMessage{
+				Queue: persistence.QueueOutbox, ID: "event-1", ProjectID: "project-1",
+				ApplicationID: "application-1", JSONPayload: []byte(`{"event":"changed"}`),
+			})
+			if test.wantCode == "" {
+				if err != nil {
+					t.Fatalf("Deliver() error = %v, want success", err)
+				}
+				return
+			}
+			failure, ok := err.(*DeliveryError)
+			if !ok || failure.CodeValue() != test.wantCode || failure.Retryable() != test.wantRetry {
+				t.Fatalf("Deliver() error = %#v, want code %q retryable %t", err, test.wantCode, test.wantRetry)
+			}
+		})
+	}
+}
+
 // TestWebhookAddressPolicyRejectsNonPublicRanges verifies the Internet-only destination boundary.
 func TestWebhookAddressPolicyRejectsNonPublicRanges(t *testing.T) {
 	tests := []struct {

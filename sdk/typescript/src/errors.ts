@@ -34,6 +34,20 @@ export class APIError extends Error {
   }
 }
 
+/** Caller aborted the request through its AbortSignal. */
+export class AbortError extends Error {
+  constructor(
+    message = 'IAPStack request was aborted',
+    options?: { cause?: unknown },
+  ) {
+    super(message);
+    this.name = 'AbortError';
+    if (options && 'cause' in options) {
+      (this as Error & { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
+
 /** Network failure before a complete HTTP response. */
 export class TransportError extends Error {
   constructor(

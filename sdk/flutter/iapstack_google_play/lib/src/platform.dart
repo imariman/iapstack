@@ -48,9 +48,13 @@ final class GooglePlayPurchase {
   /// Safe plugin error code for failed purchase updates.
   final String? errorCode;
 
-  /// Whether this update contains evidence that can be sent to IAPStack.
+  /// Whether an automatic purchase listener should submit this update.
+  ///
+  /// Pending payments stay out. Play has not charged the customer, and a
+  /// listener that treats verification as unlock would grant access early.
+  /// `verifyPurchase` still accepts a pending purchase when the caller submits
+  /// it explicitly.
   bool get canVerify =>
-      status == GooglePlayPurchaseStatus.pending ||
       status == GooglePlayPurchaseStatus.purchased ||
       status == GooglePlayPurchaseStatus.restored;
 

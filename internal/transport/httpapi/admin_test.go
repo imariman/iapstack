@@ -34,6 +34,8 @@ type keyLifecycleStore struct {
 	records      map[string]persistence.APIKeyRecord
 	revokedAt    map[string]time.Time
 	operateError error
+	// listPageSize bounds one list page. Zero uses the production page size.
+	listPageSize int
 }
 
 // keyLifecycleTransaction implements the API key repository against deterministic test state.
@@ -130,8 +132,8 @@ func TestAdminAPIKeyLifecycleListsAndSafelyRevokes(t *testing.T) {
 	if err := json.Unmarshal(listRecorder.Body.Bytes(), &collection); err != nil {
 		t.Fatalf("decode key collection: %v", err)
 	}
-	if len(collection.APIKeys) != 3 {
-		t.Fatalf("API key collection = %#v, want three summaries", collection.APIKeys)
+	if len(collection.APIKeys) != 3 || collection.NextPageToken != "" || strings.Contains(listRecorder.Body.String(), "next_page_token") {
+		t.Fatalf("API key collection = %#v, want three summaries on the last page", collection)
 	}
 	firstAdminID := bearerKeyID(firstAdmin)
 	secondAdminID := bearerKeyID(secondAdmin)
@@ -183,6 +185,77 @@ func TestAdminAPIKeyLifecycleListsAndSafelyRevokes(t *testing.T) {
 	if finalRecorder.Code != http.StatusConflict {
 		t.Fatalf("final admin revoke status = %d, want %d", finalRecorder.Code, http.StatusConflict)
 	}
+}
+
+// TestListAPIKeysContinuesPastTheNewestPage verifies older keys stay visible to the administrator.
+func TestListAPIKeysContinuesPastTheNewestPage(t *testing.T) {
+	store := &keyLifecycleStore{
+		records:      make(map[string]persistence.APIKeyRecord),
+		revokedAt:    make(map[string]time.Time),
+		listPageSize: 1,
+	}
+	authentication, err := auth.NewService(store, testBootstrapAdminKey, 4)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adminBearer, err := authentication.Create(context.Background(), auth.Principal{Role: persistence.APIKeyRoleAdmin})
+	if err != nil {
+		t.Fatalf("Create() admin error = %v", err)
+	}
+	adminID := bearerKeyID(adminBearer)
+	older := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Microsecond)
+	oldest := older.Add(-time.Minute)
+	const olderID = "0123456789abcdef01234502"
+	const oldestID = "0123456789abcdef01234501"
+	store.records[olderID] = persistence.APIKeyRecord{
+		ID: olderID, Role: persistence.APIKeyRoleAdmin, SecretSalt: [16]byte{1}, SecretHash: [32]byte{1}, CreatedAt: older,
+	}
+	store.records[oldestID] = persistence.APIKeyRecord{
+		ID: oldestID, Role: persistence.APIKeyRoleAdmin, SecretSalt: [16]byte{1}, SecretHash: [32]byte{1}, CreatedAt: oldest,
+	}
+	api := &API{authentication: authentication}
+
+	first := listAPIKeyPage(t, api, adminBearer, "")
+	if len(first.APIKeys) != 1 || first.APIKeys[0].ID != adminID || first.NextPageToken != adminID {
+		t.Fatalf("first page = %#v, want only the newest key and a continuation", first)
+	}
+	second := listAPIKeyPage(t, api, adminBearer, first.NextPageToken)
+	if len(second.APIKeys) != 1 || second.APIKeys[0].ID != olderID || second.NextPageToken != olderID {
+		t.Fatalf("second page = %#v, want the older key", second)
+	}
+	third := listAPIKeyPage(t, api, adminBearer, second.NextPageToken)
+	if len(third.APIKeys) != 1 || third.APIKeys[0].ID != oldestID || third.NextPageToken != "" {
+		t.Fatalf("third page = %#v, want the oldest key and no continuation", third)
+	}
+
+	invalid := httptest.NewRequest(http.MethodGet, "/v1/admin/api-keys?page_token=missing-key", nil)
+	invalid.Header.Set("Authorization", "Bearer "+adminBearer)
+	invalidRecorder := httptest.NewRecorder()
+	api.listAPIKeys(invalidRecorder, invalid)
+	if invalidRecorder.Code != http.StatusBadRequest || !strings.Contains(invalidRecorder.Body.String(), `"code":"invalid_request"`) {
+		t.Fatalf("invalid page = %d %s, want 400 invalid_request", invalidRecorder.Code, invalidRecorder.Body.String())
+	}
+}
+
+// listAPIKeyPage requests one administrator key page and decodes it.
+func listAPIKeyPage(t *testing.T, api *API, bearer string, pageToken string) apiKeyCollectionResponse {
+	t.Helper()
+	target := "/v1/admin/api-keys"
+	if pageToken != "" {
+		target += "?page_token=" + pageToken
+	}
+	request := httptest.NewRequest(http.MethodGet, target, nil)
+	request.Header.Set("Authorization", "Bearer "+bearer)
+	recorder := httptest.NewRecorder()
+	api.listAPIKeys(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var collection apiKeyCollectionResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &collection); err != nil {
+		t.Fatalf("decode key collection: %v", err)
+	}
+	return collection
 }
 
 // TestAdminProjectsRequiresAdminAndReturnsStableJSON verifies authorization and the safe collection contract.
@@ -346,8 +419,11 @@ func (transaction *keyLifecycleTransaction) APIKey(
 	return record, nil
 }
 
-// APIKeys returns newest-first secret-free lifecycle metadata.
-func (transaction *keyLifecycleTransaction) APIKeys(context.Context) ([]persistence.APIKeySummary, error) {
+// APIKeys returns one newest-first page of secret-free lifecycle metadata.
+func (transaction *keyLifecycleTransaction) APIKeys(
+	_ context.Context,
+	pageToken string,
+) (persistence.APIKeyPage, error) {
 	summaries := make([]persistence.APIKeySummary, 0, len(transaction.store.records))
 	for id, record := range transaction.store.records {
 		summary := keySummary(record, transaction.store.revokedAt[id])
@@ -359,7 +435,34 @@ func (transaction *keyLifecycleTransaction) APIKeys(context.Context) ([]persiste
 		}
 		return summaries[left].CreatedAt.After(summaries[right].CreatedAt)
 	})
-	return summaries, nil
+	limit := transaction.store.listPageSize
+	if limit <= 0 {
+		limit = 200
+	}
+	start := 0
+	if pageToken != "" {
+		found := -1
+		for index, summary := range summaries {
+			if summary.ID == pageToken {
+				found = index
+				break
+			}
+		}
+		if found < 0 {
+			return persistence.APIKeyPage{}, validation.Wrap(errors.New("API key page token is invalid"))
+		}
+		start = found + 1
+	}
+	page := summaries[start:]
+	next := ""
+	if len(page) > limit {
+		next = page[limit-1].ID
+		page = page[:limit]
+	}
+	if page == nil {
+		page = []persistence.APIKeySummary{}
+	}
+	return persistence.APIKeyPage{Keys: page, NextPageToken: next}, nil
 }
 
 // PutAPIKey retains one verifier and rejects duplicate identities.
@@ -450,7 +553,7 @@ func TestAdminOverviewSerializesEmptyCollections(t *testing.T) {
 	for _, field := range []string{
 		`"credential_revision":3`, `"webhook_revision":2`, `"products":[]`, `"customers":[]`,
 		`"recent_transactions":[]`, `"queues":[]`, `"recent_webhook_events":[]`,
-		`"status":"sandbox_only"`, `"recognized_minor_units":0`, `"daily_activity":[`,
+		`"status":"sandbox_only"`, `"recognized_minor_units":0`, `"zero_filled_application_ids":[]`, `"daily_activity":[`,
 		`"sandbox_value":{"amounts":[{"milliunits":4990,"currency":"USD"}],"transaction_count":1,"missing_price_count":0}`,
 	} {
 		if !strings.Contains(string(payload), field) {

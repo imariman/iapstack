@@ -53,7 +53,9 @@ the database because IAPStack returns it only once.
   timestamps, and deduplicate the authenticated `IAPStack-Event-ID` before applying an
   event.
 
-Use `GET /v1/admin/api-keys` to inspect secret-free lifecycle metadata and
+Use `GET /v1/admin/api-keys` to inspect secret-free lifecycle metadata. Each response
+contains at most 200 keys, newest first. Follow `next_page_token` as `page_token`
+until it is absent so an older key remains available to revoke. Use
 `DELETE /v1/admin/api-keys/{key_id}` to revoke a stored key. Revocation is idempotent,
 authentication reads `revoked_at` on every request, and no process restart is required.
 The API rejects revocation of the key authenticating the current request and preserves
@@ -117,9 +119,16 @@ transaction prices by currency. The test value uses the latest non-reversed snap
 each purchased transaction, never converts currencies, and is not accounting revenue.
 Apple transactions provide this signed price metadata today; older observations report
 missing-price coverage until a fresh verification enriches them. Production projects
-stay on Reports required until every production application is covered by an accepted
-official store financial report. The revenue card then lists store-reported proceeds
-for each imported period and currency, does not convert currencies, and does not
+stay on Reports required until every production application appears in its provider's
+accepted official store financial report. A file does not name its store account. If
+it includes one production application and omits another of the same provider, the
+card keeps the imported currency totals, lists the omitted application ids, and stays
+on Reports required. Those omitted applications are counted as zero, which can mean
+no sales or a separate account whose report was not imported. When some providers
+have no report, the card lists the matched proceeds and names the providers that
+still need a report. Those lines are not a complete project total. When every
+production application is present in its provider's report, the card lists each
+imported period and currency. The card does not convert currencies and does not
 calculate tax or commission. Purchase prices are not revenue. The dashboard never
 renders report files, order ids, protected provider payloads, or secrets.
 The access-key workspace lists active and revoked administrator/application key
@@ -287,9 +296,18 @@ Never remove an encryption key until all rows written with that key ID have been
 - `iapstack_queue_job_duration_seconds` reports bounded worker attempt count and duration sums by queue and outcome.
 - River owns job claims, stale-job recovery, exponential retry scheduling, and terminal job cleanup.
 - Retryable failures become discarded after `IAPSTACK_WORKER_MAX_ATTEMPTS`; permanent failures are cancelled immediately.
+- A failed terminal audit write on the final attempt is snoozed for 15 seconds and logged at warn with `queue_transition_failed`. River's `snoozes` metadata caps that loop at 20 (about five minutes). The next run does not call the handler again. It logs `terminal_audit_write_failed` at error and increments `iapstack_queue_attempts_total{outcome="terminal_audit_write_failed"}`, then River discards the job. The durable outbox or reconciliation row can remain pending. Correlate `message_id`. Each snooze runs the handler again, so webhook receivers must keep deduplicating `IAPStack-Event-ID`.
 - Inbox, outbox, and reconciliation tables retain protected payloads and stable terminal audit outcomes while River job arguments contain identifiers only.
 - `IAPSTACK_QUEUE_RETENTION` applies to both River metadata and durable queue audit rows. Pending or otherwise runnable records are never removed by retention cleanup.
 - Durable records contain only safe error codes; correlate application logs with `message_id` and HTTP logs with `X-Request-ID`.
+
+## Missed subscription reconciliation
+
+`purchases:verify` and `purchases:restore` commit a subscription before they schedule its daily reconciliation job. Those writes use separate transactions, so a scheduling failure does not roll back the entitlement. The HTTP call still returns the committed snapshot. The API logs `reconciliation_schedule_failed` with `project_id`, `application_id`, and `customer_id`, and increments `iapstack_verifications_total{outcome="reconciliation_schedule_failed"}`. It does not log purchase evidence or the storage error text.
+
+Until that job exists, a store that does not send lifecycle notifications will not refresh expiry or refund for that subscription.
+
+Recover by submitting the same subscription again through `purchases:verify` or `purchases:restore`. Scheduling is idempotent for the same UTC day. Confirm a reconciliation row for that customer, then watch `iapstack_queue_depth` for the reconciliation queue. Alert on any increase of `iapstack_verifications_total{outcome="reconciliation_schedule_failed"}`.
 
 ## Compose release gate
 

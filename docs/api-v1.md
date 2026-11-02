@@ -21,9 +21,11 @@ application key.
 
 Administrator key rotation uses three endpoints:
 
-- `GET /v1/admin/api-keys` returns at most 200 secret-free lifecycle records, newest
-  first. Revoked records remain visible for audit context, and a stored key marks the
-  record authenticating the request with `current: true`.
+- `GET /v1/admin/api-keys` returns at most 200 secret-free lifecycle records per
+  page, newest first. When older keys exist the response includes `next_page_token`;
+  pass that value as `page_token` to list the next older page. The last page omits
+  `next_page_token`. Revoked records remain visible for audit context, and a stored
+  key marks the record authenticating the request with `current: true`.
 - `POST /v1/admin/api-keys` creates an administrator or application key and returns
   its bearer once. The bearer, salt, hash, and verifier are never returned by the list
   endpoint.
@@ -130,13 +132,25 @@ purchase evidence, and webhook bodies. Unknown project scopes return the same
 
 Verification activity is operational data, not a financial ledger. Sandbox-only
 projects report zero real revenue. Projects with production applications report
-`store_reports_required` until every production application is covered by an accepted
-official Apple, Google Play, or Huawei financial report. When that coverage is
-complete the status is `reports_imported`. Recognized amounts are then the
-store-reported proceeds for each imported period and currency, with no currency
-conversion. `recognized_minor_units` and `currency` stay null in that status so a
-single total is not implied. The API never sums `purchase_observations.price_milliunits`
-or client prices into recognized proceeds.
+`store_reports_required` until every production application appears in its provider's
+accepted official Apple, Google Play, or Huawei financial report. When that coverage
+is complete the status is `reports_imported`.
+
+Imports do not record a store account or vendor. A report that matches none of a
+provider's production applications does not cover that provider. A report that matches
+some of them keeps those applications' currency totals unchanged and lists the absent
+application ids in `zero_filled_application_ids`. Those applications are counted as
+zero and do not add a currency row. Because the file cannot show whether they had no
+sales or belong to another account, status stays `store_reports_required` while that
+list is non-empty.
+
+`amounts` lists store-reported proceeds by provider, period, and currency, with no
+currency conversion. For `reports_imported` every production application appeared in
+its provider's report. For `store_reports_required`, `amounts` includes only matched
+applications and is not a complete project total. `uncovered_providers` names
+providers with no covering report. `recognized_minor_units` and `currency` stay null
+in both of those statuses so a single total is not implied. The API never sums
+`purchase_observations.price_milliunits` or client prices into recognized proceeds.
 
 `GET /v1/admin/projects/{project_id}/overview` accepts optional
 `financial_period_start` and `financial_period_end`. Both must be omitted or both
@@ -188,7 +202,7 @@ A purchase item contains an external customer ID, claimed products, optional cus
 }
 ```
 
-`signature_algorithm` is optional. Omitted evidence uses `SHA256WithRSA`. `SHA256WithRSA/PSS` is also accepted. Any other value is rejected with `422 invalid_purchase`. IAPStack verifies the device signature with that algorithm, queries Huawei for current authoritative state, verifies the server response signature, checks application, product, subscription id, price, currency, and token consistency, and commits evidence, projection, and outbox changes atomically. Subscription `purchase_data` must include `subscriptionId`. `applicationId` inside that JSON may be a number.
+`signature_algorithm` is optional. Omitted evidence uses `SHA256WithRSA`. `SHA256WithRSA/PSS` is also accepted. Any other value is rejected with `422 invalid_purchase`. IAPStack verifies the device signature with that algorithm, queries Huawei for current authoritative state, verifies the server response signature, checks application, product, subscription id, and token consistency, and commits evidence, projection, and outbox changes atomically. The stored observation keeps the authoritative price and currency. Subscription `purchase_data` must include `subscriptionId`. `applicationId` inside that JSON may be a number.
 
 For v0.1 customer binding, the Huawei `developerPayload` must equal the authenticated request's `external_customer_id`. The API always supplies this as an expected signed binding; a valid purchase cannot be reassigned to a different application customer.
 

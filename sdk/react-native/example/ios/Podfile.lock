@@ -3,7 +3,7 @@ PODS:
   - hermes-engine (250829098.0.9):
     - hermes-engine/Pre-built (= 250829098.0.9)
   - hermes-engine/Pre-built (250829098.0.9)
-  - IAPStackReactNative (0.1.0-sdk.1):
+  - IAPStackReactNative (0.1.0-sdk.2):
     - React-Core
   - RCTDeprecation (0.84.1)
   - RCTRequired (0.84.1)
@@ -1402,7 +1402,7 @@ PODS:
     - React-RCTFBReactNativeSpec
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
-  - react-native-safe-area-context (5.10.1):
+  - react-native-safe-area-context (5.11.0):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -1414,8 +1414,8 @@ PODS:
     - React-graphics
     - React-ImageManager
     - React-jsi
-    - react-native-safe-area-context/common (= 5.10.1)
-    - react-native-safe-area-context/fabric (= 5.10.1)
+    - react-native-safe-area-context/common (= 5.11.0)
+    - react-native-safe-area-context/fabric (= 5.11.0)
     - React-NativeModulesApple
     - React-RCTFabric
     - React-renderercss
@@ -1426,7 +1426,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - react-native-safe-area-context/common (5.10.1):
+  - react-native-safe-area-context/common (5.11.0):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -1448,7 +1448,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - react-native-safe-area-context/fabric (5.10.1):
+  - react-native-safe-area-context/fabric (5.11.0):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2129,7 +2129,7 @@ SPEC CHECKSUMS:
   React-logger: b5521614afb8690420146dfc61a1447bb5d65419
   React-Mapbuffer: f4ee8c62e0ef8359d139124f35a471518a172cd3
   React-microtasksnativemodule: d1956f0eec54c619b63a379520fb4c618a55ccb9
-  react-native-safe-area-context: 9e2124f6042abcc1d033faf91a56fe05a9c6e0c4
+  react-native-safe-area-context: 4b1d40d59bcc8dc7a7866bcec3995847e21f65ab
   React-NativeModulesApple: 5ba0903927f6b8d335a091700e9fda143980f819
   React-networking: 3a4b7f9ed2b2d1c0441beacb79674323a24bcca6
   React-oscompat: ff26abf0ae3e3fdbe47b44224571e3fc7226a573

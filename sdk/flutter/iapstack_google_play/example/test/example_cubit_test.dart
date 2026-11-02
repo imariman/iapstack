@@ -104,6 +104,31 @@ void main() {
     expect(cubit.state.requestId, 'play-verify-test');
   });
 
+  test('leaves a pending payment locked and does not verify it', () async {
+    final updates = StreamController<GooglePlayPurchase>.broadcast();
+    var backendCalled = false;
+    final backend = _backend((request) async {
+      backendCalled = true;
+      return http.Response(jsonEncode(_verificationJson), 200);
+    });
+    final cubit = _cubit(
+      backend: backend,
+      platform: _FakePlatform(updates: updates.stream),
+    );
+    addTearDown(() async {
+      await cubit.close();
+      await updates.close();
+    });
+
+    updates.add(_purchase(status: GooglePlayPurchaseStatus.pending));
+    await _flushAsync();
+
+    expect(backendCalled, isFalse);
+    expect(cubit.state.status, ExampleStatus.ready);
+    expect(cubit.state.message, contains('pending'));
+    expect(cubit.state.entitlements, isEmpty);
+  });
+
   test(
     'handles cancellation and purchase stream failures without backend calls',
     () async {

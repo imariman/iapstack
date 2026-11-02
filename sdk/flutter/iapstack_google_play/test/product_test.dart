@@ -111,8 +111,7 @@ void main() {
       );
       expect(
         purchase.canVerify,
-        status == GooglePlayPurchaseStatus.pending ||
-            status == GooglePlayPurchaseStatus.purchased ||
+        status == GooglePlayPurchaseStatus.purchased ||
             status == GooglePlayPurchaseStatus.restored,
         reason: status.name,
       );
