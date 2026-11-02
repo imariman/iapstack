@@ -3,6 +3,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -26,6 +27,12 @@ const (
 	queueCleanupInterval = time.Minute
 	// queueCleanupBatchSize bounds row locks and transaction work per queue and cleanup pass.
 	queueCleanupBatchSize = 1_000
+
+	// terminalAuditRetryDelay keeps a final attempt runnable until its audit row commits.
+	terminalAuditRetryDelay = 15 * time.Second
+	// maximumTerminalAuditSnoozes bounds final-attempt audit retries before the job is discarded.
+	// Twenty snoozes is five minutes at terminalAuditRetryDelay.
+	maximumTerminalAuditSnoozes = 20
 )
 
 // Handler processes one durable message without changing queue state directly.
@@ -325,17 +332,17 @@ func (runner *Runner) refreshQueueDepth(ctx context.Context) error {
 
 // Work processes one protected notification job.
 func (worker *inboxWorker) Work(ctx context.Context, job *river.Job[jobs.InboxArgs]) error {
-	return worker.executor.execute(ctx, persistence.QueueInbox, job.Args.MessageID, job.Attempt, job.MaxAttempts)
+	return worker.executor.execute(ctx, persistence.QueueInbox, job.Args.MessageID, job.Attempt, job.MaxAttempts, snoozeCount(job.Metadata))
 }
 
 // Work processes one immutable webhook delivery job.
 func (worker *outboxWorker) Work(ctx context.Context, job *river.Job[jobs.OutboxArgs]) error {
-	return worker.executor.execute(ctx, persistence.QueueOutbox, job.Args.EventID, job.Attempt, job.MaxAttempts)
+	return worker.executor.execute(ctx, persistence.QueueOutbox, job.Args.EventID, job.Attempt, job.MaxAttempts, snoozeCount(job.Metadata))
 }
 
 // Work processes one protected lifecycle reconciliation job.
 func (worker *reconciliationWorker) Work(ctx context.Context, job *river.Job[jobs.ReconciliationArgs]) error {
-	return worker.executor.execute(ctx, persistence.QueueReconciliation, job.Args.JobID, job.Attempt, job.MaxAttempts)
+	return worker.executor.execute(ctx, persistence.QueueReconciliation, job.Args.JobID, job.Attempt, job.MaxAttempts, snoozeCount(job.Metadata))
 }
 
 // execute loads one audit record, invokes its handler, and persists terminal outcomes.
@@ -345,6 +352,7 @@ func (execution *executor) execute(
 	id string,
 	attempt int,
 	maxAttempts int,
+	auditSnoozes int,
 ) error {
 	startedAt := time.Now()
 	outcome := "failed"
@@ -369,10 +377,17 @@ func (execution *executor) execute(
 		outcome = "skipped"
 		return nil
 	}
+	if attempt >= maxAttempts && auditSnoozes >= maximumTerminalAuditSnoozes {
+		execution.logQueueTransition(ctx, slog.LevelError, queue, id, "terminal_audit_write_failed", auditSnoozes)
+		if execution.metrics != nil {
+			execution.metrics.ObserveQueueAttempt(string(queue), "terminal_audit_write_failed")
+		}
+		return errors.New("terminal_audit_write_failed")
+	}
 	handlerErr := execution.handlers[queue].Handle(ctx, message)
 	if handlerErr == nil {
 		if err := execution.complete(ctx, queue, id); err != nil {
-			return err
+			return execution.auditTransitionError(ctx, queue, id, attempt, maxAttempts, auditSnoozes, err)
 		}
 		outcome = "completed"
 		return nil
@@ -388,7 +403,7 @@ func (execution *executor) execute(
 		return errors.New(code)
 	}
 	if err := execution.fail(ctx, queue, id, code); err != nil {
-		return err
+		return execution.auditTransitionError(ctx, queue, id, attempt, maxAttempts, auditSnoozes, err)
 	}
 	if isRetryable(handlerErr) {
 		return errors.New(code)
@@ -405,12 +420,66 @@ func (execution *executor) complete(ctx context.Context, queue persistence.Queue
 		})
 	})
 	if err != nil {
-		execution.logger.Error("record queue completion",
-			"queue", queue, "message_id", id, "error_code", "queue_transition_failed")
 		return errors.New("queue_transition_failed")
 	}
 	execution.metrics.ObserveQueueAttempt(string(queue), "completed")
 	return nil
+}
+
+// auditTransitionError preserves a bounded number of River retries when a terminal audit write does not commit.
+// Earlier attempts keep the caller's backoff and are logged at error. A final attempt is snoozed and logged
+// at warn until maximumTerminalAuditSnoozes is reached. The next run then stops before the handler.
+func (execution *executor) auditTransitionError(
+	ctx context.Context,
+	queue persistence.QueueName,
+	id string,
+	attempt int,
+	maxAttempts int,
+	auditSnoozes int,
+	err error,
+) error {
+	if attempt < maxAttempts {
+		execution.logQueueTransition(ctx, slog.LevelError, queue, id, "queue_transition_failed", auditSnoozes)
+		return err
+	}
+	execution.logQueueTransition(ctx, slog.LevelWarn, queue, id, "queue_transition_failed", auditSnoozes)
+	return river.JobSnooze(terminalAuditRetryDelay)
+}
+
+// logQueueTransition records one audit-write failure without the underlying storage error text.
+func (execution *executor) logQueueTransition(
+	ctx context.Context,
+	level slog.Level,
+	queue persistence.QueueName,
+	id string,
+	code string,
+	auditSnoozes int,
+) {
+	logger := execution.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Log(ctx, level, "record queue transition",
+		"queue", queue,
+		"message_id", id,
+		"error_code", code,
+		"snooze_count", auditSnoozes,
+		"snooze_limit", maximumTerminalAuditSnoozes,
+	)
+}
+
+// snoozeCount reads River's metadata snooze counter. Missing or invalid metadata counts as zero.
+func snoozeCount(metadata []byte) int {
+	if len(metadata) == 0 {
+		return 0
+	}
+	var payload struct {
+		Snoozes int `json:"snoozes"`
+	}
+	if err := json.Unmarshal(metadata, &payload); err != nil || payload.Snoozes < 0 {
+		return 0
+	}
+	return payload.Snoozes
 }
 
 // fail records one terminal audit outcome after attempts are exhausted or a permanent error occurs.
@@ -422,8 +491,6 @@ func (execution *executor) fail(ctx context.Context, queue persistence.QueueName
 		})
 	})
 	if err != nil {
-		execution.logger.Error("record queue failure",
-			"queue", queue, "message_id", id, "error_code", "queue_transition_failed")
 		return errors.New("queue_transition_failed")
 	}
 	execution.metrics.ObserveQueueAttempt(string(queue), "failed")
