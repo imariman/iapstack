@@ -27,9 +27,37 @@ final class DedupedPurchaseUpdateTests: XCTestCase {
 
     XCTAssertEqual(values, ["tx-unfinished"])
   }
+
+  func testRevocationAfterDedupeReachesTheSubscriber() async {
+    let values = await collect(
+      mergeDeduped(
+        unfinished: { finite([Delivery(id: "tx-1", kind: "unfinished")]) },
+        updates: {
+          finite([
+            Delivery(id: "tx-1", kind: "replay"),
+            Delivery(id: "tx-1", kind: "revoked"),
+          ])
+        },
+        id: \.id,
+      ),
+    )
+
+    XCTAssertEqual(
+      values,
+      [
+        Delivery(id: "tx-1", kind: "unfinished"),
+        Delivery(id: "tx-1", kind: "revoked"),
+      ],
+    )
+  }
 }
 
-private func finite(_ values: [String]) -> AsyncStream<String> {
+private struct Delivery: Equatable, Sendable {
+  var id: String
+  var kind: String
+}
+
+private func finite<Element: Sendable>(_ values: [Element]) -> AsyncStream<Element> {
   AsyncStream { continuation in
     for value in values {
       continuation.yield(value)
@@ -38,8 +66,8 @@ private func finite(_ values: [String]) -> AsyncStream<String> {
   }
 }
 
-private func collect(_ stream: AsyncStream<String>) async -> [String] {
-  var values: [String] = []
+private func collect<Element: Sendable>(_ stream: AsyncStream<Element>) async -> [Element] {
+  var values: [Element] = []
   for await value in stream {
     values.append(value)
   }

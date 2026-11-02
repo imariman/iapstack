@@ -43,7 +43,8 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
     self.state = state
     // One shared pass. Transaction.updates replays unfinished transactions only
     // the first time it is iterated in this process, so each new pass also reads
-    // Transaction.unfinished. The same transaction id is delivered once.
+    // Transaction.unfinished. Only that replay is dropped; a later update of the
+    // same transaction id is delivered.
     self.purchaseUpdateHub = SharedAsyncMulticast {
       mergeDeduped(
         unfinished: { AppleStoreKitPlatform.storeTransactions(Transaction.unfinished, state: state) },
