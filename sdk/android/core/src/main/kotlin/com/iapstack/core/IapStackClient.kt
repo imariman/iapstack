@@ -35,7 +35,7 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 
-private const val SDK_VERSION = "0.1.0-sdk.1"
+private const val SDK_VERSION = "0.1.0-sdk.2"
 private val JSON_MEDIA_TYPE = "application/json".toMediaType()
 private val DELAY_SECONDS = Regex("^\\d{1,9}$")
 private val IMF_FIXDATE = Regex(

@@ -41,24 +41,15 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
   public init() {
     let state = State()
     self.state = state
-    // Transaction.updates already emits unfinished transactions on its first
-    // pass. A second sequence, or a second read of this property, would verify
-    // the same transaction twice. Readers share one pass until the last one leaves.
+    // One shared pass. Transaction.updates replays unfinished transactions only
+    // the first time it is iterated in this process, so each new pass also reads
+    // Transaction.unfinished. The same transaction id is delivered once.
     self.purchaseUpdateHub = SharedAsyncMulticast {
-      AsyncStream { continuation in
-        let task = Task.detached {
-          for await result in Transaction.updates {
-            if Task.isCancelled { break }
-            if let mapped = await AppleStoreKitPlatform.mapUpdate(result, status: .purchased, state: state) {
-              continuation.yield(mapped)
-            }
-          }
-          continuation.finish()
-        }
-        continuation.onTermination = { _ in
-          task.cancel()
-        }
-      }
+      mergeDeduped(
+        unfinished: { AppleStoreKitPlatform.storeTransactions(Transaction.unfinished, state: state) },
+        updates: { AppleStoreKitPlatform.storeTransactions(Transaction.updates, state: state) },
+        id: \.transactionId,
+      )
     }
   }
 
@@ -235,6 +226,26 @@ public final class AppleStoreKitPlatform: AppleIAPPlatform {
       appAccountToken: transaction.appAccountToken?.uuidString.lowercased(),
       errorCode: nil,
     )
+  }
+
+  private static func storeTransactions(
+    _ transactions: Transaction.Transactions,
+    state: State,
+  ) -> AsyncStream<ApplePurchase> {
+    AsyncStream { continuation in
+      let task = Task.detached {
+        for await result in transactions {
+          if Task.isCancelled { break }
+          if let mapped = await mapUpdate(result, status: .purchased, state: state) {
+            continuation.yield(mapped)
+          }
+        }
+        continuation.finish()
+      }
+      continuation.onTermination = { _ in
+        task.cancel()
+      }
+    }
   }
 
   private static func mapUpdate(

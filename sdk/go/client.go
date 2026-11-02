@@ -16,7 +16,7 @@ import (
 
 const (
 	// sdkVersion identifies this host package in X-IAPStack-SDK.
-	sdkVersion = "0.1.0-sdk.1"
+	sdkVersion = "0.1.0-sdk.2"
 	// jsonContentType is the only accepted v1 request and response media type.
 	jsonContentType = "application/json"
 )

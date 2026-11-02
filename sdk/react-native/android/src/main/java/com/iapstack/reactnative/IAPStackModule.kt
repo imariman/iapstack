@@ -17,9 +17,7 @@ class IAPStackModule(private val context: ReactApplicationContext) :
   ReactContextBaseJavaModule(context), ActivityEventListener, LifecycleEventListener {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private var session: Session? = null
-  private var listeners = 0
-  private val eventGate = Any()
-  private val eventBuffer = StoreEventBuffer<Map<String, Any?>>()
+  private val mailbox = OrderedStoreEvents<Map<String, Any?>>()
   // JS-driven HTTP calls share one pool and dispatcher instead of leaking one per call.
   private val transport = lazy { OkHttpClient() }
 
@@ -207,14 +205,10 @@ class IAPStackModule(private val context: ReactApplicationContext) :
   }
   @ReactMethod fun dispose(promise: Promise) { scope.launch { clearSession(); promise.resolve(null) } }
   @ReactMethod fun addListener(eventName: String) {
-    val pending = synchronized(eventGate) {
-      listeners++
-      if (listeners == 1 && context.hasActiveReactInstance()) eventBuffer.drain() else emptyList()
-    }
-    pending.forEach(::deliver)
+    mailbox.addListener(context.hasActiveReactInstance(), ::deliver)
   }
   @ReactMethod fun removeListeners(count: Double) {
-    synchronized(eventGate) { listeners = maxOf(0, listeners - count.toInt()) }
+    mailbox.removeListeners(count.toInt())
   }
   override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
     session?.huaweiPlatform?.onActivityResult(requestCode, resultCode, data)
@@ -238,7 +232,7 @@ class IAPStackModule(private val context: ReactApplicationContext) :
   private fun clearSession() {
     val old = session
     session = null
-    synchronized(eventGate) { eventBuffer.clear() }
+    mailbox.clear()
     old?.close()
   }
   private fun operation(promise: Promise, action: suspend (Session) -> Any?) {
@@ -260,16 +254,7 @@ class IAPStackModule(private val context: ReactApplicationContext) :
   }
   private fun emit(captured: Session, event: Map<String, Any?>) {
     if (session !== captured) return
-    val pending = synchronized(eventGate) {
-      val live = listeners > 0 && context.hasActiveReactInstance()
-      if (!live) {
-        eventBuffer.enqueue(event)
-        emptyList()
-      } else {
-        eventBuffer.drain() + event
-      }
-    }
-    pending.forEach(::deliver)
+    mailbox.emit(event, context.hasActiveReactInstance(), ::deliver)
   }
   private fun deliver(event: Map<String, Any?>) {
     context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)

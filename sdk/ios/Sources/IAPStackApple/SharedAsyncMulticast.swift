@@ -1,5 +1,76 @@
 import Foundation
 
+/// Yields each id once across `unfinished` and `updates`.
+///
+/// `Transaction.updates` replays unfinished transactions only on the first
+/// iteration in a process. A later pass still reads `unfinished`, and the same
+/// transaction is not delivered twice when both sequences emit it.
+func mergeDeduped<Element: Sendable, ID: Hashable & Sendable>(
+  unfinished: @escaping @Sendable () -> AsyncStream<Element>,
+  updates: @escaping @Sendable () -> AsyncStream<Element>,
+  id: @escaping @Sendable (Element) -> ID,
+) -> AsyncStream<Element> {
+  AsyncStream { continuation in
+    let seen = FirstSeenIDs<ID>()
+    let remaining = Countdown(2)
+    let unfinishedTask = Task {
+      defer {
+        if remaining.decrement() {
+          continuation.finish()
+        }
+      }
+      for await element in unfinished() {
+        if Task.isCancelled { break }
+        if seen.insert(id(element)) {
+          continuation.yield(element)
+        }
+      }
+    }
+    let updatesTask = Task {
+      defer {
+        if remaining.decrement() {
+          continuation.finish()
+        }
+      }
+      for await element in updates() {
+        if Task.isCancelled { break }
+        if seen.insert(id(element)) {
+          continuation.yield(element)
+        }
+      }
+    }
+    continuation.onTermination = { _ in
+      unfinishedTask.cancel()
+      updatesTask.cancel()
+    }
+  }
+}
+
+private final class FirstSeenIDs<ID: Hashable>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var seen = Set<ID>()
+
+  func insert(_ id: ID) -> Bool {
+    lock.withLock { seen.insert(id).inserted }
+  }
+}
+
+private final class Countdown: @unchecked Sendable {
+  private let lock = NSLock()
+  private var left: Int
+
+  init(_ left: Int) {
+    self.left = left
+  }
+
+  func decrement() -> Bool {
+    lock.withLock {
+      left -= 1
+      return left == 0
+    }
+  }
+}
+
 /// Fans one upstream async sequence out to every subscriber.
 ///
 /// The upstream is created when the first subscriber arrives and cancelled when

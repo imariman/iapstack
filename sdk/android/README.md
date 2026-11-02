@@ -1,5 +1,16 @@
 # IAPStack Android SDK
 
+## Breaking changes in 0.1.0-sdk.2
+
+`GooglePlayPurchase.canVerify` is false while Play reports `PENDING`. An
+automatic listener should wait for `PURCHASED` or `RESTORED`. `verifyPurchase`
+still accepts a pending purchase when you call it. Do not unlock access until
+`grantsAccess` is true.
+
+`GooglePlayIapStackException.retryable` is new and defaults to false. A Play
+Billing disconnect sets it to true and starts one reconnect. The in-flight call
+still fails.
+
 Provider-neutral Kotlin HTTP client plus native Google Play and Huawei adapters:
 
 - `core` — JVM client: verify, restore, entitlements, timeouts, retries, request IDs
