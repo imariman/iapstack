@@ -133,23 +133,24 @@ purchase evidence, and webhook bodies. Unknown project scopes return the same
 
 Verification activity is operational data, not a financial ledger. Sandbox-only
 projects report zero real revenue. Projects with production applications report
-`store_reports_required` until every production provider has an accepted official
-Apple, Google Play, or Huawei financial report. When that coverage is complete the
-status is `reports_imported`.
+`store_reports_required` until every production application appears in its provider's
+accepted official Apple, Google Play, or Huawei financial report. When that coverage
+is complete the status is `reports_imported`.
 
-A production application omitted from an accepted report is zero proceeds for that
-period when another production application of the same provider appears in the report.
-That omission does not add a currency row and does not change the summed totals of
-applications that do appear. A report that matches none of a provider's production
-applications does not cover that provider, so a mis-addressed file is not reported as
-zero revenue.
+Imports do not record a store account or vendor. A report that matches none of a
+provider's production applications does not cover that provider. A report that matches
+some of them keeps those applications' currency totals unchanged and lists the absent
+application ids in `zero_filled_application_ids`. Those applications are counted as
+zero and do not add a currency row. Because the file cannot show whether they had no
+sales or belong to another account, status stays `store_reports_required` while that
+list is non-empty.
 
 `amounts` lists store-reported proceeds by provider, period, and currency, with no
-currency conversion. For `reports_imported` the list includes every covered provider.
-For `store_reports_required`, the list includes only providers that are covered and is
-not a complete project total; `uncovered_providers` names the rest. The list is empty
-when no provider is covered. `recognized_minor_units` and `currency` stay null in both
-of those statuses so a single total is not implied. The API never sums
+currency conversion. For `reports_imported` every production application appeared in
+its provider's report. For `store_reports_required`, `amounts` includes only matched
+applications and is not a complete project total. `uncovered_providers` names
+providers with no covering report. `recognized_minor_units` and `currency` stay null
+in both of those statuses so a single total is not implied. The API never sums
 `purchase_observations.price_milliunits` or client prices into recognized proceeds.
 
 `GET /v1/admin/projects/{project_id}/overview` accepts optional

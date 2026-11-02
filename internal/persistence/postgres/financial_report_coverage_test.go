@@ -30,13 +30,14 @@ func TestRecognizeProviderAmountsKeepsCoveredTotals(t *testing.T) {
 		financialAmount("app-apple", "USD", "2.50", &usdMinor),
 		financialAmount("app-apple", "EUR", "-1.25", &eurMinor),
 	}
-	amounts, uncovered, allCovered := recognizeProviderAmounts(
+	amounts, uncovered, zeroFilled, allCovered := recognizeProviderAmounts(
 		applications,
 		map[core.Provider]acceptedFinancialImport{core.ProviderAppleAppStore: report},
 		map[string][]persistence.FinancialReportAmount{report.ID: rows},
 	)
-	if allCovered || len(uncovered) != 1 || uncovered[0] != core.ProviderGooglePlay {
-		t.Fatalf("coverage = (%t, %v), want Google uncovered", allCovered, uncovered)
+	if allCovered || len(uncovered) != 1 || uncovered[0] != core.ProviderGooglePlay ||
+		len(zeroFilled) != 1 || zeroFilled[0] != "app-apple-quiet" {
+		t.Fatalf("coverage = (%t, %v, %v), want Google uncovered and the quiet Apple app listed", allCovered, uncovered, zeroFilled)
 	}
 	seen := map[string]persistence.AdminRecognizedAmount{}
 	for _, amount := range amounts {
@@ -52,27 +53,29 @@ func TestRecognizeProviderAmountsKeepsCoveredTotals(t *testing.T) {
 	}
 }
 
-// TestRecognizeProviderAmountsTreatsQuietSiblingAsCovered verifies zero sales do not withhold a matched provider.
-func TestRecognizeProviderAmountsTreatsQuietSiblingAsCovered(t *testing.T) {
+// TestRecognizeProviderAmountsListsTheAppWhoseReportWasNotImported verifies one of two provider apps
+// does not mark the provider complete. The absent app is zero-filled and named, and the imported total stays 2.50.
+func TestRecognizeProviderAmountsListsTheAppWhoseReportWasNotImported(t *testing.T) {
 	t.Parallel()
 
 	applications := []productionApplication{
 		{id: "app-apple", provider: core.ProviderAppleAppStore},
-		{id: "app-apple-quiet", provider: core.ProviderAppleAppStore},
+		{id: "app-apple-other-account", provider: core.ProviderAppleAppStore},
 	}
 	report := acceptedFinancialImport{
 		ID: "import-apple", Provider: core.ProviderAppleAppStore,
 		ReportKind: persistence.FinancialReportKindAppleConsolidated,
 	}
-	amounts, uncovered, allCovered := recognizeProviderAmounts(
+	amounts, uncovered, zeroFilled, allCovered := recognizeProviderAmounts(
 		applications,
 		map[core.Provider]acceptedFinancialImport{core.ProviderAppleAppStore: report},
 		map[string][]persistence.FinancialReportAmount{
 			report.ID: {financialAmount("app-apple", "USD", "2.50", nil)},
 		},
 	)
-	if !allCovered || len(uncovered) != 0 || len(amounts) != 1 || amounts[0].AmountDecimal != "2.50" {
-		t.Fatalf("quiet coverage = (%t, %v, %#v), want covered USD 2.50", allCovered, uncovered, amounts)
+	if allCovered || len(uncovered) != 0 || len(zeroFilled) != 1 || zeroFilled[0] != "app-apple-other-account" ||
+		len(amounts) != 1 || amounts[0].AmountDecimal != "2.50" || amounts[0].Currency != "USD" {
+		t.Fatalf("one-file coverage = (%t, uncovered %v, zero %v, amounts %#v), want USD 2.50 and the other app listed", allCovered, uncovered, zeroFilled, amounts)
 	}
 }
 
@@ -87,13 +90,13 @@ func TestRecognizeProviderAmountsLeavesUnmatchedReportUncovered(t *testing.T) {
 		ID: "import-apple", Provider: core.ProviderAppleAppStore,
 		ReportKind: persistence.FinancialReportKindAppleConsolidated,
 	}
-	amounts, uncovered, allCovered := recognizeProviderAmounts(
+	amounts, uncovered, zeroFilled, allCovered := recognizeProviderAmounts(
 		applications,
 		map[core.Provider]acceptedFinancialImport{core.ProviderAppleAppStore: report},
 		map[string][]persistence.FinancialReportAmount{report.ID: {}},
 	)
-	if allCovered || len(amounts) != 0 || len(uncovered) != 1 || uncovered[0] != core.ProviderAppleAppStore {
-		t.Fatalf("unmatched coverage = (%t, %v, %#v), want Apple uncovered and no amounts", allCovered, uncovered, amounts)
+	if allCovered || len(amounts) != 0 || len(zeroFilled) != 0 || len(uncovered) != 1 || uncovered[0] != core.ProviderAppleAppStore {
+		t.Fatalf("unmatched coverage = (%t, %v, %v, %#v), want Apple uncovered and no amounts", allCovered, uncovered, zeroFilled, amounts)
 	}
 }
 

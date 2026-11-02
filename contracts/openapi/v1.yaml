@@ -2168,7 +2168,7 @@ components:
     AdminRevenue:
       type: object
       additionalProperties: false
-      required: [status, recognized_minor_units, currency, amounts, uncovered_providers, production_application_count, test_application_count]
+      required: [status, recognized_minor_units, currency, amounts, uncovered_providers, zero_filled_application_ids, production_application_count, test_application_count]
       properties:
         status:
           type: string
@@ -2190,17 +2190,28 @@ components:
             Store-reported proceeds by provider, period, and currency. Currencies are not
             converted, and these figures are not a single project total. Populated for
             reports_imported. Also populated for store_reports_required when at least one
-            provider is covered; those amounts exclude uncovered providers. Empty when no
-            provider is covered. A production application omitted from an accepted report
-            is zero for that period when another production application of the same provider
-            matched, and that omission does not add or change a currency row. A report that
-            matches none of a provider's production applications does not cover that provider.
+            provider is covered; those amounts exclude uncovered providers and do not add a
+            row for an application the report omitted. Empty when no provider is covered.
+            A report that matches none of a provider's production applications does not
+            cover that provider. An omitted sibling is listed in zero_filled_application_ids
+            and does not change these currency totals.
           items:
             $ref: '#/components/schemas/AdminRecognizedAmount'
         uncovered_providers:
           type: array
           items:
             type: string
+        zero_filled_application_ids:
+          type: array
+          description: >
+            Production applications absent from an accepted report that matched another
+            application of the same provider. They are counted as zero and are not given a
+            currency row, so matched totals are unchanged. The report does not record a
+            store account, so this list can mean no sales or a separate account whose
+            report was not imported. Status stays store_reports_required while the list
+            is non-empty.
+          items:
+            $ref: '#/components/schemas/Identifier'
         production_application_count:
           type: integer
           format: int64

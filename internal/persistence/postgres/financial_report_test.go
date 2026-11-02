@@ -160,8 +160,9 @@ func TestOverviewRecognizedProceedsStaySeparateFromPurchasePrices(t *testing.T) 
 			t.Fatalf("partial amount = %#v, want only covered Apple proceeds", amount)
 		}
 	}
-	if partialSeen["USD"] != "2.50" || partialSeen["EUR"] != "-1.25" || len(partial.Analytics.Revenue.Amounts) != 2 {
-		t.Fatalf("partial amounts = %#v, want unchanged Apple USD 2.50 and EUR -1.25", partial.Analytics.Revenue.Amounts)
+	if partialSeen["USD"] != "2.50" || partialSeen["EUR"] != "-1.25" || len(partial.Analytics.Revenue.Amounts) != 2 ||
+		len(partial.Analytics.Revenue.ZeroFilledApplicationIDs) != 0 {
+		t.Fatalf("partial amounts = %#v zero %v, want unchanged Apple USD 2.50 and EUR -1.25", partial.Analytics.Revenue.Amounts, partial.Analytics.Revenue.ZeroFilledApplicationIDs)
 	}
 	if _, err := database.conn.Exec(database.ctx, `DELETE FROM applications WHERE id = 'app-google-prod'`); err != nil {
 		t.Fatalf("remove google application: %v", err)
@@ -199,10 +200,12 @@ func TestOverviewRecognizedProceedsStaySeparateFromPurchasePrices(t *testing.T) 
 	for _, amount := range quiet.Analytics.Revenue.Amounts {
 		quietSeen[amount.Currency] = amount.AmountDecimal
 	}
-	if quiet.Analytics.Revenue.Status != persistence.AdminRevenueReportsImported ||
+	if quiet.Analytics.Revenue.Status != persistence.AdminRevenueStoreReportsRequired ||
 		len(quiet.Analytics.Revenue.UncoveredProviders) != 0 ||
+		len(quiet.Analytics.Revenue.ZeroFilledApplicationIDs) != 1 ||
+		quiet.Analytics.Revenue.ZeroFilledApplicationIDs[0] != "app-apple-quiet" ||
 		quietSeen["USD"] != "2.50" || quietSeen["EUR"] != "-1.25" || len(quiet.Analytics.Revenue.Amounts) != 2 {
-		t.Fatalf("quiet revenue = %#v, want the same Apple totals with the silent app covered as zero", quiet.Analytics.Revenue)
+		t.Fatalf("quiet revenue = %#v, want the same Apple totals with app-apple-quiet listed and not reports_imported", quiet.Analytics.Revenue)
 	}
 
 	otherStart := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

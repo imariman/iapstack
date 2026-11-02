@@ -189,7 +189,7 @@ Apple coverage:
 - environment must be `production`
 - provider must be `apple_app_store`
 - `Apple Identifier` must equal that application's provider application id
-- a production Apple application omitted from the file is zero proceeds when another production Apple application matched; a file that matches none of them does not cover the provider. Omission does not add a currency row or change matched totals
+- a file that matches none of the provider's production applications does not cover the provider. A file that matches some of them keeps those currency totals and lists the omitted application ids in `zero_filled_application_ids`. The consolidated file does not record a vendor or store account, so those omitted applications are not treated as fully covered
 
 A sandbox or test application is never covered and never required.
 
@@ -201,10 +201,10 @@ A sandbox or test application is never covered and never required.
 | --- | --- |
 | `no_applications` | No applications. Recognized amount stays zero. Unchanged. |
 | `sandbox_only` | Every application is `sandbox` or `test`. Recognized amount stays zero. Sandbox value is unchanged. An imported report does not turn test value into revenue. |
-| `store_reports_required` | Any production provider lacks an accepted covering report. Amounts, when present, are covered providers only and are not a project total. |
-| `reports_imported` | Every production provider is covered by the latest accepted import. A quiet application omitted from a report that matched a sibling is covered as zero and does not change currency totals. |
+| `store_reports_required` | A production provider lacks an accepted covering report, or an accepted report omitted a production application of a provider it otherwise matched. Amounts, when present, are matched applications only. `zero_filled_application_ids` names the omitted applications. This is not a project total. |
+| `reports_imported` | Every production application appears in its provider's latest accepted import. |
 
-`amounts` lists store-reported proceeds per provider, per that import's own period, per currency. They are not one number. `reports_imported` includes every covered provider. `store_reports_required` includes only the covered providers and leaves the rest in `uncovered_providers`; the array is empty when none are covered. `recognized_minor_units` and `currency` stay null in both statuses so an old client cannot show a false single total.
+`amounts` lists store-reported proceeds per provider, per that import's own period, per currency. They are not one number. `reports_imported` means every production application appeared in its provider's report. `store_reports_required` includes matched applications only. `uncovered_providers` names providers with no covering report. `zero_filled_application_ids` names applications omitted from a report that matched another application of the same provider; those ids do not change currency totals, and the status stays `store_reports_required` because the file has no store account. The amounts array is empty when no provider is covered. `recognized_minor_units` and `currency` stay null in both statuses so an old client cannot show a false single total.
 
 The overview stays `store_reports_required` when any of these are true. Covered providers' imported totals are still returned. Amounts stay empty when no provider is covered:
 
@@ -213,6 +213,7 @@ The overview stays `store_reports_required` when any of these are true. Covered 
 - the operator supplied `financial_period_start` and `financial_period_end` and any production provider lacks an accepted import whose period equals that range
 - the only rows available are `unrecognized`, rejected, or superseded
 - the matching report matches none of that provider's production applications
+- the matching report includes some, but not all, production applications of that provider (`zero_filled_application_ids` lists the omitted ones; matched currency totals stay unchanged)
 
 Do not substitute an older period when the requested period is missing. On the unprompted overview, IAPStack also does not guess that a newer fiscal or calendar month "should" exist. It either has an accepted covering import or it does not. Staleness is shown by printing each import's period, not by inventing a gap.
 
@@ -240,7 +241,7 @@ The list and overview responses omit API keys, ciphertext, and report bodies, co
 | Status | Badge | Value | Note |
 | --- | --- | --- | --- |
 | `store_reports_required` | Reports required | — when no provider is covered. Otherwise one line per covered provider, period, and currency, labeled as not a complete project total. | Official store financial reports are required when nothing is covered. When some providers are covered, name the uncovered providers and say the lines are not a complete project total. Purchase prices are not revenue. |
-| `reports_imported` | Reports imported | One line per provider, period, and currency. No plus-sign total. | Imported store proceeds for the periods shown. A production application omitted from a report that matches another application of the same provider is zero for that period and is not listed. Currencies are not converted. Tax is not calculated. |
+| `reports_imported` | Reports imported | One line per provider, period, and currency. No plus-sign total. | Imported store proceeds for the periods shown. Currencies are not converted. Tax is not calculated. |
 | `sandbox_only` | Sandbox only | 0 real revenue, as today | Test purchases never create real store revenue. |
 | `no_applications` | No applications | 0 | Unchanged. |
 
@@ -248,7 +249,7 @@ The revenue card eyebrow "Authoritative total" is wrong once the value can be an
 
 Do not use the words estimated, approximate, projected, forecast, MRR, or ARR on this card. Do not say IAPStack calculated tax or commission. The sandbox note stays: provider-signed test value, not real proceeds or accounting revenue.
 
-When status is `store_reports_required` and no provider is covered, the value is an em dash. When some providers are covered, the value lists those providers' imported proceeds and the note says they are not a complete project total. The note may name uncovered providers ("Google Play has no accepted earnings report."). It must not print an uncovered provider's unrecognized amount in the value slot.
+When status is `store_reports_required` and no provider is covered, the value is an em dash. When some providers are covered, the value lists those providers' imported proceeds and the note says they are not a complete project total. The note may name uncovered providers ("Google Play has no accepted earnings report.") and must name `zero_filled_application_ids` when that list is non-empty. It must not print an uncovered provider's unrecognized amount in the value slot. It must not use the Reports imported badge while any application is zero-filled.
 
 The activity chart caption stays "Daily verification outcomes". Do not relabel it as revenue.
 
@@ -327,7 +328,7 @@ Checked-in synthetic fixtures only. No live store credentials, no recorded custo
 
 - A production project with no accepted covering import still returns `store_reports_required`, an em dash, and no client-price estimate.
 - A sandbox-only project still returns zero real revenue and a separate test-value list. Importing a report does not change that.
-- An accepted Apple consolidated file changes status to `reports_imported` when every production provider is covered. A second Apple production application with no sales in the file stays covered as zero and does not change the imported currency totals. A file that matches no production application does not cover its provider.
+- An accepted Apple consolidated file changes status to `reports_imported` only when every production application of every production provider appears in that provider's report. Two production applications of one provider, with a file that includes only one of them, stay `store_reports_required`: the imported currency totals are unchanged, and `zero_filled_application_ids` names the other application. A file that matches no production application does not cover its provider.
 - Recognized Apple amounts equal the summed Extended Partner Share per currency for matched production apps, including negatives, with commission state `included` and tax state `not_itemized`.
 - No code path converts currency or reads `price_milliunits` to fill recognized amounts.
 - Google and Huawei files cannot reach `accepted` until a real-report fixture is added and the open questions above are closed in this document.

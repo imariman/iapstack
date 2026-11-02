@@ -119,15 +119,17 @@ transaction prices by currency. The test value uses the latest non-reversed snap
 each purchased transaction, never converts currencies, and is not accounting revenue.
 Apple transactions provide this signed price metadata today; older observations report
 missing-price coverage until a fresh verification enriches them. Production projects
-stay on Reports required until every production provider has an accepted official
-store financial report. A production application left out of a report that already
-matches another application of the same provider counts as zero proceeds for that
-period and does not change the currency totals of applications that appear in the
-file. When some providers are covered and others are not, the revenue card lists the
-covered providers' store-reported proceeds and names the providers that still need a
-report. Those lines are not a complete project total. When every provider is covered,
-the card lists each imported period and currency. The card does not convert currencies
-and does not calculate tax or commission. Purchase prices are not revenue. The dashboard never
+stay on Reports required until every production application appears in its provider's
+accepted official store financial report. A file does not name its store account. If
+it includes one production application and omits another of the same provider, the
+card keeps the imported currency totals, lists the omitted application ids, and stays
+on Reports required. Those omitted applications are counted as zero, which can mean
+no sales or a separate account whose report was not imported. When some providers
+have no report, the card lists the matched proceeds and names the providers that
+still need a report. Those lines are not a complete project total. When every
+production application is present in its provider's report, the card lists each
+imported period and currency. The card does not convert currencies and does not
+calculate tax or commission. Purchase prices are not revenue. The dashboard never
 renders report files, order ids, protected provider payloads, or secrets.
 The access-key workspace lists active and revoked administrator/application key
 metadata, identifies the current stored key, creates one-time administrator bearers,

@@ -10,12 +10,13 @@ import (
 const (
 	// AdminRevenueSandboxOnly means every configured application is non-production.
 	AdminRevenueSandboxOnly AdminRevenueStatus = "sandbox_only"
-	// AdminRevenueStoreReportsRequired means at least one production provider has no accepted covering report.
-	// Amounts, when present, are the covered providers' store-reported proceeds and are not a project total.
+	// AdminRevenueStoreReportsRequired means recognized coverage is incomplete.
+	// Amounts, when present, are matched store-reported proceeds and are not a project total.
+	// ZeroFilledApplicationIDs names production applications absent from a report that matched
+	// another application of the same provider. The report does not record a store account, so
+	// those applications are not treated as fully covered.
 	AdminRevenueStoreReportsRequired AdminRevenueStatus = "store_reports_required"
-	// AdminRevenueReportsImported means every production provider is covered by an accepted store report.
-	// An application omitted from a report that matched another application of the same provider is zero
-	// proceeds for that period and does not change the currency totals of applications that appear.
+	// AdminRevenueReportsImported means every production application appears in its provider's accepted report.
 	AdminRevenueReportsImported AdminRevenueStatus = "reports_imported"
 	// AdminRevenueNoApplications means the project has no application scope yet.
 	AdminRevenueNoApplications AdminRevenueStatus = "no_applications"
@@ -109,6 +110,7 @@ type AdminRevenue struct {
 	Currency                   *string
 	Amounts                    []AdminRecognizedAmount
 	UncoveredProviders         []core.Provider
+	ZeroFilledApplicationIDs   []core.ApplicationID
 	ProductionApplicationCount int64
 	TestApplicationCount       int64
 }

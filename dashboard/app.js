@@ -326,6 +326,7 @@ function emptyAnalytics() {
       currency: null,
       amounts: [],
       uncovered_providers: [],
+      zero_filled_application_ids: [],
       production_application_count: 0,
       test_application_count: 0,
     },
@@ -364,7 +365,7 @@ function renderRevenue(revenue) {
     setText("revenue-currency", "not converted");
     setText(
       "revenue-note",
-      "Imported store proceeds for the periods shown. A production application omitted from a report that matches another application of the same provider is zero for that period and is not listed. Currencies are not converted. Tax is not calculated.",
+      "Imported store proceeds for the periods shown. Currencies are not converted. Tax is not calculated.",
     );
     return;
   }
@@ -434,7 +435,15 @@ function coveredProviderProceedsNote(revenue) {
   for (const provider of providers) {
     lines.push(uncoveredProviderSentence(provider));
   }
+  const zeroFilled = zeroFilledApplicationSentence(revenue);
+  if (zeroFilled) lines.push(zeroFilled);
   return lines.join(" ");
+}
+
+function zeroFilledApplicationSentence(revenue) {
+  const ids = Array.isArray(revenue.zero_filled_application_ids) ? revenue.zero_filled_application_ids : [];
+  if (!ids.length) return "";
+  return `These production applications were absent from a report that included another application of the same provider and are counted as zero: ${ids.join(", ")}. The report does not name a store account, so this can mean no sales or a separate account whose report was not imported.`;
 }
 
 function storeReportsRequiredNote(revenue) {

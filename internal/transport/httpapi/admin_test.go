@@ -553,7 +553,7 @@ func TestAdminOverviewSerializesEmptyCollections(t *testing.T) {
 	for _, field := range []string{
 		`"credential_revision":3`, `"webhook_revision":2`, `"products":[]`, `"customers":[]`,
 		`"recent_transactions":[]`, `"queues":[]`, `"recent_webhook_events":[]`,
-		`"status":"sandbox_only"`, `"recognized_minor_units":0`, `"daily_activity":[`,
+		`"status":"sandbox_only"`, `"recognized_minor_units":0`, `"zero_filled_application_ids":[]`, `"daily_activity":[`,
 		`"sandbox_value":{"amounts":[{"milliunits":4990,"currency":"USD"}],"transaction_count":1,"missing_price_count":0}`,
 	} {
 		if !strings.Contains(string(payload), field) {

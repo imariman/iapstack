@@ -57,6 +57,7 @@ type adminRevenueResponse struct {
 	Currency                   *string                         `json:"currency"`
 	Amounts                    []adminRecognizedAmountResponse `json:"amounts"`
 	UncoveredProviders         []core.Provider                 `json:"uncovered_providers"`
+	ZeroFilledApplicationIDs   []core.ApplicationID            `json:"zero_filled_application_ids"`
 	ProductionApplicationCount int64                           `json:"production_application_count"`
 	TestApplicationCount       int64                           `json:"test_application_count"`
 }
@@ -319,11 +320,15 @@ func adminRevenueFromRecord(revenue persistence.AdminRevenue) adminRevenueRespon
 		Currency:                   revenue.Currency,
 		Amounts:                    make([]adminRecognizedAmountResponse, 0, len(revenue.Amounts)),
 		UncoveredProviders:         append([]core.Provider{}, revenue.UncoveredProviders...),
+		ZeroFilledApplicationIDs:   append([]core.ApplicationID{}, revenue.ZeroFilledApplicationIDs...),
 		ProductionApplicationCount: revenue.ProductionApplicationCount,
 		TestApplicationCount:       revenue.TestApplicationCount,
 	}
 	if response.UncoveredProviders == nil {
 		response.UncoveredProviders = []core.Provider{}
+	}
+	if response.ZeroFilledApplicationIDs == nil {
+		response.ZeroFilledApplicationIDs = []core.ApplicationID{}
 	}
 	for _, amount := range revenue.Amounts {
 		response.Amounts = append(response.Amounts, adminRecognizedAmountResponse{
