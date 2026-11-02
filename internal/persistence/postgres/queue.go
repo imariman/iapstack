@@ -108,7 +108,7 @@ func (repository *transaction) SaveReconciliationScheduleRetry(
 			id, project_id, application_id, customer_id, kind, payload_ciphertext,
 			payload_fingerprint, encryption_key_id, metadata, available_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		ON CONFLICT (application_id, customer_id, kind, payload_fingerprint) DO NOTHING
+		ON CONFLICT (application_id, customer_id, kind, payload_fingerprint) WHERE dead_at IS NULL DO NOTHING
 	`, retry.ID, retry.ProjectID, retry.ApplicationID, retry.CustomerID, retry.Kind,
 		retry.Payload.Ciphertext, retry.Payload.Fingerprint[:], retry.Payload.KeyID,
 		metadata, retry.AvailableAt)
@@ -118,22 +118,29 @@ func (repository *transaction) SaveReconciliationScheduleRetry(
 	return nil
 }
 
-// ListPendingReconciliationScheduleRetries returns a bounded batch of unscheduled retries.
+// ListPendingReconciliationScheduleRetries returns a bounded batch of due, unscheduled retries.
 func (repository *transaction) ListPendingReconciliationScheduleRetries(
 	ctx context.Context,
+	now time.Time,
 	limit int,
 ) ([]persistence.ReconciliationScheduleRetry, error) {
+	if now.IsZero() {
+		return nil, errors.New("reconciliation schedule retry time is required")
+	}
 	if limit <= 0 {
 		return nil, errors.New("reconciliation schedule retry batch size must be positive")
 	}
 	rows, err := repository.tx.Query(ctx, `
 		SELECT id, project_id, application_id, customer_id, kind,
-			payload_ciphertext, payload_fingerprint, encryption_key_id, metadata, available_at
+			payload_ciphertext, payload_fingerprint, encryption_key_id, metadata,
+			available_at, attempts, next_attempt_at
 		FROM reconciliation_schedule_retries
 		WHERE scheduled_at IS NULL
-		ORDER BY created_at, id
-		LIMIT $1
-	`, limit)
+			AND dead_at IS NULL
+			AND next_attempt_at <= $1
+		ORDER BY next_attempt_at, id
+		LIMIT $2
+	`, now.UTC(), limit)
 	if err != nil {
 		return nil, classifyError("list reconciliation schedule retries", err)
 	}
@@ -177,6 +184,35 @@ func (repository *transaction) CompleteReconciliationScheduleRetry(
 	return nil
 }
 
+// RecordReconciliationScheduleRetryFailure bumps one pending retry or marks it dead.
+// The attempt count is incremented in SQL so two workers cannot both leave it at the same count.
+func (repository *transaction) RecordReconciliationScheduleRetryFailure(
+	ctx context.Context,
+	failure persistence.ReconciliationScheduleRetryFailure,
+) (bool, error) {
+	if err := failure.Validate(); err != nil {
+		return false, err
+	}
+	var deadAt *time.Time
+	if failure.Dead {
+		attemptedAt := failure.AttemptedAt.UTC()
+		deadAt = &attemptedAt
+	}
+	command, err := repository.tx.Exec(ctx, `
+		UPDATE reconciliation_schedule_retries
+		SET attempts = attempts + 1,
+			next_attempt_at = $2,
+			dead_at = $3
+		WHERE id = $1
+			AND scheduled_at IS NULL
+			AND dead_at IS NULL
+	`, failure.ID, failure.NextAttemptAt.UTC(), deadAt)
+	if err != nil {
+		return false, classifyError("record reconciliation schedule retry failure", err)
+	}
+	return command.RowsAffected() > 0, nil
+}
+
 // scanReconciliationScheduleRetry reads one pending schedule retry.
 func scanReconciliationScheduleRetry(rows pgx.Rows) (persistence.ReconciliationScheduleRetry, error) {
 	var retry persistence.ReconciliationScheduleRetry
@@ -184,6 +220,7 @@ func scanReconciliationScheduleRetry(rows pgx.Rows) (persistence.ReconciliationS
 	if err := rows.Scan(
 		&retry.ID, &retry.ProjectID, &retry.ApplicationID, &retry.CustomerID, &retry.Kind,
 		&ciphertext, &fingerprint, &retry.Payload.KeyID, &metadata, &retry.AvailableAt,
+		&retry.Attempts, &retry.NextAttemptAt,
 	); err != nil {
 		return persistence.ReconciliationScheduleRetry{}, classifyError("scan reconciliation schedule retry", err)
 	}
@@ -255,6 +292,8 @@ func (repository *transaction) FailQueue(ctx context.Context, failure persistenc
 }
 
 // PurgeTerminalQueueRecords removes expired queue records after their River jobs become terminal or disappear.
+// Completed and dead reconciliation schedule retries have no River job of their own. Their protected
+// payload is removed on the same retention cutoff. Pending retries are left in place.
 func (repository *transaction) PurgeTerminalQueueRecords(
 	ctx context.Context,
 	before time.Time,
@@ -313,10 +352,22 @@ func (repository *transaction) PurgeTerminalQueueRecords(
 			DELETE FROM outbox_events AS record USING expired_outbox AS expired
 			WHERE record.id = expired.id
 			RETURNING 1
+		), expired_schedule_retries AS (
+			SELECT record.id FROM reconciliation_schedule_retries AS record
+			WHERE record.scheduled_at < $1 OR record.dead_at < $1
+			ORDER BY COALESCE(record.scheduled_at, record.dead_at), record.id
+			LIMIT $2
+			FOR UPDATE OF record SKIP LOCKED
+		), deleted_schedule_retries AS (
+			DELETE FROM reconciliation_schedule_retries AS record
+			USING expired_schedule_retries AS expired
+			WHERE record.id = expired.id
+			RETURNING 1
 		)
 		SELECT (SELECT count(*) FROM deleted_inbox)
 			+ (SELECT count(*) FROM deleted_reconciliation)
 			+ (SELECT count(*) FROM deleted_outbox)
+			+ (SELECT count(*) FROM deleted_schedule_retries)
 	`, before.UTC(), batchSize).Scan(&deleted)
 	if err != nil {
 		return 0, classifyError("purge terminal queue records", err)

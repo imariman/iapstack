@@ -194,12 +194,16 @@ type QueueRepository interface {
 	// SaveReconciliationJob stores one protected reconciliation request idempotently.
 	SaveReconciliationJob(context.Context, ReconciliationJob) (string, error)
 	// SaveReconciliationScheduleRetry stores one protected schedule for a later job insert.
-	// The insert is idempotent for the same application, customer, kind, and payload fingerprint.
+	// The insert is idempotent for the same application, customer, kind, and payload fingerprint
+	// while that row is still live. A dead row does not block a later schedule.
 	SaveReconciliationScheduleRetry(context.Context, ReconciliationScheduleRetry) error
-	// ListPendingReconciliationScheduleRetries returns unscheduled retries in creation order.
-	ListPendingReconciliationScheduleRetries(context.Context, int) ([]ReconciliationScheduleRetry, error)
+	// ListPendingReconciliationScheduleRetries returns due, unscheduled retries in next-attempt order.
+	ListPendingReconciliationScheduleRetries(context.Context, time.Time, int) ([]ReconciliationScheduleRetry, error)
 	// CompleteReconciliationScheduleRetry marks one retry scheduled after its job exists.
 	CompleteReconciliationScheduleRetry(context.Context, string, time.Time) error
+	// RecordReconciliationScheduleRetryFailure advances one pending retry after a promotion failure.
+	// A row that is already scheduled or dead is left unchanged and reported as not updated.
+	RecordReconciliationScheduleRetryFailure(context.Context, ReconciliationScheduleRetryFailure) (bool, error)
 	// QueueMessage returns one durable payload by its fixed queue and record identity.
 	QueueMessage(context.Context, QueueName, string) (QueueMessage, error)
 	// CompleteQueue records successful processing or delivery idempotently.
@@ -439,6 +443,18 @@ type ReconciliationScheduleRetry struct {
 	Payload       protection.Value
 	Metadata      json.RawMessage
 	AvailableAt   time.Time
+	// Attempts is how many promotions have already failed. Zero is a new row.
+	Attempts int
+	// NextAttemptAt is when the worker may select the row again. Zero on insert uses the database default.
+	NextAttemptAt time.Time
+}
+
+// ReconciliationScheduleRetryFailure is one failed promotion of a pending schedule retry.
+type ReconciliationScheduleRetryFailure struct {
+	ID            string
+	AttemptedAt   time.Time
+	NextAttemptAt time.Time
+	Dead          bool
 }
 
 // QueueMessage is one durable inbox, outbox, or reconciliation payload.
@@ -695,6 +711,10 @@ func (retry ReconciliationScheduleRetry) Validate() error {
 	if metadataError == nil && retry.Kind == ReconciliationRetryPurchaseEvidence {
 		metadataError = decoded.Validate()
 	}
+	var attemptError error
+	if retry.Attempts < 0 {
+		attemptError = errors.New("reconciliation schedule retry attempts cannot be negative")
+	}
 	return errors.Join(
 		validateText("reconciliation schedule retry ID", retry.ID),
 		retry.ProjectID.Validate(),
@@ -704,6 +724,16 @@ func (retry ReconciliationScheduleRetry) Validate() error {
 		retry.Payload.Validate(),
 		metadataError,
 		validateTime("reconciliation schedule retry availability time", retry.AvailableAt),
+		attemptError,
+	)
+}
+
+// Validate checks the identity and schedule of one failed promotion.
+func (failure ReconciliationScheduleRetryFailure) Validate() error {
+	return errors.Join(
+		validateText("reconciliation schedule retry ID", failure.ID),
+		validateTime("reconciliation schedule retry attempt time", failure.AttemptedAt),
+		validateTime("reconciliation schedule retry next attempt time", failure.NextAttemptAt),
 	)
 }
 

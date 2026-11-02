@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/imariman/iapstack/internal/core"
@@ -18,21 +19,34 @@ const (
 	purchaseEvidencePurpose = "purchase_evidence"
 	// reconciliationRetryBatch bounds one worker pass over failed subscription schedules.
 	reconciliationRetryBatch = 32
+	// reconciliationRetryMaxAttempts marks a schedule dead after this many failed promotions.
+	// A row that can never succeed must leave the due batch instead of occupying it every minute.
+	reconciliationRetryMaxAttempts = 12
+	// reconciliationRetryBaseDelay is the wait after the first failed promotion.
+	reconciliationRetryBaseDelay = time.Minute
+	// reconciliationRetryMaxDelay caps exponential backoff for a schedule that keeps failing.
+	reconciliationRetryMaxDelay = time.Hour
 )
+
+// SetLogger records schedule-retry outcomes on the worker logger.
+// A nil logger falls back to the process default when a row is marked dead.
+func (service *Service) SetLogger(logger *slog.Logger) {
+	if service == nil {
+		return
+	}
+	service.logger = logger
+}
 
 // RetryReconciliationSchedules inserts reconciliation jobs for schedules the HTTP request could not commit.
 func (service *Service) RetryReconciliationSchedules(ctx context.Context) error {
 	if service == nil || service.store == nil || service.protection == nil {
 		return errors.New("processing service is not initialized")
 	}
-	now := time.Now
-	if service.clock != nil {
-		now = service.clock
-	}
+	now := service.now()
 	var pending []persistence.ReconciliationScheduleRetry
 	err := service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
 		var listErr error
-		pending, listErr = repository.ListPendingReconciliationScheduleRetries(ctx, reconciliationRetryBatch)
+		pending, listErr = repository.ListPendingReconciliationScheduleRetries(ctx, now, reconciliationRetryBatch)
 		return listErr
 	})
 	if err != nil {
@@ -40,11 +54,103 @@ func (service *Service) RetryReconciliationSchedules(ctx context.Context) error 
 	}
 	var first error
 	for _, retry := range pending {
-		if promoteErr := service.promoteReconciliationScheduleRetry(ctx, retry, now().UTC()); promoteErr != nil && first == nil {
-			first = promoteErr
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		promoteErr := service.promoteReconciliationScheduleRetry(ctx, retry, now)
+		if promoteErr == nil {
+			continue
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// The promotion error can mention storage internals. Persist the backoff and
+		// return only a failure to record that backoff. One poison row must not stop the batch.
+		if recordErr := service.recordReconciliationScheduleRetryFailure(ctx, retry, now); recordErr != nil && first == nil {
+			first = recordErr
 		}
 	}
 	return first
+}
+
+// now returns the processing clock in UTC.
+func (service *Service) now() time.Time {
+	if service != nil && service.clock != nil {
+		return service.clock().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// recordReconciliationScheduleRetryFailure applies exponential backoff or marks the row dead.
+func (service *Service) recordReconciliationScheduleRetryFailure(
+	ctx context.Context,
+	retry persistence.ReconciliationScheduleRetry,
+	now time.Time,
+) error {
+	attempt := retry.Attempts + 1
+	if attempt < 1 {
+		attempt = 1
+	}
+	dead := attempt >= reconciliationRetryMaxAttempts
+	nextAttemptAt := now.Add(reconciliationRetryBackoff(attempt))
+	if dead {
+		nextAttemptAt = now
+	}
+	var updated bool
+	err := service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var recordErr error
+		updated, recordErr = repository.RecordReconciliationScheduleRetryFailure(ctx, persistence.ReconciliationScheduleRetryFailure{
+			ID:            retry.ID,
+			AttemptedAt:   now,
+			NextAttemptAt: nextAttemptAt,
+			Dead:          dead,
+		})
+		return recordErr
+	})
+	if err != nil {
+		return err
+	}
+	if updated && dead {
+		service.logDeadScheduleRetry(ctx, retry, attempt)
+	}
+	return nil
+}
+
+// reconciliationRetryBackoff doubles the wait on each failed promotion until the cap.
+func reconciliationRetryBackoff(attempt int) time.Duration {
+	if attempt <= 1 {
+		return reconciliationRetryBaseDelay
+	}
+	delay := reconciliationRetryBaseDelay
+	for current := 1; current < attempt; current++ {
+		if delay >= reconciliationRetryMaxDelay/2 {
+			return reconciliationRetryMaxDelay
+		}
+		delay *= 2
+	}
+	if delay > reconciliationRetryMaxDelay {
+		return reconciliationRetryMaxDelay
+	}
+	return delay
+}
+
+// logDeadScheduleRetry records one exhausted schedule without purchase evidence or the storage error.
+func (service *Service) logDeadScheduleRetry(
+	ctx context.Context,
+	retry persistence.ReconciliationScheduleRetry,
+	attempts int,
+) {
+	logger := service.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Log(ctx, slog.LevelError, "reconciliation schedule retry exhausted",
+		slog.String("error_code", "reconciliation_schedule_retry_dead"),
+		slog.String("project_id", string(retry.ProjectID)),
+		slog.String("application_id", string(retry.ApplicationID)),
+		slog.String("customer_id", string(retry.CustomerID)),
+		slog.Int("attempts", attempts),
+	)
 }
 
 // promoteReconciliationScheduleRetry inserts one idempotent reconciliation job and marks its retry scheduled.

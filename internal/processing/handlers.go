@@ -55,6 +55,7 @@ type Service struct {
 	replacements linkedPurchaseReader
 	verification *verification.Service
 	clock        func() time.Time
+	logger       *slog.Logger
 }
 
 // New validates and constructs durable provider processing handlers.
