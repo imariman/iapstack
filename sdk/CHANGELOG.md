@@ -25,6 +25,11 @@
   and `IapStackProtocolException` stay those types, so an existing
   `on IapStackApiException` catch still matches. A failure before any batch
   succeeds is rethrown unchanged.
+- Kotlin and Flutter: `IapStackException` is sealed (`IapStackErrors.kt`,
+  `errors.dart`). `IapStackIncompleteRestoreException` is a new subtype, so an
+  exhaustive `when` or `switch` on `IapStackException` with no `else` or
+  `default` fails to compile. Add a branch for
+  `IapStackIncompleteRestoreException`, or an `else` / `default` branch.
 
 ### Added
 
