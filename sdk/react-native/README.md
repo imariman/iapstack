@@ -12,7 +12,7 @@ npm install @iapstack/react-native@next
 cd ios && pod install
 ```
 
-Prerelease version: `0.1.0-sdk.1`. The package is ready for release; until it is
+Prerelease version: `0.1.0-sdk.2`. The package is ready for release; until it is
 published, use the tarball produced by `npm pack` in this directory.
 
 Requires React Native 0.76+, iOS 15.1+, Swift 6.1 / Xcode 16.3+, Android API 26+,

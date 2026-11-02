@@ -116,6 +116,14 @@ window, event IDs that do not match the MAC, and conflicting bodies for a reused
 event ID. `handler` maps those failures to 401, identity conflict to 409, and
 store or host-callback errors to 503.
 
+## Errors
+
+Caller abort → `AbortError` (name `'AbortError'`), formerly `TransportError` for an
+in-flight request. `instanceof TransportError` does not match a caller abort, and
+`instanceof DOMException` does not match `AbortError` either. Aborting during a
+retry wait used to rethrow the previous attempt's error and now rejects with
+`AbortError` as well. The client's own attempt deadline is still `TimeoutError`.
+
 ## Testing
 
 ```sh

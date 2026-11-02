@@ -296,9 +296,18 @@ Never remove an encryption key until all rows written with that key ID have been
 - `iapstack_queue_job_duration_seconds` reports bounded worker attempt count and duration sums by queue and outcome.
 - River owns job claims, stale-job recovery, exponential retry scheduling, and terminal job cleanup.
 - Retryable failures become discarded after `IAPSTACK_WORKER_MAX_ATTEMPTS`; permanent failures are cancelled immediately.
+- A failed terminal audit write on the final attempt is snoozed for 15 seconds and logged at warn with `queue_transition_failed`. River's `snoozes` metadata caps that loop at 20 (about five minutes). The next run does not call the handler again. It logs `terminal_audit_write_failed` at error and increments `iapstack_queue_attempts_total{outcome="terminal_audit_write_failed"}`, then River discards the job. The durable outbox or reconciliation row can remain pending. Correlate `message_id`. Each snooze runs the handler again, so webhook receivers must keep deduplicating `IAPStack-Event-ID`.
 - Inbox, outbox, and reconciliation tables retain protected payloads and stable terminal audit outcomes while River job arguments contain identifiers only.
 - `IAPSTACK_QUEUE_RETENTION` applies to both River metadata and durable queue audit rows. Pending or otherwise runnable records are never removed by retention cleanup.
 - Durable records contain only safe error codes; correlate application logs with `message_id` and HTTP logs with `X-Request-ID`.
+
+## Missed subscription reconciliation
+
+`purchases:verify` and `purchases:restore` commit a subscription before they schedule its daily reconciliation job. Those writes use separate transactions, so a scheduling failure does not roll back the entitlement. The HTTP call still returns the committed snapshot. The API logs `reconciliation_schedule_failed` with `project_id`, `application_id`, and `customer_id`, and increments `iapstack_verifications_total{outcome="reconciliation_schedule_failed"}`. It does not log purchase evidence or the storage error text.
+
+Until that job exists, a store that does not send lifecycle notifications will not refresh expiry or refund for that subscription.
+
+Recover by submitting the same subscription again through `purchases:verify` or `purchases:restore`. Scheduling is idempotent for the same UTC day. Confirm a reconciliation row for that customer, then watch `iapstack_queue_depth` for the reconciliation queue. Alert on any increase of `iapstack_verifications_total{outcome="reconciliation_schedule_failed"}`.
 
 ## Compose release gate
 

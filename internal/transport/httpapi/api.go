@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/imariman/iapstack/internal/financialreports"
 	"github.com/imariman/iapstack/internal/jobs"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/platform/metrics"
 	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/stores"
 	"github.com/imariman/iapstack/internal/stores/apple"
@@ -44,6 +46,12 @@ const (
 	restoreRequestTimeout = 25 * time.Second
 )
 
+// purchaseVerifier commits one purchase verification and returns its snapshot.
+type purchaseVerifier interface {
+	// Verify persists one purchase and returns the current entitlement snapshot.
+	Verify(context.Context, verification.Command) (verification.Result, error)
+}
+
 // API owns versioned routes and application services without direct database access.
 type API struct {
 	store             persistence.Store
@@ -54,35 +62,39 @@ type API struct {
 	customerSessions  *auth.CustomerSessions
 	credentials       *credentials.Service
 	webhooks          *webhooks.Service
-	verification      *verification.Service
+	verification      purchaseVerifier
 	huawei            *huawei.Adapter
 	apple             *apple.Adapter
 	googlePlay        *googleplay.Adapter
 	protection        protection.Service
 	financialReports  *financialreports.Service
+	metrics           *metrics.Registry
 	bodyLimit         int64
 	offeringDirectory string
 	offeringCatalog   persistence.OfferingCatalog
 	clock             func() time.Time
+	logger            *slog.Logger
 	handler           http.Handler
 }
 
 // Dependencies contains the services required by the public HTTP contract.
 type Dependencies struct {
-	Store             persistence.Store
-	Operations        persistence.OperationsStore
-	Admin             persistence.AdminQueryStore
-	Authentication    *auth.Service
-	AdminSessions     *auth.AdminSessions
-	CustomerSessions  *auth.CustomerSessions
-	Credentials       *credentials.Service
-	Webhooks          *webhooks.Service
-	Verification      *verification.Service
-	Huawei            *huawei.Adapter
-	Apple             *apple.Adapter
-	GooglePlay        *googleplay.Adapter
-	Protection        protection.Service
-	FinancialReports  *financialreports.Service
+	Store            persistence.Store
+	Operations       persistence.OperationsStore
+	Admin            persistence.AdminQueryStore
+	Authentication   *auth.Service
+	AdminSessions    *auth.AdminSessions
+	CustomerSessions *auth.CustomerSessions
+	Credentials      *credentials.Service
+	Webhooks         *webhooks.Service
+	Verification     *verification.Service
+	Huawei           *huawei.Adapter
+	Apple            *apple.Adapter
+	GooglePlay       *googleplay.Adapter
+	Protection       protection.Service
+	FinancialReports *financialreports.Service
+	// Metrics counts operational failures. Nil skips those counters.
+	Metrics           *metrics.Registry
 	BodyLimit         int64
 	OfferingDirectory string
 	OfferingCatalog   persistence.OfferingCatalog
@@ -230,10 +242,12 @@ func New(dependencies Dependencies) (*API, error) {
 		webhooks:         dependencies.Webhooks, verification: dependencies.Verification,
 		huawei: dependencies.Huawei, apple: dependencies.Apple, googlePlay: dependencies.GooglePlay,
 		protection: dependencies.Protection, financialReports: dependencies.FinancialReports,
+		metrics:           dependencies.Metrics,
 		bodyLimit:         dependencies.BodyLimit,
 		offeringDirectory: strings.TrimSpace(dependencies.OfferingDirectory),
 		offeringCatalog:   dependencies.OfferingCatalog,
 		clock:             time.Now,
+		logger:            slog.Default(),
 	}
 	mux := http.NewServeMux()
 	for _, route := range api.v1Routes() {
@@ -874,11 +888,47 @@ func (api *API) verify(
 		return verification.Result{}, err
 	}
 	if requiresReconciliation(input.Evidence) {
-		if err := api.scheduleReconciliation(ctx, principal, result.Customer.ID, input); err != nil {
-			return verification.Result{}, err
+		// Verify has already committed the purchase in its own transaction. The reconciliation
+		// insert uses the operations store, so it cannot join that commit. A scheduling failure
+		// must not hide the committed snapshot. The counter and log are the recovery signal.
+		if scheduleErr := api.scheduleReconciliation(ctx, principal, result.Customer.ID, input); scheduleErr != nil {
+			api.recordReconcileScheduleFailure(principal, result.Customer.ID, application.Store.Provider)
 		}
 	}
 	return result, nil
+}
+
+// recordReconcileScheduleFailure counts and logs one missed daily refresh without purchase evidence.
+func (api *API) recordReconcileScheduleFailure(
+	principal auth.Principal,
+	customerID core.CustomerID,
+	provider core.Provider,
+) {
+	logger := api.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Error("schedule purchase reconciliation",
+		slog.String("error_code", "reconciliation_schedule_failed"),
+		slog.String("project_id", string(principal.ProjectID)),
+		slog.String("application_id", string(principal.ApplicationID)),
+		slog.String("customer_id", string(customerID)),
+	)
+	if api.metrics == nil {
+		return
+	}
+	api.metrics.ObserveVerification(reconciliationScheduleProvider(provider), "reconciliation_schedule_failed")
+}
+
+// reconciliationScheduleProvider keeps the schedule-failure counter on the closed provider set.
+func reconciliationScheduleProvider(provider core.Provider) string {
+	switch provider {
+	case core.ProviderAppleAppStore, core.ProviderGooglePlay, core.ProviderHuaweiAppGallery,
+		core.ProviderAmazonAppstore, core.ProviderSamsungGalaxyStore:
+		return string(provider)
+	default:
+		return "unknown"
+	}
 }
 
 // scheduleReconciliation stores a protected idempotent daily authoritative refresh request.
