@@ -90,6 +90,115 @@ func (repository *transaction) SaveReconciliationJob(
 	return jobID, nil
 }
 
+// SaveReconciliationScheduleRetry stores one protected schedule without enqueueing River.
+// The worker inserts the reconciliation job later. A repeated failure keeps the pending row.
+func (repository *transaction) SaveReconciliationScheduleRetry(
+	ctx context.Context,
+	retry persistence.ReconciliationScheduleRetry,
+) error {
+	if err := retry.Validate(); err != nil {
+		return err
+	}
+	metadata := retry.Metadata
+	if len(metadata) == 0 {
+		metadata = []byte(`{}`)
+	}
+	_, err := repository.tx.Exec(ctx, `
+		INSERT INTO reconciliation_schedule_retries (
+			id, project_id, application_id, customer_id, kind, payload_ciphertext,
+			payload_fingerprint, encryption_key_id, metadata, available_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (application_id, customer_id, kind, payload_fingerprint) DO NOTHING
+	`, retry.ID, retry.ProjectID, retry.ApplicationID, retry.CustomerID, retry.Kind,
+		retry.Payload.Ciphertext, retry.Payload.Fingerprint[:], retry.Payload.KeyID,
+		metadata, retry.AvailableAt)
+	if err != nil {
+		return classifyError("save reconciliation schedule retry", err)
+	}
+	return nil
+}
+
+// ListPendingReconciliationScheduleRetries returns a bounded batch of unscheduled retries.
+func (repository *transaction) ListPendingReconciliationScheduleRetries(
+	ctx context.Context,
+	limit int,
+) ([]persistence.ReconciliationScheduleRetry, error) {
+	if limit <= 0 {
+		return nil, errors.New("reconciliation schedule retry batch size must be positive")
+	}
+	rows, err := repository.tx.Query(ctx, `
+		SELECT id, project_id, application_id, customer_id, kind,
+			payload_ciphertext, payload_fingerprint, encryption_key_id, metadata, available_at
+		FROM reconciliation_schedule_retries
+		WHERE scheduled_at IS NULL
+		ORDER BY created_at, id
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, classifyError("list reconciliation schedule retries", err)
+	}
+	defer rows.Close()
+
+	retries := make([]persistence.ReconciliationScheduleRetry, 0)
+	for rows.Next() {
+		retry, scanErr := scanReconciliationScheduleRetry(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		retries = append(retries, retry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, classifyError("iterate reconciliation schedule retries", err)
+	}
+	return retries, nil
+}
+
+// CompleteReconciliationScheduleRetry records that the reconciliation job now exists.
+// A concurrent worker that already scheduled the row is success.
+func (repository *transaction) CompleteReconciliationScheduleRetry(
+	ctx context.Context,
+	id string,
+	scheduledAt time.Time,
+) error {
+	if err := validateText("reconciliation schedule retry ID", id); err != nil {
+		return err
+	}
+	if scheduledAt.IsZero() {
+		return errors.New("reconciliation schedule retry completion time is required")
+	}
+	_, err := repository.tx.Exec(ctx, `
+		UPDATE reconciliation_schedule_retries
+		SET scheduled_at = COALESCE(scheduled_at, $2)
+		WHERE id = $1
+	`, id, scheduledAt.UTC())
+	if err != nil {
+		return classifyError("complete reconciliation schedule retry", err)
+	}
+	return nil
+}
+
+// scanReconciliationScheduleRetry reads one pending schedule retry.
+func scanReconciliationScheduleRetry(rows pgx.Rows) (persistence.ReconciliationScheduleRetry, error) {
+	var retry persistence.ReconciliationScheduleRetry
+	var ciphertext, fingerprint, metadata []byte
+	if err := rows.Scan(
+		&retry.ID, &retry.ProjectID, &retry.ApplicationID, &retry.CustomerID, &retry.Kind,
+		&ciphertext, &fingerprint, &retry.Payload.KeyID, &metadata, &retry.AvailableAt,
+	); err != nil {
+		return persistence.ReconciliationScheduleRetry{}, classifyError("scan reconciliation schedule retry", err)
+	}
+	payload, err := protectedValue(ciphertext, fingerprint, retry.Payload.KeyID)
+	if err != nil {
+		return persistence.ReconciliationScheduleRetry{}, fmt.Errorf("validate reconciliation schedule retry payload: %w", err)
+	}
+	retry.Payload = payload
+	retry.Metadata = append(json.RawMessage(nil), metadata...)
+	if err := retry.Validate(); err != nil {
+		return persistence.ReconciliationScheduleRetry{}, fmt.Errorf("validate reconciliation schedule retry: %w", err)
+	}
+	return retry, nil
+}
+
 // QueueMessage returns one durable payload and terminal audit state by identity.
 func (repository *transaction) QueueMessage(
 	ctx context.Context,

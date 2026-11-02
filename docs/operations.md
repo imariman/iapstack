@@ -312,9 +312,11 @@ Never remove an encryption key until all rows written with that key ID have been
 
 `purchases:verify` and `purchases:restore` commit a subscription before they schedule its daily reconciliation job. Those writes use separate transactions, so a scheduling failure does not roll back the entitlement. The HTTP call still returns the committed snapshot. The API logs `reconciliation_schedule_failed` with `project_id`, `application_id`, and `customer_id`, and increments `iapstack_verifications_total{outcome="reconciliation_schedule_failed"}`. It does not log purchase evidence or the storage error text.
 
+That failure also writes a protected row in `reconciliation_schedule_retries`. The worker reads pending rows about once a minute and inserts the daily reconciliation job. The insert is idempotent for the same protected payload, so a later verify or a second worker pass does not create another job. The worker logs `reconciliation_schedule_retry_failed` when a pass cannot insert the job, without the purchase evidence or the storage error text.
+
 Until that job exists, a store that does not send lifecycle notifications will not refresh expiry or refund for that subscription.
 
-Recover by submitting the same subscription again through `purchases:verify` or `purchases:restore`. Scheduling is idempotent for the same UTC day. Confirm a reconciliation row for that customer, then watch `iapstack_queue_depth` for the reconciliation queue. Alert on any increase of `iapstack_verifications_total{outcome="reconciliation_schedule_failed"}`.
+Resubmitting the same subscription through `purchases:verify` or `purchases:restore` still schedules idempotently for the same UTC day. Confirm a reconciliation row for that customer, then watch `iapstack_queue_depth` for the reconciliation queue. Alert on any increase of `iapstack_verifications_total{outcome="reconciliation_schedule_failed"}` and on `reconciliation_schedule_retry_failed`.
 
 ## Compose release gate
 
