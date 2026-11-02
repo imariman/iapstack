@@ -25,7 +25,8 @@ const (
 	queueMetricsInterval = time.Minute
 	// queueCleanupInterval bounds how long expired terminal audit rows remain after retention.
 	queueCleanupInterval = time.Minute
-	// reconciliationRetryInterval bounds how long a failed subscription schedule waits for its job.
+	// reconciliationRetryInterval is how often the worker looks for due schedule retries.
+	// Each row's next_attempt_at decides when it is eligible again.
 	reconciliationRetryInterval = time.Minute
 	// queueCleanupBatchSize bounds row locks and transaction work per queue and cleanup pass.
 	queueCleanupBatchSize = 1_000

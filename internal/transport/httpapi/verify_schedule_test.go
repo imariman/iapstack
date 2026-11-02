@@ -528,14 +528,21 @@ func (transaction *reconciliationScheduleTransaction) SaveReconciliationSchedule
 // ListPendingReconciliationScheduleRetries returns retries the worker has not promoted.
 func (transaction *reconciliationScheduleTransaction) ListPendingReconciliationScheduleRetries(
 	_ context.Context,
+	now time.Time,
 	limit int,
 ) ([]persistence.ReconciliationScheduleRetry, error) {
+	if now.IsZero() {
+		return nil, errors.New("reconciliation schedule retry time is required")
+	}
 	if limit <= 0 {
 		return nil, errors.New("reconciliation schedule retry batch size must be positive")
 	}
 	pending := make([]persistence.ReconciliationScheduleRetry, 0)
 	for _, retry := range transaction.store.retries {
 		if _, done := transaction.store.scheduled[retry.ID]; done {
+			continue
+		}
+		if !retry.NextAttemptAt.IsZero() && retry.NextAttemptAt.After(now) {
 			continue
 		}
 		pending = append(pending, retry)

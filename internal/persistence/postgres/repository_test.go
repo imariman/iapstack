@@ -1215,6 +1215,195 @@ func TestOperationalQueueEnqueueRollsBackAtomically(t *testing.T) {
 	assertTableCount(t, database, "river_job", 0)
 }
 
+// TestReconciliationScheduleRetryBackoffAndRetention verifies due selection, dead rows, and payload cleanup.
+func TestReconciliationScheduleRetryBackoffAndRetention(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	t.Cleanup(func() {
+		if _, err := database.conn.Exec(database.ctx, `DELETE FROM reconciliation_schedule_retries`); err != nil {
+			t.Errorf("delete reconciliation schedule retries before schema reset: %v", err)
+		}
+	})
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	pending := newScheduleRetry(fixture, "retry-pending", 1)
+	later := newScheduleRetry(fixture, "retry-later", 2)
+	oldDead := newScheduleRetry(fixture, "retry-old-dead", 3)
+	oldDone := newScheduleRetry(fixture, "retry-old-done", 4)
+	freshDone := newScheduleRetry(fixture, "retry-fresh-done", 5)
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		for _, retry := range []persistence.ReconciliationScheduleRetry{pending, later, oldDead, oldDone, freshDone} {
+			if saveErr := repository.SaveReconciliationScheduleRetry(database.ctx, retry); saveErr != nil {
+				return saveErr
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("SaveReconciliationScheduleRetry() error = %v", err)
+	}
+
+	due, err := listScheduleRetries(t, store, database.ctx, now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("ListPendingReconciliationScheduleRetries() error = %v", err)
+	}
+	if len(due) != 5 {
+		t.Fatalf("due retries = %d, want 5", len(due))
+	}
+
+	updated, err := recordScheduleRetry(t, store, database.ctx, persistence.ReconciliationScheduleRetryFailure{
+		ID: later.ID, AttemptedAt: now, NextAttemptAt: now.Add(time.Hour), Dead: false,
+	})
+	if err != nil || !updated {
+		t.Fatalf("RecordReconciliationScheduleRetryFailure() = (%t, %v), want updated", updated, err)
+	}
+	due, err = listScheduleRetries(t, store, database.ctx, now)
+	if err != nil {
+		t.Fatalf("ListPendingReconciliationScheduleRetries() after backoff error = %v", err)
+	}
+	if scheduleRetryIDs(due)["retry-later"] {
+		t.Fatal("backed-off retry was still due")
+	}
+	dueLater, err := listScheduleRetries(t, store, database.ctx, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ListPendingReconciliationScheduleRetries() at next attempt error = %v", err)
+	}
+	if !scheduleRetryIDs(dueLater)["retry-later"] {
+		t.Fatal("backed-off retry was not due at next_attempt_at")
+	}
+	foundAttempts := 0
+	for _, retry := range dueLater {
+		if retry.ID == "retry-later" {
+			foundAttempts = retry.Attempts
+			if !retry.NextAttemptAt.Equal(now.Add(time.Hour)) {
+				t.Fatalf("next_attempt_at = %v, want %v", retry.NextAttemptAt, now.Add(time.Hour))
+			}
+		}
+	}
+	if foundAttempts != 1 {
+		t.Fatalf("attempts = %d, want 1", foundAttempts)
+	}
+
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		return repository.SaveReconciliationScheduleRetry(database.ctx, later)
+	}); err != nil {
+		t.Fatalf("duplicate SaveReconciliationScheduleRetry() error = %v", err)
+	}
+	dueLater, err = listScheduleRetries(t, store, database.ctx, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ListPendingReconciliationScheduleRetries() after duplicate save error = %v", err)
+	}
+	for _, retry := range dueLater {
+		if retry.ID == "retry-later" && retry.Attempts != 1 {
+			t.Fatalf("attempts after duplicate save = %d, want 1", retry.Attempts)
+		}
+	}
+
+	if _, err := recordScheduleRetry(t, store, database.ctx, persistence.ReconciliationScheduleRetryFailure{
+		ID: oldDead.ID, AttemptedAt: now.Add(-31 * 24 * time.Hour), NextAttemptAt: now, Dead: true,
+	}); err != nil {
+		t.Fatalf("RecordReconciliationScheduleRetryFailure() dead error = %v", err)
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		if completeErr := repository.CompleteReconciliationScheduleRetry(database.ctx, oldDone.ID, now.Add(-31*24*time.Hour)); completeErr != nil {
+			return completeErr
+		}
+		return repository.CompleteReconciliationScheduleRetry(database.ctx, freshDone.ID, now.Add(-24*time.Hour))
+	}); err != nil {
+		t.Fatalf("CompleteReconciliationScheduleRetry() error = %v", err)
+	}
+
+	var deleted int64
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var purgeErr error
+		deleted, purgeErr = repository.PurgeTerminalQueueRecords(database.ctx, now.Add(-30*24*time.Hour), 100)
+		return purgeErr
+	}); err != nil {
+		t.Fatalf("PurgeTerminalQueueRecords() error = %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("PurgeTerminalQueueRecords() deleted = %d, want the expired dead and scheduled rows", deleted)
+	}
+	var remaining int
+	if err := database.conn.QueryRow(database.ctx, `SELECT count(*) FROM reconciliation_schedule_retries`).Scan(&remaining); err != nil {
+		t.Fatalf("count reconciliation_schedule_retries: %v", err)
+	}
+	if remaining != 3 {
+		t.Fatalf("reconciliation_schedule_retries count = %d, want pending, backed-off, and fresh scheduled rows", remaining)
+	}
+	var pendingPayload []byte
+	if err := database.conn.QueryRow(database.ctx, `
+		SELECT payload_ciphertext FROM reconciliation_schedule_retries WHERE id = 'retry-pending'
+	`).Scan(&pendingPayload); err != nil {
+		t.Fatalf("load pending payload: %v", err)
+	}
+	if string(pendingPayload) == "" {
+		t.Fatal("pending retry payload was removed")
+	}
+}
+
+// newScheduleRetry builds one live reconciliation schedule retry for repository tests.
+func newScheduleRetry(fixture catalogFixture, id string, mark byte) persistence.ReconciliationScheduleRetry {
+	var fingerprint [32]byte
+	fingerprint[0] = mark
+	return persistence.ReconciliationScheduleRetry{
+		ID:            id,
+		ProjectID:     core.ProjectID(fixture.projectID),
+		ApplicationID: core.ApplicationID(fixture.applicationID),
+		CustomerID:    core.CustomerID(fixture.customerID),
+		Kind:          persistence.ReconciliationRetryReconciliationRequest,
+		Payload: protection.Value{
+			Ciphertext:  []byte("ciphertext-" + id),
+			Fingerprint: fingerprint,
+			KeyID:       repositoryEncryptionKeyID,
+		},
+		Metadata:    json.RawMessage(`{}`),
+		AvailableAt: time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC),
+	}
+}
+
+// listScheduleRetries reads the due schedule-retry batch.
+func listScheduleRetries(
+	t *testing.T,
+	store *postgres.Store,
+	ctx context.Context,
+	now time.Time,
+) ([]persistence.ReconciliationScheduleRetry, error) {
+	t.Helper()
+	var retries []persistence.ReconciliationScheduleRetry
+	err := store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var listErr error
+		retries, listErr = repository.ListPendingReconciliationScheduleRetries(ctx, now, 32)
+		return listErr
+	})
+	return retries, err
+}
+
+// recordScheduleRetry stores one failed promotion.
+func recordScheduleRetry(
+	t *testing.T,
+	store *postgres.Store,
+	ctx context.Context,
+	failure persistence.ReconciliationScheduleRetryFailure,
+) (bool, error) {
+	t.Helper()
+	var updated bool
+	err := store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var recordErr error
+		updated, recordErr = repository.RecordReconciliationScheduleRetryFailure(ctx, failure)
+		return recordErr
+	})
+	return updated, err
+}
+
+// scheduleRetryIDs indexes one batch by retry ID.
+func scheduleRetryIDs(retries []persistence.ReconciliationScheduleRetry) map[string]bool {
+	ids := make(map[string]bool, len(retries))
+	for _, retry := range retries {
+		ids[retry.ID] = true
+	}
+	return ids
+}
+
 // newPurchaseWrites builds one valid provider-neutral purchase persistence graph.
 func newPurchaseWrites(t *testing.T, fixture catalogFixture) purchaseWrites {
 	t.Helper()

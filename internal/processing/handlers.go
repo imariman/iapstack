@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/imariman/iapstack/internal/core"
@@ -40,6 +41,7 @@ type Service struct {
 	protection   protection.Service
 	verification *verification.Service
 	clock        func() time.Time
+	logger       *slog.Logger
 }
 
 // New validates and constructs durable provider processing handlers.

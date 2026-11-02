@@ -533,6 +533,57 @@ func TestImportGrantMigrationRefusesDirtyDown(t *testing.T) {
 	mustMigrateTo(t, database, importGrantSchemaVersion)
 }
 
+// TestReconciliationScheduleRetryMigrationRefusesDirtyDown verifies version 13 will not drop unscheduled retries.
+func TestReconciliationScheduleRetryMigrationRefusesDirtyDown(t *testing.T) {
+	const scheduleRetrySchemaVersion int32 = 13
+	database := openTestDatabase(t, scheduleRetrySchemaVersion)
+	fixture := seedCatalog(t, database)
+	fingerprint := bytes.Repeat([]byte{11}, 32)
+	mustExec(t, database, `
+		INSERT INTO reconciliation_schedule_retries (
+			id, project_id, application_id, customer_id, kind,
+			payload_ciphertext, payload_fingerprint, encryption_key_id, metadata, available_at
+		) VALUES (
+			'retry-pending', $1, $2, $3, 'reconciliation_request',
+			'ciphertext', $4, 'test-key', '{}'::jsonb, now()
+		)
+	`, fixture.projectID, fixture.applicationID, fixture.customerID, fingerprint)
+	if err := database.migrator.MigrateTo(database.ctx, scheduleRetrySchemaVersion-1); err == nil {
+		t.Fatal("MigrateTo(previous) error = nil, want refusal while a pending retry exists")
+	}
+	assertVersion(t, database, scheduleRetrySchemaVersion)
+
+	mustExec(t, database, `UPDATE reconciliation_schedule_retries SET dead_at = now() WHERE id = 'retry-pending'`)
+	if err := database.migrator.MigrateTo(database.ctx, scheduleRetrySchemaVersion-1); err == nil {
+		t.Fatal("MigrateTo(previous) error = nil, want refusal while a dead retry is still unscheduled")
+	}
+	assertVersion(t, database, scheduleRetrySchemaVersion)
+
+	mustExec(t, database, `DELETE FROM reconciliation_schedule_retries`)
+	mustExec(t, database, `
+		INSERT INTO reconciliation_schedule_retries (
+			id, project_id, application_id, customer_id, kind,
+			payload_ciphertext, payload_fingerprint, encryption_key_id, metadata,
+			available_at, scheduled_at
+		) VALUES (
+			'retry-scheduled', $1, $2, $3, 'reconciliation_request',
+			'ciphertext', $4, 'test-key', '{}'::jsonb, now(), now()
+		)
+	`, fixture.projectID, fixture.applicationID, fixture.customerID, fingerprint)
+	mustMigrateTo(t, database, scheduleRetrySchemaVersion-1)
+	mustMigrateTo(t, database, scheduleRetrySchemaVersion)
+	expectConstraint(t, database, "reconciliation_schedule_retries_outcome_exclusive", `
+		INSERT INTO reconciliation_schedule_retries (
+			id, project_id, application_id, customer_id, kind,
+			payload_ciphertext, payload_fingerprint, encryption_key_id, metadata,
+			available_at, scheduled_at, dead_at
+		) VALUES (
+			'retry-both', $1, $2, $3, 'reconciliation_request',
+			'ciphertext', $4, 'test-key', '{}'::jsonb, now(), now(), now()
+		)
+	`, fixture.projectID, fixture.applicationID, fixture.customerID, fingerprint)
+}
+
 // openTestDatabase opens the configured integration database at one schema version.
 func openTestDatabase(t *testing.T, targetVersion int32) *testDatabase {
 	t.Helper()
