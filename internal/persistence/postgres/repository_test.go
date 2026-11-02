@@ -804,6 +804,61 @@ func TestTransactionalPurchasePersistence(t *testing.T) {
 	assertTableCount(t, database, "purchase_evidence", 1)
 }
 
+// TestSaveObservationReusesMatchingPriorSnapshot keeps an unchanged snapshot on its previously stored id.
+func TestSaveObservationReusesMatchingPriorSnapshot(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	writes := newPurchaseWrites(t, fixture)
+	end := writes.observation.Observation.EffectivePeriod.StartsAt.Add(time.Hour)
+	writes.observation.Observation.EffectivePeriod.EndsAt = &end
+	persistPurchaseWrites(t, database.ctx, store, writes)
+
+	var evidenceID int64
+	if err := database.conn.QueryRow(
+		database.ctx,
+		"SELECT id FROM purchase_evidence WHERE application_id = $1",
+		fixture.applicationID,
+	).Scan(&evidenceID); err != nil {
+		t.Fatalf("load persisted evidence ID: %v", err)
+	}
+	replay := writes.observation
+	replay.EvidenceID = evidenceID
+	replay.Observation.ID = "observation-reencoded"
+	replay.Observation.PriorSnapshotID = writes.observation.Observation.ID
+	replay.Observation.ObservedAt = replay.Observation.ObservedAt.Add(time.Hour)
+	if err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		return repository.SaveObservation(database.ctx, replay)
+	}); err != nil {
+		t.Fatalf("SaveObservation() reuse error = %v", err)
+	}
+	assertTableCount(t, database, "purchase_observations", 1)
+	var storedID string
+	var storedObservedAt time.Time
+	if err := database.conn.QueryRow(database.ctx, `
+		SELECT id, observed_at FROM purchase_observations WHERE application_id = $1
+	`, fixture.applicationID).Scan(&storedID, &storedObservedAt); err != nil {
+		t.Fatalf("load stored observation: %v", err)
+	}
+	if storedID != string(writes.observation.Observation.ID) || !storedObservedAt.Equal(replay.Observation.ObservedAt) {
+		t.Fatalf("stored observation = (%q, %s), want prior id refreshed at %s",
+			storedID, storedObservedAt, replay.Observation.ObservedAt)
+	}
+
+	changed := replay
+	changedEnd := end.Add(time.Hour)
+	changed.Observation.ID = "observation-new-end"
+	changed.Observation.PriorSnapshotID = writes.observation.Observation.ID
+	changed.Observation.EffectivePeriod.EndsAt = &changedEnd
+	changed.Observation.ObservedAt = replay.Observation.ObservedAt.Add(time.Minute)
+	if err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		return repository.SaveObservation(database.ctx, changed)
+	}); err != nil {
+		t.Fatalf("SaveObservation() changed end error = %v", err)
+	}
+	assertTableCount(t, database, "purchase_observations", 2)
+}
+
 // TestSerializableTransactionRetriesConcurrentIdempotentWrites verifies transparent fresh-snapshot retries.
 func TestSerializableTransactionRetriesConcurrentIdempotentWrites(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)
