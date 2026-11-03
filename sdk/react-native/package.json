@@ -1,6 +1,6 @@
 {
   "name": "@iapstack/react-native",
-  "version": "0.1.0-sdk.2",
+  "version": "0.1.0-sdk.3",
   "description": "React Native StoreKit, Play Billing, Huawei IAP and customer HTTP SDK for IAPStack.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/imariman/iapstack",

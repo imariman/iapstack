@@ -438,10 +438,117 @@ void main() {
       expect(batches, <int>[100, 100, 50]);
       expect(requestIds, <String?>['restore-1', 'restore-1-2', 'restore-1-3']);
       expect(result.results, hasLength(250));
+      expect(result.skipped.total, 0);
+      expect(result.pageLimitReached, isFalse);
       expect(
         (await client.restorePurchasesInBatches(const <PurchaseSubmission>[]))
             .results,
         isEmpty,
+      );
+    });
+
+    test('keeps earlier restore batches when a later batch fails', () async {
+      var calls = 0;
+      final client = IapStackClient(
+        _config(retryPolicy: const IapStackRetryPolicy(maxAttempts: 1)),
+        httpClient: MockClient((request) async {
+          calls++;
+          if (calls == 1) {
+            return http.Response(
+              jsonEncode(<String, Object?>{
+                'results': List<Object?>.filled(100, _verificationJson),
+              }),
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'error': <String, Object?>{
+                'code': 'invalid_purchase',
+                'message': 'purchase evidence could not be verified',
+                'request_id': 'request-batch-2',
+              },
+            }),
+            422,
+          );
+        }),
+      );
+
+      await expectLater(
+        client.restorePurchasesInBatches(
+          List<PurchaseSubmission>.generate(
+            101,
+            (index) => _purchase('product_$index'),
+          ),
+          requestId: 'restore-partial',
+          skipped: const RestoreSkipCounts(unknownProduct: 2),
+          pageLimitReached: true,
+        ),
+        throwsA(
+          isA<IapStackApiException>()
+              .having((error) => error.code, 'code', 'invalid_purchase')
+              .having(
+                (error) => error.committedRestoreResults,
+                'committedRestoreResults',
+                hasLength(100),
+              )
+              .having(
+                (error) => error.restoreSkips.unknownProduct,
+                'unknownProduct',
+                2,
+              )
+              .having(
+                (error) => error.restorePageLimitReached,
+                'restorePageLimitReached',
+                isTrue,
+              )
+              .having(
+                  (error) => error.requestId, 'requestId', 'request-batch-2'),
+        ),
+      );
+      expect(calls, 2);
+    });
+
+    test(
+        'a failed first restore batch keeps the original error when rows were skipped',
+        () async {
+      final client = IapStackClient(
+        _config(retryPolicy: const IapStackRetryPolicy(maxAttempts: 1)),
+        httpClient: MockClient((request) async => http.Response(
+              jsonEncode(<String, Object?>{
+                'error': <String, Object?>{
+                  'code': 'invalid_purchase',
+                  'message': 'purchase evidence could not be verified',
+                  'request_id': 'request-batch-1',
+                },
+              }),
+              422,
+            )),
+      );
+
+      await expectLater(
+        client.restorePurchasesInBatches(
+          <PurchaseSubmission>[_purchase()],
+          skipped: const RestoreSkipCounts(unbound: 3, differentCustomer: 1),
+          pageLimitReached: true,
+        ),
+        throwsA(
+          isA<IapStackApiException>()
+              .having((error) => error.code, 'code', 'invalid_purchase')
+              .having(
+                (error) => error.committedRestoreResults,
+                'committedRestoreResults',
+                isEmpty,
+              )
+              .having((error) => error.restoreSkips.total, 'skipped', 0)
+              .having(
+                (error) => error.restorePageLimitReached,
+                'restorePageLimitReached',
+                isFalse,
+              )
+              .having((error) => error, 'type',
+                  isNot(isA<IapStackIncompleteRestoreException>())),
+        ),
       );
     });
 

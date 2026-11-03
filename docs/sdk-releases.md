@@ -8,7 +8,7 @@ server release nor changes its three-provider evidence requirements.
 ## Version policy
 
 `sdk/version.txt` is the independent SDK release-train version. The current prepared
-version is `0.1.0-sdk.2`; it is **not published merely because it appears here**.
+version is `0.1.0-sdk.3`; it is **not published merely because it appears here**.
 Check the [GitHub SDK release](https://github.com/imariman/iapstack/releases) and
 registry availability before using registry install commands.
 
@@ -20,10 +20,10 @@ will be introduced explicitly when compatibility commitments are ready.
 
 | Distribution | Release identity |
 | --- | --- |
-| SwiftPM | Root semantic tag `0.1.0-sdk.2`, exact dependency version |
-| Go module | Tag `sdk/go/v0.1.0-sdk.2` |
-| npm | `@iapstack/host` and `@iapstack/react-native`, version `0.1.0-sdk.2`, dist-tag `next` |
-| Maven | `io.github.imariman.iapstack`, artifacts `iapstack-core`, `iapstack-google-play`, `iapstack-huawei`, version `0.1.0-sdk.2` |
+| SwiftPM | Root semantic tag `0.1.0-sdk.3`, exact dependency version |
+| Go module | Tag `sdk/go/v0.1.0-sdk.3` |
+| npm | `@iapstack/host` and `@iapstack/react-native`, version `0.1.0-sdk.3`, dist-tag `next` |
+| Maven | `io.github.imariman.iapstack`, artifacts `iapstack-core`, `iapstack-google-play`, `iapstack-huawei`, version `0.1.0-sdk.3` |
 
 The root `Package.swift` points at the canonical sources in `sdk/ios`. Semantic SDK
 tags deliberately omit the server's `v` prefix and use the `sdk.N` prerelease label;
@@ -35,15 +35,15 @@ version in SwiftPM because the same repository also has server version tags.
 ### Go trusted host
 
 ```sh
-go get github.com/imariman/iapstack/sdk/go@v0.1.0-sdk.2
+go get github.com/imariman/iapstack/sdk/go@v0.1.0-sdk.3
 ```
 
 ### TypeScript trusted host and React Native
 
 ```sh
-npm install @iapstack/host@0.1.0-sdk.2
+npm install @iapstack/host@0.1.0-sdk.3
 # In a React Native application:
-npm install @iapstack/react-native@0.1.0-sdk.2
+npm install @iapstack/react-native@0.1.0-sdk.3
 ```
 
 The host package includes compiled ESM and TypeScript declarations and requires
@@ -54,7 +54,7 @@ package. See its README for native platform setup and the runnable example.
 ### SwiftPM
 
 ```swift
-.package(url: "https://github.com/imariman/iapstack.git", exact: "0.1.0-sdk.2")
+.package(url: "https://github.com/imariman/iapstack.git", exact: "0.1.0-sdk.3")
 ```
 
 Link the `IAPStackApple` product. Before publication use `.package(path: "../iapstack")`
@@ -83,9 +83,9 @@ outside source control. Add `google()` and `mavenCentral()` for transitive depen
 Huawei consumers also need `https://developer.huawei.com/repo/`.
 
 ```kotlin
-implementation("io.github.imariman.iapstack:iapstack-core:0.1.0-sdk.2")
-implementation("io.github.imariman.iapstack:iapstack-google-play:0.1.0-sdk.2")
-implementation("io.github.imariman.iapstack:iapstack-huawei:0.1.0-sdk.2")
+implementation("io.github.imariman.iapstack:iapstack-core:0.1.0-sdk.3")
+implementation("io.github.imariman.iapstack:iapstack-google-play:0.1.0-sdk.3")
+implementation("io.github.imariman.iapstack:iapstack-huawei:0.1.0-sdk.3")
 ```
 
 Include only the store companions the application uses. Both depend on the same

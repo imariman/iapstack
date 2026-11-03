@@ -47,8 +47,11 @@ leaves the transaction unfinished so StoreKit can redeliver it.
 ## Restore
 
 `restorePurchases` calls App Store sync, reads StoreKit 2 transaction history,
-deduplicates transaction IDs, and sends bounded batches to IAPStack. Each
-restored transaction must contain the expected `appAccountToken` UUID.
+deduplicates transaction IDs, and sends bounded batches to IAPStack. Rows
+without the expected `appAccountToken`, rows for another customer, and unknown
+products are counted on `RestoreResult.skipped` and are not submitted. Another
+customer's transactions are never verified. If a later batch fails, the
+original IAPStack error carries `committedRestoreResults`.
 
 See `example/` for an iOS simulator harness with a checked-in StoreKit
 Configuration file.

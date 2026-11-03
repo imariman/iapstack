@@ -111,7 +111,7 @@ test('verifyPurchase sends correct method, path, headers, and payload', async ()
     const headers = new Headers(calls[0].init.headers as HeadersInit);
     assert.equal(headers.get('Accept'), 'application/json');
     assert.equal(headers.get('Authorization'), 'Bearer token');
-    assert.equal(headers.get('X-IAPStack-SDK'), 'react-native/0.1.0-sdk.2');
+    assert.equal(headers.get('X-IAPStack-SDK'), 'react-native/0.1.0-sdk.3');
     assert.equal(headers.get('X-Request-ID'), 'request-123');
     assert.equal(headers.get('Content-Type'), 'application/json');
 

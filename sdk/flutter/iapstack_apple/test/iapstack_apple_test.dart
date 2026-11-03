@@ -172,9 +172,10 @@ void main() {
           restored: <ApplePurchase>[
             _purchase(transactionId: 'unknown', productId: 'legacy_product'),
             _purchase(
-              transactionId: 'unbound',
+              transactionId: 'other-customer',
               appAccountToken: '018f59d0-a200-7000-8000-000000000002',
             ),
+            _purchase(transactionId: 'legacy-unbound', appAccountToken: ''),
             _purchase(transactionId: 'empty', signedTransaction: ''),
             _purchase(transactionId: 'malformed', signedTransaction: 'not-jws'),
             _purchase(transactionId: 'configured'),
@@ -211,6 +212,11 @@ void main() {
           'header.payload.signature',
         );
         expect(result.results, hasLength(1));
+        expect(result.skipped.unknownProduct, 1);
+        expect(result.skipped.differentCustomer, 1);
+        expect(result.skipped.unbound, 1);
+        expect(result.skipped.multipleProducts, 0);
+        expect(result.pageLimitReached, isFalse);
       },
     );
 
