@@ -16,6 +16,7 @@ import (
 	"github.com/imariman/iapstack/internal/protection"
 )
 
+// scheduleRetrySecret is failure text that must never reach worker logs.
 const scheduleRetrySecret = "retired-key-do-not-log"
 
 // scheduleRetryStore is an in-memory schedule queue for promotion tests.
