@@ -377,7 +377,10 @@ Flutter, Kotlin and Swift SDKs. The SDK contract tests assert this section.
   `effective_ends_at`. The server only emits an `allowed` projection once its
   period has started, so `effective_starts_at` is informational; checking it on
   a device whose clock runs behind the server would deny access right after a
-  purchase.
+  purchase. Provider clock skew is already included in `effective_ends_at`
+  when the server still allows access. The App Store allowance is five minutes
+  past a signed expiry that Apple still reports as active. Clients do not add
+  a second window.
 - **`MemoryEventStore`.** The Go and TypeScript in-memory webhook stores never
   evict and are for tests and local development only.
 

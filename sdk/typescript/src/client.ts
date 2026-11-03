@@ -173,6 +173,13 @@ export class Client {
         const apiError = apiErrorFromResponse(response, this.#now());
         last = apiError;
         if (!this.shouldRetry(apiError, attempt, options.signal)) {
+          // shouldRetry is false once the caller aborts, including in the gap
+          // after a retryable body is parsed and before the backoff wait starts.
+          // Throw the abort instead of the response so a user cancel is not a
+          // server failure. Go's retryStopError does the same with context.Canceled.
+          if (options.signal?.aborted) {
+            throw abortError(options.signal);
+          }
           throw apiError;
         }
       } catch (error) {
