@@ -299,6 +299,38 @@ func TestServiceVerifyPersistsAndReplays(t *testing.T) {
 	}
 }
 
+// TestMissingExpiryDoesNotClobberFutureEnd verifies a failed provider read leaves the stored period in place.
+// Apple returns invalid evidence when an active subscription has no signed expiry, and that error
+// is raised before persistence, so the previous future end remains.
+func TestMissingExpiryDoesNotClobberFutureEnd(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	future := fixture.result.VerifiedAt.Add(30 * 24 * time.Hour)
+	fixture.result.Observations[0].EffectivePeriod.EndsAt = &future
+	store := newFakeStore(fixture)
+	adapter := &fakeAdapter{result: fixture.result}
+	service := newVerificationService(t, store, adapter, &fakeProtector{}, fixture.clock)
+
+	if _, err := service.Verify(context.Background(), fixture.command); err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	adapter.err = errors.New("apple active subscription expiry is missing")
+	if _, err := service.Verify(context.Background(), fixture.command); err == nil {
+		t.Fatal("Verify() error = nil, want the missing expiry to fail before persistence")
+	}
+	if len(store.repository.entitlements) != 1 {
+		t.Fatalf("entitlements = %d, want the original projection", len(store.repository.entitlements))
+	}
+	for _, entitlement := range store.repository.entitlements {
+		end := entitlement.Projection.EffectivePeriod.EndsAt
+		if entitlement.Version != 1 || entitlement.Projection.Access != core.AccessAllowed ||
+			end == nil || !end.Equal(future) {
+			t.Fatalf("stored projection = %#v, want the future end preserved", entitlement)
+		}
+	}
+}
+
 // TestServiceVerifyCompletesWhenProductGrantsNothing verifies an empty grant set is a completed verification.
 func TestServiceVerifyCompletesWhenProductGrantsNothing(t *testing.T) {
 	t.Parallel()

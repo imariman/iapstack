@@ -174,6 +174,20 @@ class GooglePlayIapStackTest {
     }
   }
 
+  @Test
+  fun purchaseListenerDoesNotVerifyBecauseAnotherEntitlementIsAllowed() {
+    assertEquals(
+      "pending",
+      purchaseListenerEventType(
+        listOf(
+          Entitlement("premium", "allowed", "purchase_valid", 1),
+          Entitlement("extra", "unresolved", "pending_payment", 1),
+        ),
+      ),
+    )
+    assertEquals("pending", purchaseListenerEventType(emptyList()))
+  }
+
   private fun googlePlay(
     platform: FakePlatform = FakePlatform(),
     client: IapStackClient = unusedClient(),

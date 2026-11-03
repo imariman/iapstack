@@ -386,6 +386,12 @@ func TestNormalizeSubscriptionStatusCoversAppleLifecycle(t *testing.T) {
 			if test.wantGraceEnd && (endsAt == nil || !endsAt.Equal(milliseconds(test.graceEndsAt))) {
 				t.Fatalf("grace end = %v", endsAt)
 			}
+			if test.status == subscriptionStatusActive && !test.wantGraceEnd {
+				signed := milliseconds(transaction.ExpiresDate)
+				if endsAt == nil || !endsAt.Equal(signed) {
+					t.Fatalf("effective end = %v, want signed expiry %v", endsAt, signed)
+				}
+			}
 			if test.autoRenew == autoRenewEnabled && (renewal.NextProductID != fixtureProductID || renewal.NextRenewalAt == nil) {
 				t.Fatalf("enabled renewal = %#v", renewal)
 			}
@@ -445,8 +451,19 @@ func TestNormalizeActiveStatusNearExpiry(t *testing.T) {
 				}
 				return
 			}
-			if endsAt == nil || !endsAt.Equal(milliseconds(test.expiresAt)) {
-				t.Fatalf("effective end = %v, want signed expiry", endsAt)
+			signedEnd := milliseconds(test.expiresAt)
+			wantEnd := signedEnd
+			if test.wantAccess == core.AccessAllowed && !signedEnd.After(now) {
+				wantEnd = signedEnd.Add(maximumNotificationClockSkew)
+			}
+			if endsAt == nil || !endsAt.Equal(wantEnd) {
+				t.Fatalf("effective end = %v, want %v", endsAt, wantEnd)
+			}
+			decision, decisionReason := core.AccessAt(access, reason, endsAt, now)
+			clientGrants := decision == core.AccessAllowed && (endsAt == nil || now.Before(*endsAt))
+			if decision != access || decisionReason != reason || (!clientGrants && access == core.AccessAllowed) {
+				t.Fatalf("reader decision = (%q, %q), client grants = %v, stored = (%q, %q)",
+					decision, decisionReason, clientGrants, access, reason)
 			}
 		})
 	}
@@ -792,6 +809,81 @@ func TestAdapterRejectsActiveSubscriptionWithoutExpiry(t *testing.T) {
 	})
 	if !isFailureKind(err, stores.FailureInvalidEvidence) {
 		t.Fatalf("Verify() error = %v, want invalid evidence", err)
+	}
+}
+
+// TestAdapterPublishesClockSkewAllowance verifies an active App Store subscription whose
+// signed expiry is one minute behind the server stays allowed through the skew window.
+// The effective end includes the allowance, so a reader that expires at that end and an
+// SDK grantsAccess check agree with the stored access decision.
+func TestAdapterPublishesClockSkewAllowance(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 29, 14, 0, 0, 0, time.UTC)
+	signedExpiry := now.Add(-time.Minute)
+	fixture := newSigningFixture(t, now)
+	transaction := transactionPayload{
+		OriginalTransactionID: "2000001023456789", TransactionID: "2000001023456790",
+		BundleID: fixtureBundleID, ProductID: fixtureProductID, PurchaseDate: now.Add(-24 * time.Hour).UnixMilli(),
+		ExpiresDate: signedExpiry.UnixMilli(), Quantity: 1, Type: appleSubscriptionType,
+		AppAccountToken: fixtureAccountToken, OwnershipType: applePurchasedOwnership,
+		SignedDate: now.UnixMilli(), Environment: "Sandbox",
+	}
+	renewal := renewalPayload{
+		AppAccountToken: transaction.AppAccountToken, AutoRenewProductID: transaction.ProductID,
+		AutoRenewStatus: autoRenewEnabled, Environment: transaction.Environment,
+		OriginalTransactionID: transaction.OriginalTransactionID, ProductID: transaction.ProductID,
+		RenewalDate: now.Add(30 * 24 * time.Hour).UnixMilli(), SignedDate: now.UnixMilli(),
+	}
+	adapter, err := New(fakeCredentialSource{credential: credentialFixture(t, fixture, core.EnvironmentSandbox)}, time.Second)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	adapter.clock = func() time.Time { return now }
+	adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/inApps/v1/subscriptions/"+transaction.OriginalTransactionID {
+			t.Fatalf("subscription status path = %q", request.URL.Path)
+		}
+		return jsonResponse(t, http.StatusOK, statusResponse{
+			Environment: transaction.Environment, BundleID: transaction.BundleID,
+			Data: []subscriptionGroupIdentifierItem{{
+				SubscriptionGroupIdentifier: "subscription-group-1",
+				LastTransactions: []lastTransactionsItem{{
+					OriginalTransactionID: transaction.OriginalTransactionID,
+					Status:                subscriptionStatusActive,
+					SignedTransactionInfo: signTransactionFixture(t, fixture, transaction),
+					SignedRenewalInfo:     signApplePayloadFixture(t, fixture, renewal),
+				}},
+			}},
+		}, nil), nil
+	})
+	binding, err := core.NewStoreReference(core.ReferenceCustomerBinding, "app_account_token", fixtureAccountToken)
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	result, err := adapter.Verify(context.Background(), stores.VerificationRequest{
+		Application: appleApplication(core.EnvironmentSandbox), CustomerID: "customer-1",
+		ClaimedProducts:          []core.ProviderProductID{fixtureProductID},
+		ExpectedCustomerBindings: []core.StoreReference{binding},
+		Evidence:                 evidenceFixture(t, fixture, transaction, core.ProductKindSubscription),
+	})
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	observation := result.Observations[0]
+	wantEnd := milliseconds(signedExpiry.UnixMilli()).Add(maximumNotificationClockSkew)
+	if observation.State != core.LifecycleActive || observation.Access != core.AccessAllowed ||
+		observation.AccessReason != core.AccessReasonPurchaseValid ||
+		observation.EffectivePeriod.EndsAt == nil || !observation.EffectivePeriod.EndsAt.Equal(wantEnd) {
+		t.Fatalf("observation = %#v, want allowed until %v", observation, wantEnd)
+	}
+	access, reason := core.AccessAt(observation.Access, observation.AccessReason, observation.EffectivePeriod.EndsAt, now)
+	if access != core.AccessAllowed || reason != core.AccessReasonPurchaseValid || !now.Before(wantEnd) {
+		t.Fatalf("access one minute after the signed expiry = (%q, %q)", access, reason)
+	}
+	atEnd, atEndReason := core.AccessAt(observation.Access, observation.AccessReason, observation.EffectivePeriod.EndsAt, wantEnd)
+	if atEnd != core.AccessDenied || atEndReason != core.AccessReasonExpired {
+		t.Fatalf("access at the allowance end = (%q, %q), want expired", atEnd, atEndReason)
 	}
 }
 
