@@ -80,7 +80,11 @@ abstract interface class GooglePlayIapPlatform {
     required String obfuscatedAccountId,
   });
 
-  /// Queries currently owned purchases for an application customer binding.
+  /// Queries currently owned purchases.
+  ///
+  /// Return every owned row, including purchases with no account binding or a
+  /// different one. `GooglePlayIapStack.restorePurchases` counts those instead
+  /// of treating them as an empty restore.
   Future<List<GooglePlayPurchase>> ownedPurchases({
     required String obfuscatedAccountId,
   });
