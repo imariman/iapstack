@@ -25,9 +25,12 @@ import (
 
 // googleLookupStore returns one verified purchase context for processing tests.
 type googleLookupStore struct {
-	purchase persistence.PurchaseReferenceContext
-	lookup   persistence.ProviderReferenceLookup
-	err      error
+	purchase       persistence.PurchaseReferenceContext
+	lookup         persistence.ProviderReferenceLookup
+	err            error
+	evidence       persistence.PurchaseEvidenceRecord
+	evidenceLookup persistence.ProviderReferenceLookup
+	evidenceErr    error
 }
 
 // googleLookupTransaction implements the provider reference lookup test port.
@@ -85,7 +88,9 @@ func TestHuaweiReconciliationCommandResolvesProtectedPurchaseScope(t *testing.T)
 	}
 	if command.ExternalCustomerID != "account-1" || len(command.ExpectedProducts) != 1 ||
 		command.ExpectedProducts[0] != "premium_monthly" || command.Signal.ContentType != huawei.NotificationContentType ||
-		len(command.QueryReferences) != 1 || command.QueryReferences[0].Value() != "purchase-token-1" ||
+		len(command.QueryReferences) != 2 || command.QueryReferences[0].Value() != "purchase-token-1" ||
+		command.QueryReferences[1].Kind != "subscription_id" ||
+		command.QueryReferences[1].Value() != "1665732615152.08082DFB.3006" ||
 		len(command.ExpectedCustomerBindings) != 1 || command.ExpectedCustomerBindings[0].Value() != "account-1" {
 		t.Fatalf("huaweiReconciliationCommand() = %#v", command)
 	}
@@ -201,6 +206,67 @@ func TestHuaweiReconciliationCommandClassifiesLookupFailures(t *testing.T) {
 	_, err = service.huaweiReconciliationCommand(context.Background(), message, notification, payload)
 	if !errors.As(err, &failure) || failure.Kind != stores.FailureInvalidEvidence || failure.Retryable() {
 		t.Fatalf("scope mismatch error = %#v", err)
+	}
+}
+
+// TestHuaweiReconciliationCommandUsesStoredEvidenceForLegacySubscription recovers subscriptionId
+// from client evidence when an older inbox envelope has no subscription_id.
+func TestHuaweiReconciliationCommandUsesStoredEvidenceForLegacySubscription(t *testing.T) {
+	t.Parallel()
+
+	const subscriptionID = "1581789719266.D40972AC.3089"
+	purchaseData := `{"subscriptionId":"` + subscriptionID + `","productId":"premium_monthly"}`
+	evidenceJSON, err := json.Marshal(map[string]string{
+		"purchase_data": purchaseData,
+		"signature":     "c2ln",
+		"product_kind":  "subscription",
+	})
+	if err != nil {
+		t.Fatalf("Marshal() evidence error = %v", err)
+	}
+	store := &googleLookupStore{
+		purchase: persistence.PurchaseReferenceContext{
+			Customer:          core.Customer{ID: "customer-1", ProjectID: "project-1", ExternalID: "account-1"},
+			ProviderProductID: "premium_monthly", ProductKind: core.ProductKindSubscription,
+		},
+		evidence: persistence.PurchaseEvidenceRecord{
+			Kind:        "purchase_submission",
+			ContentType: huawei.EvidenceContentType,
+			Payload:     protection.Value{Ciphertext: []byte{1}, Fingerprint: [32]byte{2}, KeyID: "test-key"},
+		},
+	}
+	service := &Service{store: store, protection: &processingProtection{opened: evidenceJSON}}
+	message := persistence.QueueMessage{ProjectID: "project-1", ApplicationID: "application-1"}
+	notification := huawei.NotificationEnvelope{
+		PurchaseToken: "purchase-token-1", ProviderProductID: "premium_monthly",
+		ProductKind: core.ProductKindSubscription,
+	}
+	payload, err := json.Marshal(notification)
+	if err != nil {
+		t.Fatalf("Marshal() notification error = %v", err)
+	}
+	command, err := service.huaweiReconciliationCommand(context.Background(), message, notification, payload)
+	if err != nil {
+		t.Fatalf("huaweiReconciliationCommand() error = %v", err)
+	}
+	if len(command.QueryReferences) != 2 || command.QueryReferences[1].Kind != "subscription_id" ||
+		command.QueryReferences[1].Value() != subscriptionID {
+		t.Fatalf("query references = %#v", command.QueryReferences)
+	}
+	if store.evidenceLookup.Kind != "purchase_token" || store.evidenceLookup.Role != core.ReferenceQuery ||
+		store.evidenceLookup.Fingerprint != store.lookup.Fingerprint || store.evidenceLookup.Fingerprint == ([32]byte{}) {
+		t.Fatalf("evidence lookup = %#v, purchase lookup = %#v", store.evidenceLookup, store.lookup)
+	}
+
+	missing := &googleLookupStore{
+		purchase:    store.purchase,
+		evidenceErr: persistence.ErrNotFound,
+	}
+	service = &Service{store: missing, protection: &processingProtection{}}
+	_, err = service.huaweiReconciliationCommand(context.Background(), message, notification, payload)
+	var failure *stores.Failure
+	if !errors.As(err, &failure) || failure.Kind != stores.FailureTemporary || !failure.Retryable() {
+		t.Fatalf("missing evidence error = %#v, want retryable temporary failure", err)
 	}
 }
 
@@ -422,6 +488,21 @@ func (transaction *googleLookupTransaction) PurchaseContextByReference(
 ) (persistence.PurchaseReferenceContext, error) {
 	transaction.store.lookup = lookup
 	return transaction.store.purchase, transaction.store.err
+}
+
+// PurchaseSubmissionByReference records the evidence lookup and returns stored client evidence.
+func (transaction *googleLookupTransaction) PurchaseSubmissionByReference(
+	_ context.Context,
+	lookup persistence.ProviderReferenceLookup,
+) (persistence.PurchaseEvidenceRecord, error) {
+	transaction.store.evidenceLookup = lookup
+	if transaction.store.evidenceErr != nil {
+		return persistence.PurchaseEvidenceRecord{}, transaction.store.evidenceErr
+	}
+	if transaction.store.evidence.Kind == "" {
+		return persistence.PurchaseEvidenceRecord{}, persistence.ErrNotFound
+	}
+	return transaction.store.evidence, nil
 }
 
 // SaveReconciliationJob records the next generation before provider preparation begins.
