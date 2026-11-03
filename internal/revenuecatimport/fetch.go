@@ -53,6 +53,15 @@ func FetchSubscribers(ctx context.Context, config FetchConfig) error {
 	if base == "" {
 		base = strings.TrimRight(revenueCatSubscriberURL, "/")
 	}
+	// Reject every unusable id before the first GET, because each GET can create a customer.
+	for _, id := range config.IDs {
+		if id = strings.TrimSpace(id); id == "" {
+			continue
+		}
+		if _, err := subscriberURL(base, id); err != nil {
+			return err
+		}
+	}
 	var buffer bytes.Buffer
 	for _, id := range config.IDs {
 		id = strings.TrimSpace(id)
@@ -90,14 +99,14 @@ func FetchSubscribers(ctx context.Context, config FetchConfig) error {
 
 // fetchSubscriber performs one GET and retries bounded 429 and 5xx responses.
 func fetchSubscriber(ctx context.Context, config FetchConfig, base, id string) ([]byte, error) {
+	endpoint, err := subscriberURL(base, id)
+	if err != nil {
+		return nil, err
+	}
 	var lastStatus int
 	for attempt := 1; attempt <= fetchAttempts; attempt++ {
 		if attempt > 1 {
 			config.Sleep(fetchJitter(attempt))
-		}
-		endpoint, err := url.JoinPath(base, id)
-		if err != nil {
-			return nil, fmt.Errorf("revenuecat subscriber url: %w", ErrUsage)
 		}
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
@@ -132,6 +141,16 @@ func fetchSubscriber(ctx context.Context, config FetchConfig, base, id string) (
 		return nil, fmt.Errorf("revenuecat subscriber %q request failed", id)
 	}
 	return nil, fmt.Errorf("revenuecat subscriber %q returned status %d", id, lastStatus)
+}
+
+// subscriberURL escapes the id as exactly one path segment below the subscriber endpoint.
+// url.JoinPath is not used: it splits on "/" and resolves "..", so "bob/../alice" would fetch alice.
+// A lone "." or ".." stays a dot segment after escaping, so both are rejected.
+func subscriberURL(base, id string) (string, error) {
+	if id == "" || id == "." || id == ".." {
+		return "", fmt.Errorf("revenuecat subscriber id %q cannot be used as a URL path segment: %w", id, ErrUsage)
+	}
+	return base + "/" + url.PathEscape(id), nil
 }
 
 // fetchJitter returns a bounded delay that grows with the attempt.
