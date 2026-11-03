@@ -249,10 +249,17 @@ protected evidence/reference boundaries. Subscription states including active,
 pending, canceled, expired, paused, grace period, and account hold are normalized.
 
 The initial Google Play server slice supports one current subscription line item or
-one non-consumable line item per purchase token. A completed purchase whose
-`acknowledgementState` is pending produces a bounded provider action. IAPStack calls
-the matching Android Publisher product or subscription acknowledgement endpoint only
-after the evidence, observation, entitlement projection, and outbox event commit.
+one non-consumable line item per purchase token. A subscription changed with the
+`DEFERRED` replacement mode has two line items on its new purchase token. Until the
+change takes effect, IAPStack records the existing item, which keeps access until its
+expiry, and stores the new product as the next renewal product. After the change, the
+replacement item is recorded together with the replaced item as expired, and later
+notifications for that token expect the new product. Both products must stay mapped
+in the catalog. A claimed product may name either item of that replacement. A completed
+purchase whose `acknowledgementState` is pending produces a bounded provider action.
+IAPStack calls the matching Android Publisher product or subscription acknowledgement
+endpoint only after the evidence, observation, entitlement projection, and outbox
+event commit.
 Pending purchases and already acknowledged purchases never create this action. A
 retryable acknowledgement failure is returned after the durable result so the API
 submission, RTDN job, or scheduled reconciliation can safely retry and re-query the
