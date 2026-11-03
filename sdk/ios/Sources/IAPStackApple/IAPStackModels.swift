@@ -297,8 +297,7 @@ private func requiredInt(_ dictionary: [String: Any], key: String) throws -> Int
 
 private func requiredDate(_ dictionary: [String: Any], key: String) throws -> Date {
   let timestamp = try requiredString(dictionary, key: key)
-  let parsed = IAPStackDateFormatter.shared.date(from: timestamp)
-  guard let value = parsed else {
+  guard let value = parseServerTimestamp(timestamp) else {
     throw IAPStackSDKError.protocolError(message: "\(key) must be an ISO-8601 timestamp")
   }
   return value
@@ -311,7 +310,7 @@ private func optionalDate(_ dictionary: [String: Any], key: String) throws -> Da
   guard let timestamp = raw as? String, !timestamp.isEmpty else {
     throw IAPStackSDKError.protocolError(message: "\(key) must be an ISO-8601 timestamp")
   }
-  guard let value = IAPStackDateFormatter.shared.date(from: timestamp) else {
+  guard let value = parseServerTimestamp(timestamp) else {
     throw IAPStackSDKError.protocolError(message: "\(key) must be an ISO-8601 timestamp")
   }
   return value
@@ -327,8 +326,28 @@ private func requiredObjectList(_ dictionary: [String: Any], key: String) throws
   return list
 }
 
-private enum IAPStackDateFormatter {
-  static let shared = ISO8601DateFormatter()
+/// Parses one RFC 3339 timestamp, such as `2026-11-01T21:52:49.28412077Z`.
+///
+/// Go's `encoding/json` writes `time.Time` with zero to nine fraction digits.
+/// `ISO8601DateFormatter` keeps at most milliseconds of a fraction and is not
+/// documented to accept nine digits on older OS releases, so the fraction is
+/// read here and the rest goes through a whole-second formatter. A new
+/// formatter per call keeps concurrent decodes safe.
+func parseServerTimestamp(_ value: String) -> Date? {
+  let formatter = ISO8601DateFormatter()
+  // A fraction can only follow the seconds of `yyyy-MM-ddTHH:mm:ss`.
+  guard let dot = value.index(value.startIndex, offsetBy: 19, limitedBy: value.endIndex),
+    dot < value.endIndex, value[dot] == "."
+  else {
+    return formatter.date(from: value)
+  }
+  let digits = value[value.index(after: dot)...].prefix { $0.isASCII && $0.isNumber }
+  guard !digits.isEmpty, let fraction = TimeInterval("0.\(digits)"),
+    let wholeSeconds = formatter.date(from: String(value[..<dot]) + value[digits.endIndex...])
+  else {
+    return nil
+  }
+  return wholeSeconds.addingTimeInterval(fraction)
 }
 
 /// Requires one non-empty customer identity without surrounding whitespace; a

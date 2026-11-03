@@ -367,6 +367,132 @@ final class IAPStackAppleTests: XCTestCase {
     )
   }
 
+  /// The API accepts only `app_account_token` as an Apple customer binding and
+  /// derives it from `external_customer_id`, so a `storefront` binding is a 400.
+  func testAppleSubmissionSendsNoCustomerBindings() throws {
+    let submission = try ApplePurchaseEvidence(signedTransaction: "a.b.c", productKind: .subscription)
+      .toSubmission(externalCustomerId: "3f2504e0-4f89-41d3-9a0c-0305e82c3301", productId: "premium_monthly")
+
+    XCTAssertTrue(submission.customerBindings.isEmpty)
+    let body = submission.toDictionary()
+    XCTAssertEqual(Set(body.keys), ["external_customer_id", "claimed_products", "evidence"])
+    XCTAssertEqual(body["claimed_products"] as? [String], ["premium_monthly"])
+    XCTAssertEqual(
+      body["evidence"] as? [String: String],
+      ["signed_transaction": "a.b.c", "product_kind": "subscription"],
+    )
+  }
+
+  func testVerifyPurchaseSendsNoBindingAndFinishesAfterFractionalTimestamps() async throws {
+    URLStubProtocol.reset()
+    var capturedRequest: URLRequest?
+    URLStubProtocol.enqueue { request in
+      capturedRequest = request
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"],
+      )!
+      let body = """
+      {"verified_at": "2026-11-01T21:52:49.28412077Z", "customer_id": "customer-internal", "entitlements": [
+        {"key": "premium", "access": "allowed", "reason": "verified", "version": 1,
+         "effective_starts_at": "2026-11-01T21:52:48.123Z", "effective_ends_at": "2026-12-01T21:52:48.123Z"}
+      ]}
+      """
+      return (response, Data(body.utf8))
+    }
+    let customer = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    let platform = FakeApplePlatform()
+    let stack = try makeAppleStack(platform: platform)
+
+    let result = try await stack.verifyPurchase(
+      externalCustomerId: customer,
+      purchase: restoredRow("tx-1", customer: customer, pendingCompletion: true),
+    )
+
+    let posted = try XCTUnwrap(
+      capturedRequest?.httpBody.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] },
+    )
+    XCTAssertNil(posted["customer_bindings"])
+    XCTAssertEqual(posted["external_customer_id"] as? String, customer)
+    XCTAssertEqual(result.verifiedAt.timeIntervalSince1970, 1_793_569_969.284_120_77, accuracy: 0.000_001)
+    let startsAt = try XCTUnwrap(result.entitlements.first?.effectiveStartsAt)
+    XCTAssertEqual(startsAt.timeIntervalSince1970, 1_793_569_968.123, accuracy: 0.000_001)
+    XCTAssertEqual(platform.completedTransactionIds, ["tx-1"])
+  }
+
+  func testRestoreSendsNoBindingAndFinishesAfterFractionalTimestamps() async throws {
+    URLStubProtocol.reset()
+    var capturedRequest: URLRequest?
+    URLStubProtocol.enqueue { request in
+      capturedRequest = request
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"],
+      )!
+      let row = #"{"verified_at": "2026-11-01T21:52:49.5Z", "customer_id": "c", "entitlements": []}"#
+      return (response, Data(#"{"results": [\#(row), \#(row)]}"#.utf8))
+    }
+    let customer = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    let platform = FakeApplePlatform(restoreResult: [
+      restoredRow("tx-1", customer: customer, pendingCompletion: true),
+      restoredRow("tx-2", customer: customer, pendingCompletion: true),
+    ])
+    let stack = try makeAppleStack(platform: platform)
+
+    let result = try await stack.restorePurchases(externalCustomerId: customer)
+
+    let posted = try XCTUnwrap(
+      capturedRequest?.httpBody.flatMap { try JSONSerialization.jsonObject(with: $0) as? [String: Any] },
+    )
+    let rows = try XCTUnwrap(posted["purchases"] as? [[String: Any]])
+    XCTAssertEqual(rows.count, 2)
+    XCTAssertTrue(rows.allSatisfy { $0["customer_bindings"] == nil })
+    XCTAssertEqual(result.results.count, 2)
+    let verifiedAt = try XCTUnwrap(result.results.first?.verifiedAt)
+    XCTAssertEqual(verifiedAt.timeIntervalSince1970, 1_793_569_969.5, accuracy: 0.000_001)
+    XCTAssertEqual(platform.completedTransactionIds, ["tx-1", "tx-2"])
+  }
+
+  func testGetEntitlementsDecodesFractionalTimestamps() async throws {
+    URLStubProtocol.reset()
+    URLStubProtocol.enqueue { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"],
+      )!
+      let body = """
+      {"customer_id": "customer-internal", "entitlements": [
+        {"key": "premium", "access": "allowed", "reason": "verified", "version": 4,
+         "effective_starts_at": "2026-11-01T21:52:49.123Z", "effective_ends_at": "2026-12-01T21:52:49.284120771Z"}
+      ]}
+      """
+      return (response, Data(body.utf8))
+    }
+    let client = try IAPStackClient(
+      config: IAPStackConfig(
+        baseUri: URL(string: "https://example.local")!,
+        applicationId: "application-1",
+        customerToken: "customer-token",
+      ),
+      session: makeSession(),
+    )
+
+    let snapshot = try await client.getEntitlements("customer-id")
+
+    let entitlement = try XCTUnwrap(snapshot.entitlements.first)
+    let startsAt = try XCTUnwrap(entitlement.effectiveStartsAt)
+    let endsAt = try XCTUnwrap(entitlement.effectiveEndsAt)
+    XCTAssertEqual(startsAt.timeIntervalSince1970, 1_793_569_969.123, accuracy: 0.000_001)
+    XCTAssertEqual(endsAt.timeIntervalSince1970, 1_793_569_969.284_120_771 + 30 * 86_400, accuracy: 0.000_001)
+    XCTAssertTrue(entitlement.grantsAccess(at: Date(timeIntervalSince1970: 1_793_569_970)))
+  }
+
   func testOversizedResponseBecomesProtocolError() async throws {
     URLStubProtocol.reset()
     URLStubProtocol.enqueue { request in

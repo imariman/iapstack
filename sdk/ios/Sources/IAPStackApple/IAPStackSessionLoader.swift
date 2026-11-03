@@ -146,7 +146,7 @@ public final class IAPStackSessionLoader {
       return value
     }
     guard let baseURL = URL(string: try field("base_url")),
-      let expiresAt = sessionTimestamp(try field("expires_at"))
+      let expiresAt = parseServerTimestamp(try field("expires_at"))
     else { throw IAPStackSessionError.invalidResponse }
     let session = IAPStackCustomerSession(baseURL: baseURL, applicationId: try field("application_id"),
       externalCustomerId: try field("external_customer_id"), customerToken: try field("token"),
@@ -169,12 +169,4 @@ private final class RejectSessionRedirects: NSObject, URLSessionTaskDelegate {
                   completionHandler: @escaping (URLRequest?) -> Void) {
     completionHandler(nil)
   }
-}
-
-private func sessionTimestamp(_ value: String) -> Date? {
-  let formatter = ISO8601DateFormatter()
-  formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-  if let date = formatter.date(from: value) { return date }
-  formatter.formatOptions = [.withInternetDateTime]
-  return formatter.date(from: value)
 }

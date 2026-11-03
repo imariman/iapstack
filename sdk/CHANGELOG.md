@@ -50,6 +50,16 @@
   `multipleProducts`) and `RestoreResult.pageLimitReached`. Direct HTTP
   `fromJson` still reads only `results`.
 
+### Fixed
+
+- Swift and React Native iOS: Apple verify and restore no longer send a
+  `storefront` customer binding. The API rejected it with 400
+  `invalid_request`, so the StoreKit transaction was never finished.
+- Swift and React Native iOS: `verified_at`, `effective_starts_at`, and
+  `effective_ends_at` with a fractional second (`2026-11-01T21:52:49.28412077Z`)
+  decode instead of throwing `protocolError`. The fraction is kept below a
+  millisecond, and concurrent requests no longer share one date formatter.
+
 ## 0.1.0-sdk.2
 
 Released with #223 and #226. These notes stay with that version.
