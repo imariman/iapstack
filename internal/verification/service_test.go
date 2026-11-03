@@ -505,6 +505,139 @@ func TestVerifyMapsCurrentAppleSubscriptionProduct(t *testing.T) {
 	}
 }
 
+// TestGooglePlayFollowsCurrentSubscriptionProduct persists the product a deferred replacement switched one token to.
+func TestGooglePlayFollowsCurrentSubscriptionProduct(t *testing.T) {
+	t.Parallel()
+
+	const (
+		replacementProviderProduct = "provider-product-basic"
+		replacementProduct         = "product-basic"
+	)
+	queryReference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", "sensitive-purchase-token")
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	signal, err := stores.NewEvidence(
+		"application/vnd.iapstack.google-play-rtdn+json",
+		[]byte(`{"kind":"subscription","purchase_token":"sensitive-purchase-token"}`),
+	)
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	for _, operation := range []string{"verify", "reconcile", "reconcile with replaced item"} {
+		t.Run(operation, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := newVerificationFixture(t)
+			fixture.application.Store.Provider = core.ProviderGooglePlay
+			fixture.application.Store.ID = "com.example.iapstack"
+			fixture.catalog.Product.Kind = core.ProductKindSubscription
+			replacement := fixture.catalog
+			replacement.Mapping.ProviderID = replacementProviderProduct
+			replacement.Product.ID = replacementProduct
+			end := fixture.result.VerifiedAt.Add(30 * 24 * time.Hour)
+			observation := &fixture.result.Observations[0]
+			observation.Store = fixture.application.Store
+			observation.ProductID = replacementProviderProduct
+			observation.ProductKind = core.ProductKindSubscription
+			observation.EffectivePeriod.EndsAt = &end
+			observation.Renewal = core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled}
+			observation.References = append(observation.References, queryReference)
+			wantObservations := 1
+			if operation == "reconcile with replaced item" {
+				replacedEnd := fixture.result.VerifiedAt.Add(-30 * time.Second)
+				replaced := *observation
+				replaced.ID = "observation-replaced"
+				replaced.ProductID = verificationProviderProductID
+				replaced.State = core.LifecycleExpired
+				replaced.ProviderState = "SUBSCRIPTION_STATE_EXPIRED"
+				replaced.Access = core.AccessDenied
+				replaced.AccessReason = core.AccessReasonExpired
+				replaced.ObservedAt = observation.ObservedAt.Add(-time.Microsecond)
+				replaced.EffectivePeriod.EndsAt = &replacedEnd
+				replaced.Renewal = core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalDisabled}
+				fixture.result.Observations = append(fixture.result.Observations, replaced)
+				wantObservations = 2
+			}
+			store := newFakeStore(fixture)
+			store.repository.catalog[replacementProviderProduct] = replacement
+			service := newVerificationService(
+				t,
+				store,
+				&fakeAdapter{provider: core.ProviderGooglePlay, result: fixture.result},
+				&fakeProtector{},
+				fixture.clock,
+			)
+
+			var result verification.Result
+			var operationErr error
+			if operation == "verify" {
+				result, operationErr = service.Verify(context.Background(), fixture.command)
+			} else {
+				result, operationErr = service.Reconcile(context.Background(), verification.ReconciliationCommand{
+					ProjectID:           verificationProjectID,
+					ApplicationID:       verificationApplicationID,
+					ExternalCustomerID:  verificationExternalCustomerID,
+					ExpectedProducts:    []core.ProviderProductID{verificationProviderProductID},
+					ExpectedProductKind: core.ProductKindSubscription,
+					QueryReferences:     []core.StoreReference{queryReference},
+					Signal:              signal,
+				})
+			}
+			if operationErr != nil {
+				t.Fatalf("%s() error = %v", operation, operationErr)
+			}
+			if len(store.repository.observations) != wantObservations {
+				t.Fatalf("observations = %d, want %d", len(store.repository.observations), wantObservations)
+			}
+			for _, write := range store.repository.observations {
+				if write.Observation.ProductID != replacementProviderProduct {
+					continue
+				}
+				if write.ProductID != replacementProduct {
+					t.Fatalf("stored observation = (%q, %q), want catalog product %q",
+						write.ProductID, write.Observation.ProductID, replacementProduct)
+				}
+			}
+			if len(result.Entitlements) != 1 || result.Entitlements[0].Projection.SourceProductID != replacementProduct ||
+				result.Entitlements[0].Projection.Access != core.AccessAllowed {
+				t.Fatalf("entitlements = %#v, want allowed from source product %q", result.Entitlements, replacementProduct)
+			}
+		})
+	}
+}
+
+// TestReconcileKeepsExpectedProductForOtherProviders rejects a reconciled product change outside supported lineages.
+func TestReconcileKeepsExpectedProductForOtherProviders(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	fixture.result.Observations[0].ProductID = "provider-product-other"
+	queryReference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", "sensitive-purchase-token")
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	fixture.result.Observations[0].References = append(fixture.result.Observations[0].References, queryReference)
+	other := fixture.catalog
+	other.Mapping.ProviderID = "provider-product-other"
+	store := newFakeStore(fixture)
+	store.repository.catalog["provider-product-other"] = other
+	service := newVerificationService(t, store, &fakeAdapter{result: fixture.result}, &fakeProtector{}, fixture.clock)
+	_, err = service.Reconcile(context.Background(), verification.ReconciliationCommand{
+		ProjectID:           verificationProjectID,
+		ApplicationID:       verificationApplicationID,
+		ExternalCustomerID:  verificationExternalCustomerID,
+		ExpectedProducts:    []core.ProviderProductID{verificationProviderProductID},
+		ExpectedProductKind: core.ProductKindNonConsumable,
+		QueryReferences:     []core.StoreReference{queryReference},
+		Signal:              fixture.command.Evidence,
+	})
+	if err == nil || !strings.Contains(err.Error(), "expected product") {
+		t.Fatalf("Reconcile() error = %v, want expected product mismatch", err)
+	}
+	assertNoDurableWrites(t, store.repository)
+}
+
 // TestVerifyKeepsClaimedProductForOtherProviders rejects a provider product the caller did not claim.
 func TestVerifyKeepsClaimedProductForOtherProviders(t *testing.T) {
 	t.Parallel()

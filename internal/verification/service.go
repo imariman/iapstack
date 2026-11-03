@@ -190,7 +190,7 @@ func (service *Service) Verify(ctx context.Context, command Command) (Result, er
 		return Result{}, fmt.Errorf("verify purchase with %s: %w", application.Store.Provider, err)
 	}
 	validationRequest := request
-	validationRequest.ClaimedProducts = claimedProductsForValidation(
+	validationRequest.ClaimedProducts = productsForValidation(
 		application.Store.Provider,
 		request.ClaimedProducts,
 		providerResult,
@@ -269,7 +269,13 @@ func (service *Service) Reconcile(ctx context.Context, command ReconciliationCom
 	if err != nil {
 		return Result{}, fmt.Errorf("reconcile purchase with %s: %w", application.Store.Provider, err)
 	}
-	if err := providerResult.ValidateForReconciliation(request); err != nil {
+	validationRequest := request
+	validationRequest.ExpectedProducts = productsForValidation(
+		application.Store.Provider,
+		request.ExpectedProducts,
+		providerResult,
+	)
+	if err := providerResult.ValidateForReconciliation(validationRequest); err != nil {
 		return Result{}, fmt.Errorf("validate provider reconciliation result: %w", err)
 	}
 	var postCommitter stores.PostCommitter
@@ -724,6 +730,47 @@ func indexCatalogProducts(
 		}
 	}
 	return catalogByProviderID, nil
+}
+
+// productsForValidation selects the product set a provider result is checked against.
+func productsForValidation(
+	provider core.Provider,
+	claimed []core.ProviderProductID,
+	result stores.VerificationResult,
+) []core.ProviderProductID {
+	if provider == core.ProviderGooglePlay {
+		return googlePlayProductsForValidation(claimed, result)
+	}
+	return claimedProductsForValidation(provider, claimed, result)
+}
+
+// googlePlayProductsForValidation follows a deferred replacement on one Google Play purchase token.
+// Before the change takes effect the adapter reports the old item, and afterwards the new item plus
+// the expired old item. A claim, a stored notification lookup, or a scheduled refresh can name either
+// product. The adapter has already rejected a product the purchase does not name, so a single
+// subscription observation replaces the claim and a claim among several observations checks all of them.
+func googlePlayProductsForValidation(
+	claimed []core.ProviderProductID,
+	result stores.VerificationResult,
+) []core.ProviderProductID {
+	if len(claimed) != 1 || len(result.Observations) == 0 {
+		return claimed
+	}
+	for _, observation := range result.Observations {
+		if observation.ProductKind != core.ProductKindSubscription {
+			return claimed
+		}
+	}
+	observed := observationProductIDs(result.Observations)
+	if len(observed) == 1 {
+		return observed
+	}
+	for _, product := range observed {
+		if product == claimed[0] {
+			return observed
+		}
+	}
+	return claimed
 }
 
 // EntitlementChangedEvent builds one idempotent outbox event for a changed projection.
