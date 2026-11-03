@@ -30,6 +30,14 @@
   exhaustive `when` or `switch` on `IapStackException` with no `else` or
   `default` fails to compile. Add a branch for
   `IapStackIncompleteRestoreException`, or an `else` / `default` branch.
+- React Native: a product that grants nothing, and an unresolved purchase, emit
+  `pending` and never `verified`. That includes an empty entitlement list and a
+  purchase that stays unresolved while another entitlement already grants
+  access. An app that waits only for `verified` can hang. Wait with a timeout,
+  or read `grantsAccess` before unlocking.
+- TypeScript host: aborting after a parsed 429 or 5xx body, before the backoff
+  wait, rejects with `AbortError` instead of `APIError`. A `catch` of
+  `APIError` no longer matches that cancel. Catch `AbortError`.
 
 ### Added
 
