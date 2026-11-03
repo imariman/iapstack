@@ -55,7 +55,8 @@ func TestValidateNotificationAuthenticatesNativeSubscriptionV2(t *testing.T) {
 		t.Fatalf("ValidateNotification() error = %v", err)
 	}
 	if notification.ProductKind != core.ProductKindSubscription || notification.ProviderProductID != "premium_monthly" ||
-		notification.PurchaseToken != "purchase-token-1" || notification.NotificationType != 2 {
+		notification.PurchaseToken != "purchase-token-1" || notification.SubscriptionID != "1665732615152.08082DFB.3006" ||
+		notification.NotificationType != 2 {
 		t.Fatalf("ValidateNotification() = %#v", notification)
 	}
 

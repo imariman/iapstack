@@ -65,6 +65,60 @@ func (repository *transaction) PurchaseContextByReference(
 	return result, nil
 }
 
+// PurchaseSubmissionByReference returns the latest client purchase submission bound to one protected reference.
+func (repository *transaction) PurchaseSubmissionByReference(
+	ctx context.Context,
+	lookup persistence.ProviderReferenceLookup,
+) (persistence.PurchaseEvidenceRecord, error) {
+	if err := lookup.Validate(); err != nil {
+		return persistence.PurchaseEvidenceRecord{}, err
+	}
+	var record persistence.PurchaseEvidenceRecord
+	var ciphertext []byte
+	var fingerprint []byte
+	err := repository.tx.QueryRow(ctx, `
+		SELECT evidence.kind, evidence.content_type,
+			evidence.payload_ciphertext, evidence.payload_fingerprint, evidence.encryption_key_id
+		FROM provider_references AS reference
+		JOIN observation_references AS observation_reference
+			ON observation_reference.reference_id = reference.id
+			AND observation_reference.application_id = reference.application_id
+		JOIN purchase_observations AS observation
+			ON observation.id = observation_reference.observation_id
+			AND observation.application_id = observation_reference.application_id
+		JOIN purchase_evidence AS evidence
+			ON evidence.id = observation.evidence_id
+			AND evidence.application_id = observation.application_id
+			AND evidence.project_id = observation.project_id
+		WHERE observation.project_id = $1
+			AND reference.application_id = $2
+			AND reference.role = $3
+			AND reference.kind = $4
+			AND reference.value_fingerprint = $5
+			AND evidence.kind = 'purchase_submission'
+		ORDER BY observation.observed_at DESC, observation.created_at DESC, observation.id DESC
+		LIMIT 1
+	`, lookup.ProjectID, lookup.ApplicationID, lookup.Role, lookup.Kind, lookup.Fingerprint[:]).Scan(
+		&record.Kind,
+		&record.ContentType,
+		&ciphertext,
+		&fingerprint,
+		&record.Payload.KeyID,
+	)
+	if err != nil {
+		return persistence.PurchaseEvidenceRecord{}, classifyError("resolve purchase submission evidence", err)
+	}
+	if len(fingerprint) != len(record.Payload.Fingerprint) {
+		return persistence.PurchaseEvidenceRecord{}, errors.New("stored purchase evidence fingerprint has invalid length")
+	}
+	record.Payload.Ciphertext = append([]byte(nil), ciphertext...)
+	copy(record.Payload.Fingerprint[:], fingerprint)
+	if err := record.Validate(); err != nil {
+		return persistence.PurchaseEvidenceRecord{}, fmt.Errorf("validate purchase submission evidence: %w", err)
+	}
+	return record, nil
+}
+
 // SaveEvidence stores client evidence idempotently and returns its durable identity.
 func (repository *transaction) SaveEvidence(ctx context.Context, write persistence.EvidenceWrite) (int64, error) {
 	if err := write.Validate(); err != nil {
