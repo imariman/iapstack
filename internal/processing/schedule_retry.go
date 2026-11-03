@@ -15,8 +15,6 @@ import (
 )
 
 const (
-	// purchaseEvidencePurpose matches verification's protected client-submission scope.
-	purchaseEvidencePurpose = "purchase_evidence"
 	// reconciliationRetryBatch bounds one worker pass over failed subscription schedules.
 	reconciliationRetryBatch = 32
 	// reconciliationRetryMaxAttempts marks a schedule dead after this many failed promotions.

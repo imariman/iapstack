@@ -88,6 +88,81 @@ class IapStackClientTest {
 
       assertEquals(2, result.results.size)
       assertEquals("customer-internal", result.results[0].customerId)
+      assertEquals(0, result.skipped.total)
+      assertFalse(result.pageLimitReached)
+      client.close()
+    }
+  }
+
+  @Test
+  fun laterRestoreBatchKeepsCommittedResultsOnTheOriginalError() = runBlocking {
+    MockWebServer().use { server ->
+      val rows = List(100) { VERIFICATION_JSON }.joinToString(",")
+      server.enqueue(jsonResponse("""{"results":[$rows]}"""))
+      server.enqueue(
+        jsonResponse(
+          """{"error":{"code":"invalid_purchase","message":"rejected","request_id":"request-2"}}""",
+          422,
+        ),
+      )
+      val client = client(server)
+      val error = assertFailsWith<IapStackApiException> {
+        client.restorePurchasesInBatches(
+          purchases = List(101) { index -> purchase("product-$index") },
+          requestId = " restore-partial ",
+          skipped = RestoreSkipCounts(unknownProduct = 2),
+          pageLimitReached = true,
+        )
+      }
+      assertEquals("invalid_purchase", error.code)
+      assertEquals(100, error.committedRestoreResults.size)
+      assertEquals(2, error.restoreSkips.unknownProduct)
+      assertTrue(error.restorePageLimitReached)
+      assertEquals(2, server.requestCount)
+      assertEquals("restore-partial", server.takeRequest().getHeader("X-Request-ID"))
+      assertEquals("restore-partial-2", server.takeRequest().getHeader("X-Request-ID"))
+      client.close()
+    }
+  }
+
+  @Test
+  fun firstRestoreBatchFailureWithSkipsKeepsTheOriginalError() = runBlocking {
+    MockWebServer().use { server ->
+      server.enqueue(
+        jsonResponse(
+          """{"error":{"code":"invalid_purchase","message":"rejected","request_id":"request-1"}}""",
+          422,
+        ),
+      )
+      val client = client(server)
+      val error = assertFailsWith<IapStackApiException> {
+        client.restorePurchasesInBatches(
+          purchases = listOf(purchase()),
+          skipped = RestoreSkipCounts(unbound = 1, differentCustomer = 1, unknownProduct = 1),
+          pageLimitReached = true,
+        )
+      }
+      assertEquals("invalid_purchase", error.code)
+      assertTrue(error.committedRestoreResults.isEmpty())
+      assertEquals(0, error.restoreSkips.total)
+      assertFalse(error.restorePageLimitReached)
+      assertEquals(1, server.requestCount)
+      client.close()
+    }
+  }
+
+  @Test
+  fun firstBatchValidationFailureWithSkipsIsNotWrapped() = runBlocking {
+    MockWebServer().use { server ->
+      val client = client(server)
+      assertFailsWith<IllegalArgumentException> {
+        client.restorePurchasesInBatches(
+          purchases = listOf(purchase(" ")),
+          skipped = RestoreSkipCounts(unbound = 2),
+          pageLimitReached = true,
+        )
+      }
+      assertEquals(0, server.requestCount)
       client.close()
     }
   }
@@ -136,7 +211,7 @@ class IapStackClientTest {
 
       client.getEntitlements("customer-external")
 
-      assertEquals("react-native/0.1.0-sdk.2", server.takeRequest().getHeader("X-IAPStack-SDK"))
+      assertEquals("react-native/0.1.0-sdk.3", server.takeRequest().getHeader("X-IAPStack-SDK"))
       client.close()
     }
   }

@@ -141,14 +141,72 @@ final class VerificationResult {
       );
 }
 
+/// Rows a store restore did not submit.
+///
+/// Direct HTTP restores leave every count at zero. Duplicate tokens and rows
+/// that cannot be verified yet are omitted.
+final class RestoreSkipCounts {
+  /// Creates skip counts. Omitted counts are zero.
+  const RestoreSkipCounts({
+    this.unbound = 0,
+    this.differentCustomer = 0,
+    this.unknownProduct = 0,
+    this.multipleProducts = 0,
+  });
+
+  /// Purchases with no store account binding.
+  final int unbound;
+
+  /// Purchases bound to a different customer. These are never submitted.
+  final int differentCustomer;
+
+  /// Purchases whose product is not in the local catalog.
+  final int unknownProduct;
+
+  /// Play purchases that list more than one product id.
+  final int multipleProducts;
+
+  /// Sum of the reason counts.
+  int get total =>
+      unbound + differentCustomer + unknownProduct + multipleProducts;
+
+  /// Returns these counts plus the given increments.
+  RestoreSkipCounts byAdding({
+    int unbound = 0,
+    int differentCustomer = 0,
+    int unknownProduct = 0,
+    int multipleProducts = 0,
+  }) =>
+      RestoreSkipCounts(
+        unbound: this.unbound + unbound,
+        differentCustomer: this.differentCustomer + differentCustomer,
+        unknownProduct: this.unknownProduct + unknownProduct,
+        multipleProducts: this.multipleProducts + multipleProducts,
+      );
+}
+
 /// Results returned by one bounded batch restore operation.
+///
+/// [skipped] and [pageLimitReached] are client-side. [RestoreResult.fromJson]
+/// leaves them empty because the v1 body only contains `results`.
+/// [pageLimitReached] is set by Huawei restore when paging stopped at the
+/// configured cap after purchases already read were submitted.
 final class RestoreResult {
   /// Creates an immutable restore response.
-  RestoreResult({required List<VerificationResult> results})
-      : results = List<VerificationResult>.unmodifiable(results);
+  RestoreResult({
+    required List<VerificationResult> results,
+    this.skipped = const RestoreSkipCounts(),
+    this.pageLimitReached = false,
+  }) : results = List<VerificationResult>.unmodifiable(results);
 
   /// Per-purchase verification snapshots in request order.
   final List<VerificationResult> results;
+
+  /// Store rows that were not submitted.
+  final RestoreSkipCounts skipped;
+
+  /// True when Huawei restore stopped because the page cap was reached.
+  final bool pageLimitReached;
 
   /// Decodes the public v1 restore response.
   factory RestoreResult.fromJson(Map<String, Object?> json) => RestoreResult(

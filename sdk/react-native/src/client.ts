@@ -17,7 +17,7 @@ import {
   IapStackTransportError,
 } from './errors';
 
-const SDK_VERSION = '0.1.0-sdk.2';
+const SDK_VERSION = '0.1.0-sdk.3';
 
 const RETRYABLE_STATUS = (statusCode: number): boolean =>
   statusCode === 429 || statusCode >= 500;

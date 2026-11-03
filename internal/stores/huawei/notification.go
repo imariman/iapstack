@@ -2,10 +2,6 @@ package huawei
 
 import (
 	"context"
-	"crypto"
-	"crypto/rsa"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -33,6 +29,7 @@ type NotificationEnvelope struct {
 	ApplicationID     core.ProviderApplicationID `json:"application_id"`
 	NotificationType  int                        `json:"notification_type"`
 	PurchaseToken     string                     `json:"purchase_token"`
+	SubscriptionID    string                     `json:"subscription_id,omitempty"`
 	ProviderProductID core.ProviderProductID     `json:"provider_product_id"`
 	ProductKind       core.ProductKind           `json:"product_kind"`
 }
@@ -126,7 +123,7 @@ func (adapter *Adapter) ValidateNotification(
 		if err != nil {
 			return NotificationEnvelope{}, err
 		}
-		if err := verifyNotificationSignature(
+		if err := verifySignature(
 			publicKey,
 			subscription.StatusUpdateNotification,
 			subscription.NotificationSignature,
@@ -144,6 +141,7 @@ func (adapter *Adapter) ValidateNotification(
 		}
 		envelope.NotificationType = update.NotificationType
 		envelope.PurchaseToken = update.PurchaseToken
+		envelope.SubscriptionID = update.SubscriptionID
 		envelope.ProviderProductID = core.ProviderProductID(update.ProductID)
 		envelope.ProductKind = core.ProductKindSubscription
 	default:
@@ -153,28 +151,4 @@ func (adapter *Adapter) ValidateNotification(
 		return NotificationEnvelope{}, invalid("notification", err)
 	}
 	return envelope, nil
-}
-
-// verifyNotificationSignature supports Huawei's two documented SHA-256/RSA modes.
-func verifyNotificationSignature(publicKey *rsa.PublicKey, data, encodedSignature, algorithm string) error {
-	signature, err := base64.StdEncoding.DecodeString(encodedSignature)
-	if err != nil {
-		return errors.New("Huawei notification signature is not valid base64")
-	}
-	digest := sha256.Sum256([]byte(data))
-	switch strings.ToUpper(strings.TrimSpace(algorithm)) {
-	case "SHA256WITHRSA":
-		err = rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, digest[:], signature)
-	case "SHA256WITHRSA/PSS":
-		err = rsa.VerifyPSS(publicKey, crypto.SHA256, digest[:], signature, &rsa.PSSOptions{
-			SaltLength: rsa.PSSSaltLengthAuto,
-			Hash:       crypto.SHA256,
-		})
-	default:
-		return errors.New("unsupported Huawei notification signature algorithm")
-	}
-	if err != nil {
-		return errors.New("Huawei notification signature verification failed")
-	}
-	return nil
 }

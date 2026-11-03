@@ -1333,11 +1333,12 @@ func effectiveEntitlementAccess(
 	projection persistence.EntitlementProjection,
 	now time.Time,
 ) (core.AccessStatus, core.AccessReason) {
-	endsAt := projection.EffectivePeriod.EndsAt
-	if projection.Access == core.AccessAllowed && endsAt != nil && !now.Before(*endsAt) {
-		return core.AccessDenied, core.AccessReasonExpired
-	}
-	return projection.Access, projection.AccessReason
+	return core.AccessAt(
+		projection.Access,
+		projection.AccessReason,
+		projection.EffectivePeriod.EndsAt,
+		now,
+	)
 }
 
 // requiresReconciliation reports whether signed evidence describes a time-sensitive subscription.

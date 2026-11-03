@@ -12,8 +12,15 @@ npm install @iapstack/react-native@next
 cd ios && pod install
 ```
 
-Prerelease version: `0.1.0-sdk.2`. The package is ready for release; until it is
+Prerelease version: `0.1.0-sdk.3`. The package is ready for release; until it is
 published, use the tarball produced by `npm pack` in this directory.
+
+## Breaking changes in 0.1.0-sdk.3
+
+A product that grants nothing, and an unresolved purchase, emit `pending` and
+never `verified`. That stays `pending` when another entitlement already grants
+access. An empty entitlement list stays `pending` too. An app that waits only
+for `verified` can hang. Wait with a timeout, or unlock from `grantsAccess`.
 
 ## Breaking changes in 0.1.0-sdk.2
 

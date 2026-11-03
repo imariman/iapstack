@@ -763,6 +763,14 @@ func newEntitlementEvent(
 	occurredAt time.Time,
 ) (persistence.OutboxEvent, error) {
 	projection := entitlement.Projection.Normalized()
+	// Evaluate access at the same instant as GET entitlements. A stored allowed
+	// row whose effective end is not after that instant is expired in the payload.
+	access, reason := core.AccessAt(
+		projection.Access,
+		projection.AccessReason,
+		projection.EffectivePeriod.EndsAt,
+		occurredAt,
+	)
 	payloadContract := entitlementEventPayload{
 		SchemaVersion:       entitlementEventSchemaVersion,
 		ProjectID:           projection.ProjectID,
@@ -770,8 +778,8 @@ func newEntitlementEvent(
 		CustomerID:          projection.CustomerID,
 		EntitlementID:       projection.EntitlementID,
 		EntitlementKey:      entitlement.Key,
-		Access:              projection.Access,
-		AccessReason:        projection.AccessReason,
+		Access:              access,
+		AccessReason:        reason,
 		SourceApplicationID: entitlement.SourceApplicationID,
 		SourceProductID:     projection.SourceProductID,
 		Version:             entitlement.Version,

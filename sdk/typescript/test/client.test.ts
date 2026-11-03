@@ -438,6 +438,43 @@ function assertAbort(error: unknown): boolean {
   return true;
 }
 
+test('abort after a retryable response rejects with AbortError before wait', async () => {
+  for (const status of [503, 429]) {
+    const controller = new AbortController();
+    let attempts = 0;
+    let waited = false;
+    const { client } = newTestClient(
+      async () => {
+        attempts += 1;
+        return jsonResponse(status, {
+          error: {
+            code: 'provider_unavailable',
+            message: 'provider is unavailable',
+            request_id: 'request-abort-after-response',
+          },
+        });
+      },
+      { retryPolicy: new RetryPolicy({ maxAttempts: 3, baseDelayMs: 60_000, maxDelayMs: 60_000 }) },
+    );
+    setRetrySeamsForTesting(client, {
+      now: () => {
+        controller.abort();
+        return Date.parse('2026-08-24T20:00:00.000Z');
+      },
+      delay: async () => {
+        waited = true;
+      },
+    });
+
+    await assert.rejects(
+      client.createCustomerSession('customer-external', { signal: controller.signal }),
+      assertAbort,
+    );
+    assert.equal(attempts, 1);
+    assert.equal(waited, false);
+  }
+});
+
 test('abort during retry backoff rejects with AbortError', async () => {
   let attempts = 0;
   const server = await listen((_request, response) => {

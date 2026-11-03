@@ -160,6 +160,10 @@ final class GooglePlayIapStack {
   }
 
   /// Restores configured, customer-bound purchases in bounded IAPStack batches.
+  ///
+  /// Rows for another customer, an unbound legacy purchase, an unknown product,
+  /// or more than one product id are counted on [RestoreResult.skipped] and are
+  /// not submitted. Another customer's rows are never verified.
   Future<RestoreResult> restorePurchases({
     required String externalCustomerId,
     String? requestId,
@@ -170,18 +174,32 @@ final class GooglePlayIapStack {
     );
     final submissions = <PurchaseSubmission>[];
     final observedTokens = <String>{};
+    var skipped = const RestoreSkipCounts();
     for (final purchase in purchases) {
       if (purchase.status != GooglePlayPurchaseStatus.purchased &&
           purchase.status != GooglePlayPurchaseStatus.restored) {
         continue;
       }
-      if (purchase.purchaseToken.trim().isEmpty ||
-          purchase.obfuscatedAccountId != externalCustomerId ||
-          purchase.productIds.length != 1) {
+      final account = purchase.obfuscatedAccountId;
+      final bound = account != null && account.trim().isNotEmpty;
+      if (bound && account != externalCustomerId) {
+        skipped = skipped.byAdding(differentCustomer: 1);
         continue;
       }
-      final productId = purchase.productIds.single;
-      if (!_productKinds.containsKey(productId) ||
+      if (purchase.productIds.length > 1) {
+        skipped = skipped.byAdding(multipleProducts: 1);
+        continue;
+      }
+      if (purchase.productIds.length != 1 ||
+          !_productKinds.containsKey(purchase.productIds.single)) {
+        skipped = skipped.byAdding(unknownProduct: 1);
+        continue;
+      }
+      if (!bound) {
+        skipped = skipped.byAdding(unbound: 1);
+        continue;
+      }
+      if (purchase.purchaseToken.trim().isEmpty ||
           !observedTokens.add(purchase.purchaseToken)) {
         continue;
       }
@@ -189,7 +207,11 @@ final class GooglePlayIapStack {
         _submission(externalCustomerId: externalCustomerId, purchase: purchase),
       );
     }
-    return _client.restorePurchasesInBatches(submissions, requestId: requestId);
+    return _client.restorePurchasesInBatches(
+      submissions,
+      requestId: requestId,
+      skipped: skipped,
+    );
   }
 
   /// Loads the current IAPStack projection without contacting Google Play.

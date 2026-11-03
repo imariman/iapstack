@@ -35,7 +35,7 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 
-private const val SDK_VERSION = "0.1.0-sdk.2"
+private const val SDK_VERSION = "0.1.0-sdk.3"
 private val JSON_MEDIA_TYPE = "application/json".toMediaType()
 private val DELAY_SECONDS = Regex("^\\d{1,9}$")
 private val IMF_FIXDATE = Regex(
@@ -163,6 +163,63 @@ class IapStackClient(
       throw IapStackProtocolException("IAPStack restore response did not contain one result per purchase")
     }
     return result
+  }
+
+  /**
+   * Verifies any number of purchases in order, in batches of 100.
+   *
+   * An empty list does not contact IAPStack. Each batch after the first suffixes
+   * [requestId] with `-2`, `-3`, and so on. When a later batch fails after an
+   * earlier one succeeded, those results stay on
+   * [IapStackException.committedRestoreResults]. A failure before any batch
+   * succeeds is the original error, including when [skipped] is non-empty.
+   * Cancellation is not rewritten.
+   */
+  suspend fun restorePurchasesInBatches(
+    purchases: List<PurchaseSubmission>,
+    requestId: String? = null,
+    skipped: RestoreSkipCounts = RestoreSkipCounts(),
+    pageLimitReached: Boolean = false,
+  ): RestoreResult {
+    val results = mutableListOf<VerificationResult>()
+    var start = 0
+    var batchIndex = 0
+    while (start < purchases.size) {
+      val end = minOf(start + 100, purchases.size)
+      try {
+        val batch = restorePurchases(
+          purchases = purchases.subList(start, end),
+          requestId = batchRequestId(requestId, batchIndex),
+        )
+        results.addAll(batch.results)
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (error: IapStackException) {
+        // Attach progress only after a batch has committed. A first-batch
+        // failure stays the original error so callers still match it.
+        if (results.isNotEmpty()) {
+          error.attachPartialRestore(results.toList(), skipped, pageLimitReached)
+        }
+        throw error
+      } catch (error: Exception) {
+        if (results.isEmpty()) {
+          throw error
+        }
+        throw IapStackIncompleteRestoreException(
+          committedResults = results.toList(),
+          skipped = skipped,
+          pageLimitReached = pageLimitReached,
+          cause = error,
+        )
+      }
+      start = end
+      batchIndex++
+    }
+    return RestoreResult(
+      results = results.toList(),
+      skipped = skipped,
+      pageLimitReached = pageLimitReached,
+    )
   }
 
   /**
@@ -428,4 +485,12 @@ private fun requireExternalCustomerId(value: String) {
   if (value.isEmpty() || value.trim() != value) {
     throw IllegalArgumentException("externalCustomerId must be non-empty without surrounding whitespace")
   }
+}
+
+private fun batchRequestId(requestId: String?, batchIndex: Int): String? {
+  if (requestId == null || requestId.trim().isEmpty()) {
+    return null
+  }
+  val normalized = requestId.trim()
+  return if (batchIndex == 0) normalized else "$normalized-${batchIndex + 1}"
 }

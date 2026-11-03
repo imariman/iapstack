@@ -93,23 +93,46 @@ final class IapStackClient {
   ///
   /// Each batch after the first gets `requestId` with a `-2`, `-3`, ... suffix so
   /// operators can correlate the calls. An empty list returns an empty result
-  /// without contacting IAPStack.
+  /// without contacting IAPStack. [skipped] and [pageLimitReached] are copied
+  /// onto that result. If a later batch fails after an earlier one succeeded,
+  /// the same exception type is thrown again with
+  /// [IapStackException.committedRestoreResults] set to the batches already
+  /// accepted. A failure before any batch succeeds is rethrown unchanged, even
+  /// when [skipped] or [pageLimitReached] is set.
   Future<RestoreResult> restorePurchasesInBatches(
     List<PurchaseSubmission> purchases, {
     String? requestId,
+    RestoreSkipCounts skipped = const RestoreSkipCounts(),
+    bool pageLimitReached = false,
   }) async {
     final results = <VerificationResult>[];
     for (var start = 0;
         start < purchases.length;
         start += maxRestoreBatchSize) {
       final end = min(start + maxRestoreBatchSize, purchases.length);
-      final batch = await restorePurchases(
-        purchases.sublist(start, end),
-        requestId: _batchRequestId(requestId, start ~/ maxRestoreBatchSize),
-      );
-      results.addAll(batch.results);
+      try {
+        final batch = await restorePurchases(
+          purchases.sublist(start, end),
+          requestId: _batchRequestId(requestId, start ~/ maxRestoreBatchSize),
+        );
+        results.addAll(batch.results);
+      } catch (error) {
+        if (results.isEmpty) {
+          rethrow;
+        }
+        throw _withRestoreProgress(
+          error,
+          committed: results,
+          skipped: skipped,
+          pageLimitReached: pageLimitReached,
+        );
+      }
     }
-    return RestoreResult(results: results);
+    return RestoreResult(
+      results: results,
+      skipped: skipped,
+      pageLimitReached: pageLimitReached,
+    );
   }
 
   /// Loads the current projection snapshot for one external customer.
@@ -397,6 +420,62 @@ void _validateExternalCustomerId(String value) {
     throw ArgumentError.value(value, 'externalCustomerId',
         'must be non-empty without surrounding whitespace');
   }
+}
+
+Object _withRestoreProgress(
+  Object error, {
+  required List<VerificationResult> committed,
+  required RestoreSkipCounts skipped,
+  required bool pageLimitReached,
+}) {
+  final committedResults = List<VerificationResult>.unmodifiable(committed);
+  if (error is IapStackApiException) {
+    return IapStackApiException(
+      statusCode: error.statusCode,
+      code: error.code,
+      message: error.message,
+      retryable: error.retryable,
+      requestId: error.requestId,
+      retryAfter: error.retryAfter,
+      committedRestoreResults: committedResults,
+      restoreSkips: skipped,
+      restorePageLimitReached: pageLimitReached,
+    );
+  }
+  if (error is IapStackTransportException) {
+    return IapStackTransportException(
+      error.message,
+      cause: error.cause,
+      committedRestoreResults: committedResults,
+      restoreSkips: skipped,
+      restorePageLimitReached: pageLimitReached,
+    );
+  }
+  if (error is IapStackTimeoutException) {
+    return IapStackTimeoutException(
+      error.message,
+      cause: error.cause,
+      committedRestoreResults: committedResults,
+      restoreSkips: skipped,
+      restorePageLimitReached: pageLimitReached,
+    );
+  }
+  if (error is IapStackProtocolException) {
+    return IapStackProtocolException(
+      error.message,
+      cause: error.cause,
+      committedRestoreResults: committedResults,
+      restoreSkips: skipped,
+      restorePageLimitReached: pageLimitReached,
+    );
+  }
+  return IapStackIncompleteRestoreException(
+    'IAPStack restore committed earlier batches and then failed',
+    cause: error,
+    committedRestoreResults: committedResults,
+    restoreSkips: skipped,
+    restorePageLimitReached: pageLimitReached,
+  );
 }
 
 /// _batchRequestId creates stable suffixes for bounded restore API calls.

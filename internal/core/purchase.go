@@ -141,6 +141,18 @@ type PurchaseObservation struct {
 	PriorSnapshotID ObservationID
 }
 
+// AccessAt is the access decision shared by entitlement reads and webhook payloads.
+// An allowed period whose exclusive end is not after now is expired. Adapters that
+// tolerate provider clock skew include that allowance in the effective end before
+// this runs. Clients apply the same comparison in grantsAccessAt and do not add
+// a second window, so the API, the webhook, and the SDKs stay in agreement.
+func AccessAt(access AccessStatus, reason AccessReason, endsAt *time.Time, now time.Time) (AccessStatus, AccessReason) {
+	if access == AccessAllowed && endsAt != nil && !now.Before(*endsAt) {
+		return AccessDenied, AccessReasonExpired
+	}
+	return access, reason
+}
+
 // Validate checks that the lifecycle state belongs to the normalized state vocabulary.
 func (state LifecycleState) Validate() error {
 	switch state {

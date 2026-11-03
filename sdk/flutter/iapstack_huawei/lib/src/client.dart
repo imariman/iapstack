@@ -164,6 +164,13 @@ final class HuaweiIapStack {
   }
 
   /// Restores configured, customer-bound purchases for one customer.
+  ///
+  /// Hitting [maxRestorePagesPerKind] submits the pages already read and sets
+  /// [RestoreResult.pageLimitReached]. It does not discard those purchases.
+  /// That result cannot be resumed: the next restore reads the first pages
+  /// again. Raise [maxRestorePagesPerKind] to include older rows.
+  /// Unbound, different-customer, and unknown-product rows are counted on
+  /// [RestoreResult.skipped] and are not submitted.
   Future<RestoreResult> restorePurchases({
     required String externalCustomerId,
     Set<HuaweiProductKind> productKinds = const <HuaweiProductKind>{
@@ -181,6 +188,8 @@ final class HuaweiIapStack {
     }
     final submissions = <PurchaseSubmission>[];
     final evidenceKeys = <String>{};
+    var skipped = const RestoreSkipCounts();
+    var pageLimitReached = false;
     for (final productKind in productKinds) {
       String? continuationToken;
       final observedTokens = <String>{};
@@ -188,30 +197,33 @@ final class HuaweiIapStack {
       do {
         pageCount++;
         if (pageCount > maxRestorePagesPerKind) {
-          throw const HuaweiIapStackException(
-            code: 'restore_page_limit',
-            message: 'Huawei restore exceeded the configured page limit',
-          );
+          pageLimitReached = true;
+          break;
         }
         final page = await _platform.ownedPurchases(
           productKind: productKind,
           continuationToken: continuationToken,
         );
         for (final purchase in page.purchases) {
-          final submission = _restoreSubmission(
+          final row = _classifyRestore(
             externalCustomerId: externalCustomerId,
             purchase: purchase,
             productKind: productKind,
           );
-          if (submission == null) {
-            continue;
+          if (row is _HuaweiRestoreAccept) {
+            final key =
+                '${productKind.name}\u0000${purchase.signature}\u0000${purchase.purchaseData}';
+            if (evidenceKeys.add(key)) {
+              submissions.add(row.submission);
+            }
+          } else if (row is _HuaweiRestoreSkip) {
+            skipped = switch (row.reason) {
+              _HuaweiSkip.unbound => skipped.byAdding(unbound: 1),
+              _HuaweiSkip.differentCustomer =>
+                skipped.byAdding(differentCustomer: 1),
+              _HuaweiSkip.unknownProduct => skipped.byAdding(unknownProduct: 1),
+            };
           }
-          final key =
-              '${productKind.name}\u0000${purchase.signature}\u0000${purchase.purchaseData}';
-          if (!evidenceKeys.add(key)) {
-            continue;
-          }
-          submissions.add(submission);
         }
         continuationToken = page.continuationToken;
         if (continuationToken != null &&
@@ -226,6 +238,8 @@ final class HuaweiIapStack {
     return _client.restorePurchasesInBatches(
       submissions,
       requestId: requestId,
+      skipped: skipped,
+      pageLimitReached: pageLimitReached,
     );
   }
 
@@ -236,26 +250,68 @@ final class HuaweiIapStack {
   }) =>
       _client.getEntitlements(externalCustomerId, requestId: requestId);
 
-  /// Returns null when a history row cannot be safely attached to the customer.
-  PurchaseSubmission? _restoreSubmission({
+  /// Classifies one history row. Malformed evidence is ignored, not counted.
+  _HuaweiRestoreRow _classifyRestore({
     required String externalCustomerId,
     required HuaweiSignedPurchase purchase,
     required HuaweiProductKind productKind,
   }) {
     if (purchase.purchaseData.trim().isEmpty ||
         purchase.signature.trim().isEmpty) {
-      return null;
+      return const _HuaweiRestoreIgnore();
     }
+    final HuaweiPurchaseEvidence evidence;
     try {
-      final evidence =
+      evidence =
           HuaweiPurchaseEvidence.fromSignedPurchase(purchase, productKind);
-      if (_productKinds[evidence.productId] != productKind ||
-          evidence.developerPayload != externalCustomerId) {
-        return null;
-      }
-      return evidence.toSubmission(externalCustomerId: externalCustomerId);
     } on HuaweiIapStackException {
-      return null;
+      return const _HuaweiRestoreIgnore();
     }
+    String? payload;
+    try {
+      payload = evidence.developerPayload;
+    } on HuaweiIapStackException {
+      payload = null;
+    }
+    if (payload != null && payload != externalCustomerId) {
+      return const _HuaweiRestoreSkip(_HuaweiSkip.differentCustomer);
+    }
+    String? productId;
+    try {
+      productId = evidence.productId;
+    } on HuaweiIapStackException {
+      productId = null;
+    }
+    if (productId == null || _productKinds[productId] != productKind) {
+      return const _HuaweiRestoreSkip(_HuaweiSkip.unknownProduct);
+    }
+    if (payload == null) {
+      return const _HuaweiRestoreSkip(_HuaweiSkip.unbound);
+    }
+    return _HuaweiRestoreAccept(
+      evidence.toSubmission(externalCustomerId: externalCustomerId),
+    );
   }
+}
+
+enum _HuaweiSkip { unbound, differentCustomer, unknownProduct }
+
+sealed class _HuaweiRestoreRow {
+  const _HuaweiRestoreRow();
+}
+
+final class _HuaweiRestoreAccept extends _HuaweiRestoreRow {
+  const _HuaweiRestoreAccept(this.submission);
+
+  final PurchaseSubmission submission;
+}
+
+final class _HuaweiRestoreSkip extends _HuaweiRestoreRow {
+  const _HuaweiRestoreSkip(this.reason);
+
+  final _HuaweiSkip reason;
+}
+
+final class _HuaweiRestoreIgnore extends _HuaweiRestoreRow {
+  const _HuaweiRestoreIgnore();
 }

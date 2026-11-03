@@ -179,15 +179,67 @@ public struct VerificationResult: Sendable {
   }
 }
 
+/// Rows a store restore did not submit.
+///
+/// Direct HTTP restores leave every count at zero. Duplicate transactions and
+/// rows that cannot be verified yet are omitted.
+public struct RestoreSkipCounts: Sendable, Equatable {
+  /// Creates skip counts. Omitted counts are zero.
+  public init(
+    unbound: Int = 0,
+    differentCustomer: Int = 0,
+    unknownProduct: Int = 0,
+    multipleProducts: Int = 0,
+  ) {
+    self.unbound = unbound
+    self.differentCustomer = differentCustomer
+    self.unknownProduct = unknownProduct
+    self.multipleProducts = multipleProducts
+  }
+
+  /// Purchases with no store account binding.
+  public let unbound: Int
+
+  /// Purchases bound to a different customer. These are never submitted.
+  public let differentCustomer: Int
+
+  /// Purchases whose product is not in the local catalog.
+  public let unknownProduct: Int
+
+  /// Play purchases that list more than one product id.
+  public let multipleProducts: Int
+
+  /// Sum of the reason counts.
+  public var total: Int {
+    unbound + differentCustomer + unknownProduct + multipleProducts
+  }
+}
+
 /// Batched restore result.
+///
+/// `skipped` and `pageLimitReached` are client-side. `from` leaves them empty
+/// because the v1 body only contains `results`. `pageLimitReached` is unused by
+/// the Apple companion and stays false.
 public struct RestoreResult: Sendable {
   /// Creates one restore response.
-  public init(results: [VerificationResult]) {
+  public init(
+    results: [VerificationResult],
+    skipped: RestoreSkipCounts = RestoreSkipCounts(),
+    pageLimitReached: Bool = false,
+  ) {
     self.results = results
+    self.skipped = skipped
+    self.pageLimitReached = pageLimitReached
   }
 
   /// Per-purchase verification rows.
   public let results: [VerificationResult]
+
+  /// Store rows that were not submitted.
+  public let skipped: RestoreSkipCounts
+
+  /// True when a Huawei restore stopped because the page cap was reached.
+  public let pageLimitReached: Bool
 
   /// Builds one batch response from contract JSON.
   public static func from(_ dictionary: [String: Any]) throws -> RestoreResult {

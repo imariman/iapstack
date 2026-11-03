@@ -1,5 +1,6 @@
 package com.iapstack.huawei
 
+import com.iapstack.core.IapStackApiException
 import com.iapstack.core.IapStackClient
 import com.iapstack.core.IapStackConfig
 import com.iapstack.core.IapStackRetryPolicy
@@ -11,6 +12,7 @@ import java.net.URI
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
@@ -131,8 +133,118 @@ class HuaweiIapStackTest {
       ),
     )
     val huawei = HuaweiIapStack(unusedClient(), productKinds, platform)
-    val result = huawei.restorePurchases("customer-1")
+    val result = huawei.restorePurchases(
+      "customer-1",
+      productKinds = setOf(HuaweiProductKind.SUBSCRIPTION),
+    )
     assertTrue(result.results.isEmpty())
+    assertEquals(1, result.skipped.differentCustomer)
+    assertEquals(0, result.skipped.unbound)
+    assertEquals(0, result.skipped.unknownProduct)
+  }
+
+  @Test
+  fun countsUnboundAndUnknownRestoreRows() = runBlocking {
+    val platform = FakePlatform(
+      owned = listOf(
+        HuaweiSignedPurchase("""{"productId":"premium_monthly"}""", "sig-unbound"),
+        HuaweiSignedPurchase(purchaseData("legacy_product", "customer-1"), "sig-unknown"),
+        HuaweiSignedPurchase("", ""),
+      ),
+    )
+    val huawei = HuaweiIapStack(unusedClient(), productKinds, platform)
+    val result = huawei.restorePurchases(
+      "customer-1",
+      productKinds = setOf(HuaweiProductKind.SUBSCRIPTION),
+    )
+    assertTrue(result.results.isEmpty())
+    assertEquals(1, result.skipped.unbound)
+    assertEquals(1, result.skipped.unknownProduct)
+    assertEquals(0, result.skipped.differentCustomer)
+  }
+
+  @Test
+  fun restorePageCapSubmitsPurchasesAlreadyRead() = runBlocking {
+    MockWebServer().use { server ->
+      server.enqueue(MockResponse().setBody("""{"results":[$VERIFICATION_JSON]}""").setResponseCode(200))
+      val http = client(server)
+      val platform = FakePlatform(
+        ownedPages = listOf(
+          HuaweiOwnedPurchasesPage(
+            listOf(HuaweiSignedPurchase(purchaseData("premium_monthly", "customer-1"), "sig-kept")),
+            continuationToken = "next",
+          ),
+          HuaweiOwnedPurchasesPage(
+            listOf(HuaweiSignedPurchase(purchaseData("premium_monthly", "customer-1"), "sig-dropped")),
+            continuationToken = null,
+          ),
+        ),
+      )
+      val huawei = HuaweiIapStack(http, productKinds, platform, maxRestorePagesPerKind = 1)
+      val result = huawei.restorePurchases(
+        "customer-1",
+        productKinds = setOf(HuaweiProductKind.SUBSCRIPTION),
+      )
+      assertEquals(1, result.results.size)
+      assertTrue(result.pageLimitReached)
+      assertEquals(1, platform.ownedPurchaseCalls)
+      assertEquals(1, server.requestCount)
+      val body = server.takeRequest().body.readUtf8()
+      assertTrue(body.contains("sig-kept"))
+      assertFalse(body.contains("sig-dropped"))
+      http.close()
+    }
+  }
+
+  @Test
+  fun restorePageCapWithNoRowsDoesNotCallTheServer() = runBlocking {
+    val platform = FakePlatform(
+      ownedPages = listOf(
+        HuaweiOwnedPurchasesPage(emptyList(), continuationToken = "next"),
+        HuaweiOwnedPurchasesPage(emptyList(), continuationToken = null),
+      ),
+    )
+    val huawei = HuaweiIapStack(unusedClient(), productKinds, platform, maxRestorePagesPerKind = 1)
+    val result = huawei.restorePurchases(
+      "customer-1",
+      productKinds = setOf(HuaweiProductKind.SUBSCRIPTION),
+    )
+    assertTrue(result.results.isEmpty())
+    assertTrue(result.pageLimitReached)
+    assertEquals(1, platform.ownedPurchaseCalls)
+  }
+
+  @Test
+  fun laterRestoreBatchKeepsCommittedResults() = runBlocking {
+    MockWebServer().use { server ->
+      val rows = List(100) { VERIFICATION_JSON }.joinToString(",")
+      server.enqueue(MockResponse().setBody("""{"results":[$rows]}""").setResponseCode(200))
+      server.enqueue(
+        MockResponse().setResponseCode(422).setBody(
+          """{"error":{"code":"invalid_purchase","message":"rejected","request_id":"request-2"}}""",
+        ),
+      )
+      val http = client(server)
+      val owned = (0 until 101).map { index ->
+        HuaweiSignedPurchase(
+          """{"productId":"premium_monthly","developerPayload":"customer-1","purchaseToken":"token-$index"}""",
+          "sig-$index",
+        )
+      }
+      val platform = FakePlatform(owned = owned)
+      val huawei = HuaweiIapStack(http, productKinds, platform)
+      val error = assertFailsWith<IapStackApiException> {
+        huawei.restorePurchases(
+          "customer-1",
+          productKinds = setOf(HuaweiProductKind.SUBSCRIPTION),
+          requestId = "huawei-restore",
+        )
+      }
+      assertEquals(100, error.committedRestoreResults.size)
+      assertEquals("invalid_purchase", error.code)
+      assertEquals(2, server.requestCount)
+      http.close()
+    }
   }
 
   @Test
@@ -210,6 +322,7 @@ class HuaweiIapStackTest {
     var purchasedProductId: String? = null
     val failingProductKinds = mutableSetOf<HuaweiProductKind>()
     var purchasedDeveloperPayload: String? = null
+    var ownedPurchaseCalls = 0
     private var pageIndex = 0
 
     override suspend fun isAvailable(): Boolean = true
@@ -240,6 +353,7 @@ class HuaweiIapStackTest {
       productKind: HuaweiProductKind,
       continuationToken: String?,
     ): HuaweiOwnedPurchasesPage {
+      ownedPurchaseCalls++
       if (ownedPages != null) {
         val page = ownedPages[pageIndex.coerceAtMost(ownedPages.lastIndex)]
         pageIndex++

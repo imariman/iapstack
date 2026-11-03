@@ -93,10 +93,34 @@ data class VerificationResult(
 }
 
 /**
- * Batched verify response.
+ * Rows a store restore did not submit.
+ *
+ * Direct HTTP restores leave every count at zero. Store companions fill the
+ * counts for rows they refused. Duplicate tokens and rows that cannot be
+ * verified yet are omitted.
  */
-data class RestoreResult(
+data class RestoreSkipCounts(
+  val unbound: Int = 0,
+  val differentCustomer: Int = 0,
+  val unknownProduct: Int = 0,
+  val multipleProducts: Int = 0,
+) {
+  val total: Int
+    get() = unbound + differentCustomer + unknownProduct + multipleProducts
+}
+
+/**
+ * Batched verify response.
+ *
+ * [skipped] and [pageLimitReached] are client-side. `fromJson` leaves them at
+ * their defaults because the v1 response body only contains `results`.
+ * [pageLimitReached] is set by Huawei restore when paging stopped at
+ * `maxRestorePagesPerKind` after the purchases already read were submitted.
+ */
+data class RestoreResult @JvmOverloads constructor(
   val results: List<VerificationResult>,
+  val skipped: RestoreSkipCounts = RestoreSkipCounts(),
+  val pageLimitReached: Boolean = false,
 ) {
   companion object {
     fun fromJson(json: Map<String, Any?>): RestoreResult = RestoreResult(
