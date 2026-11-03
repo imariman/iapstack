@@ -409,6 +409,8 @@ func (service *Service) googlePlayReconciliationCommand(
 }
 
 // HandleReconciliation opens one scheduled request, re-queries its provider, and schedules its next generation.
+// The next generation is saved before the provider call, so a failed refresh cannot end the chain.
+// A refresh that finds the lineage terminally expired closes that generation instead of leaving it runnable.
 func (service *Service) HandleReconciliation(ctx context.Context, message persistence.QueueMessage) error {
 	if message.Queue != persistence.QueueReconciliation {
 		return errors.New("unsupported reconciliation message")
@@ -440,17 +442,21 @@ func (service *Service) HandleReconciliation(ctx context.Context, message persis
 	}); err != nil {
 		return err
 	}
-	if err := service.schedule(
+	nextID, err := service.scheduleNext(
 		ctx,
 		message.ProjectID,
 		message.ApplicationID,
 		customerID,
 		scheduled.Verification,
-	); err != nil {
+	)
+	if err != nil {
 		return err
 	}
-	_, err = service.verify(ctx, message.ProjectID, message.ApplicationID, scheduled.Verification)
-	return err
+	result, err := service.verify(ctx, message.ProjectID, message.ApplicationID, scheduled.Verification)
+	if err != nil || !lineageEnded(result.Observations) {
+		return err
+	}
+	return service.retire(ctx, nextID)
 }
 
 // verify converts one protected job into the provider-neutral verification command.
@@ -488,28 +494,53 @@ func (service *Service) schedule(
 	customerID core.CustomerID,
 	verificationPayload jobs.VerificationPayload,
 ) error {
+	_, err := service.scheduleNext(ctx, projectID, applicationID, customerID, verificationPayload)
+	return err
+}
+
+// scheduleNext creates the next unique protected reconciliation generation and returns its durable identity.
+func (service *Service) scheduleNext(
+	ctx context.Context,
+	projectID core.ProjectID,
+	applicationID core.ApplicationID,
+	customerID core.CustomerID,
+	verificationPayload jobs.VerificationPayload,
+) (string, error) {
 	availableAt := nextReconciliationTime(service.clock().UTC())
 	payload, err := json.Marshal(jobs.ReconciliationPayload{
 		Verification: verificationPayload,
 		ScheduledFor: availableAt,
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer zero(payload)
 	protected, err := protection.Protect(ctx, service.protection, protection.Scope{
 		ProjectID: projectID, ApplicationID: applicationID, Purpose: reconciliationProtectionPurpose,
 	}, payload)
 	if err != nil {
-		return fmt.Errorf("protect reconciliation request: %w", err)
+		return "", fmt.Errorf("protect reconciliation request: %w", err)
 	}
-	return service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
-		_, saveErr := repository.SaveReconciliationJob(ctx, persistence.ReconciliationJob{
+	var jobID string
+	err = service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var saveErr error
+		jobID, saveErr = repository.SaveReconciliationJob(ctx, persistence.ReconciliationJob{
 			ID: deterministicID("reconcile", protected.Fingerprint), ProjectID: projectID,
 			ApplicationID: applicationID, CustomerID: customerID,
 			Payload: protected, AvailableAt: availableAt,
 		})
 		return saveErr
+	})
+	return jobID, err
+}
+
+// retire closes one future reconciliation generation so the worker skips it when it becomes due.
+func (service *Service) retire(ctx context.Context, jobID string) error {
+	completedAt := service.clock().UTC()
+	return service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		return repository.CompleteQueue(ctx, persistence.QueueCompletion{
+			Queue: persistence.QueueReconciliation, ID: jobID, CompletedAt: completedAt,
+		})
 	})
 }
 
@@ -552,6 +583,22 @@ func requiresReconciliation(evidence json.RawMessage) bool {
 		ProductKind core.ProductKind `json:"product_kind"`
 	}
 	return json.Unmarshal(evidence, &metadata) == nil && metadata.ProductKind == core.ProductKindSubscription
+}
+
+// lineageEnded reports whether one verified purchase lineage is terminally expired.
+// Every line item must be expired and denied. Refunds and revocations keep their daily refresh because
+// a provider can reverse them. A later renewal or resubscription is verified and scheduled again by the
+// client purchase or provider notification that reports it.
+func lineageEnded(observations []core.PurchaseObservation) bool {
+	if len(observations) == 0 {
+		return false
+	}
+	for _, observation := range observations {
+		if observation.State != core.LifecycleExpired || observation.Access != core.AccessDenied {
+			return false
+		}
+	}
+	return true
 }
 
 // nextReconciliationTime returns one deterministic UTC generation boundary for idempotent scheduling.
