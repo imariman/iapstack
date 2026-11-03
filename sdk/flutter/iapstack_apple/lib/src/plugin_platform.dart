@@ -16,6 +16,10 @@ final class ApplePluginPlatform implements AppleIapPlatform {
       <String, ProductDetails>{};
   final Map<String, PurchaseDetails> _pendingTransactions =
       <String, PurchaseDetails>{};
+  // Restore has no PurchaseDetails, so its finish handle is the StoreKit id.
+  final Set<String> _unfinishedRestoredTransactions = <String>{};
+  // Finishing a transaction again is a no-op, not a missing handle.
+  final Set<String> _finishedTransactions = <String>{};
 
   @override
   Stream<ApplePurchase> get purchaseUpdates => _plugin.purchaseStream
@@ -112,8 +116,22 @@ final class ApplePluginPlatform implements AppleIapPlatform {
     operation: 'restore',
     callback: () async {
       await SK2Transaction.restorePurchases();
-      final transactions = await SK2Transaction.transactions();
-      return transactions.map(_restoredPurchase).toList(growable: false);
+      // `transactions()` is the full history, finished or not. Only rows still
+      // in `unfinishedTransactions()` need finish(), so only those keep a
+      // handle. The plugin's history rows carry no JWS; unfinished rows do.
+      final unfinished = <String, SK2Transaction>{
+        for (final transaction in await SK2Transaction.unfinishedTransactions())
+          transaction.id: transaction,
+      };
+      final purchases = <ApplePurchase>[];
+      for (final transaction in await SK2Transaction.transactions()) {
+        final pending = unfinished[transaction.id];
+        if (pending != null) {
+          _unfinishedRestoredTransactions.add(transaction.id);
+        }
+        purchases.add(_restoredPurchase(transaction, unfinished: pending));
+      }
+      return purchases;
     },
   );
 
@@ -121,12 +139,27 @@ final class ApplePluginPlatform implements AppleIapPlatform {
   Future<void> completePurchase(ApplePurchase purchase) => _guard(
     operation: 'completion',
     callback: () async {
-      final details = _pendingTransactions[purchase.transactionId];
-      if (details == null || !purchase.pendingCompletion) {
+      if (!purchase.pendingCompletion) {
         return;
       }
-      await _plugin.completePurchase(details);
-      _pendingTransactions.remove(purchase.transactionId);
+      final transactionId = purchase.transactionId;
+      final details = _pendingTransactions[transactionId];
+      if (details != null) {
+        await _plugin.completePurchase(details);
+      } else if (_unfinishedRestoredTransactions.contains(transactionId)) {
+        await SK2Transaction.finish(int.parse(transactionId));
+      } else if (_finishedTransactions.contains(transactionId)) {
+        return;
+      } else {
+        throw const AppleIapStackException(
+          code: 'transaction_not_finishable',
+          message:
+              'This platform has no StoreKit handle to finish the transaction',
+        );
+      }
+      _pendingTransactions.remove(transactionId);
+      _unfinishedRestoredTransactions.remove(transactionId);
+      _finishedTransactions.add(transactionId);
     },
   );
 
@@ -195,13 +228,19 @@ AppleProduct _appleProduct(AppStoreProduct2Details details) {
 }
 
 /// _restoredPurchase converts a StoreKit 2 history row into signed evidence.
-ApplePurchase _restoredPurchase(SK2Transaction transaction) => ApplePurchase(
+///
+/// [unfinished] is the same transaction from the unfinished read, when StoreKit
+/// still expects it to be finished.
+ApplePurchase _restoredPurchase(
+  SK2Transaction transaction, {
+  SK2Transaction? unfinished,
+}) => ApplePurchase(
   transactionId: transaction.id,
   productId: transaction.productId,
-  signedTransaction: transaction.receiptData ?? '',
+  signedTransaction: transaction.receiptData ?? unfinished?.receiptData ?? '',
   appAccountToken: transaction.appAccountToken?.toLowerCase(),
   status: ApplePurchaseStatus.restored,
-  pendingCompletion: false,
+  pendingCompletion: unfinished != null,
 );
 
 /// _purchaseStatus maps official plugin states into a stable companion contract.

@@ -91,6 +91,10 @@ final class AppleIapStack {
   }
 
   /// Verifies one completed transaction, then finishes it only after server success.
+  ///
+  /// When StoreKit cannot finish a pending transaction, the
+  /// [AppleIapStackException] from completion is thrown after IAPStack has
+  /// already verified it.
   Future<VerificationResult> verifyPurchase({
     required String externalCustomerId,
     required ApplePurchase purchase,
@@ -112,7 +116,10 @@ final class AppleIapStack {
 
   /// Restores configured, customer-bound StoreKit history in bounded batches.
   ///
-  /// Unbound, different-customer, and unknown-product rows are counted on
+  /// Unfinished StoreKit rows are finished after IAPStack accepts the batch
+  /// that carried them. If a later batch fails, rows from the batches already
+  /// accepted are finished and the rest stay unfinished. Unbound,
+  /// different-customer, and unknown-product rows are counted on
   /// [RestoreResult.skipped] and are not submitted. Another customer's rows
   /// are never verified.
   Future<RestoreResult> restorePurchases({
@@ -121,6 +128,7 @@ final class AppleIapStack {
   }) async {
     _validateAppAccountToken(externalCustomerId);
     final purchases = await _platform.restorePurchases();
+    final submitted = <ApplePurchase>[];
     final submissions = <PurchaseSubmission>[];
     final observedTransactions = <String>{};
     var skipped = const RestoreSkipCounts();
@@ -148,12 +156,34 @@ final class AppleIapStack {
       submissions.add(
         _submission(externalCustomerId: externalCustomerId, purchase: purchase),
       );
+      submitted.add(purchase);
     }
-    return _client.restorePurchasesInBatches(
-      submissions,
-      requestId: requestId,
-      skipped: skipped,
-    );
+    final RestoreResult result;
+    try {
+      result = await _client.restorePurchasesInBatches(
+        submissions,
+        requestId: requestId,
+        skipped: skipped,
+      );
+    } on IapStackException catch (error) {
+      // Batches go in order with one result per row, so the committed results
+      // are exactly the first rows. The failed batch and later ones stay open.
+      await _finishRestored(
+        submitted.take(error.committedRestoreResults.length),
+      );
+      rethrow;
+    }
+    await _finishRestored(submitted);
+    return result;
+  }
+
+  /// _finishRestored finishes accepted rows that StoreKit still holds open.
+  Future<void> _finishRestored(Iterable<ApplePurchase> purchases) async {
+    for (final purchase in purchases) {
+      if (purchase.pendingCompletion) {
+        await _platform.completePurchase(purchase);
+      }
+    }
   }
 
   /// Loads the current IAPStack projection without contacting StoreKit.

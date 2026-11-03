@@ -42,7 +42,11 @@ final subscription = apple.purchaseUpdates.listen((purchase) async {
 
 `verifyPurchase` finishes a pending StoreKit transaction only after IAPStack
 returns a successful authoritative verification. A provider or network failure
-leaves the transaction unfinished so StoreKit can redeliver it.
+leaves the transaction unfinished so StoreKit can redeliver it. Verify each
+update on the `AppleIapStack` whose `purchaseUpdates` delivered it, or on one
+that shares its `platform`. A different platform has no StoreKit handle for the
+transaction, so completion throws `AppleIapStackException` with code
+`transaction_not_finishable` after IAPStack has verified the purchase.
 
 ## Restore
 
@@ -52,6 +56,11 @@ without the expected `appAccountToken`, rows for another customer, and unknown
 products are counted on `RestoreResult.skipped` and are not submitted. Another
 customer's transactions are never verified. If a later batch fails, the
 original IAPStack error carries `committedRestoreResults`.
+
+Rows that StoreKit has not finished yet are finished after IAPStack accepts the
+batch that carried them. Rows in a failed batch, and in the batches after it,
+stay unfinished, and the next restore submits them again. If StoreKit cannot
+finish an accepted row, restore throws that `AppleIapStackException`.
 
 See `example/` for an iOS simulator harness with a checked-in StoreKit
 Configuration file.
