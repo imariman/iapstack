@@ -549,6 +549,10 @@ func (adapter *Adapter) result(
 		value := milliseconds(purchase.ExpirationDate)
 		endsAt = &value
 	}
+	graceEndsAt := graceEnd(productKind, purchase, access, observedAt)
+	if graceEndsAt != nil {
+		endsAt = graceEndsAt
+	}
 	renewal := core.Renewal{Mode: core.RenewalNone, Status: core.RenewalNotApplicable}
 	if productKind == core.ProductKindSubscription {
 		renewal = core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalDisabled}
@@ -596,6 +600,7 @@ func (adapter *Adapter) result(
 		reason,
 		renewal,
 		quantity,
+		graceEndsAt,
 	)
 	observation := core.PurchaseObservation{
 		ID:              core.ObservationID("hua-" + hex.EncodeToString(identity[:16])),
@@ -627,6 +632,8 @@ func (adapter *Adapter) result(
 }
 
 // observationSnapshotIdentity hashes every authoritative field that can change the immutable normalized snapshot.
+// graceEndsAt is set only when billing grace replaced the expiration date as the effective end. It is encoded
+// separately so a corrected grace snapshot does not reuse the id of a row stored with the expiration date as its end.
 func observationSnapshotIdentity(
 	applicationID core.ApplicationID,
 	productKind core.ProductKind,
@@ -636,8 +643,9 @@ func observationSnapshotIdentity(
 	reason core.AccessReason,
 	renewal core.Renewal,
 	quantity uint32,
+	graceEndsAt *time.Time,
 ) [32]byte {
-	return sha256.Sum256([]byte(strings.Join([]string{
+	fields := []string{
 		string(applicationID),
 		string(productKind),
 		string(purchase.ApplicationID),
@@ -662,7 +670,28 @@ func observationSnapshotIdentity(
 		string(reason),
 		string(renewal.Mode),
 		string(renewal.Status),
-	}, "\x00")))
+	}
+	if graceEndsAt != nil {
+		fields = append(fields, "grace_end", strconv.FormatInt(graceEndsAt.UnixMilli(), 10))
+	}
+	return sha256.Sum256([]byte(strings.Join(fields, "\x00")))
+}
+
+// graceEnd returns Huawei's grace end when billing grace is what keeps a subscription allowed.
+// expirationDate is already past during grace, and access lasts until graceExpirationTime. Using
+// the expiration date as the effective end would make the entitlement reader deny an allowed grace state.
+func graceEnd(
+	productKind core.ProductKind,
+	purchase purchaseData,
+	access core.AccessStatus,
+	now time.Time,
+) *time.Time {
+	if productKind != core.ProductKindSubscription || access != core.AccessAllowed || purchase.RetryFlag != 1 ||
+		purchase.GraceExpirationTime <= now.UnixMilli() || purchase.GraceExpirationTime <= purchase.ExpirationDate {
+		return nil
+	}
+	value := milliseconds(purchase.GraceExpirationTime)
+	return &value
 }
 
 // parseEvidence decodes the submitted envelope and its embedded purchase data.

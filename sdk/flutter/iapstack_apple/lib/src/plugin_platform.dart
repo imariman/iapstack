@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:iapstack_apple/src/errors.dart';
 import 'package:iapstack_apple/src/platform.dart';
 import 'package:iapstack_apple/src/product_kind.dart';
@@ -111,9 +112,43 @@ final class ApplePluginPlatform implements AppleIapPlatform {
   Future<List<ApplePurchase>> restorePurchases() => _guard(
     operation: 'restore',
     callback: () async {
-      await SK2Transaction.restorePurchases();
-      final transactions = await SK2Transaction.transactions();
-      return transactions.map(_restoredPurchase).toList(growable: false);
+      // The plugin's restore re-emits current entitlements on the purchase
+      // stream. It does not call `AppStore.sync()`.
+      try {
+        await SK2Transaction.restorePurchases();
+      } on PlatformException catch (error) {
+        // The plugin emits the verified entitlements first, then fails when
+        // any entitlement is unverified. The reads below skip unverified rows,
+        // as Swift's restore does, so the verified ones are still restored.
+        if (error.code != _unverifiedRestoreCode) {
+          rethrow;
+        }
+      }
+      // `transactions()` is the full history, finished or not, but the plugin
+      // returns it without a JWS. Unfinished rows and current entitlements
+      // carry one, so history rows take it from those reads. Only rows still
+      // in `unfinishedTransactions()` need finish(). The three reads are
+      // independent.
+      final (unfinishedRows, entitlementRows, history) = await (
+        SK2Transaction.unfinishedTransactions(),
+        SK2Transaction.currentEntitlements(),
+        SK2Transaction.transactions(),
+      ).wait;
+      final unfinished = _byId(unfinishedRows);
+      final entitlements = _byId(entitlementRows);
+      // A row missing from the history read is still restored.
+      return <ApplePurchase>[
+        for (final transaction in _byId(<SK2Transaction>[
+          ...history,
+          ...unfinishedRows,
+          ...entitlementRows,
+        ]).values)
+          _restoredPurchase(
+            transaction,
+            unfinished: unfinished[transaction.id],
+            entitlement: entitlements[transaction.id],
+          ),
+      ];
     },
   );
 
@@ -121,12 +156,27 @@ final class ApplePluginPlatform implements AppleIapPlatform {
   Future<void> completePurchase(ApplePurchase purchase) => _guard(
     operation: 'completion',
     callback: () async {
-      final details = _pendingTransactions[purchase.transactionId];
-      if (details == null || !purchase.pendingCompletion) {
+      if (!purchase.pendingCompletion) {
         return;
       }
-      await _plugin.completePurchase(details);
-      _pendingTransactions.remove(purchase.transactionId);
+      final transactionId = purchase.transactionId;
+      final details = _pendingTransactions[transactionId];
+      if (details != null) {
+        await _plugin.completePurchase(details);
+        _pendingTransactions.remove(transactionId);
+        return;
+      }
+      // The plugin's own StoreKit 2 completion is `finish(id)`, and the native
+      // side looks the id up in `Transaction.all`. So any bridge can finish any
+      // StoreKit id, and finishing one again does nothing.
+      final id = int.tryParse(transactionId);
+      if (id == null || id <= 0) {
+        throw const AppleIapStackException(
+          code: 'transaction_not_finishable',
+          message: 'The App Store transaction has no StoreKit id to finish',
+        );
+      }
+      await SK2Transaction.finish(id);
     },
   );
 
@@ -194,14 +244,40 @@ AppleProduct _appleProduct(AppStoreProduct2Details details) {
   );
 }
 
+/// The plugin's restore error when a current entitlement fails verification.
+const String _unverifiedRestoreCode = 'storekit2_restore_failed';
+
+/// _byId keys StoreKit 2 rows by transaction ID. The first row for an ID wins.
+Map<String, SK2Transaction> _byId(List<SK2Transaction> transactions) {
+  final rows = <String, SK2Transaction>{};
+  for (final transaction in transactions) {
+    rows.putIfAbsent(transaction.id, () => transaction);
+  }
+  return rows;
+}
+
 /// _restoredPurchase converts a StoreKit 2 history row into signed evidence.
-ApplePurchase _restoredPurchase(SK2Transaction transaction) => ApplePurchase(
+///
+/// [unfinished] is the same transaction from the unfinished read, when StoreKit
+/// still expects it to be finished. [entitlement] is the same transaction from
+/// the current entitlements read. Either one supplies the JWS that the plugin
+/// leaves out of history rows. A row with neither has an empty
+/// `signedTransaction`, so `canVerify` is false.
+ApplePurchase _restoredPurchase(
+  SK2Transaction transaction, {
+  SK2Transaction? unfinished,
+  SK2Transaction? entitlement,
+}) => ApplePurchase(
   transactionId: transaction.id,
   productId: transaction.productId,
-  signedTransaction: transaction.receiptData ?? '',
+  signedTransaction: <String?>[
+    transaction.receiptData,
+    unfinished?.receiptData,
+    entitlement?.receiptData,
+  ].nonNulls.firstWhere((jws) => jws.isNotEmpty, orElse: () => ''),
   appAccountToken: transaction.appAccountToken?.toLowerCase(),
   status: ApplePurchaseStatus.restored,
-  pendingCompletion: false,
+  pendingCompletion: unfinished != null,
 );
 
 /// _purchaseStatus maps official plugin states into a stable companion contract.

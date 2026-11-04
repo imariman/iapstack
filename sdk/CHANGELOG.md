@@ -38,6 +38,36 @@
 - TypeScript host: aborting after a parsed 429 or 5xx body, before the backoff
   wait, rejects with `AbortError` instead of `APIError`. A `catch` of
   `APIError` no longer matches that cancel. Catch `AbortError`.
+- Flutter Apple: `completePurchase` throws `AppleIapStackException` with code
+  `transaction_not_finishable` when `pendingCompletion` is true and the
+  purchase has no StoreKit transaction id. `verifyPurchase` throws the same
+  error for such a purchase before it contacts IAPStack. Before, completion
+  returned without finishing and StoreKit kept the transaction open.
+- Flutter Apple: when every restore batch is accepted but StoreKit cannot
+  finish a row, `restorePurchases` throws `IapStackIncompleteRestoreException`
+  with `committedRestoreResults`, as Swift throws
+  `IAPStackIncompleteRestoreError`.
+- Flutter Apple requires `in_app_purchase_storekit` 0.4.16, so the minimum is
+  now Dart 3.11 and Flutter 3.41. That version adds
+  `SK2Transaction.currentEntitlements()`, which restore needs.
+
+### Fixed
+
+- Flutter Apple `restorePurchases` finishes unfinished StoreKit transactions
+  after IAPStack accepts the batch that carried them, as Swift does. Rows in a
+  failed batch stay unfinished. Restored rows can now have
+  `pendingCompletion == true`.
+- Flutter Apple `completePurchase` finishes a transaction by its StoreKit id
+  when this platform did not cache the update, for example one delivered to
+  another `ApplePluginPlatform`. Before, it returned without finishing.
+- Flutter Apple `restorePurchases` submits finished current entitlements. The
+  plugin returns history rows without a JWS, so on a real device restore
+  submitted only unfinished rows and dropped the rest without counting them.
+  Restore now takes the JWS from `currentEntitlements()`. Finished rows that
+  still have no JWS, such as earlier renewals, are counted on
+  `skipped.unsigned`. Swift still submits them. A current entitlement that
+  StoreKit cannot verify is skipped, as in Swift. Before, it failed the whole
+  restore with `apple_restore_failed`.
 
 ### Added
 
@@ -49,6 +79,8 @@
 - `RestoreResult.skipped` (`unbound`, `differentCustomer`, `unknownProduct`,
   `multipleProducts`) and `RestoreResult.pageLimitReached`. Direct HTTP
   `fromJson` still reads only `results`.
+- Flutter: `RestoreSkipCounts.unsigned`, included in `total`. Flutter Apple
+  counts restore rows with no JWS there. Swift and Kotlin have no such count.
 
 ## 0.1.0-sdk.2
 

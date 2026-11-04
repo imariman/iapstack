@@ -1,7 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:iapstack/iapstack.dart';
 import 'package:iapstack_apple/iapstack_apple.dart';
 import 'package:in_app_purchase_platform_interface/in_app_purchase_platform_interface.dart';
 import 'package:in_app_purchase_storekit/in_app_purchase_storekit.dart';
@@ -12,16 +17,19 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late _FakeOfficialPlatform officialPlatform;
+  late _FakeStoreKit2 storeKit;
   late ApplePluginPlatform bridge;
 
   setUp(() {
     debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
     officialPlatform = _FakeOfficialPlatform();
     InAppPurchasePlatform.instance = officialPlatform;
+    storeKit = _FakeStoreKit2()..install();
     bridge = ApplePluginPlatform();
   });
 
   tearDown(() async {
+    storeKit.uninstall();
     await officialPlatform.close();
     debugDefaultTargetPlatformOverride = null;
   });
@@ -313,7 +321,7 @@ void main() {
       officialPlatform.emitPurchase(native);
 
       final purchase = await purchaseFuture;
-      expect(purchase.transactionId, 'transaction-100');
+      expect(purchase.transactionId, '100');
       expect(purchase.productId, 'premium_monthly');
       expect(purchase.signedTransaction, 'header.payload.signature');
       expect(purchase.appAccountToken, '018f59d0-a200-7000-8000-000000000001');
@@ -324,6 +332,292 @@ void main() {
       await bridge.completePurchase(purchase);
       await bridge.completePurchase(purchase);
       expect(officialPlatform.completed, <PurchaseDetails>[native]);
+      // The cached handle is used once; a repeat finishes by id, a no-op.
+      expect(storeKit.finished, <int>[100]);
+    },
+  );
+
+  test(
+    'restore marks unfinished history rows and finishes them by id',
+    () async {
+      storeKit
+        ..unfinished = <SK2TransactionMessage>[
+          _transactionMessage(id: 101, receiptData: 'header.payload.signature'),
+        ]
+        ..history = <SK2TransactionMessage>[
+          _transactionMessage(id: 100),
+          _transactionMessage(id: 101),
+        ];
+
+      final restored = await bridge.restorePurchases();
+
+      expect(storeKit.calls, <String>[
+        'restorePurchases',
+        'unfinishedTransactions',
+        'currentEntitlements',
+        'transactions',
+      ]);
+      expect(restored.map((purchase) => purchase.transactionId), <String>[
+        '100',
+        '101',
+      ]);
+      expect(restored.first.pendingCompletion, isFalse);
+      final unfinished = restored.last;
+      expect(unfinished.status, ApplePurchaseStatus.restored);
+      expect(unfinished.pendingCompletion, isTrue);
+      expect(unfinished.signedTransaction, 'header.payload.signature');
+      expect(
+        unfinished.appAccountToken,
+        '018f59d0-a200-7000-8000-000000000001',
+      );
+      expect(unfinished.canVerify, isTrue);
+
+      await bridge.completePurchase(restored.first);
+      await bridge.completePurchase(unfinished);
+      await bridge.completePurchase(unfinished);
+      // Native finish(id) does nothing for a transaction already finished.
+      expect(storeKit.finished, <int>[101, 101]);
+      expect(officialPlatform.completed, isEmpty);
+    },
+  );
+
+  test(
+    'restore signs finished current entitlements from the entitlements read',
+    () async {
+      storeKit
+        ..unfinished = <SK2TransactionMessage>[
+          _transactionMessage(id: 101, receiptData: 'unfinished.jws.101'),
+        ]
+        ..entitlements = <SK2TransactionMessage>[
+          _transactionMessage(
+            id: 100,
+            originalId: 90,
+            receiptData: 'entitlement.jws.100',
+          ),
+          _transactionMessage(id: 101, receiptData: 'entitlement.jws.101'),
+          _transactionMessage(
+            id: 200,
+            productId: 'premium_lifetime',
+            receiptData: 'entitlement.jws.200',
+          ),
+        ]
+        ..history = <SK2TransactionMessage>[
+          // An earlier renewal of 100: finished and no longer an entitlement.
+          _transactionMessage(id: 90),
+          _transactionMessage(id: 100, originalId: 90),
+          _transactionMessage(id: 101),
+        ];
+
+      final restored = await bridge.restorePurchases();
+
+      expect(restored.map((purchase) => purchase.transactionId), <String>[
+        '90',
+        '100',
+        '101',
+        '200',
+      ]);
+      final byId = <String, ApplePurchase>{
+        for (final purchase in restored) purchase.transactionId: purchase,
+      };
+      expect(byId['90']!.signedTransaction, isEmpty);
+      expect(byId['90']!.canVerify, isFalse);
+      expect(byId['90']!.pendingCompletion, isFalse);
+      expect(byId['100']!.signedTransaction, 'entitlement.jws.100');
+      expect(byId['100']!.canVerify, isTrue);
+      expect(byId['100']!.pendingCompletion, isFalse);
+      expect(byId['101']!.signedTransaction, 'unfinished.jws.101');
+      expect(byId['101']!.pendingCompletion, isTrue);
+      // Missing from the history read, but still a current entitlement.
+      expect(byId['200']!.productId, 'premium_lifetime');
+      expect(byId['200']!.signedTransaction, 'entitlement.jws.200');
+      expect(byId['200']!.canVerify, isTrue);
+      expect(byId['200']!.pendingCompletion, isFalse);
+
+      for (final purchase in restored) {
+        await bridge.completePurchase(purchase);
+      }
+      expect(storeKit.finished, <int>[101]);
+    },
+  );
+
+  test(
+    'restore submits finished entitlements and counts unsigned history',
+    () async {
+      storeKit
+        ..entitlements = <SK2TransactionMessage>[
+          _transactionMessage(
+            id: 100,
+            originalId: 90,
+            receiptData: 'entitlement.jws.100',
+          ),
+        ]
+        ..history = <SK2TransactionMessage>[
+          _transactionMessage(id: 90),
+          _transactionMessage(id: 100, originalId: 90),
+          _transactionMessage(
+            id: 300,
+            appAccountToken: '018F59D0-A200-7000-8000-000000000002',
+          ),
+        ];
+      final submitted = <Object?>[];
+      final apple = AppleIapStack(
+        client: IapStackClient(
+          IapStackConfig(
+            baseUri: Uri.parse('https://iap.example'),
+            applicationId: 'application-1',
+            customerToken: 'customer-token',
+            retryPolicy: const IapStackRetryPolicy(maxAttempts: 1),
+          ),
+          httpClient: MockClient((request) async {
+            final body = (jsonDecode(request.body) as Map)
+                .cast<String, Object?>();
+            final purchases = body['purchases']! as List<Object?>;
+            submitted.addAll(purchases);
+            return http.Response(
+              jsonEncode(<String, Object?>{
+                'results': List<Object?>.filled(
+                  purchases.length,
+                  _verificationJson,
+                ),
+              }),
+              200,
+            );
+          }),
+        ),
+        productKinds: const <String, AppleProductKind>{
+          'premium_monthly': AppleProductKind.subscription,
+        },
+        platform: bridge,
+      );
+
+      final result = await apple.restorePurchases(
+        externalCustomerId: '018f59d0-a200-7000-8000-000000000001',
+      );
+
+      expect(submitted, hasLength(1));
+      final evidence =
+          (submitted.single! as Map)['evidence']! as Map<String, Object?>;
+      expect(evidence['signed_transaction'], 'entitlement.jws.100');
+      expect(result.results, hasLength(1));
+      expect(result.skipped.unsigned, 1);
+      expect(result.skipped.differentCustomer, 1);
+      expect(result.skipped.total, 2);
+      expect(storeKit.finished, isEmpty);
+    },
+  );
+
+  test(
+    'restore keeps verified entitlements when the plugin rejects an unverified one',
+    () async {
+      // The plugin's restore re-emits the verified entitlements, then fails
+      // because another entitlement is unverified. The reads skip that row.
+      storeKit
+        ..errors['restorePurchases'] = PlatformException(
+          code: 'storekit2_restore_failed',
+          message: 'This purchase could not be restored.',
+        )
+        ..entitlements = <SK2TransactionMessage>[
+          _transactionMessage(id: 100, receiptData: 'entitlement.jws.100'),
+        ]
+        ..history = <SK2TransactionMessage>[_transactionMessage(id: 100)];
+
+      final restored = await bridge.restorePurchases();
+
+      expect(storeKit.calls, <String>[
+        'restorePurchases',
+        'unfinishedTransactions',
+        'currentEntitlements',
+        'transactions',
+      ]);
+      expect(restored.single.transactionId, '100');
+      expect(restored.single.signedTransaction, 'entitlement.jws.100');
+      expect(restored.single.canVerify, isTrue);
+    },
+  );
+
+  test(
+    'restore fails with a redacted error when a StoreKit call fails',
+    () async {
+      for (final method in <String>[
+        'restorePurchases',
+        'unfinishedTransactions',
+        'currentEntitlements',
+        'transactions',
+      ]) {
+        storeKit.errors
+          ..clear()
+          ..[method] = PlatformException(
+            code: 'storekit_error',
+            message: 'secret native detail',
+          );
+
+        await expectLater(
+          bridge.restorePurchases(),
+          throwsA(
+            isA<AppleIapStackException>()
+                .having((error) => error.code, 'code', 'apple_restore_failed')
+                .having(
+                  (error) => error.message,
+                  'message',
+                  isNot(contains('secret')),
+                ),
+          ),
+          reason: method,
+        );
+      }
+    },
+  );
+
+  test(
+    'finishes by StoreKit id when another bridge cached the update',
+    () async {
+      final otherBridge = ApplePluginPlatform();
+      final otherPurchaseFuture = otherBridge.purchaseUpdates.first;
+      officialPlatform.emitPurchase(
+        _purchaseDetails(status: PurchaseStatus.purchased, purchaseID: '4242'),
+      );
+      final otherPurchase = await otherPurchaseFuture;
+
+      await bridge.completePurchase(otherPurchase);
+
+      expect(storeKit.finished, <int>[4242]);
+      expect(officialPlatform.completed, isEmpty);
+    },
+  );
+
+  test(
+    'fails completion when the purchase has no StoreKit id to finish',
+    () async {
+      final missingIdFuture = bridge.purchaseUpdates.first;
+      officialPlatform.emitPurchase(
+        _purchaseDetails(status: PurchaseStatus.purchased, purchaseID: null),
+      );
+      final missingId = await missingIdFuture;
+
+      for (final purchase in <ApplePurchase>[
+        missingId,
+        const ApplePurchase(
+          transactionId: 'not-a-storekit-id',
+          productId: 'premium_monthly',
+          signedTransaction: 'header.payload.signature',
+          status: ApplePurchaseStatus.purchased,
+          pendingCompletion: true,
+        ),
+      ]) {
+        expect(purchase.pendingCompletion, isTrue);
+        await expectLater(
+          bridge.completePurchase(purchase),
+          throwsA(
+            isA<AppleIapStackException>().having(
+              (error) => error.code,
+              'code',
+              'transaction_not_finishable',
+            ),
+          ),
+        );
+      }
+      expect(officialPlatform.completed, isEmpty);
+      expect(storeKit.finished, isEmpty);
     },
   );
 
@@ -493,9 +787,10 @@ AppStoreProduct2Details _productDetails({
 SK2PurchaseDetails _purchaseDetails({
   required PurchaseStatus status,
   String? appAccountToken,
+  String? purchaseID = '100',
 }) => SK2PurchaseDetails(
   productID: 'premium_monthly',
-  purchaseID: 'transaction-100',
+  purchaseID: purchaseID,
   verificationData: _verificationData,
   transactionDate: '1787745600000',
   status: status,
@@ -507,3 +802,90 @@ final PurchaseVerificationData _verificationData = PurchaseVerificationData(
   serverVerificationData: 'header.payload.signature',
   source: 'app_store',
 );
+
+final Map<String, Object?> _verificationJson = <String, Object?>{
+  'verified_at': '2026-08-26T10:00:00Z',
+  'customer_id': 'customer-internal',
+  'entitlements': <Object?>[
+    <String, Object?>{
+      'key': 'premium',
+      'access': 'allowed',
+      'reason': 'purchase_valid',
+      'version': 1,
+    },
+  ],
+};
+
+SK2TransactionMessage _transactionMessage({
+  required int id,
+  String? receiptData,
+  int? originalId,
+  String productId = 'premium_monthly',
+  String? appAccountToken = '018F59D0-A200-7000-8000-000000000001',
+}) => SK2TransactionMessage(
+  id: id,
+  originalId: originalId ?? id,
+  productId: productId,
+  appAccountToken: appAccountToken,
+  receiptData: receiptData,
+  status: SK2PurchaseStatusMessage.purchased,
+);
+
+/// Answers the StoreKit 2 Pigeon channels the bridge calls during restore.
+///
+/// Like `in_app_purchase_storekit` 0.4.16, history rows carry no JWS; only the
+/// unfinished and current entitlements reads do.
+final class _FakeStoreKit2 {
+  static const String _prefix =
+      'dev.flutter.pigeon.in_app_purchase_storekit.InAppPurchase2API';
+  static const List<String> _methods = <String>[
+    'restorePurchases',
+    'unfinishedTransactions',
+    'currentEntitlements',
+    'transactions',
+    'finish',
+  ];
+
+  List<SK2TransactionMessage> unfinished = <SK2TransactionMessage>[];
+  List<SK2TransactionMessage> entitlements = <SK2TransactionMessage>[];
+  List<SK2TransactionMessage> history = <SK2TransactionMessage>[];
+  // A method listed here answers with this error instead of a result.
+  final Map<String, PlatformException> errors = <String, PlatformException>{};
+  final List<String> calls = <String>[];
+  final List<int> finished = <int>[];
+
+  void install() {
+    const codec = InAppPurchase2API.pigeonChannelCodec;
+    for (final method in _methods) {
+      _messenger.setMockMessageHandler('$_prefix.$method', (message) async {
+        calls.add(method);
+        final error = errors[method];
+        if (error != null) {
+          return codec.encodeMessage(wrapResponse(error: error));
+        }
+        Object? result;
+        switch (method) {
+          case 'unfinishedTransactions':
+            result = unfinished;
+          case 'currentEntitlements':
+            result = entitlements;
+          case 'transactions':
+            result = history;
+          case 'finish':
+            final arguments = codec.decodeMessage(message)! as List<Object?>;
+            finished.add(arguments.single! as int);
+        }
+        return codec.encodeMessage(wrapResponse(result: result));
+      });
+    }
+  }
+
+  void uninstall() {
+    for (final method in _methods) {
+      _messenger.setMockMessageHandler('$_prefix.$method', null);
+    }
+  }
+
+  TestDefaultBinaryMessenger get _messenger =>
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+}

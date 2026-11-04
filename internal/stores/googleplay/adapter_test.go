@@ -27,6 +27,10 @@ const (
 	fixturePackageName = "com.example.iapstack"
 	// fixtureProductID identifies the Google Play catalog item used by adapter tests.
 	fixtureProductID = "iapstack.pro"
+	// fixtureReplacementProductID identifies the product a deferred replacement switches to.
+	fixtureReplacementProductID = "iapstack.basic"
+	// pinnedSingleLineItemObservationID is the identity main computed for the one-item pinning fixture.
+	pinnedSingleLineItemObservationID = "gpl-f030e05b7c15b55c8760a1f73455b588"
 	// fixturePurchaseToken identifies the opaque Google Play query token used by adapter tests.
 	fixturePurchaseToken = "purchase-token-0123456789"
 	// fixtureAccountID identifies the obfuscated application customer used by adapter tests.
@@ -681,4 +685,437 @@ func jsonResponse(t *testing.T, status int, value any, header http.Header) *http
 func isFailureKind(err error, kind stores.FailureKind) bool {
 	var failure *stores.Failure
 	return errors.As(err, &failure) && failure.Kind == kind
+}
+
+// TestAdapterNormalizesPendingDeferredReplacement verifies the documented two-item purchase before a deferred change.
+func TestAdapterNormalizesPendingDeferredReplacement(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentProduction)
+	oldExpiry := fixture.now.Add(10 * 24 * time.Hour)
+	fixture.adapter.client.Transport = providerTransport(t, fixture, pendingDeferredReplacement(fixture.now, oldExpiry))
+	for _, claimed := range []core.ProviderProductID{fixtureProductID, fixtureReplacementProductID} {
+		request := verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription)
+		request.ClaimedProducts = []core.ProviderProductID{claimed}
+		result, err := fixture.adapter.Verify(context.Background(), request)
+		if err != nil {
+			t.Fatalf("Verify(claim %q) error = %v", claimed, err)
+		}
+		if len(result.Observations) != 1 {
+			t.Fatalf("Verify(claim %q) observations = %#v", claimed, result.Observations)
+		}
+		observation := result.Observations[0]
+		if observation.ProductID != fixtureProductID || observation.State != core.LifecycleActive ||
+			observation.Access != core.AccessAllowed || observation.EffectivePeriod.EndsAt == nil ||
+			!observation.EffectivePeriod.EndsAt.Equal(oldExpiry) {
+			t.Fatalf("Verify(claim %q) observation = %#v, want current item until %s", claimed, observation, oldExpiry)
+		}
+		if observation.Renewal != (core.Renewal{
+			Mode: core.RenewalAuto, Status: core.RenewalEnabled, NextProductID: fixtureReplacementProductID,
+		}) {
+			t.Fatalf("Verify(claim %q) renewal = %#v, want pending replacement", claimed, observation.Renewal)
+		}
+		if len(observation.ReferencesFor(core.ReferenceLinkedLineage)) != 1 {
+			t.Fatalf("Verify(claim %q) references = %#v, want linked purchase token", claimed, observation.References)
+		}
+		if len(result.PostCommitActions) != 1 || result.PostCommitActions[0].ProductID != fixtureProductID {
+			t.Fatalf("Verify(claim %q) post-commit actions = %#v", claimed, result.PostCommitActions)
+		}
+	}
+
+	request := verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription)
+	request.ClaimedProducts = []core.ProviderProductID{"iapstack.unrelated"}
+	if _, err := fixture.adapter.Verify(context.Background(), request); !isFailureKind(err, stores.FailureInvalidEvidence) {
+		t.Fatalf("Verify(unrelated claim) error = %v, want invalid evidence", err)
+	}
+}
+
+// TestAdapterReconcilesCompletedDeferredReplacement verifies the replacement product becomes the observed product.
+func TestAdapterReconcilesCompletedDeferredReplacement(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentProduction)
+	newExpiry := fixture.now.Add(30 * 24 * time.Hour)
+	fixture.adapter.client.Transport = providerTransport(t, fixture, completedDeferredReplacement(fixture.now, newExpiry))
+	queryReference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", fixturePurchaseToken)
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	verification := verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription)
+	for _, expected := range []core.ProviderProductID{fixtureProductID, fixtureReplacementProductID} {
+		result, err := fixture.adapter.Reconcile(context.Background(), stores.ReconciliationRequest{
+			Application: verification.Application, CustomerID: verification.CustomerID,
+			ExpectedProducts:         []core.ProviderProductID{expected},
+			ExpectedProductKind:      core.ProductKindSubscription,
+			ExpectedCustomerBindings: verification.ExpectedCustomerBindings,
+			QueryReferences:          []core.StoreReference{queryReference},
+		})
+		if err != nil {
+			t.Fatalf("Reconcile(expected %q) error = %v", expected, err)
+		}
+		if len(result.Observations) != 2 {
+			t.Fatalf("Reconcile(expected %q) observations = %#v, want current and replaced items", expected, result.Observations)
+		}
+		observation := result.Observations[0]
+		if observation.ProductID != fixtureReplacementProductID || observation.State != core.LifecycleActive ||
+			observation.Access != core.AccessAllowed || observation.EffectivePeriod.EndsAt == nil ||
+			!observation.EffectivePeriod.EndsAt.Equal(newExpiry) {
+			t.Fatalf("Reconcile(expected %q) observation = %#v, want replacement until %s", expected, observation, newExpiry)
+		}
+		if observation.Renewal != (core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled}) {
+			t.Fatalf("Reconcile(expected %q) renewal = %#v", expected, observation.Renewal)
+		}
+		replaced := result.Observations[1]
+		if replaced.ProductID != fixtureProductID || replaced.State != core.LifecycleExpired ||
+			replaced.Access != core.AccessDenied || replaced.AccessReason != core.AccessReasonExpired ||
+			replaced.EffectivePeriod.EndsAt == nil || !replaced.EffectivePeriod.EndsAt.Equal(fixture.now.Add(-time.Hour)) ||
+			replaced.Renewal != (core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalDisabled}) {
+			t.Fatalf("Reconcile(expected %q) replaced observation = %#v, want expired old item", expected, replaced)
+		}
+		if !replaced.ObservedAt.Before(observation.ObservedAt) || replaced.ID == observation.ID {
+			t.Fatalf("Reconcile(expected %q) replaced observation must sort before the current item: %#v", expected, replaced)
+		}
+		if len(result.PostCommitActions) != 0 {
+			t.Fatalf("Reconcile(expected %q) post-commit actions = %#v, want none for an acknowledged purchase",
+				expected, result.PostCommitActions)
+		}
+	}
+}
+
+// TestAdapterFollowsItemReplacementOnOneItemPurchase accepts a stored product only when Google names it as replaced.
+func TestAdapterFollowsItemReplacementOnOneItemPurchase(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentProduction)
+	newExpiry := fixture.now.Add(30 * 24 * time.Hour)
+	payload := completedDeferredReplacement(fixture.now, newExpiry)
+	current := payload["lineItems"].([]map[string]any)[1]
+	current["itemReplacement"] = map[string]any{
+		"productId": fixtureProductID, "basePlanId": "monthly", "replacementMode": "DEFERRED",
+	}
+	payload["lineItems"] = []map[string]any{current}
+	queryReference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", fixturePurchaseToken)
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	verification := verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription)
+	request := stores.ReconciliationRequest{
+		Application: verification.Application, CustomerID: verification.CustomerID,
+		ExpectedProducts:         []core.ProviderProductID{fixtureProductID},
+		ExpectedProductKind:      core.ProductKindSubscription,
+		ExpectedCustomerBindings: verification.ExpectedCustomerBindings,
+		QueryReferences:          []core.StoreReference{queryReference},
+	}
+	fixture.adapter.client.Transport = providerTransport(t, fixture, payload)
+	result, err := fixture.adapter.Reconcile(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(result.Observations) != 2 || result.Observations[0].ProductID != fixtureReplacementProductID {
+		t.Fatalf("Reconcile() observations = %#v, want %q and the replaced product", result.Observations, fixtureReplacementProductID)
+	}
+	replaced := result.Observations[1]
+	if replaced.ProductID != fixtureProductID || replaced.State != core.LifecycleExpired ||
+		replaced.Access != core.AccessDenied || replaced.EffectivePeriod.EndsAt != nil ||
+		!replaced.ObservedAt.Before(result.Observations[0].ObservedAt) ||
+		len(replaced.ReferencesFor(core.ReferenceTransaction)) != 0 {
+		t.Fatalf("Reconcile() replaced observation = %#v, want expired stored product without a period", replaced)
+	}
+
+	request.ExpectedProducts = []core.ProviderProductID{fixtureReplacementProductID}
+	result, err = fixture.adapter.Reconcile(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Reconcile(expected replacement) error = %v", err)
+	}
+	if len(result.Observations) != 1 || result.Observations[0].ProductID != fixtureReplacementProductID {
+		t.Fatalf("Reconcile(expected replacement) observations = %#v, want only the current item", result.Observations)
+	}
+	verify := verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription)
+	verify.ClaimedProducts = []core.ProviderProductID{fixtureReplacementProductID}
+	verified, err := fixture.adapter.Verify(context.Background(), verify)
+	if err != nil {
+		t.Fatalf("Verify(claim replacement) error = %v", err)
+	}
+	if len(verified.Observations) != 1 {
+		t.Fatalf("Verify(claim replacement) observations = %#v, want only the current item", verified.Observations)
+	}
+	request.ExpectedProducts = []core.ProviderProductID{fixtureProductID}
+
+	delete(current, "itemReplacement")
+	fixture.adapter.client.Transport = providerTransport(t, fixture, payload)
+	if _, err := fixture.adapter.Reconcile(context.Background(), request); !isFailureKind(err, stores.FailureInvalidEvidence) {
+		t.Fatalf("Reconcile() without itemReplacement error = %v, want invalid evidence", err)
+	}
+}
+
+// TestDeferredReplacementObservationsAreDistinct verifies the pending and completed snapshots never share an identity.
+func TestDeferredReplacementObservationsAreDistinct(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentProduction)
+	application := verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription).Application
+	observe := func(payload map[string]any) core.PurchaseObservation {
+		t.Helper()
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		var purchase subscriptionPurchase
+		if err := json.Unmarshal(encoded, &purchase); err != nil {
+			t.Fatalf("Unmarshal() error = %v", err)
+		}
+		observations, err := fixture.adapter.subscriptionObservations(application, fixturePurchaseToken, purchase)
+		if err != nil {
+			t.Fatalf("subscriptionObservations() error = %v", err)
+		}
+		return observations[0]
+	}
+	oldExpiry := fixture.now.Add(10 * 24 * time.Hour)
+	pending := observe(pendingDeferredReplacement(fixture.now, oldExpiry))
+	withoutReplacement := pendingDeferredReplacement(fixture.now, oldExpiry)
+	singleItem := withoutReplacement["lineItems"].([]map[string]any)[:1]
+	delete(singleItem[0], "deferredItemReplacement")
+	withoutReplacement["lineItems"] = singleItem
+	single := observe(withoutReplacement)
+	completed := observe(completedDeferredReplacement(fixture.now, fixture.now.Add(30*24*time.Hour)))
+	if pending.ID == single.ID || pending.ID == completed.ID || single.ID == completed.ID {
+		t.Fatalf("observation IDs = pending %q, single %q, completed %q, want distinct", pending.ID, single.ID, completed.ID)
+	}
+}
+
+// TestPendingReplacementRenewalFollowsNewItem reports the new item's plan as the renewal before a deferred change.
+func TestPendingReplacementRenewalFollowsNewItem(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentProduction)
+	application := verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription).Application
+	for name, test := range map[string]struct {
+		plan map[string]any
+		want core.Renewal
+	}{
+		"prepaid new item": {
+			plan: map[string]any{"prepaidPlan": map[string]any{}},
+			want: core.Renewal{Mode: core.RenewalPrepaid, Status: core.RenewalNotApplicable},
+		},
+		"new item without plan details": {
+			plan: map[string]any{},
+			want: core.Renewal{Mode: core.RenewalUnknown, Status: core.RenewalStatusUnknown},
+		},
+	} {
+		payload := pendingDeferredReplacement(fixture.now, fixture.now.Add(10*24*time.Hour))
+		pending := payload["lineItems"].([]map[string]any)[1]
+		delete(pending, "autoRenewingPlan")
+		for key, value := range test.plan {
+			pending[key] = value
+		}
+		purchase := decodeSubscriptionPurchase(t, payload)
+		observations, err := fixture.adapter.subscriptionObservations(application, fixturePurchaseToken, purchase)
+		if err != nil {
+			t.Fatalf("%s: subscriptionObservations() error = %v", name, err)
+		}
+		if observations[0].ProductID != fixtureProductID || observations[0].Renewal != test.want {
+			t.Fatalf("%s: observation = (%q, %#v), want current item with renewal %#v",
+				name, observations[0].ProductID, observations[0].Renewal, test.want)
+		}
+	}
+}
+
+// TestReplacedItemSnapshotSurvivesCurrentItemRenewal keeps one expired snapshot of the ended item across renewals.
+func TestReplacedItemSnapshotSurvivesCurrentItemRenewal(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentProduction)
+	application := verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription).Application
+	observe := func(payload map[string]any) []core.PurchaseObservation {
+		t.Helper()
+		observations, err := fixture.adapter.subscriptionObservations(
+			application, fixturePurchaseToken, decodeSubscriptionPurchase(t, payload),
+		)
+		if err != nil {
+			t.Fatalf("subscriptionObservations() error = %v", err)
+		}
+		if len(observations) != 2 {
+			t.Fatalf("subscriptionObservations() = %#v, want current and replaced items", observations)
+		}
+		return observations
+	}
+	first := observe(completedDeferredReplacement(fixture.now, fixture.now.Add(30*24*time.Hour)))
+	renewed := completedDeferredReplacement(fixture.now, fixture.now.Add(60*24*time.Hour))
+	renewed["latestOrderId"] = "GPA.3333-4444-5555-66666..1"
+	renewed["subscriptionState"] = subscriptionStateCanceled
+	renewedItems := renewed["lineItems"].([]map[string]any)
+	renewedItems[1]["latestSuccessfulOrderId"] = "GPA.3333-4444-5555-66666..1"
+	renewedItems[1]["autoRenewingPlan"] = map[string]any{"autoRenewEnabled": false}
+	second := observe(renewed)
+	if first[0].ID == second[0].ID {
+		t.Fatalf("current item ID = %q after renewal, want a new snapshot", second[0].ID)
+	}
+	if first[1].ID != second[1].ID {
+		t.Fatalf("replaced item ID = %q then %q, want one snapshot", first[1].ID, second[1].ID)
+	}
+
+	withoutOrder := completedDeferredReplacement(fixture.now, fixture.now.Add(30*24*time.Hour))
+	delete(withoutOrder["lineItems"].([]map[string]any)[0], "latestSuccessfulOrderId")
+	replaced := observe(withoutOrder)[1]
+	if references := replaced.ReferencesFor(core.ReferenceTransaction); len(references) != 0 {
+		t.Fatalf("replaced item transaction references = %#v, want none from the current item's order", references)
+	}
+}
+
+// decodeSubscriptionPurchase converts one JSON test payload into the decoded Android Publisher response.
+func decodeSubscriptionPurchase(t *testing.T, payload map[string]any) subscriptionPurchase {
+	t.Helper()
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var purchase subscriptionPurchase
+	if err := json.Unmarshal(encoded, &purchase); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	return purchase
+}
+
+// TestAdapterRejectsUnsupportedSubscriptionLineItems keeps add-on bundles and malformed replacements out of one observation.
+func TestAdapterRejectsUnsupportedSubscriptionLineItems(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentProduction)
+	renewsAt := fixture.now.Add(30 * 24 * time.Hour)
+	addOns := completedDeferredReplacement(fixture.now, renewsAt)
+	addOnItems := addOns["lineItems"].([]map[string]any)
+	addOnItems[0]["expiryTime"] = renewsAt.Format(time.RFC3339Nano)
+	addOnItems[0]["autoRenewingPlan"] = map[string]any{"autoRenewEnabled": true}
+
+	unknownTarget := pendingDeferredReplacement(fixture.now, fixture.now.Add(10*24*time.Hour))
+	unknownTarget["lineItems"].([]map[string]any)[0]["deferredItemReplacement"] = map[string]any{"productId": "iapstack.unrelated"}
+
+	stillRenewing := completedDeferredReplacement(fixture.now, renewsAt)
+	stillRenewing["lineItems"].([]map[string]any)[0]["autoRenewingPlan"] = map[string]any{"autoRenewEnabled": true}
+
+	threeItems := completedDeferredReplacement(fixture.now, renewsAt)
+	threeItems["lineItems"] = append(threeItems["lineItems"].([]map[string]any), map[string]any{
+		"productId": "iapstack.extra", "expiryTime": renewsAt.Format(time.RFC3339Nano),
+		"autoRenewingPlan": map[string]any{"autoRenewEnabled": true},
+	})
+
+	canceledAddOn := completedDeferredReplacement(fixture.now, renewsAt)
+	canceledAddOn["subscriptionState"] = subscriptionStateCanceled
+	canceledItems := canceledAddOn["lineItems"].([]map[string]any)
+	canceledItems[0]["expiryTime"] = fixture.now.Add(5 * 24 * time.Hour).Format(time.RFC3339Nano)
+	canceledItems[1]["autoRenewingPlan"] = map[string]any{"autoRenewEnabled": false}
+
+	otherReplaced := completedDeferredReplacement(fixture.now, renewsAt)
+	otherReplaced["lineItems"].([]map[string]any)[1]["itemReplacement"] = map[string]any{"productId": "iapstack.unrelated"}
+
+	for name, payload := range map[string]map[string]any{
+		"two current add-on items":              addOns,
+		"replacement names an absent product":   unknownTarget,
+		"replaced item still renews":            stillRenewing,
+		"three line items":                      threeItems,
+		"canceled add-on still in its period":   canceledAddOn,
+		"itemReplacement names another product": otherReplaced,
+	} {
+		fixture.adapter.client.Transport = providerTransport(t, fixture, payload)
+		request := verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription)
+		if _, err := fixture.adapter.Verify(context.Background(), request); !isFailureKind(err, stores.FailureInvalidEvidence) {
+			t.Fatalf("%s: Verify() error = %v, want invalid evidence", name, err)
+		}
+	}
+}
+
+// TestSingleLineItemObservationIDIsUnchanged pins the identity of existing one-item snapshots.
+func TestSingleLineItemObservationIDIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentProduction)
+	purchase := subscriptionPurchase{
+		LineItems: []subscriptionLineItem{{
+			ProductID: fixtureProductID, ExpiryTime: fixture.now.Add(24 * time.Hour),
+			LatestSuccessfulOrderID: "GPA.2234-5678-9012-34567",
+			AutoRenewingPlan:        &autoRenewingPlan{AutoRenewEnabled: true},
+		}},
+		StartTime: fixture.now.Add(-24 * time.Hour), SubscriptionState: subscriptionStateActive,
+		LatestOrderID: "GPA.2234-5678-9012-34567", LinkedPurchaseToken: "linked-purchase-token",
+		AcknowledgementState: acknowledgementStateAcknowledged,
+		ExternalAccountIdentifiers: externalAccountIdentifiers{
+			ObfuscatedExternalAccountID: fixtureAccountID,
+		},
+	}
+	observations, err := fixture.adapter.subscriptionObservations(
+		verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription).Application,
+		fixturePurchaseToken,
+		purchase,
+	)
+	if err != nil {
+		t.Fatalf("subscriptionObservations() error = %v", err)
+	}
+	if observations[0].ID != pinnedSingleLineItemObservationID {
+		t.Fatalf("observation ID = %q, want %q", observations[0].ID, pinnedSingleLineItemObservationID)
+	}
+}
+
+// pendingDeferredReplacement returns subscriptionsv2.get for a new token right after ReplacementMode.DEFERRED.
+// The old item keeps access until oldExpiry and names the replacement. The new item has no expiry yet.
+func pendingDeferredReplacement(now, oldExpiry time.Time) map[string]any {
+	return map[string]any{
+		"kind":                 "androidpublisher#subscriptionPurchaseV2",
+		"regionCode":           "US",
+		"startTime":            now.Add(-time.Hour).Format(time.RFC3339Nano),
+		"subscriptionState":    subscriptionStateActive,
+		"latestOrderId":        "GPA.3333-4444-5555-66666",
+		"linkedPurchaseToken":  "previous-purchase-token",
+		"acknowledgementState": acknowledgementStatePending,
+		"externalAccountIdentifiers": map[string]any{
+			"obfuscatedExternalAccountId": fixtureAccountID,
+		},
+		"lineItems": []map[string]any{
+			{
+				"productId":               fixtureProductID,
+				"expiryTime":              oldExpiry.Format(time.RFC3339Nano),
+				"latestSuccessfulOrderId": "GPA.3333-4444-5555-66666",
+				"autoRenewingPlan":        map[string]any{"autoRenewEnabled": false},
+				"offerDetails":            map[string]any{"basePlanId": "monthly"},
+				"deferredItemReplacement": map[string]any{"productId": fixtureReplacementProductID},
+			},
+			{
+				"productId":        fixtureReplacementProductID,
+				"autoRenewingPlan": map[string]any{"autoRenewEnabled": true},
+				"offerDetails":     map[string]any{"basePlanId": "monthly"},
+			},
+		},
+	}
+}
+
+// completedDeferredReplacement returns subscriptionsv2.get for the same token after the deferred change renewed.
+// The old item has a past expiry and no pending change. The new item carries the current period.
+func completedDeferredReplacement(now, newExpiry time.Time) map[string]any {
+	return map[string]any{
+		"kind":                 "androidpublisher#subscriptionPurchaseV2",
+		"regionCode":           "US",
+		"startTime":            now.Add(-10 * 24 * time.Hour).Format(time.RFC3339Nano),
+		"subscriptionState":    subscriptionStateActive,
+		"latestOrderId":        "GPA.3333-4444-5555-66666..0",
+		"linkedPurchaseToken":  "previous-purchase-token",
+		"acknowledgementState": acknowledgementStateAcknowledged,
+		"externalAccountIdentifiers": map[string]any{
+			"obfuscatedExternalAccountId": fixtureAccountID,
+		},
+		"lineItems": []map[string]any{
+			{
+				"productId":               fixtureProductID,
+				"expiryTime":              now.Add(-time.Hour).Format(time.RFC3339Nano),
+				"latestSuccessfulOrderId": "GPA.3333-4444-5555-66666",
+				"autoRenewingPlan":        map[string]any{"autoRenewEnabled": false},
+				"offerDetails":            map[string]any{"basePlanId": "monthly"},
+			},
+			{
+				"productId":               fixtureReplacementProductID,
+				"expiryTime":              newExpiry.Format(time.RFC3339Nano),
+				"latestSuccessfulOrderId": "GPA.3333-4444-5555-66666..0",
+				"autoRenewingPlan":        map[string]any{"autoRenewEnabled": true},
+				"offerDetails":            map[string]any{"basePlanId": "monthly"},
+			},
+		},
+	}
 }
