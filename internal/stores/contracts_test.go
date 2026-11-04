@@ -75,6 +75,49 @@ func TestVerificationResultSupportsMultipleLineItems(t *testing.T) {
 	}
 }
 
+// TestVerificationResultMapsClaimsOnlyForNamedProducts maps a claim onto observed products only when the purchase names it.
+func TestVerificationResultMapsClaimsOnlyForNamedProducts(t *testing.T) {
+	t.Parallel()
+
+	application := googleApplication()
+	evidence, err := stores.NewEvidence("application/json", []byte(`{"token":"opaque"}`))
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	result := stores.VerificationResult{
+		VerifiedAt:    time.Now().UTC(),
+		Artifacts:     []stores.VerifiedArtifact{{Kind: "provider_response", Evidence: evidence}},
+		Observations:  []core.PurchaseObservation{productObservation(t, application, "observation_1", "monthly_basic")},
+		NamedProducts: []core.ProviderProductID{"monthly_pro", "monthly_basic"},
+	}
+	request := stores.VerificationRequest{
+		Application: application, CustomerID: "customer_1", Evidence: evidence,
+		ClaimedProducts: []core.ProviderProductID{"monthly_pro"},
+	}
+	request.ClaimedProducts = result.ProductsForClaim(request.ClaimedProducts)
+	if err := result.ValidateForVerification(request); err != nil {
+		t.Fatalf("ValidateForVerification(named claim) error = %v", err)
+	}
+
+	request.ClaimedProducts = result.ProductsForClaim([]core.ProviderProductID{"monthly_other"})
+	if err := result.ValidateForVerification(request); err == nil {
+		t.Fatal("ValidateForVerification(unnamed claim) error = nil, want product mismatch")
+	}
+	withoutNames := result
+	withoutNames.NamedProducts = nil
+	if products := withoutNames.ProductsForClaim([]core.ProviderProductID{"monthly_pro"}); len(products) != 1 ||
+		products[0] != "monthly_pro" {
+		t.Fatalf("ProductsForClaim() without named products = %#v, want the claim", products)
+	}
+
+	unnamedObservation := result
+	unnamedObservation.NamedProducts = []core.ProviderProductID{"monthly_pro", "monthly_other"}
+	request.ClaimedProducts = []core.ProviderProductID{"monthly_basic"}
+	if err := unnamedObservation.ValidateForVerification(request); err == nil {
+		t.Fatal("ValidateForVerification(observed product outside named products) error = nil, want error")
+	}
+}
+
 // TestVerificationResultRejectsScopeAndProductMismatch verifies request-result consistency.
 func TestVerificationResultRejectsScopeAndProductMismatch(t *testing.T) {
 	t.Parallel()
