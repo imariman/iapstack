@@ -3,7 +3,9 @@
 package processing
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -23,6 +25,16 @@ type lineageIntegrationSnapshot struct {
 	startsAt   time.Time
 	endsAt     time.Time
 	observedAt time.Time
+}
+
+// retireFailingStore delegates storage but rejects every reconciliation completion.
+type retireFailingStore struct {
+	persistence.OperationsStore
+}
+
+// retireFailingTransaction rejects the completion that retires the next reconciliation generation.
+type retireFailingTransaction struct {
+	persistence.OperationsTransaction
 }
 
 // TestExpiredLineageReconciliationKeepsRepurchaseAndStops verifies an expired lineage neither revokes a repurchase nor reschedules.
@@ -103,6 +115,11 @@ func TestExpiredLineageReconciliationKeepsRepurchaseAndStops(t *testing.T) {
 	if completed := lineageIntegrationNextCompleted(t, database, activeA.token, reconciledAt); !completed {
 		t.Fatal("expired lineage next reconciliation is still runnable, want it retired")
 	}
+	// A client resubmission of the same evidence in that window must reopen the retired generation.
+	saveLineageIntegrationJob(t, database, processingService, application, activeA.token, reconciledAt)
+	if completed := lineageIntegrationNextCompleted(t, database, activeA.token, reconciledAt); completed {
+		t.Fatal("rescheduled expired lineage stayed retired, want its next reconciliation runnable")
+	}
 
 	activeB.observedAt = reconciledAt
 	adapter.verificationResult = lineageIntegrationResult(t, application, activeB)
@@ -114,6 +131,89 @@ func TestExpiredLineageReconciliationKeepsRepurchaseAndStops(t *testing.T) {
 	if completed := lineageIntegrationNextCompleted(t, database, activeB.token, reconciledAt); completed {
 		t.Fatal("active lineage next reconciliation was retired, want it runnable")
 	}
+}
+
+// TestExpiredLineageRetireFailureKeepsCommittedRefresh verifies a failed retire neither fails nor repeats the refresh.
+func TestExpiredLineageRetireFailureKeepsCommittedRefresh(t *testing.T) {
+	database := openProcessingIntegrationDatabase(t)
+	purchasedAt := time.Date(2026, time.September, 1, 9, 0, 0, 0, time.UTC)
+	application := core.Application{
+		ID: processingIntegrationApplicationID, ProjectID: processingIntegrationProjectID,
+		Store: core.StoreApplication{
+			Provider: core.ProviderGooglePlay, Environment: core.EnvironmentTest,
+			ID: "com.example.iapstack",
+		},
+	}
+	customer := core.Customer{
+		ID: processingIntegrationCustomerID, ProjectID: processingIntegrationProjectID,
+		ExternalID: processingIntegrationExternalCustomerID,
+	}
+	seedProcessingIntegrationCatalog(t, database, application, customer)
+	if _, err := database.conn.Exec(database.ctx, `
+		UPDATE products SET kind = 'subscription' WHERE id = $1
+	`, processingIntegrationProductID); err != nil {
+		t.Fatalf("make integration product a subscription: %v", err)
+	}
+	expiredAt := purchasedAt.AddDate(0, 1, 0)
+	reconciledAt := expiredAt.Add(48 * time.Hour)
+	expired := lineageIntegrationSnapshot{
+		id: "lineage-retire-expired", token: "lineage-token-retire", order: "GPA.0000-0000-0000-00003",
+		access: core.AccessDenied, startsAt: purchasedAt, endsAt: expiredAt, observedAt: reconciledAt,
+	}
+
+	protector := processingIntegrationProtection{}
+	adapter := &processingIntegrationAdapter{verificationResult: lineageIntegrationResult(t, application, expired)}
+	registry, err := stores.NewRegistry(adapter)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	verificationService, err := verification.NewService(
+		database.store, registry, protector, verification.NewDefaultProjector(),
+		processingIntegrationClock{now: reconciledAt},
+	)
+	if err != nil {
+		t.Fatalf("NewService() verification error = %v", err)
+	}
+	processingService, err := New(retireFailingStore{database.store}, protector, verificationService)
+	if err != nil {
+		t.Fatalf("New() processing error = %v", err)
+	}
+	processingService.clock = func() time.Time { return reconciledAt }
+
+	job := saveLineageIntegrationJob(t, database, processingService, application, expired.token, expiredAt)
+	if err := processingService.HandleReconciliation(database.ctx, job); err != nil {
+		t.Fatalf("HandleReconciliation() error = %v, want nil after a committed refresh", err)
+	}
+	if completed := lineageIntegrationNextCompleted(t, database, expired.token, reconciledAt); completed {
+		t.Fatal("next reconciliation completed despite the rejected retire")
+	}
+	var observations int
+	if err := database.conn.QueryRow(database.ctx, `
+		SELECT count(*) FROM purchase_observations WHERE id = $1
+	`, expired.id).Scan(&observations); err != nil {
+		t.Fatalf("count refreshed observations: %v", err)
+	}
+	if observations != 1 {
+		t.Fatalf("refreshed observations = %d, want 1", observations)
+	}
+}
+
+// Operate wraps each operations transaction so its reconciliation completions fail.
+func (store retireFailingStore) Operate(ctx context.Context, operation persistence.OperationsFunc) error {
+	return store.OperationsStore.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		return operation(retireFailingTransaction{repository})
+	})
+}
+
+// CompleteQueue rejects reconciliation completions and delegates every other queue.
+func (transaction retireFailingTransaction) CompleteQueue(
+	ctx context.Context,
+	completion persistence.QueueCompletion,
+) error {
+	if completion.Queue == persistence.QueueReconciliation {
+		return errors.Join(persistence.ErrUnavailable, errors.New("reject reconciliation completion"))
+	}
+	return transaction.OperationsTransaction.CompleteQueue(ctx, completion)
 }
 
 // lineageIntegrationResult builds one valid Google Play subscription response for a lineage snapshot.

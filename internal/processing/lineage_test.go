@@ -6,11 +6,26 @@ import (
 	"github.com/imariman/iapstack/internal/core"
 )
 
-// TestLineageEndedRequiresEveryLineItemExpired verifies only a fully expired lineage stops its daily refresh.
+// TestLineageEndedRequiresEveryLineItemExpired verifies only a fully expired, non-renewing lineage stops its daily refresh.
 func TestLineageEndedRequiresEveryLineItemExpired(t *testing.T) {
 	t.Parallel()
 
-	expired := core.PurchaseObservation{State: core.LifecycleExpired, Access: core.AccessDenied}
+	expired := core.PurchaseObservation{
+		State: core.LifecycleExpired, Access: core.AccessDenied,
+		Renewal: core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalDisabled},
+	}
+	expiredPrepaid := core.PurchaseObservation{
+		State: core.LifecycleExpired, Access: core.AccessDenied,
+		Renewal: core.Renewal{Mode: core.RenewalPrepaid, Status: core.RenewalNotApplicable},
+	}
+	expiredRenewing := core.PurchaseObservation{
+		State: core.LifecycleExpired, Access: core.AccessDenied,
+		Renewal: core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled},
+	}
+	expiredUnknownRenewal := core.PurchaseObservation{
+		State: core.LifecycleExpired, Access: core.AccessDenied,
+		Renewal: core.Renewal{Mode: core.RenewalUnknown, Status: core.RenewalStatusUnknown},
+	}
 	active := core.PurchaseObservation{State: core.LifecycleActive, Access: core.AccessAllowed}
 	cases := []struct {
 		name         string
@@ -20,7 +35,15 @@ func TestLineageEndedRequiresEveryLineItemExpired(t *testing.T) {
 		{name: "no observations", want: false},
 		{name: "expired", observations: []core.PurchaseObservation{expired}, want: true},
 		{name: "every line item expired", observations: []core.PurchaseObservation{expired, expired}, want: true},
+		{name: "expired prepaid", observations: []core.PurchaseObservation{expiredPrepaid}, want: true},
 		{name: "one line item active", observations: []core.PurchaseObservation{expired, active}, want: false},
+		{name: "expired with renewal enabled", observations: []core.PurchaseObservation{expiredRenewing}, want: false},
+		{
+			name:         "one expired line item still renewing",
+			observations: []core.PurchaseObservation{expired, expiredRenewing},
+			want:         false,
+		},
+		{name: "expired with unknown renewal", observations: []core.PurchaseObservation{expiredUnknownRenewal}, want: false},
 		{name: "active", observations: []core.PurchaseObservation{active}, want: false},
 		{
 			name:         "grace period",

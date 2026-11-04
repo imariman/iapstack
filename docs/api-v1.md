@@ -359,8 +359,9 @@ times are compared only inside one lineage. A customer who lets a subscription e
 and buys the same product again keeps access from the new lineage when the old one is
 refreshed. When several sources allow access, a store observation is projected before
 an import, then the source whose access ends last. The daily reconciliation of a
-lineage stops once the provider reports every line item expired. Refunded and revoked
-lineages keep their daily refresh. A later resubscription is scheduled again when the
+lineage stops once the provider reports every line item expired with automatic renewal
+off. A lineage the provider can still renew, such as one in billing retry, keeps its
+daily refresh. Refunded and revoked lineages keep their daily refresh too. A later resubscription is scheduled again when the
 client submits it, or when an App Store or Google Play notification reports it.
 
 ## Webhook verification
