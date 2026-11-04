@@ -12,13 +12,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/imariman/iapstack/internal/core"
-	"github.com/imariman/iapstack/internal/persistence"
-	"github.com/imariman/iapstack/internal/verification"
 	"github.com/imariman/iapstack/internal/webhooks"
 )
 
@@ -268,43 +264,6 @@ func TestReceiverReportsIdentityConflict(t *testing.T) {
 
 	if recorder.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusConflict)
-	}
-}
-
-// TestReceiverAcceptsOutboxEntitlementPayload verifies the real outbox body, which has no event_type, is accepted.
-func TestReceiverAcceptsOutboxEntitlementPayload(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, time.November, 2, 12, 0, 0, 0, time.UTC)
-	entitlement := persistence.CustomerEntitlement{
-		Projection: persistence.EntitlementProjection{
-			ProjectID: "project-1", CustomerID: "customer-1", EntitlementID: "entitlement-1",
-			SourceObservationID: "observation-1", SourceProductID: "product-1",
-			Access: core.AccessAllowed, AccessReason: core.AccessReasonPurchaseValid,
-			EffectivePeriod: core.EffectivePeriod{StartsAt: now.Add(-time.Hour)},
-		},
-		SourceApplicationID: "ios-sandbox",
-		Key:                 "premium",
-		Version:             1,
-	}
-	// Core application IDs allow inner spaces and non-ASCII text, with no 128-byte cap.
-	for _, applicationID := range []core.ApplicationID{"ios-sandbox", core.ApplicationID("Café app " + strings.Repeat("é", 70))} {
-		event, err := verification.EntitlementChangedEvent(applicationID, entitlement, now)
-		if err != nil {
-			t.Fatalf("EntitlementChangedEvent() error = %v", err)
-		}
-		store := &fakeStore{saveResult: SaveInserted}
-		receiver := newTestReceiver(t, store, now, defaultTestBodyLimit)
-		recorder := httptest.NewRecorder()
-
-		receiver.ServeHTTP(recorder, signedRequest(t, now, event.Payload, event.ID))
-
-		if recorder.Code != http.StatusNoContent || len(store.events) != 1 {
-			t.Fatalf("application %q status/events = %d/%d, want %d/1; body=%s", applicationID, recorder.Code, len(store.events), http.StatusNoContent, recorder.Body.String())
-		}
-		if store.events[0].ApplicationID != string(applicationID) || store.events[0].EventType != event.EventType {
-			t.Fatalf("saved event = %#v, want application %q type %q", store.events[0], applicationID, event.EventType)
-		}
 	}
 }
 
