@@ -50,12 +50,22 @@ it contacts IAPStack.
 
 ## Restore
 
-`restorePurchases` calls App Store sync, reads StoreKit 2 transaction history,
-deduplicates transaction IDs, and sends bounded batches to IAPStack. Rows
-without the expected `appAccountToken`, rows for another customer, and unknown
-products are counted on `RestoreResult.skipped` and are not submitted. Another
-customer's transactions are never verified. If a later batch fails, the
-original IAPStack error carries `committedRestoreResults`.
+`restorePurchases` runs the plugin's StoreKit 2 restore, which re-emits current
+entitlements on `purchaseUpdates` and does not call `AppStore.sync()`. It then
+reads StoreKit 2 transaction history, current entitlements, and unfinished
+transactions, deduplicates transaction IDs, and sends bounded batches to
+IAPStack. Rows without the expected `appAccountToken`, rows for another
+customer, and unknown products are counted on `RestoreResult.skipped` and are
+not submitted. Another customer's transactions are never verified. If a later
+batch fails, the original IAPStack error carries `committedRestoreResults`.
+
+`in_app_purchase_storekit` returns history rows without a JWS. Restore takes
+the JWS from the current entitlements and unfinished reads, so every current
+entitlement carries one. Other finished rows, such as earlier subscription
+renewals and expired purchases, have no JWS. They are counted on
+`RestoreResult.skipped.unsigned` and are not submitted. The Swift SDK submits
+them. A current entitlement that StoreKit cannot verify is left out and does
+not fail the restore, as in the Swift SDK.
 
 Rows that StoreKit has not finished yet are finished after IAPStack accepts the
 batch that carried them. Rows in a failed batch, and in the batches after it,

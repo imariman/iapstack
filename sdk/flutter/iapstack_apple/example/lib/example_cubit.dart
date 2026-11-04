@@ -192,7 +192,7 @@ final class ExampleCubit extends Cubit<ExampleState> {
         );
         return;
       }
-      if (firstRestore.results.length != secondRestore.results.length ||
+      if (restoredRowCount(firstRestore) != restoredRowCount(secondRestore) ||
           !sameLogicalEntitlementProjections(
             firstSnapshot.entitlements,
             secondSnapshot.entitlements,
@@ -406,6 +406,14 @@ final class ExampleCubit extends Cubit<ExampleState> {
 /// _newRequestId creates one diagnostic-only correlation identifier.
 String _newRequestId(String operation) =>
     'apple-$operation-${DateTime.now().toUtc().microsecondsSinceEpoch}';
+
+/// Counts the customer's restorable rows: submitted plus unsigned.
+///
+/// A row the first restore signed from StoreKit's unfinished queue and then
+/// finished comes back from history without a JWS. The next restore counts it
+/// on `skipped.unsigned` instead of submitting it, so this sum stays the same.
+int restoredRowCount(RestoreResult restore) =>
+    restore.results.length + restore.skipped.unsigned;
 
 /// Compares the logical fields whose equality proves a replay did not advance a projection.
 bool sameLogicalEntitlementProjections(
