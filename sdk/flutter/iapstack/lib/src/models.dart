@@ -144,7 +144,7 @@ final class VerificationResult {
 /// Rows a store restore did not submit.
 ///
 /// Direct HTTP restores leave every count at zero. Duplicate tokens and rows
-/// that cannot be verified yet are omitted.
+/// that cannot be verified yet, such as pending purchases, are omitted.
 final class RestoreSkipCounts {
   /// Creates skip counts. Omitted counts are zero.
   const RestoreSkipCounts({
@@ -152,6 +152,7 @@ final class RestoreSkipCounts {
     this.differentCustomer = 0,
     this.unknownProduct = 0,
     this.multipleProducts = 0,
+    this.unsigned = 0,
   });
 
   /// Purchases with no store account binding.
@@ -166,9 +167,19 @@ final class RestoreSkipCounts {
   /// Play purchases that list more than one product id.
   final int multipleProducts;
 
+  /// Store rows that carry no signed evidence to submit.
+  ///
+  /// Flutter Apple counts StoreKit history rows here when the plugin returns
+  /// them without a JWS.
+  final int unsigned;
+
   /// Sum of the reason counts.
   int get total =>
-      unbound + differentCustomer + unknownProduct + multipleProducts;
+      unbound +
+      differentCustomer +
+      unknownProduct +
+      multipleProducts +
+      unsigned;
 
   /// Returns these counts plus the given increments.
   RestoreSkipCounts byAdding({
@@ -176,12 +187,14 @@ final class RestoreSkipCounts {
     int differentCustomer = 0,
     int unknownProduct = 0,
     int multipleProducts = 0,
+    int unsigned = 0,
   }) =>
       RestoreSkipCounts(
         unbound: this.unbound + unbound,
         differentCustomer: this.differentCustomer + differentCustomer,
         unknownProduct: this.unknownProduct + unknownProduct,
         multipleProducts: this.multipleProducts + multipleProducts,
+        unsigned: this.unsigned + unsigned,
       );
 }
 

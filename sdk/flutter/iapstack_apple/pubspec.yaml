@@ -5,8 +5,8 @@ repository: https://github.com/imariman/iapstack/tree/main/sdk/flutter/iapstack_
 publish_to: none
 
 environment:
-  sdk: ">=3.10.0 <4.0.0"
-  flutter: ">=3.38.0"
+  sdk: ">=3.11.0 <4.0.0"
+  flutter: ">=3.41.0"
 
 dependencies:
   flutter:
@@ -14,7 +14,7 @@ dependencies:
   iapstack:
     path: ../iapstack
   in_app_purchase: ^3.3.1
-  in_app_purchase_storekit: ^0.4.15
+  in_app_purchase_storekit: ^0.4.16
 
 dev_dependencies:
   flutter_test:
