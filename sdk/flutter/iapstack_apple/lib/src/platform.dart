@@ -139,9 +139,9 @@ abstract interface class AppleIapPlatform {
 
   /// Finishes one StoreKit transaction after authoritative server verification.
   ///
-  /// Does nothing when `pendingCompletion` is false or the transaction was
-  /// already finished here. Throws `AppleIapStackException` with code
-  /// `transaction_not_finishable` when `pendingCompletion` is true and this
-  /// platform holds no finish handle for the transaction.
+  /// Does nothing when `pendingCompletion` is false or the transaction is
+  /// already finished. Throws `AppleIapStackException` with code
+  /// `transaction_not_finishable` when `pendingCompletion` is true and the
+  /// purchase has no StoreKit transaction id to finish.
   Future<void> completePurchase(ApplePurchase purchase);
 }
