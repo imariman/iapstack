@@ -103,6 +103,11 @@ func TestExpiredLineageReconciliationKeepsRepurchaseAndStops(t *testing.T) {
 	if completed := lineageIntegrationNextCompleted(t, database, activeA.token, reconciledAt); !completed {
 		t.Fatal("expired lineage next reconciliation is still runnable, want it retired")
 	}
+	// A client resubmission of the same evidence in that window must reopen the retired generation.
+	saveLineageIntegrationJob(t, database, processingService, application, activeA.token, reconciledAt)
+	if completed := lineageIntegrationNextCompleted(t, database, activeA.token, reconciledAt); completed {
+		t.Fatal("rescheduled expired lineage stayed retired, want its next reconciliation runnable")
+	}
 
 	activeB.observedAt = reconciledAt
 	adapter.verificationResult = lineageIntegrationResult(t, application, activeB)

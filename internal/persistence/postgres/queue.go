@@ -10,6 +10,7 @@ import (
 	"github.com/imariman/iapstack/internal/jobs"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 )
 
@@ -49,6 +50,9 @@ func (repository *transaction) SaveInboxMessage(ctx context.Context, message per
 }
 
 // SaveReconciliationJob stores one protected provider query and enqueues its identifier atomically.
+// A completed generation with the same payload is reopened, because a reconciliation that found its
+// lineage expired completes the next generation before it is due. A later request for that generation
+// must run it. Its River job is still scheduled, so the worker then processes it instead of skipping it.
 func (repository *transaction) SaveReconciliationJob(
 	ctx context.Context,
 	job persistence.ReconciliationJob,
@@ -56,19 +60,22 @@ func (repository *transaction) SaveReconciliationJob(
 	if err := job.Validate(); err != nil {
 		return "", err
 	}
-	command, err := repository.tx.Exec(ctx, `
+	var jobID string
+	err := repository.tx.QueryRow(ctx, `
 		INSERT INTO reconciliation_jobs (
 			id, project_id, application_id, customer_id, payload_ciphertext,
 			payload_fingerprint, encryption_key_id, available_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (application_id, customer_id, payload_fingerprint) DO NOTHING
+		ON CONFLICT (application_id, customer_id, payload_fingerprint) DO UPDATE
+		SET processed_at = NULL, updated_at = now()
+		WHERE reconciliation_jobs.processed_at IS NOT NULL AND reconciliation_jobs.failed_at IS NULL
+		RETURNING id
 	`, job.ID, job.ProjectID, job.ApplicationID, job.CustomerID, job.Payload.Ciphertext,
-		job.Payload.Fingerprint[:], job.Payload.KeyID, job.AvailableAt)
-	if err != nil {
+		job.Payload.Fingerprint[:], job.Payload.KeyID, job.AvailableAt).Scan(&jobID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return "", classifyError("save reconciliation job", err)
 	}
-	jobID := job.ID
-	if command.RowsAffected() == 0 {
+	if errors.Is(err, pgx.ErrNoRows) {
 		err = repository.tx.QueryRow(ctx, `
 			SELECT id FROM reconciliation_jobs
 			WHERE application_id = $1 AND customer_id = $2 AND payload_fingerprint = $3
