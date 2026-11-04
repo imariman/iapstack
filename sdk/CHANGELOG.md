@@ -38,6 +38,25 @@
 - TypeScript host: aborting after a parsed 429 or 5xx body, before the backoff
   wait, rejects with `AbortError` instead of `APIError`. A `catch` of
   `APIError` no longer matches that cancel. Catch `AbortError`.
+- Flutter Apple: `completePurchase` throws `AppleIapStackException` with code
+  `transaction_not_finishable` when `pendingCompletion` is true and the
+  purchase has no StoreKit transaction id. `verifyPurchase` throws the same
+  error for such a purchase before it contacts IAPStack. Before, completion
+  returned without finishing and StoreKit kept the transaction open.
+- Flutter Apple: when every restore batch is accepted but StoreKit cannot
+  finish a row, `restorePurchases` throws `IapStackIncompleteRestoreException`
+  with `committedRestoreResults`, as Swift throws
+  `IAPStackIncompleteRestoreError`.
+
+### Fixed
+
+- Flutter Apple `restorePurchases` finishes unfinished StoreKit transactions
+  after IAPStack accepts the batch that carried them, as Swift does. Rows in a
+  failed batch stay unfinished. Restored rows can now have
+  `pendingCompletion == true`.
+- Flutter Apple `completePurchase` finishes a transaction by its StoreKit id
+  when this platform did not cache the update, for example one delivered to
+  another `ApplePluginPlatform`. Before, it returned without finishing.
 
 ### Added
 

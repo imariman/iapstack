@@ -12,16 +12,19 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late _FakeOfficialPlatform officialPlatform;
+  late _FakeStoreKit2 storeKit;
   late ApplePluginPlatform bridge;
 
   setUp(() {
     debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
     officialPlatform = _FakeOfficialPlatform();
     InAppPurchasePlatform.instance = officialPlatform;
+    storeKit = _FakeStoreKit2()..install();
     bridge = ApplePluginPlatform();
   });
 
   tearDown(() async {
+    storeKit.uninstall();
     await officialPlatform.close();
     debugDefaultTargetPlatformOverride = null;
   });
@@ -313,7 +316,7 @@ void main() {
       officialPlatform.emitPurchase(native);
 
       final purchase = await purchaseFuture;
-      expect(purchase.transactionId, 'transaction-100');
+      expect(purchase.transactionId, '100');
       expect(purchase.productId, 'premium_monthly');
       expect(purchase.signedTransaction, 'header.payload.signature');
       expect(purchase.appAccountToken, '018f59d0-a200-7000-8000-000000000001');
@@ -324,6 +327,104 @@ void main() {
       await bridge.completePurchase(purchase);
       await bridge.completePurchase(purchase);
       expect(officialPlatform.completed, <PurchaseDetails>[native]);
+      // The cached handle is used once; a repeat finishes by id, a no-op.
+      expect(storeKit.finished, <int>[100]);
+    },
+  );
+
+  test(
+    'restore marks unfinished history rows and finishes them by id',
+    () async {
+      storeKit
+        ..unfinished = <SK2TransactionMessage>[
+          _transactionMessage(id: 101, receiptData: 'header.payload.signature'),
+        ]
+        ..history = <SK2TransactionMessage>[
+          _transactionMessage(id: 100),
+          _transactionMessage(id: 101),
+        ];
+
+      final restored = await bridge.restorePurchases();
+
+      expect(storeKit.calls, <String>[
+        'restorePurchases',
+        'unfinishedTransactions',
+        'transactions',
+      ]);
+      expect(restored.map((purchase) => purchase.transactionId), <String>[
+        '100',
+        '101',
+      ]);
+      expect(restored.first.pendingCompletion, isFalse);
+      final unfinished = restored.last;
+      expect(unfinished.status, ApplePurchaseStatus.restored);
+      expect(unfinished.pendingCompletion, isTrue);
+      expect(unfinished.signedTransaction, 'header.payload.signature');
+      expect(
+        unfinished.appAccountToken,
+        '018f59d0-a200-7000-8000-000000000001',
+      );
+      expect(unfinished.canVerify, isTrue);
+
+      await bridge.completePurchase(restored.first);
+      await bridge.completePurchase(unfinished);
+      await bridge.completePurchase(unfinished);
+      // Native finish(id) does nothing for a transaction already finished.
+      expect(storeKit.finished, <int>[101, 101]);
+      expect(officialPlatform.completed, isEmpty);
+    },
+  );
+
+  test(
+    'finishes by StoreKit id when another bridge cached the update',
+    () async {
+      final otherBridge = ApplePluginPlatform();
+      final otherPurchaseFuture = otherBridge.purchaseUpdates.first;
+      officialPlatform.emitPurchase(
+        _purchaseDetails(status: PurchaseStatus.purchased, purchaseID: '4242'),
+      );
+      final otherPurchase = await otherPurchaseFuture;
+
+      await bridge.completePurchase(otherPurchase);
+
+      expect(storeKit.finished, <int>[4242]);
+      expect(officialPlatform.completed, isEmpty);
+    },
+  );
+
+  test(
+    'fails completion when the purchase has no StoreKit id to finish',
+    () async {
+      final missingIdFuture = bridge.purchaseUpdates.first;
+      officialPlatform.emitPurchase(
+        _purchaseDetails(status: PurchaseStatus.purchased, purchaseID: null),
+      );
+      final missingId = await missingIdFuture;
+
+      for (final purchase in <ApplePurchase>[
+        missingId,
+        const ApplePurchase(
+          transactionId: 'not-a-storekit-id',
+          productId: 'premium_monthly',
+          signedTransaction: 'header.payload.signature',
+          status: ApplePurchaseStatus.purchased,
+          pendingCompletion: true,
+        ),
+      ]) {
+        expect(purchase.pendingCompletion, isTrue);
+        await expectLater(
+          bridge.completePurchase(purchase),
+          throwsA(
+            isA<AppleIapStackException>().having(
+              (error) => error.code,
+              'code',
+              'transaction_not_finishable',
+            ),
+          ),
+        );
+      }
+      expect(officialPlatform.completed, isEmpty);
+      expect(storeKit.finished, isEmpty);
     },
   );
 
@@ -493,9 +594,10 @@ AppStoreProduct2Details _productDetails({
 SK2PurchaseDetails _purchaseDetails({
   required PurchaseStatus status,
   String? appAccountToken,
+  String? purchaseID = '100',
 }) => SK2PurchaseDetails(
   productID: 'premium_monthly',
-  purchaseID: 'transaction-100',
+  purchaseID: purchaseID,
   verificationData: _verificationData,
   transactionDate: '1787745600000',
   status: status,
@@ -507,3 +609,64 @@ final PurchaseVerificationData _verificationData = PurchaseVerificationData(
   serverVerificationData: 'header.payload.signature',
   source: 'app_store',
 );
+
+SK2TransactionMessage _transactionMessage({
+  required int id,
+  String? receiptData,
+}) => SK2TransactionMessage(
+  id: id,
+  originalId: id,
+  productId: 'premium_monthly',
+  appAccountToken: '018F59D0-A200-7000-8000-000000000001',
+  receiptData: receiptData,
+  status: SK2PurchaseStatusMessage.purchased,
+);
+
+/// Answers the StoreKit 2 Pigeon channels the bridge calls during restore.
+///
+/// Like `in_app_purchase_storekit`, history rows carry no JWS; only the
+/// unfinished read does.
+final class _FakeStoreKit2 {
+  static const String _prefix =
+      'dev.flutter.pigeon.in_app_purchase_storekit.InAppPurchase2API';
+  static const List<String> _methods = <String>[
+    'restorePurchases',
+    'unfinishedTransactions',
+    'transactions',
+    'finish',
+  ];
+
+  List<SK2TransactionMessage> unfinished = <SK2TransactionMessage>[];
+  List<SK2TransactionMessage> history = <SK2TransactionMessage>[];
+  final List<String> calls = <String>[];
+  final List<int> finished = <int>[];
+
+  void install() {
+    const codec = InAppPurchase2API.pigeonChannelCodec;
+    for (final method in _methods) {
+      _messenger.setMockMessageHandler('$_prefix.$method', (message) async {
+        calls.add(method);
+        Object? result;
+        switch (method) {
+          case 'unfinishedTransactions':
+            result = unfinished;
+          case 'transactions':
+            result = history;
+          case 'finish':
+            final arguments = codec.decodeMessage(message)! as List<Object?>;
+            finished.add(arguments.single! as int);
+        }
+        return codec.encodeMessage(wrapResponse(result: result));
+      });
+    }
+  }
+
+  void uninstall() {
+    for (final method in _methods) {
+      _messenger.setMockMessageHandler('$_prefix.$method', null);
+    }
+  }
+
+  TestDefaultBinaryMessenger get _messenger =>
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+}

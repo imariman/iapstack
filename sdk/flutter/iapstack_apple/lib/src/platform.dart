@@ -133,8 +133,15 @@ abstract interface class AppleIapPlatform {
   });
 
   /// Synchronizes App Store ownership and returns the current transaction history.
+  ///
+  /// Rows that StoreKit has not finished yet have `pendingCompletion == true`.
   Future<List<ApplePurchase>> restorePurchases();
 
   /// Finishes one StoreKit transaction after authoritative server verification.
+  ///
+  /// Does nothing when `pendingCompletion` is false or the transaction is
+  /// already finished. Throws `AppleIapStackException` with code
+  /// `transaction_not_finishable` when `pendingCompletion` is true and the
+  /// purchase has no StoreKit transaction id to finish.
   Future<void> completePurchase(ApplePurchase purchase);
 }
