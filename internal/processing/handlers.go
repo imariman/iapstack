@@ -586,15 +586,20 @@ func requiresReconciliation(evidence json.RawMessage) bool {
 }
 
 // lineageEnded reports whether one verified purchase lineage is terminally expired.
-// Every line item must be expired and denied. Refunds and revocations keep their daily refresh because
-// a provider can reverse them. A later renewal or resubscription is verified and scheduled again by the
-// client purchase or provider notification that reports it.
+// Every line item must be expired and denied, with no renewal still enabled. An enabled renewal means the
+// provider can still renew this lineage, as in Huawei billing retry after the grace period or an App Store
+// subscription still reported active with a stale signed expiry. Unknown renewal state keeps the refresh too.
+// Refunds and revocations keep their daily refresh because a provider can reverse them. A later
+// resubscription is verified and scheduled again by the client purchase or provider notification that reports it.
 func lineageEnded(observations []core.PurchaseObservation) bool {
 	if len(observations) == 0 {
 		return false
 	}
 	for _, observation := range observations {
 		if observation.State != core.LifecycleExpired || observation.Access != core.AccessDenied {
+			return false
+		}
+		if observation.Renewal.Status != core.RenewalDisabled && observation.Renewal.Status != core.RenewalNotApplicable {
 			return false
 		}
 	}
