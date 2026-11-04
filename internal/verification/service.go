@@ -79,6 +79,9 @@ type ReconciliationCommand struct {
 
 // Result contains the verified time and resulting current entitlement snapshot.
 type Result struct {
+	// Observations are the normalized provider line items stored by this verification.
+	// They are not part of the HTTP response.
+	Observations []core.PurchaseObservation
 	VerifiedAt   time.Time
 	Customer     core.Customer
 	Entitlements []persistence.CustomerEntitlement
@@ -187,7 +190,7 @@ func (service *Service) Verify(ctx context.Context, command Command) (Result, er
 		return Result{}, fmt.Errorf("verify purchase with %s: %w", application.Store.Provider, err)
 	}
 	validationRequest := request
-	validationRequest.ClaimedProducts = claimedProductsForValidation(
+	validationRequest.ClaimedProducts = productsForValidation(
 		application.Store.Provider,
 		request.ClaimedProducts,
 		providerResult,
@@ -266,7 +269,13 @@ func (service *Service) Reconcile(ctx context.Context, command ReconciliationCom
 	if err != nil {
 		return Result{}, fmt.Errorf("reconcile purchase with %s: %w", application.Store.Provider, err)
 	}
-	if err := providerResult.ValidateForReconciliation(request); err != nil {
+	validationRequest := request
+	validationRequest.ExpectedProducts = productsForValidation(
+		application.Store.Provider,
+		request.ExpectedProducts,
+		providerResult,
+	)
+	if err := providerResult.ValidateForReconciliation(validationRequest); err != nil {
 		return Result{}, fmt.Errorf("validate provider reconciliation result: %w", err)
 	}
 	var postCommitter stores.PostCommitter
@@ -540,7 +549,10 @@ func (service *Service) persist(
 	providerResult stores.VerificationResult,
 	prepared preparedVerification,
 ) (Result, error) {
-	verificationResult := Result{VerifiedAt: providerResult.VerifiedAt, Customer: customer}
+	verificationResult := Result{
+		Observations: append([]core.PurchaseObservation(nil), providerResult.Observations...),
+		VerifiedAt:   providerResult.VerifiedAt, Customer: customer,
+	}
 	err := service.store.Transact(ctx, func(repository persistence.Transaction) error {
 		resolution, err := repository.ResolveCustomer(ctx, command.ProjectID, command.ExternalCustomerID)
 		if err != nil {
@@ -718,6 +730,17 @@ func indexCatalogProducts(
 		}
 	}
 	return catalogByProviderID, nil
+}
+
+// productsForValidation selects the product set a provider result is checked against.
+// A provider result that names several products for one purchase, such as a Google Play deferred
+// replacement, maps a claim on one of them onto the observed products. Any other claim is kept.
+func productsForValidation(
+	provider core.Provider,
+	claimed []core.ProviderProductID,
+	result stores.VerificationResult,
+) []core.ProviderProductID {
+	return claimedProductsForValidation(provider, result.ProductsForClaim(claimed), result)
 }
 
 // EntitlementChangedEvent builds one idempotent outbox event for a changed projection.

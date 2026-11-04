@@ -285,19 +285,24 @@ type EntitlementProjection struct {
 	EffectivePeriod     core.EffectivePeriod
 }
 
-// EntitlementSource is the latest observed projection for one application-product access source.
+// EntitlementSource is the latest observed projection for one purchase lineage of an application product.
 type EntitlementSource struct {
 	Projection          EntitlementProjection
 	SourceApplicationID core.ApplicationID
-	ObservedAt          time.Time
+	// SourceLineage is an opaque key for the purchase lineage inside the application product.
+	// It is empty when the source has no lineage reference.
+	SourceLineage string
+	ObservedAt    time.Time
 }
 
 // CustomerEntitlement is a versioned current projection returned to application use cases.
 type CustomerEntitlement struct {
 	Projection          EntitlementProjection
 	SourceApplicationID core.ApplicationID
-	Key                 string
-	Version             int64
+	// SourceLineage is the opaque purchase lineage key of the projection source.
+	SourceLineage string
+	Key           string
+	Version       int64
 }
 
 // EntitlementWriteResult reports the durable projection and whether it changed.

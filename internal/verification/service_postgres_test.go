@@ -2,6 +2,7 @@ package verification_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"os"
 	"strings"
@@ -352,6 +353,219 @@ func (transaction *failingOutboxTransaction) SaveOutboxEvent(
 	persistence.OutboxEvent,
 ) (string, error) {
 	return "", errFakeOutbox
+}
+
+// TestGooglePlayDeferredReplacementWithPostgreSQL follows one purchase token across a deferred replacement.
+// Both products grant the same entitlement, which is the common catalog shape. The pending replacement
+// is kept on the token's first snapshot. After the change, the replacement is the allowed source, the
+// replaced item's expired snapshot keeps the old product from holding the entitlement past its end,
+// and the stored product lookup returns the replacement for later notifications.
+func TestGooglePlayDeferredReplacementWithPostgreSQL(t *testing.T) {
+	const (
+		replacementProviderProduct core.ProviderProductID = "provider-product-basic"
+		replacementProduct         core.ProductID         = "product-basic"
+		purchaseToken                                     = "sensitive-replacement-token"
+	)
+	database := openVerificationTestDatabase(t)
+	fixture := newVerificationFixture(t)
+	fixture.application.Store.Provider = core.ProviderGooglePlay
+	fixture.application.Store.ID = "com.example.iapstack"
+	fixture.catalog.Product.Kind = core.ProductKindSubscription
+	seedVerificationCatalog(t, database, fixture)
+	seedVerificationProduct(t, database, fixture, replacementProduct, replacementProviderProduct)
+
+	queryReference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", purchaseToken)
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	item := func(
+		id core.ObservationID,
+		product core.ProviderProductID,
+		observedAt time.Time,
+		endsAt time.Time,
+		renewal core.Renewal,
+	) core.PurchaseObservation {
+		observation := fixture.result.Observations[0]
+		observation.ID = id
+		observation.Store = fixture.application.Store
+		observation.ProductID = product
+		observation.ProductKind = core.ProductKindSubscription
+		observation.ProviderState = "SUBSCRIPTION_STATE_ACTIVE"
+		observation.ObservedAt = observedAt
+		observation.EffectivePeriod = core.EffectivePeriod{StartsAt: observation.OccurredAt, EndsAt: &endsAt}
+		observation.Renewal = renewal
+		observation.References = append(append([]core.StoreReference(nil), observation.References...), queryReference)
+		return observation
+	}
+	snapshot := func(observedAt time.Time, observations ...core.PurchaseObservation) stores.VerificationResult {
+		evidence, evidenceErr := stores.NewEvidence(
+			repositoryContentType(), []byte(`{"observation":"`+string(observations[0].ID)+`"}`),
+		)
+		if evidenceErr != nil {
+			t.Fatalf("NewEvidence() error = %v", evidenceErr)
+		}
+		return stores.VerificationResult{
+			VerifiedAt:    observedAt,
+			Artifacts:     []stores.VerifiedArtifact{{Kind: "google_play_server_response", Evidence: evidence}},
+			Observations:  observations,
+			NamedProducts: []core.ProviderProductID{verificationProviderProductID, replacementProviderProduct},
+		}
+	}
+	storedProduct := func() core.ProviderProductID {
+		t.Helper()
+		var purchase persistence.PurchaseReferenceContext
+		err := database.store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+			var lookupErr error
+			purchase, lookupErr = repository.PurchaseContextByReference(database.ctx, persistence.ProviderReferenceLookup{
+				ProjectID: verificationProjectID, ApplicationID: verificationApplicationID,
+				Role: core.ReferenceQuery, Kind: "purchase_token",
+				Fingerprint: sha256.Sum256([]byte(
+					verificationApplicationID + ":provider_reference:query:purchase_token:" + purchaseToken,
+				)),
+			})
+			return lookupErr
+		})
+		if err != nil {
+			t.Fatalf("PurchaseContextByReference() error = %v", err)
+		}
+		return purchase.ProviderProductID
+	}
+
+	pendingAt := fixture.result.VerifiedAt
+	switchAt := pendingAt.Add(10 * 24 * time.Hour)
+	pending := snapshot(pendingAt, item(
+		"gpl-pending-replacement", verificationProviderProductID, pendingAt, switchAt,
+		core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled, NextProductID: replacementProviderProduct},
+	))
+	service := newVerificationService(t, database.store,
+		&fakeAdapter{provider: core.ProviderGooglePlay, result: pending}, &fakeProtector{},
+		fakeClock{now: pendingAt.Add(time.Second)})
+	if _, err := service.Verify(database.ctx, fixture.command); err != nil {
+		t.Fatalf("Verify() pending replacement error = %v", err)
+	}
+	var nextProduct string
+	if err := database.conn.QueryRow(database.ctx, `
+		SELECT next_provider_product_id FROM purchase_observations WHERE id = $1
+	`, "gpl-pending-replacement").Scan(&nextProduct); err != nil {
+		t.Fatalf("load pending replacement: %v", err)
+	}
+	if nextProduct != string(replacementProviderProduct) {
+		t.Fatalf("next provider product = %q, want %q", nextProduct, replacementProviderProduct)
+	}
+	if product := storedProduct(); product != verificationProviderProductID {
+		t.Fatalf("stored product before replacement = %q, want %q", product, verificationProviderProductID)
+	}
+
+	completedAt := switchAt.Add(time.Hour)
+	replaced := item(
+		"gpl-replaced-item", verificationProviderProductID, completedAt.Add(-time.Microsecond), switchAt,
+		core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalDisabled},
+	)
+	replaced.State = core.LifecycleExpired
+	replaced.ProviderState = "SUBSCRIPTION_STATE_EXPIRED"
+	replaced.Access = core.AccessDenied
+	replaced.AccessReason = core.AccessReasonExpired
+	completed := snapshot(completedAt, item(
+		"gpl-completed-replacement", replacementProviderProduct, completedAt, switchAt.Add(30*24*time.Hour),
+		core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled},
+	), replaced)
+	service = newVerificationService(t, database.store,
+		&fakeAdapter{provider: core.ProviderGooglePlay, result: completed}, &fakeProtector{},
+		fakeClock{now: completedAt.Add(time.Second)})
+	signal, err := stores.NewEvidence(
+		"application/vnd.iapstack.google-play-rtdn+json",
+		[]byte(`{"kind":"subscription","notification_type":2,"purchase_token":"`+purchaseToken+`"}`),
+	)
+	if err != nil {
+		t.Fatalf("NewEvidence() signal error = %v", err)
+	}
+	result, err := service.Reconcile(database.ctx, verification.ReconciliationCommand{
+		ProjectID: verificationProjectID, ApplicationID: verificationApplicationID,
+		ExternalCustomerID:  verificationExternalCustomerID,
+		ExpectedProducts:    []core.ProviderProductID{verificationProviderProductID},
+		ExpectedProductKind: core.ProductKindSubscription,
+		QueryReferences:     []core.StoreReference{queryReference},
+		Signal:              signal,
+	})
+	if err != nil {
+		t.Fatalf("Reconcile() completed replacement error = %v", err)
+	}
+	if product := storedProduct(); product != replacementProviderProduct {
+		t.Fatalf("stored product after replacement = %q, want %q", product, replacementProviderProduct)
+	}
+	assertVerificationEntitlement(t, result.Entitlements, core.AccessAllowed, replacementProduct, "gpl-completed-replacement")
+	projection := result.Entitlements[0].Projection
+	if access, _ := core.AccessAt(
+		projection.Access, projection.AccessReason, projection.EffectivePeriod.EndsAt, completedAt.Add(time.Hour),
+	); access != core.AccessAllowed {
+		t.Fatalf("read access after replacement = %q, want allowed", access)
+	}
+	assertVerificationTableCount(t, database, "purchase_observations", 3)
+}
+
+// TestHuaweiGraceEndReplacesStoredExpiredEndWithPostgreSQL covers a grace row stored before the grace end fix.
+// That row ended at the past expiration date. Reusing its id for the corrected end is an immutable snapshot
+// conflict, so the corrected snapshot has its own id and becomes the allowed source until the grace end.
+func TestHuaweiGraceEndReplacesStoredExpiredEndWithPostgreSQL(t *testing.T) {
+	database := openVerificationTestDatabase(t)
+	fixture := newVerificationFixture(t)
+	fixture.catalog.Product.Kind = core.ProductKindSubscription
+	seedVerificationCatalog(t, database, fixture)
+	verifiedAt := fixture.result.VerifiedAt
+	expiredAt := verifiedAt.Add(-time.Hour)
+	graceEndsAt := verifiedAt.Add(72 * time.Hour)
+	grace := func(id core.ObservationID, endsAt time.Time, payload string) (verification.Command, stores.VerificationResult) {
+		observation := fixture.result.Observations[0]
+		observation.ID = id
+		observation.ProductKind = core.ProductKindSubscription
+		observation.State = core.LifecycleGracePeriod
+		observation.ProviderState = "0"
+		observation.AccessReason = core.AccessReasonGracePeriod
+		observation.OccurredAt = verifiedAt.Add(-30 * 24 * time.Hour)
+		observation.EffectivePeriod = core.EffectivePeriod{StartsAt: observation.OccurredAt, EndsAt: &endsAt}
+		observation.Renewal = core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled}
+		evidence, err := stores.NewEvidence(repositoryContentType(), []byte(payload))
+		if err != nil {
+			t.Fatalf("NewEvidence() error = %v", err)
+		}
+		command := fixture.command
+		command.Evidence = evidence
+		return command, stores.VerificationResult{
+			VerifiedAt:   verifiedAt,
+			Artifacts:    []stores.VerifiedArtifact{{Kind: "huawei_server_response", Evidence: evidence}},
+			Observations: []core.PurchaseObservation{observation},
+		}
+	}
+	verify := func(command verification.Command, result stores.VerificationResult) (verification.Result, error) {
+		service := newVerificationService(t, database.store, &fakeAdapter{result: result}, &fakeProtector{},
+			fakeClock{now: verifiedAt.Add(time.Second)})
+		return service.Verify(database.ctx, command)
+	}
+
+	legacyCommand, legacy := grace("hua-legacy-grace", expiredAt, `{"grace":"legacy"}`)
+	if _, err := verify(legacyCommand, legacy); err != nil {
+		t.Fatalf("Verify() legacy grace error = %v", err)
+	}
+	reusedCommand, reused := grace("hua-legacy-grace", graceEndsAt, `{"grace":"reused"}`)
+	if _, err := verify(reusedCommand, reused); !errors.Is(err, persistence.ErrConflict) {
+		t.Fatalf("Verify() corrected end under the legacy id error = %v, want conflict", err)
+	}
+	correctedCommand, corrected := grace("hua-corrected-grace", graceEndsAt, `{"grace":"corrected"}`)
+	corrected.Observations[0].ObservedAt = verifiedAt.Add(time.Minute)
+	result, err := verify(correctedCommand, corrected)
+	if err != nil {
+		t.Fatalf("Verify() corrected grace error = %v", err)
+	}
+	assertVerificationEntitlement(t, result.Entitlements, core.AccessAllowed, verificationProductID, "hua-corrected-grace")
+	projection := result.Entitlements[0].Projection
+	if projection.EffectivePeriod.EndsAt == nil || !projection.EffectivePeriod.EndsAt.Equal(graceEndsAt) {
+		t.Fatalf("entitlement end = %v, want grace end %s", projection.EffectivePeriod.EndsAt, graceEndsAt)
+	}
+	if access, _ := core.AccessAt(
+		projection.Access, projection.AccessReason, projection.EffectivePeriod.EndsAt, verifiedAt.Add(time.Hour),
+	); access != core.AccessAllowed {
+		t.Fatalf("read access during grace = %q, want allowed", access)
+	}
 }
 
 // openVerificationTestDatabase resets, migrates, and opens the configured PostgreSQL test database.
