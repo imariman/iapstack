@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/imariman/iapstack/internal/core"
 )
 
 const (
@@ -33,8 +35,11 @@ const (
 	signatureMACSeparator = "\n"
 	// signatureBytes is the byte length of one HMAC-SHA-256 signature.
 	signatureBytes = sha256.Size
-	// maximumIdentityLength bounds event-controlled metadata retained by the receiver.
+	// maximumIdentityLength bounds the IAPStack-Event-ID header, which is read before authentication.
 	maximumIdentityLength = 128
+	// entitlementChangedEventType is the only event type the IAPStack outbox delivers.
+	// The signed body does not carry it and no delivery header names it.
+	entitlementChangedEventType = "entitlement.changed"
 
 	// SaveInserted indicates that the event identity was stored for the first time.
 	SaveInserted SaveResult = "inserted"
@@ -57,7 +62,9 @@ type Store interface {
 	Close()
 }
 
-// Event contains the bounded metadata retained after successful authentication.
+// Event contains the metadata retained after successful authentication.
+// ID is capped at 128 bytes. ApplicationID follows the core identifier rules, which have no
+// length cap, so it is bounded only by the authenticated body limit.
 type Event struct {
 	ID              string
 	ApplicationID   string
@@ -86,11 +93,10 @@ type Receiver struct {
 	clock              func() time.Time
 }
 
-// eventEnvelope contains only the non-sensitive webhook fields needed for audit metadata.
+// eventEnvelope contains only the non-sensitive entitlement.changed fields needed for audit metadata.
 type eventEnvelope struct {
 	SchemaVersion int    `json:"schema_version"`
 	ApplicationID string `json:"application_id"`
-	EventType     string `json:"event_type"`
 }
 
 // New validates dependencies and constructs a bounded webhook receiver.
@@ -208,7 +214,7 @@ func (receiver *Receiver) serveWebhook(writer http.ResponseWriter, request *http
 		return
 	}
 	result, err := receiver.store.Save(request.Context(), Event{
-		ID: eventID, ApplicationID: envelope.ApplicationID, EventType: envelope.EventType,
+		ID: eventID, ApplicationID: envelope.ApplicationID, EventType: entitlementChangedEventType,
 		BodyFingerprint: sha256.Sum256(body), ReceivedAt: receiver.clock().UTC(),
 	})
 	if err != nil {
@@ -222,7 +228,7 @@ func (receiver *Receiver) serveWebhook(writer http.ResponseWriter, request *http
 	receiver.logger.Info("iapstack webhook accepted",
 		"event_id", eventID,
 		"application_id", envelope.ApplicationID,
-		"event_type", envelope.EventType,
+		"event_type", entitlementChangedEventType,
 		"delivery", string(result),
 		"signed_at", timestamp.UTC().Format(time.RFC3339),
 	)
@@ -266,13 +272,14 @@ func (receiver *Receiver) validSignature(eventID, timestamp string, body []byte,
 	return hmac.Equal(provided, mac.Sum(nil))
 }
 
-// decodeEnvelope validates the stable event metadata used by the receiver audit row.
+// decodeEnvelope validates the entitlement.changed metadata used by the receiver audit row.
+// The application ID follows the core identifier rules, so any ID IAPStack can store is accepted.
 func decodeEnvelope(body []byte) (eventEnvelope, error) {
 	var envelope eventEnvelope
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return eventEnvelope{}, err
 	}
-	if envelope.SchemaVersion <= 0 || !validIdentity(envelope.ApplicationID) || !validIdentity(envelope.EventType) {
+	if envelope.SchemaVersion <= 0 || core.ApplicationID(envelope.ApplicationID).Validate() != nil {
 		return eventEnvelope{}, errors.New("webhook event metadata is invalid")
 	}
 	return envelope, nil

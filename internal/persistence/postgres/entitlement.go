@@ -13,6 +13,25 @@ import (
 )
 
 const (
+	// observationLineageSQL derives the purchase lineage key of the observation aliased po.
+	// Apple and Google Play store a lineage reference. Huawei has none, and its purchase token
+	// stays stable across renewals, so the query token is the lineage there.
+	observationLineageSQL = `COALESCE((
+		SELECT 'reference:' || lineage_reference.id::text
+		FROM observation_references AS lineage_link
+		JOIN provider_references AS lineage_reference
+			ON lineage_reference.id = lineage_link.reference_id
+			AND lineage_reference.application_id = lineage_link.application_id
+		WHERE lineage_link.observation_id = po.id
+			AND (
+				lineage_reference.role = 'lineage'
+				OR (lineage_reference.role = 'query' AND lineage_reference.kind = 'purchase_token')
+			)
+		ORDER BY CASE WHEN lineage_reference.role = 'lineage' THEN 0 ELSE 1 END, lineage_reference.id
+		LIMIT 1
+	), '')`
+	// importLineageSQL derives the purchase lineage key of the import grant aliased ig.
+	importLineageSQL = `'import:' || encode(ig.lineage_fingerprint, 'hex')`
 	// entitlementSelectSQL reads one projection from either its observation or its import grant.
 	entitlementSelectSQL = `
 		SELECT
@@ -26,6 +45,7 @@ const (
 			ce.source_import_id,
 			COALESCE(po.application_id, ig.application_id),
 			ce.source_product_id,
+			CASE WHEN ce.source_kind = 'import' THEN ` + importLineageSQL + ` ELSE ` + observationLineageSQL + ` END,
 			ce.access_status,
 			ce.access_reason,
 			ce.effective_starts_at,
@@ -64,6 +84,7 @@ type entitlementRow struct {
 	sourceImportID      string
 	sourceApplicationID string
 	sourceProductID     string
+	sourceLineage       string
 	access              string
 	accessReason        string
 	effectiveStartsAt   pgtype.Timestamptz
@@ -71,7 +92,7 @@ type entitlementRow struct {
 	version             int64
 }
 
-// entitlementSourceRow contains one latest source observation mapped to an entitlement.
+// entitlementSourceRow contains the latest snapshot of one purchase lineage mapped to an entitlement.
 type entitlementSourceRow struct {
 	projectID           string
 	customerID          string
@@ -81,6 +102,7 @@ type entitlementSourceRow struct {
 	sourceImportID      string
 	sourceApplicationID string
 	sourceProductID     string
+	sourceLineage       string
 	access              string
 	accessReason        string
 	effectiveStartsAt   pgtype.Timestamptz
@@ -229,8 +251,11 @@ func (repository *transaction) PutEntitlement(
 	return persistence.EntitlementWriteResult{Entitlement: entitlement, Changed: true}, err
 }
 
-// CustomerEntitlementSources returns the latest observation or import grant for every application-product source in the customer closure.
-// Equal observation times prefer an allowed snapshot, so a merged source grant is not hidden by a denied twin.
+// CustomerEntitlementSources returns the latest observation or import grant for every purchase lineage
+// of every application product in the customer closure.
+// Observation times are compared only inside one lineage, so a refreshed expired lineage cannot hide a
+// later purchase of the same product. Equal times prefer an allowed snapshot, so a merged source grant
+// is not hidden by a denied twin.
 func (repository *transaction) CustomerEntitlementSources(
 	ctx context.Context,
 	projectID core.ProjectID,
@@ -246,10 +271,10 @@ func (repository *transaction) CustomerEntitlementSources(
 	}
 	rows, err := repository.tx.Query(ctx, `
 		SELECT project_id, customer_id, entitlement_id, source_kind, source_observation_id,
-			source_import_id, application_id, product_id, access_status, access_reason,
+			source_import_id, application_id, product_id, source_lineage, access_status, access_reason,
 			effective_starts_at, effective_ends_at, observed_at
 		FROM (
-			SELECT DISTINCT ON (pe.entitlement_id, po.application_id, po.product_id)
+			SELECT DISTINCT ON (pe.entitlement_id, po.application_id, po.product_id, lineage.source_lineage)
 				po.project_id,
 				po.customer_id,
 				pe.entitlement_id,
@@ -258,6 +283,7 @@ func (repository *transaction) CustomerEntitlementSources(
 				NULL::text AS source_import_id,
 				po.application_id,
 				po.product_id,
+				lineage.source_lineage,
 				po.access_status,
 				po.access_reason,
 				po.effective_starts_at,
@@ -266,18 +292,19 @@ func (repository *transaction) CustomerEntitlementSources(
 			FROM purchase_observations AS po
 			JOIN product_entitlements AS pe
 				ON pe.project_id = po.project_id AND pe.product_id = po.product_id
+			CROSS JOIN LATERAL (SELECT `+observationLineageSQL+` AS source_lineage) AS lineage
 			WHERE po.project_id = $1 AND po.customer_id = ANY($2)
-			ORDER BY pe.entitlement_id, po.application_id, po.product_id,
+			ORDER BY pe.entitlement_id, po.application_id, po.product_id, lineage.source_lineage,
 				po.observed_at DESC,
 				CASE WHEN po.access_status = 'allowed' THEN 0 ELSE 1 END,
 				po.id ASC
 		) AS observations
 		UNION ALL
 		SELECT project_id, customer_id, entitlement_id, source_kind, source_observation_id,
-			source_import_id, application_id, product_id, access_status, access_reason,
+			source_import_id, application_id, product_id, source_lineage, access_status, access_reason,
 			effective_starts_at, effective_ends_at, observed_at
 		FROM (
-			SELECT DISTINCT ON (ig.entitlement_id, ig.application_id, ig.product_id)
+			SELECT DISTINCT ON (ig.entitlement_id, ig.application_id, ig.product_id, ig.lineage_fingerprint)
 				ig.project_id,
 				ig.customer_id,
 				ig.entitlement_id,
@@ -286,6 +313,7 @@ func (repository *transaction) CustomerEntitlementSources(
 				ig.id AS source_import_id,
 				ig.application_id,
 				ig.product_id,
+				`+importLineageSQL+` AS source_lineage,
 				ig.access_status,
 				ig.access_reason,
 				ig.effective_starts_at,
@@ -293,7 +321,7 @@ func (repository *transaction) CustomerEntitlementSources(
 				ig.observed_at
 			FROM import_grants AS ig
 			WHERE ig.project_id = $1 AND ig.customer_id = ANY($2)
-			ORDER BY ig.entitlement_id, ig.application_id, ig.product_id,
+			ORDER BY ig.entitlement_id, ig.application_id, ig.product_id, ig.lineage_fingerprint,
 				ig.observed_at DESC,
 				ig.id ASC
 		) AS imports
@@ -382,6 +410,7 @@ func (repository *transaction) loadCustomerEntitlement(
 		&importID,
 		&row.sourceApplicationID,
 		&row.sourceProductID,
+		&row.sourceLineage,
 		&row.access,
 		&row.accessReason,
 		&row.effectiveStartsAt,
@@ -412,6 +441,7 @@ func scanEntitlementRow(rows pgx.Rows) (entitlementRow, error) {
 		&importID,
 		&row.sourceApplicationID,
 		&row.sourceProductID,
+		&row.sourceLineage,
 		&row.access,
 		&row.accessReason,
 		&row.effectiveStartsAt,
@@ -425,7 +455,7 @@ func scanEntitlementRow(rows pgx.Rows) (entitlementRow, error) {
 	return row, nil
 }
 
-// scanEntitlementSourceRow scans one latest source projection from a PostgreSQL result set.
+// scanEntitlementSourceRow scans the latest source projection of one lineage from a PostgreSQL result set.
 func scanEntitlementSourceRow(rows pgx.Rows) (entitlementSourceRow, error) {
 	row := entitlementSourceRow{}
 	var observationID pgtype.Text
@@ -439,6 +469,7 @@ func scanEntitlementSourceRow(rows pgx.Rows) (entitlementSourceRow, error) {
 		&importID,
 		&row.sourceApplicationID,
 		&row.sourceProductID,
+		&row.sourceLineage,
 		&row.access,
 		&row.accessReason,
 		&row.effectiveStartsAt,
@@ -483,6 +514,7 @@ func (row entitlementRow) entitlement() (persistence.CustomerEntitlement, error)
 	return persistence.CustomerEntitlement{
 		Projection:          projection,
 		SourceApplicationID: core.ApplicationID(row.sourceApplicationID),
+		SourceLineage:       row.sourceLineage,
 		Key:                 row.entitlementKey,
 		Version:             row.version,
 	}, nil
@@ -508,6 +540,7 @@ func (row entitlementSourceRow) entitlementSource() (persistence.EntitlementSour
 			},
 		},
 		SourceApplicationID: core.ApplicationID(row.sourceApplicationID),
+		SourceLineage:       row.sourceLineage,
 		ObservedAt:          row.observedAt,
 	}
 	if err := source.Validate(); err != nil {

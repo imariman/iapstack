@@ -249,10 +249,20 @@ protected evidence/reference boundaries. Subscription states including active,
 pending, canceled, expired, paused, grace period, and account hold are normalized.
 
 The initial Google Play server slice supports one current subscription line item or
-one non-consumable line item per purchase token. A completed purchase whose
-`acknowledgementState` is pending produces a bounded provider action. IAPStack calls
-the matching Android Publisher product or subscription acknowledgement endpoint only
-after the evidence, observation, entitlement projection, and outbox event commit.
+one non-consumable line item per purchase token. A subscription changed with the
+`DEFERRED` replacement mode has two line items on its new purchase token. Until the
+change takes effect, IAPStack records the existing item, which keeps access until its
+expiry. Its renewal follows the new item's plan, and the new product is stored as the
+next renewal product when that plan renews automatically. After the change, the
+replacement item is recorded together with the replaced item as expired, once the
+replaced item's expiry has passed, and later notifications for that token expect the
+new product. A one-item response whose `itemReplacement` names the stored product also
+records that product as expired for that token. Both products must stay mapped in the
+catalog. A claimed product may name either item of that replacement. A completed
+purchase whose `acknowledgementState` is pending produces a bounded provider action.
+IAPStack calls the matching Android Publisher product or subscription acknowledgement
+endpoint only after the evidence, observation, entitlement projection, and outbox
+event commit.
 Pending purchases and already acknowledged purchases never create this action. A
 retryable acknowledgement failure is returned after the durable result so the API
 submission, RTDN job, or scheduled reconciliation can safely retry and re-query the
@@ -329,6 +339,17 @@ The pending chargeback review workflow itself is outside the current slice. Dupl
 Pub/Sub deliveries normalize to the same protected inbox identity and downstream
 projection/outbox writes remain idempotent.
 
+Each purchase lineage is a separate entitlement source: the App Store original
+transaction, the Google Play purchase token, or the Huawei purchase token. Observation
+times are compared only inside one lineage. A customer who lets a subscription expire
+and buys the same product again keeps access from the new lineage when the old one is
+refreshed. When several sources allow access, a store observation is projected before
+an import, then the source whose access ends last. The daily reconciliation of a
+lineage stops once the provider reports every line item expired with automatic renewal
+off. A lineage the provider can still renew, such as one in billing retry, keeps its
+daily refresh. Refunded and revoked lineages keep their daily refresh too. A later resubscription is scheduled again when the
+client submits it, or when an App Store or Google Play notification reports it.
+
 ## Webhook verification
 
 Outbound requests include `IAPStack-Event-ID`, `IAPStack-Timestamp`, and `IAPStack-Signature`. Verify `v2=<hex>` as HMAC-SHA-256 over the unambiguous newline-delimited input:
@@ -341,6 +362,8 @@ v2
 ```
 
 The event ID is authenticated. Reject `v1` signatures, timestamps outside the application's replay window, and any delivery whose `IAPStack-Event-ID` does not match the MAC. Deduplicate by that authenticated event ID.
+
+The body is the `entitlement.changed` payload modeled by `EntitlementChange` in the Go and TypeScript SDKs. It has no `event_type` field, and no header names the event type. `entitlement.changed` is the only event IAPStack delivers. `application_id` follows the shared identifier rules: it can contain inner spaces and non-ASCII text and has no length cap.
 
 ## Shared SDK behavior
 

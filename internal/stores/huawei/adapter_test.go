@@ -24,6 +24,13 @@ import (
 	"github.com/imariman/iapstack/internal/stores"
 )
 
+const (
+	// legacyGraceObservationID is the identity main computed for the grace fixture with the expiration date as its end.
+	legacyGraceObservationID = "hua-6bf407e6be74949969c31b1fb55b7603"
+	// pinnedExpiredObservationID is the identity main computed for the expired fixture.
+	pinnedExpiredObservationID = "hua-bdb56bd0a1a784ab94911fc12fcc5b49"
+)
+
 // fakeCredentialSource returns one opaque Huawei credential fixture.
 type fakeCredentialSource struct {
 	credential stores.Credential
@@ -374,6 +381,75 @@ func TestObservationSnapshotIdentitySeparatesLifecycleChangesButNotReceiptTime(t
 	}
 	if first.Observations[0].ID == revoked.Observations[0].ID {
 		t.Fatal("active and revoked observations share one identity")
+	}
+}
+
+// TestGraceObservationEndsAtGraceExpiration keeps billing-grace access open until Huawei's grace end.
+func TestGraceObservationEndsAtGraceExpiration(t *testing.T) {
+	application := core.Application{ID: "application-1", ProjectID: "project-1", Store: core.StoreApplication{
+		Provider: core.ProviderHuaweiAppGallery, Environment: core.EnvironmentSandbox, ID: "provider-app-1",
+	}}
+	now := time.Date(2026, time.August, 24, 10, 0, 0, 0, time.UTC)
+	graceEnd := now.Add(72 * time.Hour)
+	artifact, err := stores.NewEvidence("application/json", []byte(`{"authoritative":true}`))
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	adapter := &Adapter{clock: func() time.Time { return now }}
+	inGrace := purchaseData{
+		ApplicationID: "provider-app-1", ProductID: "subscription", SubscriptionID: "subscription-id-1",
+		OrderID: "order-1", PurchaseToken: "token-1", PurchaseState: 0,
+		PurchaseTime: now.Add(-30 * 24 * time.Hour).UnixMilli(), ExpirationDate: now.Add(-time.Hour).UnixMilli(),
+		GraceExpirationTime: graceEnd.UnixMilli(), RetryFlag: 1, RenewStatus: 1, SubIsValid: true,
+		Quantity: 1, Currency: "USD", Price: 499,
+	}
+	refundedInGrace := inGrace
+	refundedInGrace.PurchaseState = 2
+	for name, test := range map[string]struct {
+		purchase purchaseData
+		state    core.LifecycleState
+	}{
+		"grace":             {purchase: inGrace, state: core.LifecycleGracePeriod},
+		"refunded in grace": {purchase: refundedInGrace, state: core.LifecycleRefunded},
+	} {
+		result, err := adapter.result(application, core.ProductKindSubscription, test.purchase, artifact)
+		if err != nil {
+			t.Fatalf("%s: result() error = %v", name, err)
+		}
+		observation := result.Observations[0]
+		if observation.State != test.state || observation.Access != core.AccessAllowed {
+			t.Fatalf("%s: observation = (%q, %q), want (%q, allowed)", name, observation.State, observation.Access, test.state)
+		}
+		if observation.EffectivePeriod.EndsAt == nil || !observation.EffectivePeriod.EndsAt.Equal(graceEnd) {
+			t.Fatalf("%s: effective end = %v, want grace end %s", name, observation.EffectivePeriod.EndsAt, graceEnd)
+		}
+		access, reason := core.AccessAt(observation.Access, observation.AccessReason, observation.EffectivePeriod.EndsAt, now)
+		if access != core.AccessAllowed || reason != observation.AccessReason {
+			t.Fatalf("%s: AccessAt() = (%q, %q), want allowed until the grace end", name, access, reason)
+		}
+	}
+
+	result, err := adapter.result(application, core.ProductKindSubscription, inGrace, artifact)
+	if err != nil {
+		t.Fatalf("result() error = %v", err)
+	}
+	if result.Observations[0].ID == legacyGraceObservationID {
+		t.Fatalf("grace observation ID = %q, want a new identity for the corrected effective end", result.Observations[0].ID)
+	}
+
+	expired := inGrace
+	expired.RetryFlag = 0
+	result, err = adapter.result(application, core.ProductKindSubscription, expired, artifact)
+	if err != nil {
+		t.Fatalf("expired result() error = %v", err)
+	}
+	observation := result.Observations[0]
+	if observation.State != core.LifecycleExpired || observation.EffectivePeriod.EndsAt == nil ||
+		!observation.EffectivePeriod.EndsAt.Equal(milliseconds(expired.ExpirationDate)) {
+		t.Fatalf("expired observation = %#v, want expiration date end", observation)
+	}
+	if observation.ID != pinnedExpiredObservationID {
+		t.Fatalf("expired observation ID = %q, want unchanged %q", observation.ID, pinnedExpiredObservationID)
 	}
 }
 

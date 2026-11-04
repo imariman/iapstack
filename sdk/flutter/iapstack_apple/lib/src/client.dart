@@ -91,6 +91,12 @@ final class AppleIapStack {
   }
 
   /// Verifies one completed transaction, then finishes it only after server success.
+  ///
+  /// A pending purchase with no transaction id cannot be finished, so it fails
+  /// with `transaction_not_finishable` before IAPStack is contacted. When
+  /// StoreKit fails to finish a pending transaction, the
+  /// [AppleIapStackException] from completion is thrown after IAPStack has
+  /// already verified it.
   Future<VerificationResult> verifyPurchase({
     required String externalCustomerId,
     required ApplePurchase purchase,
@@ -100,6 +106,12 @@ final class AppleIapStack {
       externalCustomerId: externalCustomerId,
       purchase: purchase,
     );
+    if (purchase.pendingCompletion && purchase.transactionId.trim().isEmpty) {
+      throw const AppleIapStackException(
+        code: 'transaction_not_finishable',
+        message: 'The App Store transaction has no StoreKit id to finish',
+      );
+    }
     final result = await _client.verifyPurchase(
       submission,
       requestId: requestId,
@@ -112,20 +124,30 @@ final class AppleIapStack {
 
   /// Restores configured, customer-bound StoreKit history in bounded batches.
   ///
-  /// Unbound, different-customer, and unknown-product rows are counted on
+  /// Unfinished StoreKit rows are finished after IAPStack accepts the batch
+  /// that carried them. If a later batch fails, rows from the batches already
+  /// accepted are finished, the rest stay unfinished, and the IAPStack error
+  /// is rethrown. If StoreKit fails to finish an accepted row, every other
+  /// accepted row is still finished, and restore throws
+  /// [IapStackIncompleteRestoreException] with the committed results and the
+  /// first completion failure as its cause. Unbound,
+  /// different-customer, and unknown-product rows are counted on
   /// [RestoreResult.skipped] and are not submitted. Another customer's rows
-  /// are never verified.
+  /// are never verified. A row with no usable JWS is counted as
+  /// [RestoreSkipCounts.unsigned] when no other reason applies.
   Future<RestoreResult> restorePurchases({
     required String externalCustomerId,
     String? requestId,
   }) async {
     _validateAppAccountToken(externalCustomerId);
     final purchases = await _platform.restorePurchases();
+    final submitted = <ApplePurchase>[];
     final submissions = <PurchaseSubmission>[];
     final observedTransactions = <String>{};
     var skipped = const RestoreSkipCounts();
     for (final purchase in purchases) {
-      if (!purchase.canVerify) {
+      if (purchase.status != ApplePurchaseStatus.purchased &&
+          purchase.status != ApplePurchaseStatus.restored) {
         continue;
       }
       final account = purchase.appAccountToken?.toLowerCase();
@@ -142,18 +164,66 @@ final class AppleIapStack {
         skipped = skipped.byAdding(unbound: 1);
         continue;
       }
+      if (!purchase.canVerify) {
+        // The plugin returns finished history rows without a JWS.
+        skipped = skipped.byAdding(unsigned: 1);
+        continue;
+      }
       if (!observedTransactions.add(purchase.transactionId)) {
         continue;
       }
       submissions.add(
         _submission(externalCustomerId: externalCustomerId, purchase: purchase),
       );
+      submitted.add(purchase);
     }
-    return _client.restorePurchasesInBatches(
-      submissions,
-      requestId: requestId,
-      skipped: skipped,
-    );
+    final RestoreResult result;
+    try {
+      result = await _client.restorePurchasesInBatches(
+        submissions,
+        requestId: requestId,
+        skipped: skipped,
+      );
+    } on IapStackException catch (error) {
+      // Batches go in order with one result per row, so the committed results
+      // are exactly the first rows. The failed batch and later ones stay open.
+      // The IAPStack error wins over a completion failure: it carries the
+      // committed results and retry metadata. A row that failed to finish stays
+      // open, and the next restore submits it again.
+      await _finishRestored(
+        submitted.take(error.committedRestoreResults.length),
+      );
+      rethrow;
+    }
+    final failure = await _finishRestored(submitted);
+    if (failure != null) {
+      throw IapStackIncompleteRestoreException(
+        'IAPStack accepted the restore, but StoreKit did not finish every row',
+        cause: failure,
+        committedRestoreResults: result.results,
+        restoreSkips: result.skipped,
+      );
+    }
+    return result;
+  }
+
+  /// _finishRestored finishes accepted rows that StoreKit still holds open.
+  ///
+  /// It tries every row and returns the first failure, so one row that cannot
+  /// be finished does not leave the others open.
+  Future<Exception?> _finishRestored(Iterable<ApplePurchase> purchases) async {
+    Exception? failure;
+    for (final purchase in purchases) {
+      if (!purchase.pendingCompletion) {
+        continue;
+      }
+      try {
+        await _platform.completePurchase(purchase);
+      } on Exception catch (error) {
+        failure ??= error;
+      }
+    }
+    return failure;
   }
 
   /// Loads the current IAPStack projection without contacting StoreKit.
