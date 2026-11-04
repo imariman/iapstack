@@ -181,6 +181,15 @@ func productFromCandidate(candidate ProjectionCandidate) entitlementProduct {
 	}
 }
 
+// productFromCurrent returns the entitlement and application product of one stored projection.
+func productFromCurrent(current persistence.CustomerEntitlement) entitlementProduct {
+	return entitlementProduct{
+		EntitlementID: current.Projection.EntitlementID,
+		ApplicationID: current.SourceApplicationID,
+		ProductID:     current.Projection.SourceProductID,
+	}
+}
+
 // currentSourceReported reports whether the candidates carry newer state for the current projection source.
 // A current import is reported once a store observation exists for its application product.
 func currentSourceReported(
@@ -194,11 +203,7 @@ func currentSourceReported(
 	if current.Projection.Normalized().SourceKind != persistence.SourceKindImport {
 		return false
 	}
-	_, superseded := storeProducts[entitlementProduct{
-		EntitlementID: current.Projection.EntitlementID,
-		ApplicationID: current.SourceApplicationID,
-		ProductID:     current.Projection.SourceProductID,
-	}]
+	_, superseded := storeProducts[productFromCurrent(current)]
 	return superseded
 }
 
