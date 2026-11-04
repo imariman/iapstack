@@ -65,14 +65,15 @@ func TestGooglePlayInboxFollowsDeferredReplacementWithPostgreSQL(t *testing.T) {
 	replacedEnd := renewedAt.Add(-30 * time.Second)
 	replaced.EffectivePeriod.EndsAt = &replacedEnd
 	completed.Observations = append(completed.Observations, replaced)
-	adapter := &processingIntegrationAdapter{
-		verificationResult: replacementIntegrationResult(
-			t, application, "processing-observation-pending-replacement", replacementIntegrationOldProduct,
-			core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled, NextProductID: replacementIntegrationNewProduct},
-			now, references...,
-		),
-		reconciliationResult: completed,
-	}
+	namedProducts := []core.ProviderProductID{replacementIntegrationOldProduct, replacementIntegrationNewProduct}
+	completed.NamedProducts = namedProducts
+	pending := replacementIntegrationResult(
+		t, application, "processing-observation-pending-replacement", replacementIntegrationOldProduct,
+		core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled, NextProductID: replacementIntegrationNewProduct},
+		now, references...,
+	)
+	pending.NamedProducts = namedProducts
+	adapter := &processingIntegrationAdapter{verificationResult: pending, reconciliationResult: completed}
 	registry, err := stores.NewRegistry(adapter)
 	if err != nil {
 		t.Fatalf("NewRegistry() error = %v", err)

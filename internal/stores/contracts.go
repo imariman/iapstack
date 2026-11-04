@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,11 +42,16 @@ type PostCommitRequest struct {
 	Actions     []PostCommitAction
 }
 
+// VerificationResult is one authoritative provider answer.
+// NamedProducts is set only when the provider purchase names more than one product, such as a Google Play
+// deferred replacement. It lists every product the purchase names, including each observed product. A claim
+// on one of them is checked against the observed products, see ProductsForClaim.
 type VerificationResult struct {
 	VerifiedAt        time.Time
 	Artifacts         []VerifiedArtifact
 	Observations      []core.PurchaseObservation
 	PostCommitActions []PostCommitAction
+	NamedProducts     []core.ProviderProductID
 }
 
 type Verifier interface {
@@ -145,6 +151,22 @@ func (request ReconciliationRequest) Validate() error {
 	return validateReferencesWithRole(request.QueryReferences, core.ReferenceQuery)
 }
 
+// ProductsForClaim returns the products a result is checked against for one claimed or expected product.
+// A claim on a product the purchase names is replaced by the observed products. Any other claim is kept,
+// so a product the provider purchase does not name still fails validation.
+func (result VerificationResult) ProductsForClaim(claimed []core.ProviderProductID) []core.ProviderProductID {
+	if len(claimed) != 1 || len(result.NamedProducts) == 0 || !slices.Contains(result.NamedProducts, claimed[0]) {
+		return claimed
+	}
+	observed := make([]core.ProviderProductID, 0, len(result.Observations))
+	for _, observation := range result.Observations {
+		if !slices.Contains(observed, observation.ProductID) {
+			observed = append(observed, observation.ProductID)
+		}
+	}
+	return observed
+}
+
 // ValidateForVerification checks a result against its original verification request.
 func (result VerificationResult) ValidateForVerification(request VerificationRequest) error {
 	if err := request.Validate(); err != nil {
@@ -229,6 +251,18 @@ func (result VerificationResult) validate(
 			expectedQueryReferences,
 		) {
 			return fmt.Errorf("observation %d does not match a reconciliation query reference", i)
+		}
+	}
+	for index, product := range result.NamedProducts {
+		if err := product.Validate(); err != nil {
+			return fmt.Errorf("named product %d: %w", index, err)
+		}
+	}
+	if len(result.NamedProducts) > 0 {
+		for product := range observedProducts {
+			if !slices.Contains(result.NamedProducts, product) {
+				return fmt.Errorf("observed product %q is not a named product", product)
+			}
 		}
 	}
 	for index, action := range result.PostCommitActions {

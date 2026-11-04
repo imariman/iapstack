@@ -543,6 +543,7 @@ func TestGooglePlayFollowsCurrentSubscriptionProduct(t *testing.T) {
 			observation.EffectivePeriod.EndsAt = &end
 			observation.Renewal = core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled}
 			observation.References = append(observation.References, queryReference)
+			fixture.result.NamedProducts = []core.ProviderProductID{verificationProviderProductID, replacementProviderProduct}
 			wantObservations := 1
 			if operation == "reconcile with replaced item" {
 				replacedEnd := fixture.result.VerifiedAt.Add(-30 * time.Second)
@@ -668,6 +669,49 @@ func TestVerifyKeepsClaimedProductForOtherProviders(t *testing.T) {
 		t.Fatalf("Verify() non-subscription error = %v, want claimed product mismatch", err)
 	}
 	assertNoDurableWrites(t, store.repository)
+}
+
+// TestGooglePlayKeepsClaimedProductOutsideNamedProducts rejects a Google Play product change the purchase does not name.
+func TestGooglePlayKeepsClaimedProductOutsideNamedProducts(t *testing.T) {
+	t.Parallel()
+
+	for name, namedProducts := range map[string][]core.ProviderProductID{
+		"no named products":            nil,
+		"claim is not a named product": {"provider-product-other", "provider-product-third"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := newVerificationFixture(t)
+			fixture.application.Store.Provider = core.ProviderGooglePlay
+			fixture.application.Store.ID = "com.example.iapstack"
+			fixture.catalog.Product.Kind = core.ProductKindSubscription
+			end := fixture.result.VerifiedAt.Add(30 * 24 * time.Hour)
+			observation := &fixture.result.Observations[0]
+			observation.Store = fixture.application.Store
+			observation.ProductID = "provider-product-other"
+			observation.ProductKind = core.ProductKindSubscription
+			observation.EffectivePeriod.EndsAt = &end
+			observation.Renewal = core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled}
+			fixture.result.NamedProducts = namedProducts
+			other := fixture.catalog
+			other.Mapping.ProviderID = "provider-product-other"
+			store := newFakeStore(fixture)
+			store.repository.catalog["provider-product-other"] = other
+			service := newVerificationService(
+				t,
+				store,
+				&fakeAdapter{provider: core.ProviderGooglePlay, result: fixture.result},
+				&fakeProtector{},
+				fixture.clock,
+			)
+			_, err := service.Verify(context.Background(), fixture.command)
+			if err == nil || !strings.Contains(err.Error(), "expected product") {
+				t.Fatalf("Verify() error = %v, want claimed product mismatch", err)
+			}
+			assertNoDurableWrites(t, store.repository)
+		})
+	}
 }
 
 // TestServiceRejectsUnknownClaimBeforeProviderCall verifies catalog fail-fast behavior.

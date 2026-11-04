@@ -405,9 +405,10 @@ func TestGooglePlayDeferredReplacementWithPostgreSQL(t *testing.T) {
 			t.Fatalf("NewEvidence() error = %v", evidenceErr)
 		}
 		return stores.VerificationResult{
-			VerifiedAt:   observedAt,
-			Artifacts:    []stores.VerifiedArtifact{{Kind: "google_play_server_response", Evidence: evidence}},
-			Observations: observations,
+			VerifiedAt:    observedAt,
+			Artifacts:     []stores.VerifiedArtifact{{Kind: "google_play_server_response", Evidence: evidence}},
+			Observations:  observations,
+			NamedProducts: []core.ProviderProductID{verificationProviderProductID, replacementProviderProduct},
 		}
 	}
 	storedProduct := func() core.ProviderProductID {
