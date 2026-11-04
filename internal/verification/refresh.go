@@ -52,6 +52,7 @@ func RefreshCustomerProjectionWithOptions(
 		candidates = append(candidates, ProjectionCandidate{
 			Projection:          source.Projection,
 			SourceApplicationID: source.SourceApplicationID,
+			SourceLineage:       source.SourceLineage,
 			ObservedAt:          source.ObservedAt,
 		})
 	}
