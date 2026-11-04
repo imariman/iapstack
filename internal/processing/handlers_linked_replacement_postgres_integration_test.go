@@ -12,6 +12,7 @@ import (
 
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/platform/metrics"
 	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/stores"
 	"github.com/imariman/iapstack/internal/stores/googleplay"
@@ -304,7 +305,12 @@ func newLinkedReplacementProcessing(
 	now time.Time,
 ) *Service {
 	t.Helper()
-	registry, err := stores.NewRegistry(adapter)
+	// Production registers every adapter through ObservedAdapter, so the replacement lookup must pass through it.
+	observed, err := stores.NewObservedAdapter(adapter, metrics.New())
+	if err != nil {
+		t.Fatalf("NewObservedAdapter() error = %v", err)
+	}
+	registry, err := stores.NewRegistry(observed)
 	if err != nil {
 		t.Fatalf("NewRegistry() error = %v", err)
 	}
