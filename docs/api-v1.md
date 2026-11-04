@@ -343,9 +343,10 @@ Its state, projection, and outbox event commit first, and then IAPStack acknowle
 purchase, which Google requires within three days. The daily refresh is scheduled for the
 new token. Later notifications and redeliveries find the stored token and do not repeat
 the link lookup. A token that replaces nothing, whose linked token is not stored yet, or
-that Android Publisher does not return yet stays retryable. A different or missing account id fails the job without a retry; the
-client can still submit that token for its own customer. Voided-purchase notifications
-for unknown tokens are not bound this way.
+that Android Publisher does not return yet stays retryable. A different or missing
+account id fails the job without a retry; the client can still submit that token for
+its own customer. Voided-purchase notifications for unknown tokens are not bound
+this way.
 When that authoritative state requires purchase acknowledgement, the worker commits
 the normalized state first and then calls Google using the same protected purchase
 token. HTTP `409`, `429`, and `5xx` acknowledgement failures remain retryable.
