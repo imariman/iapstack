@@ -77,6 +77,14 @@ type ReconciliationCommand struct {
 	Signal                   stores.Evidence
 }
 
+// LinkedPurchaseCommand asks the provider which purchase one not yet verified purchase replaces.
+type LinkedPurchaseCommand struct {
+	ProjectID       core.ProjectID
+	ApplicationID   core.ApplicationID
+	ProductKind     core.ProductKind
+	QueryReferences []core.StoreReference
+}
+
 // Result contains the verified time and resulting current entitlement snapshot.
 type Result struct {
 	// Observations are the normalized provider line items stored by this verification.
@@ -316,6 +324,48 @@ func (service *Service) Reconcile(ctx context.Context, command ReconciliationCom
 		return Result{}, fmt.Errorf("complete reconciliation with %s: %w", application.Store.Provider, err)
 	}
 	return result, nil
+}
+
+// LinkedPurchase reads the replacement link of one purchase before any customer is known for it.
+// It stores nothing. The caller binds the purchase through Reconcile once it has resolved the customer
+// from the replaced purchase, so verification, persistence, and acknowledgement keep one path.
+func (service *Service) LinkedPurchase(ctx context.Context, command LinkedPurchaseCommand) (stores.LinkedPurchase, error) {
+	if err := errors.Join(command.ProjectID.Validate(), command.ApplicationID.Validate()); err != nil {
+		return stores.LinkedPurchase{}, validation.Wrap(err)
+	}
+	var application core.Application
+	err := service.store.Transact(ctx, func(repository persistence.Transaction) error {
+		var loadErr error
+		application, loadErr = repository.Application(ctx, command.ProjectID, command.ApplicationID)
+		return loadErr
+	})
+	if err != nil {
+		return stores.LinkedPurchase{}, fmt.Errorf("resolve linked purchase scope: %w", err)
+	}
+	request := stores.LinkedPurchaseRequest{
+		Application:     application,
+		ProductKind:     command.ProductKind,
+		QueryReferences: append([]core.StoreReference(nil), command.QueryReferences...),
+	}
+	if err := request.Validate(); err != nil {
+		return stores.LinkedPurchase{}, validation.Wrap(err)
+	}
+	adapter, err := service.adapters.Adapter(application.Store.Provider)
+	if err != nil {
+		return stores.LinkedPurchase{}, fmt.Errorf("resolve store adapter: %w", err)
+	}
+	resolver, supported := adapter.(stores.LinkedPurchaseResolver)
+	if !supported {
+		return stores.LinkedPurchase{}, fmt.Errorf("%s does not report linked purchases", application.Store.Provider)
+	}
+	linked, err := resolver.LinkedPurchase(ctx, request)
+	if err != nil {
+		return stores.LinkedPurchase{}, fmt.Errorf("read linked purchase with %s: %w", application.Store.Provider, err)
+	}
+	if err := linked.Validate(); err != nil {
+		return stores.LinkedPurchase{}, fmt.Errorf("validate provider linked purchase: %w", err)
+	}
+	return linked, nil
 }
 
 // Validate checks command scope, external customer identity, product claims, bindings, and evidence.

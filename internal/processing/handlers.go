@@ -37,12 +37,21 @@ const (
 	purchaseSubmissionEvidenceKind = "purchase_submission"
 	// reconciliationInterval schedules daily authoritative lifecycle refreshes.
 	reconciliationInterval = 24 * time.Hour
+	// googlePlayAccountBindingKind names the Google Play customer binding that carries the external customer id.
+	googlePlayAccountBindingKind = "obfuscated_external_account_id"
 )
+
+// linkedPurchaseReader reads the replacement link of a purchase that no customer has verified yet.
+type linkedPurchaseReader interface {
+	// LinkedPurchase queries the provider without a customer and stores nothing.
+	LinkedPurchase(context.Context, verification.LinkedPurchaseCommand) (stores.LinkedPurchase, error)
+}
 
 // Service opens protected jobs, runs verification, and schedules the next lifecycle refresh.
 type Service struct {
 	store        persistence.OperationsStore
 	protection   protection.Service
+	replacements linkedPurchaseReader
 	verification *verification.Service
 	clock        func() time.Time
 }
@@ -56,7 +65,10 @@ func New(
 	if store == nil || protectionService == nil || verificationService == nil {
 		return nil, errors.New("processing dependencies are required")
 	}
-	return &Service{store: store, protection: protectionService, verification: verificationService, clock: time.Now}, nil
+	return &Service{
+		store: store, protection: protectionService, verification: verificationService,
+		replacements: verificationService, clock: time.Now,
+	}, nil
 }
 
 // HandleInbox opens one validated provider notification and runs authoritative verification when required.
@@ -331,6 +343,7 @@ func (service *Service) handleGooglePlayInbox(
 }
 
 // googlePlayReconciliationCommand binds an RTDN token to a known purchase and preserves the native signal.
+// A subscription token that no client has verified is bound through the purchase it replaces.
 func (service *Service) googlePlayReconciliationCommand(
 	ctx context.Context,
 	message persistence.QueueMessage,
@@ -344,41 +357,25 @@ func (service *Service) googlePlayReconciliationCommand(
 		notification.Kind == googleplay.NotificationKindPendingRefundReview {
 		return verification.ReconciliationCommand{}, false, nil
 	}
-	token := []byte(notification.PurchaseToken)
-	defer zero(token)
-	protected, err := protection.Protect(ctx, service.protection, protection.Scope{
-		ProjectID: message.ProjectID, ApplicationID: message.ApplicationID,
-		Purpose: providerReferencePurpose + ":" + string(core.ReferenceQuery) + ":purchase_token",
-	}, token)
-	if err != nil {
-		return verification.ReconciliationCommand{}, false, fmt.Errorf(
-			"protect Google Play notification lookup: %w",
-			err,
-		)
-	}
-	defer zero(protected.Ciphertext)
-	var purchase persistence.PurchaseReferenceContext
-	err = service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
-		var lookupErr error
-		purchase, lookupErr = repository.PurchaseContextByReference(ctx, persistence.ProviderReferenceLookup{
-			ProjectID: message.ProjectID, ApplicationID: message.ApplicationID,
-			Role: core.ReferenceQuery, Kind: "purchase_token", Fingerprint: protected.Fingerprint,
-		})
-		return lookupErr
-	})
-	if err != nil {
-		if errors.Is(err, persistence.ErrNotFound) || errors.Is(err, persistence.ErrUnavailable) {
+	var externalCustomerID string
+	var expectedProduct core.ProviderProductID
+	purchase, err := service.googlePlayPurchase(ctx, message, notification.PurchaseToken)
+	switch {
+	case err == nil:
+		if purchase.ProductKind != notification.ProductKind ||
+			(notification.ProviderProductID != "" && notification.ProviderProductID != purchase.ProviderProductID) {
 			return verification.ReconciliationCommand{}, false, stores.NewFailure(
-				core.ProviderGooglePlay, "notification_lookup", stores.FailureTemporary, 0, err,
+				core.ProviderGooglePlay, "notification_lookup", stores.FailureInvalidEvidence, 0, nil,
 			)
 		}
-		return verification.ReconciliationCommand{}, false, err
-	}
-	if purchase.ProductKind != notification.ProductKind ||
-		(notification.ProviderProductID != "" && notification.ProviderProductID != purchase.ProviderProductID) {
-		return verification.ReconciliationCommand{}, false, stores.NewFailure(
-			core.ProviderGooglePlay, "notification_lookup", stores.FailureInvalidEvidence, 0, nil,
-		)
+		externalCustomerID, expectedProduct = purchase.Customer.ExternalID, purchase.ProviderProductID
+	case errors.Is(err, persistence.ErrNotFound) && notification.Kind == googleplay.NotificationKindSubscription:
+		externalCustomerID, expectedProduct, err = service.googlePlayReplacement(ctx, message, notification)
+		if err != nil {
+			return verification.ReconciliationCommand{}, false, err
+		}
+	default:
+		return verification.ReconciliationCommand{}, false, googlePlayLookupFailure(err)
 	}
 	queryReference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", notification.PurchaseToken)
 	if err != nil {
@@ -386,8 +383,8 @@ func (service *Service) googlePlayReconciliationCommand(
 	}
 	customerBinding, err := core.NewStoreReference(
 		core.ReferenceCustomerBinding,
-		"obfuscated_external_account_id",
-		purchase.Customer.ExternalID,
+		googlePlayAccountBindingKind,
+		externalCustomerID,
 	)
 	if err != nil {
 		return verification.ReconciliationCommand{}, false, err
@@ -399,13 +396,156 @@ func (service *Service) googlePlayReconciliationCommand(
 	return verification.ReconciliationCommand{
 		ProjectID:                message.ProjectID,
 		ApplicationID:            message.ApplicationID,
-		ExternalCustomerID:       purchase.Customer.ExternalID,
-		ExpectedProducts:         []core.ProviderProductID{purchase.ProviderProductID},
-		ExpectedProductKind:      purchase.ProductKind,
+		ExternalCustomerID:       externalCustomerID,
+		ExpectedProducts:         []core.ProviderProductID{expectedProduct},
+		ExpectedProductKind:      notification.ProductKind,
 		ExpectedCustomerBindings: []core.StoreReference{customerBinding},
 		QueryReferences:          []core.StoreReference{queryReference},
 		Signal:                   signal,
 	}, true, nil
+}
+
+// googlePlayReplacement binds a subscription token that no client has verified to the purchase it replaces.
+// Google issues a new purchase token for an upgrade, a downgrade, a deferred replacement, or a resubscribe before
+// expiry, and names the old token in linkedPurchaseToken. The provider is queried before any customer is known.
+// The old token must already be stored, and the new purchase's obfuscated account id must name the old token's
+// customer or the same canonical customer. The caller then reconciles the new token for that account, which
+// stores the purchase and acknowledges it after the commit, as Google requires within three days.
+// It returns the external customer id and the product that grants access now.
+func (service *Service) googlePlayReplacement(
+	ctx context.Context,
+	message persistence.QueueMessage,
+	notification googleplay.NotificationEnvelope,
+) (string, core.ProviderProductID, error) {
+	if service.replacements == nil {
+		return "", "", errors.New("google play linked purchase reader is not configured")
+	}
+	queryReference, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", notification.PurchaseToken)
+	if err != nil {
+		return "", "", err
+	}
+	linked, err := service.replacements.LinkedPurchase(ctx, verification.LinkedPurchaseCommand{
+		ProjectID: message.ProjectID, ApplicationID: message.ApplicationID,
+		ProductKind: core.ProductKindSubscription, QueryReferences: []core.StoreReference{queryReference},
+	})
+	var failure *stores.Failure
+	if errors.As(err, &failure) && failure.Kind == stores.FailureNotFound {
+		// The signed RTDN announced this token, so a missing purchase is retried like an unknown token.
+		return "", "", stores.NewFailure(core.ProviderGooglePlay, "notification_lookup", stores.FailureTemporary, 0, err)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	linkedToken := ""
+	for _, reference := range linked.LinkedReferences {
+		if reference.Kind == "purchase_token" {
+			linkedToken = reference.Value()
+			break
+		}
+	}
+	if linkedToken == "" {
+		// A purchase that replaces nothing is bound by its client verification, which may still race the RTDN.
+		return "", "", googlePlayLookupFailure(persistence.ErrNotFound)
+	}
+	replaced, err := service.googlePlayPurchase(ctx, message, linkedToken)
+	if err != nil {
+		return "", "", googlePlayLookupFailure(err)
+	}
+	if replaced.ProductKind != core.ProductKindSubscription {
+		return "", "", stores.NewFailure(
+			core.ProviderGooglePlay, "notification_lookup", stores.FailureInvalidEvidence, 0, nil,
+		)
+	}
+	accountID := ""
+	for _, binding := range linked.CustomerBindings {
+		if binding.Kind == googlePlayAccountBindingKind {
+			accountID = binding.Value()
+			break
+		}
+	}
+	if accountID == "" {
+		return "", "", stores.NewFailure(
+			core.ProviderGooglePlay, "notification_lookup", stores.FailureInvalidEvidence, 0, nil,
+		)
+	}
+	if accountID != replaced.Customer.ExternalID {
+		same, err := service.sameCanonicalCustomer(ctx, message.ProjectID, accountID, replaced.Customer.ExternalID)
+		if err != nil {
+			return "", "", err
+		}
+		if !same {
+			return "", "", stores.NewFailure(
+				core.ProviderGooglePlay, "notification_lookup", stores.FailureInvalidEvidence, 0, nil,
+			)
+		}
+	}
+	return accountID, linked.ProductID, nil
+}
+
+// googlePlayPurchase fingerprints one purchase token in its query scope and loads the purchase stored for it.
+func (service *Service) googlePlayPurchase(
+	ctx context.Context,
+	message persistence.QueueMessage,
+	purchaseToken string,
+) (persistence.PurchaseReferenceContext, error) {
+	token := []byte(purchaseToken)
+	defer zero(token)
+	protected, err := protection.Protect(ctx, service.protection, protection.Scope{
+		ProjectID: message.ProjectID, ApplicationID: message.ApplicationID,
+		Purpose: providerReferencePurpose + ":" + string(core.ReferenceQuery) + ":purchase_token",
+	}, token)
+	if err != nil {
+		return persistence.PurchaseReferenceContext{}, fmt.Errorf("protect Google Play notification lookup: %w", err)
+	}
+	defer zero(protected.Ciphertext)
+	var purchase persistence.PurchaseReferenceContext
+	err = service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var lookupErr error
+		purchase, lookupErr = repository.PurchaseContextByReference(ctx, persistence.ProviderReferenceLookup{
+			ProjectID: message.ProjectID, ApplicationID: message.ApplicationID,
+			Role: core.ReferenceQuery, Kind: "purchase_token", Fingerprint: protected.Fingerprint,
+		})
+		return lookupErr
+	})
+	return purchase, err
+}
+
+// sameCanonicalCustomer reports whether two external customer ids resolve to one canonical project customer.
+// An unknown id is not the same customer. A storage outage stays retryable.
+func (service *Service) sameCanonicalCustomer(
+	ctx context.Context,
+	projectID core.ProjectID,
+	left string,
+	right string,
+) (bool, error) {
+	same := false
+	err := service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		leftCustomer, err := repository.CustomerByExternalID(ctx, projectID, left)
+		if err != nil {
+			return err
+		}
+		rightCustomer, err := repository.CustomerByExternalID(ctx, projectID, right)
+		if err != nil {
+			return err
+		}
+		same = leftCustomer.ID == rightCustomer.ID
+		return nil
+	})
+	if errors.Is(err, persistence.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, googlePlayLookupFailure(err)
+	}
+	return same, nil
+}
+
+// googlePlayLookupFailure keeps unknown purchases and storage outages retryable and returns other errors as they are.
+func googlePlayLookupFailure(err error) error {
+	if errors.Is(err, persistence.ErrNotFound) || errors.Is(err, persistence.ErrUnavailable) {
+		return stores.NewFailure(core.ProviderGooglePlay, "notification_lookup", stores.FailureTemporary, 0, err)
+	}
+	return err
 }
 
 // HandleReconciliation opens one scheduled request, re-queries its provider, and schedules its next generation.
