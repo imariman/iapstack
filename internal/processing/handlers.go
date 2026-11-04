@@ -437,13 +437,7 @@ func (service *Service) googlePlayReplacement(
 	if err != nil {
 		return "", "", err
 	}
-	linkedToken := ""
-	for _, reference := range linked.LinkedReferences {
-		if reference.Kind == "purchase_token" {
-			linkedToken = reference.Value()
-			break
-		}
-	}
+	linkedToken := core.FirstReferenceValue(linked.LinkedReferences, "purchase_token")
 	if linkedToken == "" {
 		// A purchase that replaces nothing is bound by its client verification, which may still race the RTDN.
 		return "", "", googlePlayLookupFailure(persistence.ErrNotFound)
@@ -457,13 +451,7 @@ func (service *Service) googlePlayReplacement(
 			core.ProviderGooglePlay, "notification_lookup", stores.FailureInvalidEvidence, 0, nil,
 		)
 	}
-	accountID := ""
-	for _, binding := range linked.CustomerBindings {
-		if binding.Kind == googlePlayAccountBindingKind {
-			accountID = binding.Value()
-			break
-		}
-	}
+	accountID := core.FirstReferenceValue(linked.CustomerBindings, googlePlayAccountBindingKind)
 	if accountID == "" {
 		return "", "", stores.NewFailure(
 			core.ProviderGooglePlay, "notification_lookup", stores.FailureInvalidEvidence, 0, nil,

@@ -233,6 +233,29 @@ func TestStoreReferenceIsRedacted(t *testing.T) {
 	}
 }
 
+// TestFirstReferenceValueSelectsByKind verifies the first matching kind wins and a missing kind is empty.
+func TestFirstReferenceValueSelectsByKind(t *testing.T) {
+	t.Parallel()
+
+	references := []core.StoreReference{
+		storeReference(t, core.ReferenceCustomerBinding, "obfuscated_external_account_id", "account-1"),
+		storeReference(t, core.ReferenceQuery, "purchase_token", "first-token"),
+		storeReference(t, core.ReferenceQuery, "purchase_token", "second-token"),
+	}
+	if got := core.FirstReferenceValue(references, "purchase_token"); got != "first-token" {
+		t.Fatalf("FirstReferenceValue(purchase_token) = %q, want first-token", got)
+	}
+	if got := core.FirstReferenceValue(references, "obfuscated_external_account_id"); got != "account-1" {
+		t.Fatalf("FirstReferenceValue(account) = %q, want account-1", got)
+	}
+	if got := core.FirstReferenceValue(references, "order_id"); got != "" {
+		t.Fatalf("FirstReferenceValue(order_id) = %q, want empty", got)
+	}
+	if got := core.FirstReferenceValue(nil, "purchase_token"); got != "" {
+		t.Fatalf("FirstReferenceValue(nil) = %q, want empty", got)
+	}
+}
+
 // subscriptionObservation builds a valid subscription observation for scenario tests.
 func subscriptionObservation(
 	t *testing.T,

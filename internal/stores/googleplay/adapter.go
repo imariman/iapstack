@@ -283,7 +283,7 @@ func (adapter *Adapter) Reconcile(
 	if len(request.ExpectedProducts) != 1 {
 		return stores.VerificationResult{}, invalid("reconcile", errors.New("google play reconciliation requires one expected product"))
 	}
-	purchaseToken := queryPurchaseToken(request.QueryReferences)
+	purchaseToken := core.FirstReferenceValue(request.QueryReferences, "purchase_token")
 	if purchaseToken == "" {
 		return stores.VerificationResult{}, invalid("reconcile", errors.New("google play reconciliation requires a purchase token"))
 	}
@@ -319,7 +319,7 @@ func (adapter *Adapter) LinkedPurchase(
 	if request.Application.Store.Provider != adapter.Provider() || request.ProductKind != core.ProductKindSubscription {
 		return stores.LinkedPurchase{}, invalid("linked_purchase", errors.New("google play linked purchases are subscriptions"))
 	}
-	purchaseToken := queryPurchaseToken(request.QueryReferences)
+	purchaseToken := core.FirstReferenceValue(request.QueryReferences, "purchase_token")
 	if purchaseToken == "" {
 		return stores.LinkedPurchase{}, invalid("linked_purchase", errors.New("google play linked purchase requires a purchase token"))
 	}
@@ -894,16 +894,6 @@ func (result queryResult) verificationResult(
 		verificationResult.NamedProducts = append([]core.ProviderProductID(nil), result.products...)
 	}
 	return verificationResult
-}
-
-// queryPurchaseToken returns the first purchase token among query references.
-func queryPurchaseToken(references []core.StoreReference) string {
-	for _, reference := range references {
-		if reference.Kind == "purchase_token" {
-			return reference.Value()
-		}
-	}
-	return ""
 }
 
 // googleReferences creates protected transaction, lineage, query, and customer references.
