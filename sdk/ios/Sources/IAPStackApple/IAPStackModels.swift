@@ -297,8 +297,7 @@ private func requiredInt(_ dictionary: [String: Any], key: String) throws -> Int
 
 private func requiredDate(_ dictionary: [String: Any], key: String) throws -> Date {
   let timestamp = try requiredString(dictionary, key: key)
-  let parsed = IAPStackDateFormatter.shared.date(from: timestamp)
-  guard let value = parsed else {
+  guard let value = parseServerTimestamp(timestamp) else {
     throw IAPStackSDKError.protocolError(message: "\(key) must be an ISO-8601 timestamp")
   }
   return value
@@ -311,7 +310,7 @@ private func optionalDate(_ dictionary: [String: Any], key: String) throws -> Da
   guard let timestamp = raw as? String, !timestamp.isEmpty else {
     throw IAPStackSDKError.protocolError(message: "\(key) must be an ISO-8601 timestamp")
   }
-  guard let value = IAPStackDateFormatter.shared.date(from: timestamp) else {
+  guard let value = parseServerTimestamp(timestamp) else {
     throw IAPStackSDKError.protocolError(message: "\(key) must be an ISO-8601 timestamp")
   }
   return value
@@ -327,8 +326,54 @@ private func requiredObjectList(_ dictionary: [String: Any], key: String) throws
   return list
 }
 
+/// Parses one RFC 3339 timestamp, such as `2026-11-01T21:52:49.28412077Z`.
+///
+/// Go's `encoding/json` writes `time.Time` with zero to nine fraction digits.
+/// `ISO8601DateFormatter` keeps at most milliseconds of a fraction and is not
+/// documented to accept nine digits on older OS releases, so the fraction is
+/// read here and the rest goes through a whole-second formatter. RFC 3339
+/// allows no whitespace, and the formatter would accept leading or trailing
+/// whitespace only on some shapes, so any whitespace is rejected.
+func parseServerTimestamp(_ value: String) -> Date? {
+  guard !value.contains(where: \.isWhitespace) else { return nil }
+  let formatter = IAPStackDateFormatter.wholeSeconds
+  // A fraction can only follow the seconds of `yyyy-MM-ddTHH:mm:ss`.
+  guard let dot = value.index(value.startIndex, offsetBy: 19, limitedBy: value.endIndex),
+    dot < value.endIndex, value[dot] == "."
+  else {
+    return formatter.date(from: value)
+  }
+  let digits = value[value.index(after: dot)...].prefix { $0.isASCII && $0.isNumber }
+  guard !digits.isEmpty, let fraction = TimeInterval("0.\(digits)"),
+    let wholeSeconds = formatter.date(from: String(value[..<dot]) + value[digits.endIndex...])
+  else {
+    return nil
+  }
+  return wholeSeconds.addingTimeInterval(fraction)
+}
+
+/// Formats a date with the millisecond precision a JavaScript `Date` keeps.
+///
+/// `rounding` picks the direction of the cut, so a caller can keep an access
+/// end from moving later (`.down`) or a start from moving earlier (`.up`). The
+/// formatter alone rounds to the nearest millisecond, which can do either.
+func millisecondTimestamp(_ date: Date, rounding rule: FloatingPointRoundingRule) -> String {
+  // A `Date` near today holds about a quarter microsecond, so rounding to whole
+  // microseconds first keeps an exact millisecond value from shifting by one.
+  let microseconds = (date.timeIntervalSince1970 * 1_000_000).rounded()
+  let milliseconds = (microseconds / 1000).rounded(rule)
+  return IAPStackDateFormatter.milliseconds.string(from: Date(timeIntervalSince1970: milliseconds / 1000))
+}
+
+/// Shared formatters. Their options never change after initialization, and
+/// Foundation date formatters are thread-safe, so concurrent decodes can share them.
 private enum IAPStackDateFormatter {
-  static let shared = ISO8601DateFormatter()
+  static let wholeSeconds = ISO8601DateFormatter()
+  static let milliseconds: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+  }()
 }
 
 /// Requires one non-empty customer identity without surrounding whitespace; a

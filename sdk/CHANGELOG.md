@@ -82,6 +82,18 @@
 - Flutter: `RestoreSkipCounts.unsigned`, included in `total`. Flutter Apple
   counts restore rows with no JWS there. Swift and Kotlin have no such count.
 
+### Fixed
+
+- Swift and React Native iOS: Apple verify and restore no longer send a
+  `storefront` customer binding. The API rejected it with 400
+  `invalid_request`, so the StoreKit transaction was never finished.
+- Swift and React Native iOS: `verified_at`, `effective_starts_at`, and
+  `effective_ends_at` with a fractional second (`2026-11-01T21:52:49.28412077Z`)
+  decode instead of throwing `protocolError`. The fraction is kept below a
+  millisecond. React Native receives these dates cut to milliseconds, with
+  `effective_ends_at` rounded down and `effective_starts_at` rounded up. A
+  timestamp with surrounding whitespace is now rejected.
+
 ## 0.1.0-sdk.2
 
 Released with #223 and #226. These notes stay with that version.

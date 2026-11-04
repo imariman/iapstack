@@ -160,6 +160,9 @@ public struct ApplePurchaseEvidence: Sendable {
   }
 
   /// Converts to a provider-neutral submission for one product.
+  ///
+  /// Sends no `customer_bindings`. The API derives the Apple `app_account_token`
+  /// binding from `externalCustomerId` and rejects any other binding kind.
   public func toSubmission(
     externalCustomerId: String,
     productId: String,
@@ -168,12 +171,6 @@ public struct ApplePurchaseEvidence: Sendable {
       externalCustomerId: externalCustomerId,
       claimedProducts: [productId],
       evidence: toDictionary(),
-      customerBindings: [
-        CustomerBinding(
-          kind: "storefront",
-          value: "apple",
-        ),
-      ],
     )
   }
 }
