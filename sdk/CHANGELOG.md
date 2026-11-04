@@ -65,7 +65,9 @@
   submitted only unfinished rows and dropped the rest without counting them.
   Restore now takes the JWS from `currentEntitlements()`. Finished rows that
   still have no JWS, such as earlier renewals, are counted on
-  `skipped.unsigned`. Swift still submits them.
+  `skipped.unsigned`. Swift still submits them. A current entitlement that
+  StoreKit cannot verify is skipped, as in Swift. Before, it failed the whole
+  restore with `apple_restore_failed`.
 
 ### Added
 

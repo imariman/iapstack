@@ -171,6 +171,131 @@ void main() {
     expect(cubit.state.requestId, 'apple-restore-test');
   });
 
+  test(
+    'restore idempotency counts rows the first restore finished as unsigned',
+    () async {
+      const entitlement = ApplePurchase(
+        transactionId: '100',
+        productId: 'premium_monthly',
+        signedTransaction: 'header.payload.signature',
+        appAccountToken: _customerId,
+        status: ApplePurchaseStatus.restored,
+        pendingCompletion: false,
+      );
+      // An earlier renewal StoreKit still holds open. The first restore signs
+      // it from the unfinished read and finishes it, so the second restore
+      // reads it back from history without a JWS.
+      const openRenewal = ApplePurchase(
+        transactionId: '90',
+        productId: 'premium_monthly',
+        signedTransaction: 'header.payload.signature',
+        appAccountToken: _customerId,
+        status: ApplePurchaseStatus.restored,
+        pendingCompletion: true,
+      );
+      const finishedRenewal = ApplePurchase(
+        transactionId: '90',
+        productId: 'premium_monthly',
+        signedTransaction: '',
+        appAccountToken: _customerId,
+        status: ApplePurchaseStatus.restored,
+        pendingCompletion: false,
+      );
+      final platform = _FakePlatform(
+        restoreRounds: <List<ApplePurchase>>[
+          <ApplePurchase>[openRenewal, entitlement],
+          <ApplePurchase>[finishedRenewal, entitlement],
+        ],
+      );
+      final cubit = _cubit(
+        backend: _backend((request) async {
+          if (request.url.path.endsWith('purchases:restore')) {
+            final body = (jsonDecode(request.body) as Map)
+                .cast<String, Object?>();
+            final purchases = body['purchases']! as List<Object?>;
+            return http.Response(
+              jsonEncode(<String, Object?>{
+                'results': List<Object?>.filled(
+                  purchases.length,
+                  _verificationJson,
+                ),
+              }),
+              200,
+            );
+          }
+          return http.Response(jsonEncode(_snapshotJson), 200);
+        }),
+        platform: platform,
+      );
+      addTearDown(cubit.close);
+      await cubit.initialize();
+
+      await cubit.restoreTwice();
+
+      expect(cubit.state.status, ExampleStatus.ready);
+      expect(cubit.state.message, startsWith('PASS'));
+      expect(
+        platform.completedPurchases.map((purchase) => purchase.transactionId),
+        <String>['90'],
+      );
+    },
+  );
+
+  test(
+    'restore idempotency fails when the second restore loses a row',
+    () async {
+      const entitlement = ApplePurchase(
+        transactionId: '100',
+        productId: 'premium_monthly',
+        signedTransaction: 'header.payload.signature',
+        appAccountToken: _customerId,
+        status: ApplePurchaseStatus.restored,
+        pendingCompletion: false,
+      );
+      const lifetime = ApplePurchase(
+        transactionId: '200',
+        productId: 'premium_monthly',
+        signedTransaction: 'header.payload.signature',
+        appAccountToken: _customerId,
+        status: ApplePurchaseStatus.restored,
+        pendingCompletion: false,
+      );
+      final platform = _FakePlatform(
+        restoreRounds: <List<ApplePurchase>>[
+          <ApplePurchase>[entitlement, lifetime],
+          <ApplePurchase>[entitlement],
+        ],
+      );
+      final cubit = _cubit(
+        backend: _backend((request) async {
+          if (request.url.path.endsWith('purchases:restore')) {
+            final body = (jsonDecode(request.body) as Map)
+                .cast<String, Object?>();
+            final purchases = body['purchases']! as List<Object?>;
+            return http.Response(
+              jsonEncode(<String, Object?>{
+                'results': List<Object?>.filled(
+                  purchases.length,
+                  _verificationJson,
+                ),
+              }),
+              200,
+            );
+          }
+          return http.Response(jsonEncode(_snapshotJson), 200);
+        }),
+        platform: platform,
+      );
+      addTearDown(cubit.close);
+      await cubit.initialize();
+
+      await cubit.restoreTwice();
+
+      expect(cubit.state.status, ExampleStatus.failure);
+      expect(cubit.state.message, contains('Restore idempotency failed'));
+    },
+  );
+
   test('surfaces redacted checkout and refresh failures', () async {
     final platform = _FakePlatform(
       query: AppleProductQuery(
@@ -292,9 +417,11 @@ final class _FakePlatform implements AppleIapPlatform {
     AppleProductQuery? query,
     Stream<ApplePurchase>? updates,
     List<ApplePurchase> restored = const <ApplePurchase>[],
+    List<List<ApplePurchase>> restoreRounds = const <List<ApplePurchase>>[],
     this.available = true,
     this.launchError,
-  }) : query =
+  }) : restoreRounds = List<List<ApplePurchase>>.of(restoreRounds),
+       query =
            query ??
            AppleProductQuery(
              products: const <AppleProduct>[],
@@ -306,6 +433,8 @@ final class _FakePlatform implements AppleIapPlatform {
   final AppleProductQuery query;
   final Stream<ApplePurchase> updates;
   final List<ApplePurchase> restored;
+  // Each restore returns the next round; later restores return [restored].
+  final List<List<ApplePurchase>> restoreRounds;
   final bool available;
   final AppleIapStackException? launchError;
   final List<ApplePurchase> completedPurchases = <ApplePurchase>[];
@@ -339,7 +468,8 @@ final class _FakePlatform implements AppleIapPlatform {
   }
 
   @override
-  Future<List<ApplePurchase>> restorePurchases() async => restored;
+  Future<List<ApplePurchase>> restorePurchases() async =>
+      restoreRounds.isEmpty ? restored : restoreRounds.removeAt(0);
 
   @override
   Future<void> completePurchase(ApplePurchase purchase) async {

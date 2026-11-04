@@ -64,7 +64,8 @@ the JWS from the current entitlements and unfinished reads, so every current
 entitlement carries one. Other finished rows, such as earlier subscription
 renewals and expired purchases, have no JWS. They are counted on
 `RestoreResult.skipped.unsigned` and are not submitted. The Swift SDK submits
-them.
+them. A current entitlement that StoreKit cannot verify is left out and does
+not fail the restore, as in the Swift SDK.
 
 Rows that StoreKit has not finished yet are finished after IAPStack accepts the
 batch that carried them. Rows in a failed batch, and in the batches after it,

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -506,6 +507,68 @@ void main() {
   );
 
   test(
+    'restore keeps verified entitlements when the plugin rejects an unverified one',
+    () async {
+      // The plugin's restore re-emits the verified entitlements, then fails
+      // because another entitlement is unverified. The reads skip that row.
+      storeKit
+        ..errors['restorePurchases'] = PlatformException(
+          code: 'storekit2_restore_failed',
+          message: 'This purchase could not be restored.',
+        )
+        ..entitlements = <SK2TransactionMessage>[
+          _transactionMessage(id: 100, receiptData: 'entitlement.jws.100'),
+        ]
+        ..history = <SK2TransactionMessage>[_transactionMessage(id: 100)];
+
+      final restored = await bridge.restorePurchases();
+
+      expect(storeKit.calls, <String>[
+        'restorePurchases',
+        'unfinishedTransactions',
+        'currentEntitlements',
+        'transactions',
+      ]);
+      expect(restored.single.transactionId, '100');
+      expect(restored.single.signedTransaction, 'entitlement.jws.100');
+      expect(restored.single.canVerify, isTrue);
+    },
+  );
+
+  test(
+    'restore fails with a redacted error when a StoreKit call fails',
+    () async {
+      for (final method in <String>[
+        'restorePurchases',
+        'unfinishedTransactions',
+        'currentEntitlements',
+        'transactions',
+      ]) {
+        storeKit.errors
+          ..clear()
+          ..[method] = PlatformException(
+            code: 'storekit_error',
+            message: 'secret native detail',
+          );
+
+        await expectLater(
+          bridge.restorePurchases(),
+          throwsA(
+            isA<AppleIapStackException>()
+                .having((error) => error.code, 'code', 'apple_restore_failed')
+                .having(
+                  (error) => error.message,
+                  'message',
+                  isNot(contains('secret')),
+                ),
+          ),
+          reason: method,
+        );
+      }
+    },
+  );
+
+  test(
     'finishes by StoreKit id when another bridge cached the update',
     () async {
       final otherBridge = ApplePluginPlatform();
@@ -786,6 +849,8 @@ final class _FakeStoreKit2 {
   List<SK2TransactionMessage> unfinished = <SK2TransactionMessage>[];
   List<SK2TransactionMessage> entitlements = <SK2TransactionMessage>[];
   List<SK2TransactionMessage> history = <SK2TransactionMessage>[];
+  // A method listed here answers with this error instead of a result.
+  final Map<String, PlatformException> errors = <String, PlatformException>{};
   final List<String> calls = <String>[];
   final List<int> finished = <int>[];
 
@@ -794,6 +859,10 @@ final class _FakeStoreKit2 {
     for (final method in _methods) {
       _messenger.setMockMessageHandler('$_prefix.$method', (message) async {
         calls.add(method);
+        final error = errors[method];
+        if (error != null) {
+          return codec.encodeMessage(wrapResponse(error: error));
+        }
         Object? result;
         switch (method) {
           case 'unfinishedTransactions':

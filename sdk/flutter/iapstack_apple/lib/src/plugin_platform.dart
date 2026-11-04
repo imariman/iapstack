@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:iapstack_apple/src/errors.dart';
 import 'package:iapstack_apple/src/platform.dart';
 import 'package:iapstack_apple/src/product_kind.dart';
@@ -113,7 +114,16 @@ final class ApplePluginPlatform implements AppleIapPlatform {
     callback: () async {
       // The plugin's restore re-emits current entitlements on the purchase
       // stream. It does not call `AppStore.sync()`.
-      await SK2Transaction.restorePurchases();
+      try {
+        await SK2Transaction.restorePurchases();
+      } on PlatformException catch (error) {
+        // The plugin emits the verified entitlements first, then fails when
+        // any entitlement is unverified. The reads below skip unverified rows,
+        // as Swift's restore does, so the verified ones are still restored.
+        if (error.code != _unverifiedRestoreCode) {
+          rethrow;
+        }
+      }
       // `transactions()` is the full history, finished or not, but the plugin
       // returns it without a JWS. Unfinished rows and current entitlements
       // carry one, so history rows take it from those reads. Only rows still
@@ -126,20 +136,18 @@ final class ApplePluginPlatform implements AppleIapPlatform {
       ).wait;
       final unfinished = _byId(unfinishedRows);
       final entitlements = _byId(entitlementRows);
-      final seen = <String>{};
       // A row missing from the history read is still restored.
       return <ApplePurchase>[
-        for (final transaction in <SK2Transaction>[
+        for (final transaction in _byId(<SK2Transaction>[
           ...history,
-          ...unfinished.values,
-          ...entitlements.values,
-        ])
-          if (seen.add(transaction.id))
-            _restoredPurchase(
-              transaction,
-              unfinished: unfinished[transaction.id],
-              entitlement: entitlements[transaction.id],
-            ),
+          ...unfinishedRows,
+          ...entitlementRows,
+        ]).values)
+          _restoredPurchase(
+            transaction,
+            unfinished: unfinished[transaction.id],
+            entitlement: entitlements[transaction.id],
+          ),
       ];
     },
   );
@@ -235,6 +243,9 @@ AppleProduct _appleProduct(AppStoreProduct2Details details) {
     currencyCode: details.currencyCode,
   );
 }
+
+/// The plugin's restore error when a current entitlement fails verification.
+const String _unverifiedRestoreCode = 'storekit2_restore_failed';
 
 /// _byId keys StoreKit 2 rows by transaction ID. The first row for an ID wins.
 Map<String, SK2Transaction> _byId(List<SK2Transaction> transactions) {

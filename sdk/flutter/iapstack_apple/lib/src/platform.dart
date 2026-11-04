@@ -135,8 +135,9 @@ abstract interface class AppleIapPlatform {
   /// Returns the StoreKit transaction history to restore.
   ///
   /// Rows that StoreKit has not finished yet have `pendingCompletion == true`.
-  /// A row with no JWS has `canVerify == false`. Restore counts it on
-  /// `RestoreSkipCounts.unsigned` and does not submit it.
+  /// A row with no JWS has `canVerify == false` and is not submitted. Restore
+  /// counts it on `RestoreSkipCounts.unsigned` unless another skip reason,
+  /// such as a different customer, applies first.
   Future<List<ApplePurchase>> restorePurchases();
 
   /// Finishes one StoreKit transaction after authoritative server verification.
