@@ -37,20 +37,22 @@ func TestAdapterReadsLinkedPurchaseWithoutCustomer(t *testing.T) {
 		payload     map[string]any
 		wantProduct core.ProviderProductID
 		wantLinked  string
+		wantNamed   int
 	}{
 		{
 			name:    "pending deferred replacement",
 			payload: pendingDeferredReplacement(now, now.Add(10*24*time.Hour)), wantProduct: fixtureProductID,
-			wantLinked: "previous-purchase-token",
+			wantLinked: "previous-purchase-token", wantNamed: 2,
 		},
 		{
 			name:    "completed deferred replacement",
 			payload: completedDeferredReplacement(now, now.Add(30*24*time.Hour)), wantProduct: fixtureReplacementProductID,
-			wantLinked: "previous-purchase-token",
+			wantLinked: "previous-purchase-token", wantNamed: 2,
 		},
 		{
 			name:    "immediate replacement",
 			payload: immediate, wantProduct: fixtureReplacementProductID, wantLinked: "previous-purchase-token",
+			wantNamed: 2,
 		},
 		{name: "purchase that replaces nothing", payload: unlinked, wantProduct: fixtureReplacementProductID},
 	} {
@@ -84,6 +86,26 @@ func TestAdapterReadsLinkedPurchaseWithoutCustomer(t *testing.T) {
 			}
 			if len(paths.paths) != 1 || !strings.Contains(paths.paths[0], "/purchases/subscriptionsv2/tokens/") {
 				t.Fatalf("publisher paths = %v, want one subscriptionsv2 query", paths.paths)
+			}
+
+			// The worker reconciles the new token with the returned product and binding. That request goes
+			// through ProductsForClaim, so a purchase that names several products must accept the product.
+			verification := verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription)
+			result, err := fixture.adapter.Reconcile(context.Background(), stores.ReconciliationRequest{
+				Application: verification.Application, CustomerID: verification.CustomerID,
+				ExpectedProducts:         []core.ProviderProductID{linked.ProductID},
+				ExpectedProductKind:      core.ProductKindSubscription,
+				ExpectedCustomerBindings: linked.CustomerBindings,
+				QueryReferences:          linkedPurchaseRequest(t, core.EnvironmentProduction, core.ProductKindSubscription).QueryReferences,
+			})
+			if err != nil {
+				t.Fatalf("Reconcile(linked product %q) error = %v", linked.ProductID, err)
+			}
+			if result.Observations[0].ProductID != linked.ProductID || result.Observations[0].Access != core.AccessAllowed {
+				t.Fatalf("Reconcile(linked product %q) current observation = %#v", linked.ProductID, result.Observations[0])
+			}
+			if test.wantNamed != len(result.NamedProducts) {
+				t.Fatalf("Reconcile(linked product %q) named products = %v, want %d", linked.ProductID, result.NamedProducts, test.wantNamed)
 			}
 		})
 	}

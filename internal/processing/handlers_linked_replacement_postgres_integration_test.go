@@ -252,6 +252,8 @@ func newLinkedReplacementAdapter(
 		Kind: "acknowledge_purchase", ProductID: linkedReplacementNewProduct, ProductKind: core.ProductKindSubscription,
 		QueryReferences: replacement.Observations[0].ReferencesFor(core.ReferenceQuery),
 	}}
+	// An immediate replacement names the replaced product in itemReplacement, as the Google Play adapter reports.
+	replacement.NamedProducts = []core.ProviderProductID{linkedReplacementNewProduct, linkedReplacementOldProduct}
 	return &linkedReplacementAdapter{
 		verification: active,
 		reconciliations: map[string]stores.VerificationResult{
