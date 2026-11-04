@@ -255,16 +255,16 @@ private func rejectError(_ reject: RCTPromiseRejectBlock, _ error: Error) {
   reject(event["code"] as? String, event["message"] as? String,
     NSError(domain: "IAPStack", code: 1, userInfo: info))
 }
-private func timestamp(_ date: Date?) -> Any {
+private func timestamp(_ date: Date?, rounding: FloatingPointRoundingRule = .down) -> Any {
   guard let date else { return NSNull() }
-  // Keep sub-second precision so access windows never open early in JS.
-  let formatter = ISO8601DateFormatter()
-  formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-  return formatter.string(from: date)
+  // JS keeps milliseconds. Cut toward the safe side so an access window never
+  // opens earlier or ends later in JS than on the server.
+  return millisecondTimestamp(date, rounding: rounding)
 }
 private func entitlement(_ value: Entitlement) -> [String: Any] {
   ["key": value.key, "access": value.access, "reason": value.reason, "version": value.version,
-   "effective_starts_at": timestamp(value.effectiveStartsAt), "effective_ends_at": timestamp(value.effectiveEndsAt)]
+   "effective_starts_at": timestamp(value.effectiveStartsAt, rounding: .up),
+   "effective_ends_at": timestamp(value.effectiveEndsAt, rounding: .down)]
 }
 private func verification(_ result: VerificationResult) -> [String: Any] {
   ["verified_at": timestamp(result.verifiedAt), "customer_id": result.customerId,

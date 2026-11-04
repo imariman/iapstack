@@ -53,6 +53,35 @@ final class ServerTimestampTests: XCTestCase {
     }
   }
 
+  /// `ISO8601DateFormatter` accepts `" 2026-11-01T21:52:49Z"` but not the same
+  /// value with a fraction, so whitespace is rejected for every shape.
+  func testRejectsWhitespaceForWholeAndFractionalSeconds() {
+    for value in [
+      " 2026-11-01T21:52:49Z",
+      " 2026-11-01T21:52:49.123Z",
+      "\t2026-11-01T21:52:49Z",
+      "2026-11-01T21:52:49Z ",
+      "2026-11-01T21:52:49.123Z\n",
+    ] {
+      XCTAssertNil(parseServerTimestamp(value), value)
+    }
+  }
+
+  func testMillisecondTimestampCutsInTheRequestedDirection() throws {
+    let cases: [(String, String, String)] = [
+      ("2026-11-01T21:52:49Z", "2026-11-01T21:52:49.000Z", "2026-11-01T21:52:49.000Z"),
+      ("2026-11-01T21:52:49.284Z", "2026-11-01T21:52:49.284Z", "2026-11-01T21:52:49.284Z"),
+      ("2026-11-01T21:52:49.28412077Z", "2026-11-01T21:52:49.284Z", "2026-11-01T21:52:49.285Z"),
+      ("2026-11-01T21:52:49.0005Z", "2026-11-01T21:52:49.000Z", "2026-11-01T21:52:49.001Z"),
+      ("2026-11-01T21:52:49.9996Z", "2026-11-01T21:52:49.999Z", "2026-11-01T21:52:50.000Z"),
+    ]
+    for (value, down, up) in cases {
+      let date = try XCTUnwrap(parseServerTimestamp(value), value)
+      XCTAssertEqual(millisecondTimestamp(date, rounding: .down), down, value)
+      XCTAssertEqual(millisecondTimestamp(date, rounding: .up), up, value)
+    }
+  }
+
   func testDecodesServerShapedEntitlementVerifyAndRestoreResponses() throws {
     for (value, fraction) in serverShaped {
       let entitlement = """
