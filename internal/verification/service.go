@@ -79,6 +79,9 @@ type ReconciliationCommand struct {
 
 // Result contains the verified time and resulting current entitlement snapshot.
 type Result struct {
+	// Observations are the normalized provider line items stored by this verification.
+	// They are not part of the HTTP response.
+	Observations []core.PurchaseObservation
 	VerifiedAt   time.Time
 	Customer     core.Customer
 	Entitlements []persistence.CustomerEntitlement
@@ -540,7 +543,10 @@ func (service *Service) persist(
 	providerResult stores.VerificationResult,
 	prepared preparedVerification,
 ) (Result, error) {
-	verificationResult := Result{VerifiedAt: providerResult.VerifiedAt, Customer: customer}
+	verificationResult := Result{
+		Observations: append([]core.PurchaseObservation(nil), providerResult.Observations...),
+		VerifiedAt:   providerResult.VerifiedAt, Customer: customer,
+	}
 	err := service.store.Transact(ctx, func(repository persistence.Transaction) error {
 		resolution, err := repository.ResolveCustomer(ctx, command.ProjectID, command.ExternalCustomerID)
 		if err != nil {

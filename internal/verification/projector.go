@@ -16,15 +16,26 @@ type Projector interface {
 	Project([]persistence.CustomerEntitlement, []ProjectionCandidate) ([]persistence.EntitlementProjection, error)
 }
 
-// ProjectionCandidate associates one proposed projection with its observation time.
+// ProjectionCandidate associates one proposed projection with its purchase lineage and observation time.
 type ProjectionCandidate struct {
 	Projection          persistence.EntitlementProjection
 	SourceApplicationID core.ApplicationID
-	ObservedAt          time.Time
+	// SourceLineage identifies the purchase lineage inside the application product.
+	// Candidates with the same lineage, including an empty one, share one access source.
+	SourceLineage string
+	ObservedAt    time.Time
 }
 
-// projectionSource identifies one independent application-product access source.
+// projectionSource identifies one independent purchase lineage of an application product.
 type projectionSource struct {
+	ApplicationID core.ApplicationID
+	ProductID     core.ProductID
+	Lineage       string
+}
+
+// entitlementProduct identifies every lineage of one application product that grants one entitlement.
+type entitlementProduct struct {
+	EntitlementID core.EntitlementID
 	ApplicationID core.ApplicationID
 	ProductID     core.ProductID
 }
@@ -38,6 +49,8 @@ func NewDefaultProjector() *DefaultProjector {
 }
 
 // Project selects one candidate per entitlement without revoking an independent allowed source.
+// Each purchase lineage is its own source, so an expired lineage cannot revoke a later purchase
+// of the same product. A store observation still supersedes every import of its application product.
 func (projector *DefaultProjector) Project(
 	current []persistence.CustomerEntitlement,
 	candidates []ProjectionCandidate,
@@ -59,13 +72,23 @@ func (projector *DefaultProjector) Project(
 		currentByEntitlement[entitlement.Projection.EntitlementID] = entitlement
 	}
 
+	storeProducts := make(map[entitlementProduct]struct{}, len(candidates))
+	for index, candidate := range candidates {
+		if err := candidate.Validate(); err != nil {
+			return nil, fmt.Errorf("projection candidate %d: %w", index, err)
+		}
+		if candidate.Projection.Normalized().SourceKind == persistence.SourceKindStoreObservation {
+			storeProducts[productFromCandidate(candidate)] = struct{}{}
+		}
+	}
 	byEntitlement := make(
 		map[core.EntitlementID]map[projectionSource]ProjectionCandidate,
 		len(candidates),
 	)
-	for index, candidate := range candidates {
-		if err := candidate.Validate(); err != nil {
-			return nil, fmt.Errorf("projection candidate %d: %w", index, err)
+	for _, candidate := range candidates {
+		if _, superseded := storeProducts[productFromCandidate(candidate)]; superseded &&
+			candidate.Projection.Normalized().SourceKind == persistence.SourceKindImport {
+			continue
 		}
 		entitlementID := candidate.Projection.EntitlementID
 		sources := byEntitlement[entitlementID]
@@ -91,6 +114,7 @@ func (projector *DefaultProjector) Project(
 		if current, exists := currentByEntitlement[entitlementID]; exists {
 			if currentCandidate, updated := sources[sourceFromCurrent(current)]; updated &&
 				accessStrength(currentCandidate.Projection.Access) == accessStrength(chosen.Projection.Access) &&
+				compareAllowedEnd(currentCandidate.Projection, chosen.Projection) >= 0 &&
 				!importLosesToStore(current.Projection, chosen.Projection) {
 				chosen = currentCandidate
 			}
@@ -102,7 +126,9 @@ func (projector *DefaultProjector) Project(
 	for entitlementID, candidate := range selected {
 		currentEntitlement, exists := currentByEntitlement[entitlementID]
 		if exists {
-			_, currentSourceUpdated := byEntitlement[entitlementID][sourceFromCurrent(currentEntitlement)]
+			currentSourceUpdated := currentSourceReported(
+				currentEntitlement, byEntitlement[entitlementID], storeProducts,
+			)
 			if !currentSourceUpdated && preserveIndependentSource(currentEntitlement, candidate) {
 				continue
 			}
@@ -133,6 +159,7 @@ func sourceFromCandidate(candidate ProjectionCandidate) projectionSource {
 	return projectionSource{
 		ApplicationID: candidate.SourceApplicationID,
 		ProductID:     candidate.Projection.SourceProductID,
+		Lineage:       candidate.SourceLineage,
 	}
 }
 
@@ -141,11 +168,47 @@ func sourceFromCurrent(current persistence.CustomerEntitlement) projectionSource
 	return projectionSource{
 		ApplicationID: current.SourceApplicationID,
 		ProductID:     current.Projection.SourceProductID,
+		Lineage:       current.SourceLineage,
 	}
 }
 
-// newerSourceCandidate keeps the latest lifecycle state for one application-product source.
-// A store observation outranks an import grant for that same application and product.
+// productFromCandidate returns the entitlement and application product of one proposed projection.
+func productFromCandidate(candidate ProjectionCandidate) entitlementProduct {
+	return entitlementProduct{
+		EntitlementID: candidate.Projection.EntitlementID,
+		ApplicationID: candidate.SourceApplicationID,
+		ProductID:     candidate.Projection.SourceProductID,
+	}
+}
+
+// productFromCurrent returns the entitlement and application product of one stored projection.
+func productFromCurrent(current persistence.CustomerEntitlement) entitlementProduct {
+	return entitlementProduct{
+		EntitlementID: current.Projection.EntitlementID,
+		ApplicationID: current.SourceApplicationID,
+		ProductID:     current.Projection.SourceProductID,
+	}
+}
+
+// currentSourceReported reports whether the candidates carry newer state for the current projection source.
+// A current import is reported once a store observation exists for its application product.
+func currentSourceReported(
+	current persistence.CustomerEntitlement,
+	sources map[projectionSource]ProjectionCandidate,
+	storeProducts map[entitlementProduct]struct{},
+) bool {
+	if _, updated := sources[sourceFromCurrent(current)]; updated {
+		return true
+	}
+	if current.Projection.Normalized().SourceKind != persistence.SourceKindImport {
+		return false
+	}
+	_, superseded := storeProducts[productFromCurrent(current)]
+	return superseded
+}
+
+// newerSourceCandidate keeps the latest lifecycle state for one purchase lineage source.
+// A store observation outranks an import grant that shares its lineage key.
 func newerSourceCandidate(candidate, existing ProjectionCandidate) bool {
 	if rank := compareSourceKind(candidate.Projection, existing.Projection); rank != 0 {
 		return rank > 0
@@ -157,6 +220,8 @@ func newerSourceCandidate(candidate, existing ProjectionCandidate) bool {
 }
 
 // candidatePreferred deterministically ranks competing new sources for one entitlement.
+// Among allowed sources of the same kind, the one whose access lasts longest wins, so a lapsed
+// lineage that has not been refreshed yet cannot hide a newer purchase.
 func candidatePreferred(candidate, existing ProjectionCandidate) bool {
 	candidateStrength := accessStrength(candidate.Projection.Access)
 	existingStrength := accessStrength(existing.Projection.Access)
@@ -166,10 +231,37 @@ func candidatePreferred(candidate, existing ProjectionCandidate) bool {
 	if rank := compareSourceKind(candidate.Projection, existing.Projection); rank != 0 {
 		return rank > 0
 	}
+	if rank := compareAllowedEnd(candidate.Projection, existing.Projection); rank != 0 {
+		return rank > 0
+	}
 	if !candidate.ObservedAt.Equal(existing.ObservedAt) {
 		return candidate.ObservedAt.After(existing.ObservedAt)
 	}
 	return projectionSourceIdentity(candidate.Projection) < projectionSourceIdentity(existing.Projection)
+}
+
+// compareAllowedEnd ranks two allowed projections by when their access ends. No end ranks highest.
+// It returns zero when either projection is not allowed.
+func compareAllowedEnd(candidate, existing persistence.EntitlementProjection) int {
+	if candidate.Access != core.AccessAllowed || existing.Access != core.AccessAllowed {
+		return 0
+	}
+	candidateEnd := candidate.EffectivePeriod.EndsAt
+	existingEnd := existing.EffectivePeriod.EndsAt
+	switch {
+	case candidateEnd == nil && existingEnd == nil:
+		return 0
+	case candidateEnd == nil:
+		return 1
+	case existingEnd == nil:
+		return -1
+	case candidateEnd.After(*existingEnd):
+		return 1
+	case candidateEnd.Before(*existingEnd):
+		return -1
+	default:
+		return 0
+	}
 }
 
 // compareSourceKind ranks a store observation above an import grant.

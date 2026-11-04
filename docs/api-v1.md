@@ -329,6 +329,17 @@ The pending chargeback review workflow itself is outside the current slice. Dupl
 Pub/Sub deliveries normalize to the same protected inbox identity and downstream
 projection/outbox writes remain idempotent.
 
+Each purchase lineage is a separate entitlement source: the App Store original
+transaction, the Google Play purchase token, or the Huawei purchase token. Observation
+times are compared only inside one lineage. A customer who lets a subscription expire
+and buys the same product again keeps access from the new lineage when the old one is
+refreshed. When several sources allow access, a store observation is projected before
+an import, then the source whose access ends last. The daily reconciliation of a
+lineage stops once the provider reports every line item expired with automatic renewal
+off. A lineage the provider can still renew, such as one in billing retry, keeps its
+daily refresh. Refunded and revoked lineages keep their daily refresh too. A later resubscription is scheduled again when the
+client submits it, or when an App Store or Google Play notification reports it.
+
 ## Webhook verification
 
 Outbound requests include `IAPStack-Event-ID`, `IAPStack-Timestamp`, and `IAPStack-Signature`. Verify `v2=<hex>` as HMAC-SHA-256 over the unambiguous newline-delimited input:
