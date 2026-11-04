@@ -62,7 +62,9 @@ type Store interface {
 	Close()
 }
 
-// Event contains the bounded metadata retained after successful authentication.
+// Event contains the metadata retained after successful authentication.
+// ID is capped at 128 bytes. ApplicationID follows the core identifier rules, which have no
+// length cap, so it is bounded only by the authenticated body limit.
 type Event struct {
 	ID              string
 	ApplicationID   string
