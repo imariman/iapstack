@@ -783,44 +783,14 @@ func indexCatalogProducts(
 }
 
 // productsForValidation selects the product set a provider result is checked against.
+// A provider result that names several products for one purchase, such as a Google Play deferred
+// replacement, maps a claim on one of them onto the observed products. Any other claim is kept.
 func productsForValidation(
 	provider core.Provider,
 	claimed []core.ProviderProductID,
 	result stores.VerificationResult,
 ) []core.ProviderProductID {
-	if provider == core.ProviderGooglePlay {
-		return googlePlayProductsForValidation(claimed, result)
-	}
-	return claimedProductsForValidation(provider, claimed, result)
-}
-
-// googlePlayProductsForValidation follows a deferred replacement on one Google Play purchase token.
-// Before the change takes effect the adapter reports the old item, and afterwards the new item plus
-// the expired old item. A claim, a stored notification lookup, or a scheduled refresh can name either
-// product. The adapter has already rejected a product the purchase does not name, so a single
-// subscription observation replaces the claim and a claim among several observations checks all of them.
-func googlePlayProductsForValidation(
-	claimed []core.ProviderProductID,
-	result stores.VerificationResult,
-) []core.ProviderProductID {
-	if len(claimed) != 1 || len(result.Observations) == 0 {
-		return claimed
-	}
-	for _, observation := range result.Observations {
-		if observation.ProductKind != core.ProductKindSubscription {
-			return claimed
-		}
-	}
-	observed := observationProductIDs(result.Observations)
-	if len(observed) == 1 {
-		return observed
-	}
-	for _, product := range observed {
-		if product == claimed[0] {
-			return observed
-		}
-	}
-	return claimed
+	return claimedProductsForValidation(provider, result.ProductsForClaim(claimed), result)
 }
 
 // EntitlementChangedEvent builds one idempotent outbox event for a changed projection.

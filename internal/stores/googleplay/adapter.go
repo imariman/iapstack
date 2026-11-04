@@ -201,11 +201,14 @@ type externalAccountIdentifiers struct {
 
 // queryResult contains one authoritative provider artifact and its normalized observations.
 // products lists every product the purchase names, including replaced and pending replacement items.
+// itemReplaced is the expired snapshot of the product a one-item purchase names in itemReplacement. Its
+// period is unknown, so it is recorded only when the request names that product for this purchase token.
 type queryResult struct {
 	artifact          stores.Evidence
 	observations      []core.PurchaseObservation
 	postCommitActions []stores.PostCommitAction
 	products          []core.ProviderProductID
+	itemReplaced      *core.PurchaseObservation
 }
 
 // New constructs a bounded Google Play Android Publisher adapter.
@@ -260,14 +263,9 @@ func (adapter *Adapter) Verify(
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}
-	verificationResult := stores.VerificationResult{
-		VerifiedAt:        adapter.clock().UTC(),
-		Artifacts:         []stores.VerifiedArtifact{{Kind: "google_play_server_response", Evidence: result.artifact}},
-		Observations:      result.observations,
-		PostCommitActions: result.postCommitActions,
-	}
+	verificationResult := result.verificationResult(adapter.clock().UTC(), request.ClaimedProducts)
 	validationRequest := request
-	validationRequest.ClaimedProducts = result.validationProducts(request.ClaimedProducts)
+	validationRequest.ClaimedProducts = verificationResult.ProductsForClaim(request.ClaimedProducts)
 	if err := verificationResult.ValidateForVerification(validationRequest); err != nil {
 		return stores.VerificationResult{}, invalid("verify", err)
 	}
@@ -297,14 +295,9 @@ func (adapter *Adapter) Reconcile(
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}
-	verificationResult := stores.VerificationResult{
-		VerifiedAt:        adapter.clock().UTC(),
-		Artifacts:         []stores.VerifiedArtifact{{Kind: "google_play_server_response", Evidence: result.artifact}},
-		Observations:      result.observations,
-		PostCommitActions: result.postCommitActions,
-	}
+	verificationResult := result.verificationResult(adapter.clock().UTC(), request.ExpectedProducts)
 	validationRequest := request
-	validationRequest.ExpectedProducts = result.validationProducts(request.ExpectedProducts)
+	validationRequest.ExpectedProducts = verificationResult.ProductsForClaim(request.ExpectedProducts)
 	if err := verificationResult.ValidateForReconciliation(validationRequest); err != nil {
 		return stores.VerificationResult{}, invalid("reconcile", err)
 	}
@@ -466,9 +459,13 @@ func (adapter *Adapter) query(
 		if err != nil {
 			return queryResult{}, invalid("normalize", err)
 		}
+		itemReplaced, err := itemReplacementObservation(application, purchaseToken, purchase, observations[0])
+		if err != nil {
+			return queryResult{}, err
+		}
 		return queryResult{
 			artifact: artifact, observations: observations, postCommitActions: actions,
-			products: subscriptionProducts(purchase),
+			products: subscriptionProducts(purchase), itemReplaced: itemReplaced,
 		}, nil
 	}
 	var purchase productPurchase
@@ -665,7 +662,8 @@ func (adapter *Adapter) subscriptionObservations(
 	purchaseToken string,
 	purchase subscriptionPurchase,
 ) ([]core.PurchaseObservation, error) {
-	items, err := selectSubscriptionItems(purchase.LineItems)
+	now := adapter.clock().UTC()
+	items, err := selectSubscriptionItems(purchase.LineItems, now)
 	if err != nil {
 		return nil, invalid("normalize", err)
 	}
@@ -683,7 +681,7 @@ func (adapter *Adapter) subscriptionObservations(
 		return nil, invalid("normalize", err)
 	}
 	if items.pending != nil {
-		renewal, err = replacementRenewal(renewal, *items.pending)
+		renewal, err = replacementRenewal(*items.pending)
 		if err != nil {
 			return nil, invalid("normalize", err)
 		}
@@ -703,7 +701,7 @@ func (adapter *Adapter) subscriptionObservations(
 		ProductID: core.ProviderProductID(lineItem.ProductID), ProductKind: core.ProductKindSubscription,
 		State: state, ProviderState: purchase.SubscriptionState,
 		Access: access, AccessReason: reason, Ownership: core.OwnershipPurchased, Quantity: 1,
-		OccurredAt: purchase.StartTime, ObservedAt: adapter.clock().UTC(),
+		OccurredAt: purchase.StartTime, ObservedAt: now,
 		EffectivePeriod: core.EffectivePeriod{StartsAt: purchase.StartTime, EndsAt: timePointer(lineItem.ExpiryTime)},
 		Renewal:         renewal, References: references,
 	}
@@ -716,9 +714,7 @@ func (adapter *Adapter) subscriptionObservations(
 	}
 	observations := []core.PurchaseObservation{observation}
 	if items.replaced != nil {
-		replaced, err := replacedItemObservation(
-			application, purchaseToken, purchase, *items.replaced, accountID, observation.ObservedAt,
-		)
+		replaced, err := replacedItemObservation(application, purchaseToken, purchase, *items.replaced, observation)
 		if err != nil {
 			return nil, err
 		}
@@ -732,29 +728,26 @@ func (adapter *Adapter) subscriptionObservations(
 // means an earlier allowed snapshot of the old product on this token cannot keep granting the
 // entitlement after the replacement took effect. The snapshot is observed one microsecond before
 // the current item because both rows share one transaction timestamp, and a lookup by purchase
-// token must resolve to the current product.
+// token must resolve to the current product. Its identity and references use only the ended item
+// and the purchase fields that never change, so renewals of the current item reuse one snapshot.
 func replacedItemObservation(
 	application core.Application,
 	purchaseToken string,
 	purchase subscriptionPurchase,
 	item subscriptionLineItem,
-	accountID string,
-	currentObservedAt time.Time,
+	current core.PurchaseObservation,
 ) (core.PurchaseObservation, error) {
 	renewal, err := subscriptionRenewal(item)
 	if err != nil {
 		return core.PurchaseObservation{}, invalid("normalize", err)
 	}
-	orderID := item.LatestSuccessfulOrderID
-	if orderID == "" {
-		orderID = purchase.LatestOrderID
-	}
-	references, err := googleReferences(purchaseToken, orderID, purchase.LinkedPurchaseToken, accountID)
+	accountID := purchase.ExternalAccountIdentifiers.ObfuscatedExternalAccountID
+	references, err := googleReferences(purchaseToken, item.LatestSuccessfulOrderID, purchase.LinkedPurchaseToken, accountID)
 	if err != nil {
 		return core.PurchaseObservation{}, invalid("normalize", err)
 	}
 	state, access, reason := normalizeSubscriptionState(subscriptionStateExpired)
-	identity := subscriptionObservationIdentity(application.ID, purchaseToken, purchase, item, state, access, reason, renewal)
+	identity := replacedItemObservationIdentity(application.ID, purchaseToken, purchase, item, state, access, reason, renewal)
 	period := core.EffectivePeriod{StartsAt: purchase.StartTime}
 	if !purchase.StartTime.IsZero() && item.ExpiryTime.After(purchase.StartTime) {
 		period.EndsAt = timePointer(item.ExpiryTime)
@@ -765,7 +758,7 @@ func replacedItemObservation(
 		ProductID: core.ProviderProductID(item.ProductID), ProductKind: core.ProductKindSubscription,
 		State: state, ProviderState: subscriptionStateExpired,
 		Access: access, AccessReason: reason, Ownership: core.OwnershipPurchased, Quantity: 1,
-		OccurredAt: purchase.StartTime, ObservedAt: currentObservedAt.Add(-time.Microsecond),
+		OccurredAt: purchase.StartTime, ObservedAt: current.ObservedAt.Add(-time.Microsecond),
 		EffectivePeriod: period, Renewal: renewal, References: references,
 	}
 	if err := observation.Validate(); err != nil {
@@ -774,12 +767,41 @@ func replacedItemObservation(
 	return observation, nil
 }
 
+// itemReplacementObservation records the product a one-item purchase names in itemReplacement as expired.
+// Google documents two items on a token after a deferred change, but a one-item response that names the
+// replaced product is accepted for a token stored with that product. Without an expired snapshot, the
+// stored allowed snapshot of the replaced product would keep its entitlement source after its end. Google
+// reports no period for that product here, so the snapshot has no end, and it is added to a result only
+// when the request names the replaced product.
+func itemReplacementObservation(
+	application core.Application,
+	purchaseToken string,
+	purchase subscriptionPurchase,
+	current core.PurchaseObservation,
+) (*core.PurchaseObservation, error) {
+	if len(purchase.LineItems) != 1 || purchase.LineItems[0].ItemReplacement == nil {
+		return nil, nil
+	}
+	productID := purchase.LineItems[0].ItemReplacement.ProductID
+	if productID == "" || productID == purchase.LineItems[0].ProductID {
+		return nil, nil
+	}
+	observation, err := replacedItemObservation(
+		application, purchaseToken, purchase, subscriptionLineItem{ProductID: productID}, current,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &observation, nil
+}
+
 // selectSubscriptionItems selects the line item that grants access now and any deferred replacement item.
 // ReplacementMode.DEFERRED issues a purchase with two items. Until the change takes effect, the existing item
 // keeps the current period and its deferredItemReplacement names the new item, which has no expiry yet. After
 // the change, the replaced item keeps a past expiry without auto-renewal and the new item carries the current
 // period. Any other purchase with more than one item, such as a subscription with add-ons, is not supported.
-func selectSubscriptionItems(items []subscriptionLineItem) (subscriptionItems, error) {
+// The replaced item must already have expired at now, and an itemReplacement on the new item must name it.
+func selectSubscriptionItems(items []subscriptionLineItem, now time.Time) (subscriptionItems, error) {
 	if len(items) == 1 {
 		return subscriptionItems{current: items[0]}, nil
 	}
@@ -803,8 +825,9 @@ func selectSubscriptionItems(items []subscriptionLineItem) (subscriptionItems, e
 		replaced, current = current, replaced
 	}
 	if replaced.ProductID == "" || replaced.ProductID == current.ProductID || replaced.ExpiryTime.IsZero() ||
-		!replaced.ExpiryTime.Before(current.ExpiryTime) ||
-		(replaced.AutoRenewingPlan != nil && replaced.AutoRenewingPlan.AutoRenewEnabled) {
+		!replaced.ExpiryTime.Before(current.ExpiryTime) || replaced.ExpiryTime.After(now) ||
+		(replaced.AutoRenewingPlan != nil && replaced.AutoRenewingPlan.AutoRenewEnabled) ||
+		(current.ItemReplacement != nil && current.ItemReplacement.ProductID != replaced.ProductID) {
 		return subscriptionItems{}, errors.New("google play subscription has more than one current line item")
 	}
 	return subscriptionItems{current: current, replaced: &replaced}, nil
@@ -812,17 +835,11 @@ func selectSubscriptionItems(items []subscriptionLineItem) (subscriptionItems, e
 
 // replacementRenewal reports how a subscription continues once its pending deferred replacement takes effect.
 // Google turns auto-renewal off on the replaced item, so the new item's plan decides whether the subscription
-// renews, and its product is the next product. A new item without plan details keeps the current item's renewal.
-func replacementRenewal(current core.Renewal, pending subscriptionLineItem) (core.Renewal, error) {
+// renews, and its product is the next product. A new item without plan details leaves the renewal unknown.
+func replacementRenewal(pending subscriptionLineItem) (core.Renewal, error) {
 	renewal, err := subscriptionRenewal(pending)
 	if err != nil {
 		return core.Renewal{}, err
-	}
-	if renewal.Mode == core.RenewalUnknown {
-		return current, nil
-	}
-	if renewal.Mode != current.Mode {
-		return core.Renewal{}, errors.New("google play deferred replacement changes the plan type")
 	}
 	if renewal.Mode == core.RenewalAuto && renewal.Status == core.RenewalEnabled {
 		renewal.NextProductID = core.ProviderProductID(pending.ProductID)
@@ -856,25 +873,27 @@ func subscriptionProducts(purchase subscriptionPurchase) []core.ProviderProductI
 	return products
 }
 
-// validationProducts maps a claim on any product of one replacement purchase onto the observed products.
-// A deferred replacement keeps the old and the new product on one purchase token. A client, a stored purchase,
-// or a scheduled refresh can name either one, while the observations report the item that grants access now
-// and, after the change, the replaced item. A product the purchase does not name still fails validation.
-func (result queryResult) validationProducts(claimed []core.ProviderProductID) []core.ProviderProductID {
-	if len(claimed) != 1 || len(result.products) < 2 {
-		return claimed
+// verificationResult builds the provider result for one request.
+// A purchase that names more than one product reports them all, so a claim on any of them is checked against
+// the observed products. The itemReplacement snapshot is added only when the request names that product.
+func (result queryResult) verificationResult(
+	verifiedAt time.Time,
+	requested []core.ProviderProductID,
+) stores.VerificationResult {
+	observations := result.observations
+	if result.itemReplaced != nil && len(requested) == 1 && requested[0] == result.itemReplaced.ProductID {
+		observations = append(append([]core.PurchaseObservation(nil), observations...), *result.itemReplaced)
 	}
-	for _, product := range result.products {
-		if product != claimed[0] {
-			continue
-		}
-		observed := make([]core.ProviderProductID, 0, len(result.observations))
-		for _, observation := range result.observations {
-			observed = append(observed, observation.ProductID)
-		}
-		return observed
+	verificationResult := stores.VerificationResult{
+		VerifiedAt:        verifiedAt,
+		Artifacts:         []stores.VerifiedArtifact{{Kind: "google_play_server_response", Evidence: result.artifact}},
+		Observations:      observations,
+		PostCommitActions: result.postCommitActions,
 	}
-	return claimed
+	if len(result.products) > 1 {
+		verificationResult.NamedProducts = append([]core.ProviderProductID(nil), result.products...)
+	}
+	return verificationResult
 }
 
 // queryPurchaseToken returns the first purchase token among query references.
@@ -1072,6 +1091,31 @@ func subscriptionObservationIdentity(
 		fields = append(fields, "next_product", string(renewal.NextProductID))
 	}
 	return sha256.Sum256([]byte(strings.Join(fields, "\x00")))
+}
+
+// replacedItemObservationIdentity hashes the fields of one ended item of a replacement purchase.
+// It leaves out the purchase-level order and state, which follow the current item, so the ended item keeps
+// one snapshot while the current item renews or changes state.
+func replacedItemObservationIdentity(
+	applicationID core.ApplicationID,
+	purchaseToken string,
+	purchase subscriptionPurchase,
+	item subscriptionLineItem,
+	state core.LifecycleState,
+	access core.AccessStatus,
+	reason core.AccessReason,
+	renewal core.Renewal,
+) [sha256.Size]byte {
+	expiry := ""
+	if !item.ExpiryTime.IsZero() {
+		expiry = item.ExpiryTime.UTC().Format(time.RFC3339Nano)
+	}
+	return sha256.Sum256([]byte(strings.Join([]string{
+		"replaced_item", string(applicationID), purchaseToken, purchase.LinkedPurchaseToken, item.ProductID,
+		item.LatestSuccessfulOrderID, purchase.ExternalAccountIdentifiers.ObfuscatedExternalAccountID,
+		purchase.StartTime.UTC().Format(time.RFC3339Nano), expiry,
+		string(state), string(access), string(reason), string(renewal.Mode), string(renewal.Status),
+	}, "\x00")))
 }
 
 // parseEvidence decodes the submitted versioned Google Play purchase-token envelope.

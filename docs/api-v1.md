@@ -252,10 +252,13 @@ The initial Google Play server slice supports one current subscription line item
 one non-consumable line item per purchase token. A subscription changed with the
 `DEFERRED` replacement mode has two line items on its new purchase token. Until the
 change takes effect, IAPStack records the existing item, which keeps access until its
-expiry, and stores the new product as the next renewal product. After the change, the
-replacement item is recorded together with the replaced item as expired, and later
-notifications for that token expect the new product. Both products must stay mapped
-in the catalog. A claimed product may name either item of that replacement. A completed
+expiry. Its renewal follows the new item's plan, and the new product is stored as the
+next renewal product when that plan renews automatically. After the change, the
+replacement item is recorded together with the replaced item as expired, once the
+replaced item's expiry has passed, and later notifications for that token expect the
+new product. A one-item response whose `itemReplacement` names the stored product also
+records that product as expired for that token. Both products must stay mapped in the
+catalog. A claimed product may name either item of that replacement. A completed
 purchase whose `acknowledgementState` is pending produces a bounded provider action.
 IAPStack calls the matching Android Publisher product or subscription acknowledgement
 endpoint only after the evidence, observation, entitlement projection, and outbox
