@@ -34,6 +34,12 @@ const (
 	SourceKindImport SourceKind = "import"
 	// ImportOriginRevenueCat identifies a one-way RevenueCat historical grant.
 	ImportOriginRevenueCat = "revenuecat"
+
+	// ReconciliationRetryReconciliationRequest is a protected reconciliation job payload.
+	ReconciliationRetryReconciliationRequest = "reconciliation_request"
+	// ReconciliationRetryPurchaseEvidence is protected client purchase evidence.
+	// The worker rebuilds the reconciliation job from it when the request could not protect that job.
+	ReconciliationRetryPurchaseEvidence = "purchase_evidence"
 )
 
 // Store owns durable storage resources and starts atomic units of work.
@@ -187,6 +193,17 @@ type QueueRepository interface {
 	SaveInboxMessage(context.Context, InboxMessage) (string, error)
 	// SaveReconciliationJob stores one protected reconciliation request idempotently.
 	SaveReconciliationJob(context.Context, ReconciliationJob) (string, error)
+	// SaveReconciliationScheduleRetry stores one protected schedule for a later job insert.
+	// The insert is idempotent for the same application, customer, kind, and payload fingerprint
+	// while that row is still live. A dead row does not block a later schedule.
+	SaveReconciliationScheduleRetry(context.Context, ReconciliationScheduleRetry) error
+	// ListPendingReconciliationScheduleRetries returns due, unscheduled retries in next-attempt order.
+	ListPendingReconciliationScheduleRetries(context.Context, time.Time, int) ([]ReconciliationScheduleRetry, error)
+	// CompleteReconciliationScheduleRetry marks one retry scheduled after its job exists.
+	CompleteReconciliationScheduleRetry(context.Context, string, time.Time) error
+	// RecordReconciliationScheduleRetryFailure advances one pending retry after a promotion failure.
+	// A row that is already scheduled or dead is left unchanged and reported as not updated.
+	RecordReconciliationScheduleRetryFailure(context.Context, ReconciliationScheduleRetryFailure) (bool, error)
 	// QueueMessage returns one durable payload by its fixed queue and record identity.
 	QueueMessage(context.Context, QueueName, string) (QueueMessage, error)
 	// CompleteQueue records successful processing or delivery idempotently.
@@ -401,6 +418,43 @@ type ReconciliationJob struct {
 	CustomerID    core.CustomerID
 	Payload       protection.Value
 	AvailableAt   time.Time
+}
+
+// ReconciliationScheduleBinding is one customer binding stored with a schedule retry.
+type ReconciliationScheduleBinding struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value,omitempty"`
+}
+
+// ReconciliationScheduleMetadata is the non-secret replay data stored beside protected evidence.
+type ReconciliationScheduleMetadata struct {
+	ExternalCustomerID string                          `json:"external_customer_id,omitempty"`
+	ClaimedProducts    []core.ProviderProductID        `json:"claimed_products,omitempty"`
+	CustomerBindings   []ReconciliationScheduleBinding `json:"customer_bindings,omitempty"`
+}
+
+// ReconciliationScheduleRetry is one durable attempt to insert a reconciliation job.
+type ReconciliationScheduleRetry struct {
+	ID            string
+	ProjectID     core.ProjectID
+	ApplicationID core.ApplicationID
+	CustomerID    core.CustomerID
+	Kind          string
+	Payload       protection.Value
+	Metadata      json.RawMessage
+	AvailableAt   time.Time
+	// Attempts is how many promotions have already failed. Zero is a new row.
+	Attempts int
+	// NextAttemptAt is when the worker may select the row again. Zero on insert uses the database default.
+	NextAttemptAt time.Time
+}
+
+// ReconciliationScheduleRetryFailure is one failed promotion of a pending schedule retry.
+type ReconciliationScheduleRetryFailure struct {
+	ID            string
+	AttemptedAt   time.Time
+	NextAttemptAt time.Time
+	Dead          bool
 }
 
 // QueueMessage is one durable inbox, outbox, or reconciliation payload.
@@ -636,6 +690,77 @@ func (job ReconciliationJob) Validate() error {
 		job.Payload.Validate(),
 		validateTime("reconciliation availability time", job.AvailableAt),
 	)
+}
+
+// Validate checks one schedule retry and the metadata its kind requires.
+func (retry ReconciliationScheduleRetry) Validate() error {
+	kindError := validateText("reconciliation schedule retry kind", retry.Kind)
+	if kindError == nil && retry.Kind != ReconciliationRetryReconciliationRequest &&
+		retry.Kind != ReconciliationRetryPurchaseEvidence {
+		kindError = fmt.Errorf("unsupported reconciliation schedule retry kind %q", retry.Kind)
+	}
+	var metadataObject map[string]json.RawMessage
+	metadataError := json.Unmarshal(retry.Metadata, &metadataObject)
+	if metadataError == nil && metadataObject == nil {
+		metadataError = errors.New("reconciliation schedule retry metadata must be a JSON object")
+	}
+	var decoded ReconciliationScheduleMetadata
+	if metadataError == nil {
+		metadataError = json.Unmarshal(retry.Metadata, &decoded)
+	}
+	if metadataError == nil && retry.Kind == ReconciliationRetryPurchaseEvidence {
+		metadataError = decoded.Validate()
+	}
+	var attemptError error
+	if retry.Attempts < 0 {
+		attemptError = errors.New("reconciliation schedule retry attempts cannot be negative")
+	}
+	return errors.Join(
+		validateText("reconciliation schedule retry ID", retry.ID),
+		retry.ProjectID.Validate(),
+		retry.ApplicationID.Validate(),
+		retry.CustomerID.Validate(),
+		kindError,
+		retry.Payload.Validate(),
+		metadataError,
+		validateTime("reconciliation schedule retry availability time", retry.AvailableAt),
+		attemptError,
+	)
+}
+
+// Validate checks the identity and schedule of one failed promotion.
+func (failure ReconciliationScheduleRetryFailure) Validate() error {
+	return errors.Join(
+		validateText("reconciliation schedule retry ID", failure.ID),
+		validateTime("reconciliation schedule retry attempt time", failure.AttemptedAt),
+		validateTime("reconciliation schedule retry next attempt time", failure.NextAttemptAt),
+	)
+}
+
+// Validate checks the customer and products needed to rebuild a reconciliation job.
+func (metadata ReconciliationScheduleMetadata) Validate() error {
+	if err := validateText("reconciliation external customer ID", metadata.ExternalCustomerID); err != nil {
+		return err
+	}
+	if len(metadata.ClaimedProducts) == 0 {
+		return errors.New("reconciliation claimed products are required")
+	}
+	seen := make(map[core.ProviderProductID]struct{}, len(metadata.ClaimedProducts))
+	for _, productID := range metadata.ClaimedProducts {
+		if err := productID.Validate(); err != nil {
+			return err
+		}
+		if _, duplicate := seen[productID]; duplicate {
+			return fmt.Errorf("duplicate reconciliation claimed product %q", productID)
+		}
+		seen[productID] = struct{}{}
+	}
+	for index, binding := range metadata.CustomerBindings {
+		if err := validateText("reconciliation customer binding kind", binding.Kind); err != nil {
+			return fmt.Errorf("reconciliation customer binding %d: %w", index, err)
+		}
+	}
+	return nil
 }
 
 // Validate checks one fixed durable queue name.

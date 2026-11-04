@@ -252,6 +252,7 @@ func runWorker(
 	if err != nil {
 		return err
 	}
+	providerProcessing.SetLogger(logger)
 	runner, err := worker.New(store.Pool(), store, worker.Config{
 		WorkerID: cfg.WorkerID, PollInterval: cfg.WorkerPollInterval,
 		JobTimeout: cfg.WorkerJobTimeout, Concurrency: cfg.WorkerConcurrency,
@@ -273,6 +274,7 @@ func runWorker(
 	if err != nil {
 		return err
 	}
+	runner.SetReconciliationScheduleRetry(providerProcessing.RetryReconciliationSchedules)
 	logger.Info("worker is ready")
 	server := httpserver.NewWithOptions(httpserver.Options{
 		Address: cfg.WorkerHTTPAddress, ShutdownTimeout: cfg.ShutdownTimeout,

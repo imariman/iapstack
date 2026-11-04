@@ -189,9 +189,10 @@ func (adapter *Adapter) Verify(
 		if err := validateRenewalScope(request.Application, transaction, renewal); err != nil {
 			return stores.VerificationResult{}, invalid("verify", err)
 		}
-		return adapter.result(request.Application, evidence.ProductKind, transaction, artifact, &subscriptionSnapshot{
-			Status: status, Renewal: renewal,
-		})
+		return adapter.subscriptionResult(
+			request.Application, evidence.ProductKind, submitted, transaction, artifact,
+			&subscriptionSnapshot{Status: status, Renewal: renewal},
+		)
 	}
 	authoritativeJWS, artifact, err := adapter.query(ctx, request.Application, configuration, submitted.TransactionID)
 	if err != nil {
@@ -271,9 +272,10 @@ func (adapter *Adapter) Reconcile(
 		if err := validateRenewalScope(request.Application, transaction, renewal); err != nil {
 			return stores.VerificationResult{}, invalid("reconcile", err)
 		}
-		return adapter.result(request.Application, productKind, transaction, statusArtifact, &subscriptionSnapshot{
-			Status: status, Renewal: renewal,
-		})
+		return adapter.subscriptionResult(
+			request.Application, productKind, authoritative, transaction, statusArtifact,
+			&subscriptionSnapshot{Status: status, Renewal: renewal},
+		)
 	}
 	return adapter.result(request.Application, productKind, authoritative, artifact, nil)
 }
@@ -421,6 +423,76 @@ func (adapter *Adapter) do(request *http.Request) ([]byte, int, http.Header, err
 		return nil, response.StatusCode, response.Header.Clone(), stores.NewFailure(adapter.Provider(), "http", stores.FailurePermanent, 0, nil)
 	}
 	return body, response.StatusCode, response.Header.Clone(), nil
+}
+
+// subscriptionResult stores the current status transaction and, when that lineage moved to
+// another product, an expired observation for the previous product.
+// Client verify, daily replay, and App Store notifications all enter through this path.
+// The signed transaction they already hold is often the pre-upgrade JWS: isUpgraded is still
+// false and expiresDate is still the original period end. Subscription status replaces that
+// transaction with the current product and would otherwise leave the old entitlement in place.
+func (adapter *Adapter) subscriptionResult(
+	application core.Application,
+	kind core.ProductKind,
+	previous transactionPayload,
+	current transactionPayload,
+	artifact stores.Evidence,
+	subscription *subscriptionSnapshot,
+) (stores.VerificationResult, error) {
+	result, err := adapter.result(application, kind, current, artifact, subscription)
+	if err != nil {
+		return stores.VerificationResult{}, err
+	}
+	if previous.ProductID == "" || previous.ProductID == current.ProductID {
+		return result, nil
+	}
+	closed, err := adapter.supersededSubscriptionObservation(application, kind, previous, current, artifact)
+	if err != nil {
+		return stores.VerificationResult{}, err
+	}
+	result.Observations = append(result.Observations, closed)
+	return result, nil
+}
+
+// supersededSubscriptionObservation ends the previous product at the upgrade.
+// The effective end is the earlier of Apple's signed expiry and the new transaction's purchase time.
+// A stale client JWS still carries the original period end, so the new purchase time is what
+// cuts that period off. Downgrades stay on the old product until renewal, so this runs only
+// after status has already moved.
+func (adapter *Adapter) supersededSubscriptionObservation(
+	application core.Application,
+	kind core.ProductKind,
+	previous transactionPayload,
+	current transactionPayload,
+	artifact stores.Evidence,
+) (core.PurchaseObservation, error) {
+	upgraded := previous
+	upgraded.IsUpgraded = true
+	if current.PurchaseDate <= 0 {
+		return core.PurchaseObservation{}, invalid("normalize", errors.New("apple upgrade time is missing"))
+	}
+	if upgraded.ExpiresDate <= 0 || current.PurchaseDate < upgraded.ExpiresDate {
+		upgraded.ExpiresDate = current.PurchaseDate
+	}
+	// A purchase and its upgrade can share a millisecond. Access still ends, and the stored
+	// period has to be non-empty.
+	if upgraded.ExpiresDate <= upgraded.PurchaseDate {
+		upgraded.ExpiresDate = upgraded.PurchaseDate + 1
+	}
+	closed, err := adapter.result(application, kind, upgraded, artifact, &subscriptionSnapshot{
+		Status: subscriptionStatusExpired,
+		Renewal: renewalPayload{
+			AutoRenewStatus:       autoRenewDisabled,
+			ProductID:             upgraded.ProductID,
+			OriginalTransactionID: upgraded.OriginalTransactionID,
+			AppAccountToken:       upgraded.AppAccountToken,
+			Environment:           upgraded.Environment,
+		},
+	})
+	if err != nil {
+		return core.PurchaseObservation{}, err
+	}
+	return closed.Observations[0], nil
 }
 
 // result normalizes one authoritative Apple transaction into shared artifacts and observations.
