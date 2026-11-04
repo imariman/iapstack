@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -411,6 +412,7 @@ func (service *Service) googlePlayReconciliationCommand(
 // HandleReconciliation opens one scheduled request, re-queries its provider, and schedules its next generation.
 // The next generation is saved before the provider call, so a failed refresh cannot end the chain.
 // A refresh that finds the lineage terminally expired closes that generation instead of leaving it runnable.
+// Closing it is best effort and never fails a refresh that has already committed.
 func (service *Service) HandleReconciliation(ctx context.Context, message persistence.QueueMessage) error {
 	if message.Queue != persistence.QueueReconciliation {
 		return errors.New("unsupported reconciliation message")
@@ -456,7 +458,12 @@ func (service *Service) HandleReconciliation(ctx context.Context, message persis
 	if err != nil || !lineageEnded(result.Observations) {
 		return err
 	}
-	return service.retire(ctx, nextID)
+	// The refresh has committed, so a retry would only repeat the provider call. If retiring fails,
+	// the next generation stays runnable, refreshes once more, and retires its own successor.
+	if err := service.retire(ctx, nextID); err != nil {
+		slog.WarnContext(ctx, "reconciliation_retire_failed", slog.String("reconciliation_job_id", nextID))
+	}
+	return nil
 }
 
 // verify converts one protected job into the provider-neutral verification command.
