@@ -53,22 +53,23 @@ func FetchSubscribers(ctx context.Context, config FetchConfig) error {
 	if base == "" {
 		base = strings.TrimRight(revenueCatSubscriberURL, "/")
 	}
-	// Reject every unusable id before the first GET, because each GET can create a customer.
+	// Resolve every id before the first GET, because each GET can create a customer.
+	type subscriberRequest struct{ id, endpoint string }
+	requests := make([]subscriberRequest, 0, len(config.IDs))
 	for _, id := range config.IDs {
 		if id = strings.TrimSpace(id); id == "" {
 			continue
 		}
-		if _, err := subscriberURL(base, id); err != nil {
+		endpoint, err := subscriberURL(base, id)
+		if err != nil {
 			return err
 		}
+		requests = append(requests, subscriberRequest{id: id, endpoint: endpoint})
 	}
 	var buffer bytes.Buffer
-	for _, id := range config.IDs {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		body, err := fetchSubscriber(ctx, config, base, id)
+	for _, subscriber := range requests {
+		id := subscriber.id
+		body, err := fetchSubscriber(ctx, config, subscriber.endpoint, id)
 		if err != nil {
 			return err
 		}
@@ -97,12 +98,8 @@ func FetchSubscribers(ctx context.Context, config FetchConfig) error {
 	return err
 }
 
-// fetchSubscriber performs one GET and retries bounded 429 and 5xx responses.
-func fetchSubscriber(ctx context.Context, config FetchConfig, base, id string) ([]byte, error) {
-	endpoint, err := subscriberURL(base, id)
-	if err != nil {
-		return nil, err
-	}
+// fetchSubscriber performs one GET of a resolved endpoint and retries bounded 429 and 5xx responses.
+func fetchSubscriber(ctx context.Context, config FetchConfig, endpoint, id string) ([]byte, error) {
 	var lastStatus int
 	for attempt := 1; attempt <= fetchAttempts; attempt++ {
 		if attempt > 1 {
@@ -147,7 +144,7 @@ func fetchSubscriber(ctx context.Context, config FetchConfig, base, id string) (
 // url.JoinPath is not used: it splits on "/" and resolves "..", so "bob/../alice" would fetch alice.
 // A lone "." or ".." stays a dot segment after escaping, so both are rejected.
 func subscriberURL(base, id string) (string, error) {
-	if id == "" || id == "." || id == ".." {
+	if id == "." || id == ".." {
 		return "", fmt.Errorf("revenuecat subscriber id %q cannot be used as a URL path segment: %w", id, ErrUsage)
 	}
 	return base + "/" + url.PathEscape(id), nil
