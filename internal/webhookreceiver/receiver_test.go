@@ -267,6 +267,30 @@ func TestReceiverReportsIdentityConflict(t *testing.T) {
 	}
 }
 
+// TestReceiverRejectsInvalidEntitlementMetadata verifies authenticated bodies still need usable audit metadata.
+func TestReceiverRejectsInvalidEntitlementMetadata(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.November, 2, 12, 0, 0, 0, time.UTC)
+	for _, body := range []string{
+		`not json`,
+		`{"schema_version":0,"application_id":"ios-sandbox"}`,
+		`{"schema_version":1}`,
+		`{"schema_version":1,"application_id":" ios-sandbox"}`,
+		`{"schema_version":1,"application_id":"ios\u0007sandbox"}`,
+	} {
+		store := &fakeStore{saveResult: SaveInserted}
+		receiver := newTestReceiver(t, store, now, defaultTestBodyLimit)
+		recorder := httptest.NewRecorder()
+
+		receiver.ServeHTTP(recorder, signedRequest(t, now, []byte(body), "event-1"))
+
+		if recorder.Code != http.StatusBadRequest || len(store.events) != 0 {
+			t.Fatalf("body %s status/events = %d/%d, want %d/0", body, recorder.Code, len(store.events), http.StatusBadRequest)
+		}
+	}
+}
+
 // TestReceiverReadinessTracksStore verifies health and readiness have distinct dependency semantics.
 func TestReceiverReadinessTracksStore(t *testing.T) {
 	t.Parallel()

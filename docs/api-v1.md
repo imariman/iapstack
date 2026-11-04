@@ -363,6 +363,8 @@ v2
 
 The event ID is authenticated. Reject `v1` signatures, timestamps outside the application's replay window, and any delivery whose `IAPStack-Event-ID` does not match the MAC. Deduplicate by that authenticated event ID.
 
+The body is the `entitlement.changed` payload modeled by `EntitlementChange` in the Go and TypeScript SDKs. It has no `event_type` field, and no header names the event type. `entitlement.changed` is the only event IAPStack delivers. `application_id` follows the shared identifier rules: it can contain inner spaces and non-ASCII text and has no length cap.
+
 ## Shared SDK behavior
 
 Behavior that is meant to be identical across the Go, TypeScript, React Native,

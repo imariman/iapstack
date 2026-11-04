@@ -28,9 +28,9 @@ const (
 	processTestSecret = "0123456789abcdef0123456789abcdef"
 	// processTestEventID isolates the durable process fixture from other receiver tests.
 	processTestEventID = "receiver-command-process-success-test"
-	// processTestApplicationID identifies the synthetic application in persisted assertions.
-	processTestApplicationID = "receiver-command-test-app"
-	// processTestEventType identifies the synthetic event in persisted assertions.
+	// processTestApplicationID is a valid core application ID with an inner space and non-ASCII text.
+	processTestApplicationID = "receiver command test app ü"
+	// processTestEventType is the type the receiver records; IAPStack bodies do not carry it.
 	processTestEventType = "entitlement.changed"
 )
 
@@ -83,7 +83,7 @@ func TestRunServesAndDeduplicatesSignedWebhooksWithPostgreSQL(t *testing.T) {
 		t.Fatalf("reset receiver process fixture: %v", err)
 	}
 
-	body := []byte(`{"schema_version":1,"application_id":"` + processTestApplicationID + `","event_type":"` + processTestEventType + `"}`)
+	body := []byte(`{"schema_version":1,"application_id":"` + processTestApplicationID + `","customer_id":"customer-1"}`)
 	for delivery := 0; delivery < 2; delivery++ {
 		headers := signedReceiverHeaders(body, time.Now().UTC())
 		assertReceiverStatus(t, client, http.MethodPost, baseURL+webhookreceiver.WebhookPath, body, headers, http.StatusNoContent)
