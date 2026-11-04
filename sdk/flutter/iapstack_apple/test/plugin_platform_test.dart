@@ -320,7 +320,7 @@ void main() {
       officialPlatform.emitPurchase(native);
 
       final purchase = await purchaseFuture;
-      expect(purchase.transactionId, 'transaction-100');
+      expect(purchase.transactionId, '100');
       expect(purchase.productId, 'premium_monthly');
       expect(purchase.signedTransaction, 'header.payload.signature');
       expect(purchase.appAccountToken, '018f59d0-a200-7000-8000-000000000001');
@@ -331,6 +331,8 @@ void main() {
       await bridge.completePurchase(purchase);
       await bridge.completePurchase(purchase);
       expect(officialPlatform.completed, <PurchaseDetails>[native]);
+      // The cached handle is used once; a repeat finishes by id, a no-op.
+      expect(storeKit.finished, <int>[100]);
     },
   );
 
@@ -372,7 +374,8 @@ void main() {
       await bridge.completePurchase(restored.first);
       await bridge.completePurchase(unfinished);
       await bridge.completePurchase(unfinished);
-      expect(storeKit.finished, <int>[101]);
+      // Native finish(id) does nothing for a transaction already finished.
+      expect(storeKit.finished, <int>[101, 101]);
       expect(officialPlatform.completed, isEmpty);
     },
   );
@@ -503,15 +506,25 @@ void main() {
   );
 
   test(
-    'fails completion when this bridge holds no StoreKit finish handle',
+    'finishes by StoreKit id when another bridge cached the update',
     () async {
       final otherBridge = ApplePluginPlatform();
       final otherPurchaseFuture = otherBridge.purchaseUpdates.first;
       officialPlatform.emitPurchase(
-        _purchaseDetails(status: PurchaseStatus.purchased),
+        _purchaseDetails(status: PurchaseStatus.purchased, purchaseID: '4242'),
       );
       final otherPurchase = await otherPurchaseFuture;
 
+      await bridge.completePurchase(otherPurchase);
+
+      expect(storeKit.finished, <int>[4242]);
+      expect(officialPlatform.completed, isEmpty);
+    },
+  );
+
+  test(
+    'fails completion when the purchase has no StoreKit id to finish',
+    () async {
       final missingIdFuture = bridge.purchaseUpdates.first;
       officialPlatform.emitPurchase(
         _purchaseDetails(status: PurchaseStatus.purchased, purchaseID: null),
@@ -519,10 +532,9 @@ void main() {
       final missingId = await missingIdFuture;
 
       for (final purchase in <ApplePurchase>[
-        otherPurchase,
         missingId,
         const ApplePurchase(
-          transactionId: '999',
+          transactionId: 'not-a-storekit-id',
           productId: 'premium_monthly',
           signedTransaction: 'header.payload.signature',
           status: ApplePurchaseStatus.purchased,
@@ -712,7 +724,7 @@ AppStoreProduct2Details _productDetails({
 SK2PurchaseDetails _purchaseDetails({
   required PurchaseStatus status,
   String? appAccountToken,
-  String? purchaseID = 'transaction-100',
+  String? purchaseID = '100',
 }) => SK2PurchaseDetails(
   productID: 'premium_monthly',
   purchaseID: purchaseID,

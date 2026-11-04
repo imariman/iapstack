@@ -123,6 +123,38 @@ void main() {
     );
 
     test(
+      'rejects a pending purchase with no transaction id before verification',
+      () async {
+        final events = <String>[];
+        final apple = AppleIapStack(
+          client: _backend((request) async {
+            events.add('verified');
+            return http.Response(jsonEncode(_verificationJson), 200);
+          }),
+          productKinds: const <String, AppleProductKind>{
+            'premium_monthly': AppleProductKind.subscription,
+          },
+          platform: _FakePlatform(events: events),
+        );
+
+        await expectLater(
+          apple.verifyPurchase(
+            externalCustomerId: _customerId,
+            purchase: _purchase(transactionId: '', pendingCompletion: true),
+          ),
+          throwsA(
+            isA<AppleIapStackException>().having(
+              (error) => error.code,
+              'code',
+              'transaction_not_finishable',
+            ),
+          ),
+        );
+        expect(events, isEmpty);
+      },
+    );
+
+    test(
       'deduplicates restored transaction IDs before batch verification',
       () async {
         final batchSizes = <int>[];
@@ -219,15 +251,71 @@ void main() {
       await expectLater(
         apple.restorePurchases(externalCustomerId: _customerId),
         throwsA(
-          isA<AppleIapStackException>().having(
-            (error) => error.code,
-            'code',
-            'apple_completion_failed',
-          ),
+          isA<IapStackIncompleteRestoreException>()
+              .having(
+                (error) => error.committedRestoreResults,
+                'committedRestoreResults',
+                hasLength(2),
+              )
+              .having(
+                (error) => (error.cause! as AppleIapStackException).code,
+                'cause.code',
+                'apple_completion_failed',
+              ),
         ),
       );
-      expect(platform.completedIds, <String>['100']);
+      expect(platform.completedIds, <String>['100', '101']);
     });
+
+    test(
+      'keeps the IAPStack error when finishing fails before a later batch fails',
+      () async {
+        final transactionIds = List<String>.generate(
+          maxRestoreBatchSize + 1,
+          (index) => '${1000 + index}',
+        );
+        final platform = _FakePlatform(
+          restored: <ApplePurchase>[
+            for (final transactionId in transactionIds)
+              _purchase(transactionId: transactionId, pendingCompletion: true),
+          ],
+          completionError: const AppleIapStackException(
+            code: 'apple_completion_failed',
+            message: 'Apple completion failed',
+          ),
+        );
+        var calls = 0;
+        final apple = AppleIapStack(
+          client: _backend((request) async {
+            calls += 1;
+            return calls == 1
+                ? _restoreResponse(request)
+                : _unavailableResponse();
+          }),
+          productKinds: const <String, AppleProductKind>{
+            'premium_monthly': AppleProductKind.subscription,
+          },
+          platform: platform,
+        );
+
+        await expectLater(
+          apple.restorePurchases(externalCustomerId: _customerId),
+          throwsA(
+            isA<IapStackApiException>()
+                .having((error) => error.statusCode, 'statusCode', 503)
+                .having(
+                  (error) => error.committedRestoreResults,
+                  'committedRestoreResults',
+                  hasLength(maxRestoreBatchSize),
+                ),
+          ),
+        );
+        expect(
+          platform.completedIds,
+          transactionIds.take(maxRestoreBatchSize).toList(),
+        );
+      },
+    );
 
     test('leaves restored rows unfinished when restore fails', () async {
       final events = <String>[];

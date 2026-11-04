@@ -16,10 +16,6 @@ final class ApplePluginPlatform implements AppleIapPlatform {
       <String, ProductDetails>{};
   final Map<String, PurchaseDetails> _pendingTransactions =
       <String, PurchaseDetails>{};
-  // Restore has no PurchaseDetails, so its finish handle is the StoreKit id.
-  final Set<String> _unfinishedRestoredTransactions = <String>{};
-  // Finishing a transaction again is a no-op, not a missing handle.
-  final Set<String> _finishedTransactions = <String>{};
 
   @override
   Stream<ApplePurchase> get purchaseUpdates => _plugin.purchaseStream
@@ -121,35 +117,30 @@ final class ApplePluginPlatform implements AppleIapPlatform {
       // `transactions()` is the full history, finished or not, but the plugin
       // returns it without a JWS. Unfinished rows and current entitlements
       // carry one, so history rows take it from those reads. Only rows still
-      // in `unfinishedTransactions()` need finish(), so only those keep a
-      // handle.
-      final unfinished = _byId(await SK2Transaction.unfinishedTransactions());
-      final entitlements = _byId(await SK2Transaction.currentEntitlements());
-      final history = await SK2Transaction.transactions();
-      final purchases = <ApplePurchase>[];
+      // in `unfinishedTransactions()` need finish(). The three reads are
+      // independent.
+      final (unfinishedRows, entitlementRows, history) = await (
+        SK2Transaction.unfinishedTransactions(),
+        SK2Transaction.currentEntitlements(),
+        SK2Transaction.transactions(),
+      ).wait;
+      final unfinished = _byId(unfinishedRows);
+      final entitlements = _byId(entitlementRows);
       final seen = <String>{};
       // A row missing from the history read is still restored.
-      for (final transaction in <SK2Transaction>[
-        ...history,
-        ...unfinished.values,
-        ...entitlements.values,
-      ]) {
-        if (!seen.add(transaction.id)) {
-          continue;
-        }
-        final pending = unfinished[transaction.id];
-        if (pending != null) {
-          _unfinishedRestoredTransactions.add(transaction.id);
-        }
-        purchases.add(
-          _restoredPurchase(
-            transaction,
-            unfinished: pending,
-            entitlement: entitlements[transaction.id],
-          ),
-        );
-      }
-      return purchases;
+      return <ApplePurchase>[
+        for (final transaction in <SK2Transaction>[
+          ...history,
+          ...unfinished.values,
+          ...entitlements.values,
+        ])
+          if (seen.add(transaction.id))
+            _restoredPurchase(
+              transaction,
+              unfinished: unfinished[transaction.id],
+              entitlement: entitlements[transaction.id],
+            ),
+      ];
     },
   );
 
@@ -164,20 +155,20 @@ final class ApplePluginPlatform implements AppleIapPlatform {
       final details = _pendingTransactions[transactionId];
       if (details != null) {
         await _plugin.completePurchase(details);
-      } else if (_unfinishedRestoredTransactions.contains(transactionId)) {
-        await SK2Transaction.finish(int.parse(transactionId));
-      } else if (_finishedTransactions.contains(transactionId)) {
+        _pendingTransactions.remove(transactionId);
         return;
-      } else {
+      }
+      // The plugin's own StoreKit 2 completion is `finish(id)`, and the native
+      // side looks the id up in `Transaction.all`. So any bridge can finish any
+      // StoreKit id, and finishing one again does nothing.
+      final id = int.tryParse(transactionId);
+      if (id == null || id <= 0) {
         throw const AppleIapStackException(
           code: 'transaction_not_finishable',
-          message:
-              'This platform has no StoreKit handle to finish the transaction',
+          message: 'The App Store transaction has no StoreKit id to finish',
         );
       }
-      _pendingTransactions.remove(transactionId);
-      _unfinishedRestoredTransactions.remove(transactionId);
-      _finishedTransactions.add(transactionId);
+      await SK2Transaction.finish(id);
     },
   );
 
