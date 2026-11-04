@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:iapstack/iapstack.dart';
 import 'package:iapstack_apple/iapstack_apple.dart';
 import 'package:in_app_purchase_platform_interface/in_app_purchase_platform_interface.dart';
 import 'package:in_app_purchase_storekit/in_app_purchase_storekit.dart';
@@ -347,6 +351,7 @@ void main() {
       expect(storeKit.calls, <String>[
         'restorePurchases',
         'unfinishedTransactions',
+        'currentEntitlements',
         'transactions',
       ]);
       expect(restored.map((purchase) => purchase.transactionId), <String>[
@@ -369,6 +374,131 @@ void main() {
       await bridge.completePurchase(unfinished);
       expect(storeKit.finished, <int>[101]);
       expect(officialPlatform.completed, isEmpty);
+    },
+  );
+
+  test(
+    'restore signs finished current entitlements from the entitlements read',
+    () async {
+      storeKit
+        ..unfinished = <SK2TransactionMessage>[
+          _transactionMessage(id: 101, receiptData: 'unfinished.jws.101'),
+        ]
+        ..entitlements = <SK2TransactionMessage>[
+          _transactionMessage(
+            id: 100,
+            originalId: 90,
+            receiptData: 'entitlement.jws.100',
+          ),
+          _transactionMessage(id: 101, receiptData: 'entitlement.jws.101'),
+          _transactionMessage(
+            id: 200,
+            productId: 'premium_lifetime',
+            receiptData: 'entitlement.jws.200',
+          ),
+        ]
+        ..history = <SK2TransactionMessage>[
+          // An earlier renewal of 100: finished and no longer an entitlement.
+          _transactionMessage(id: 90),
+          _transactionMessage(id: 100, originalId: 90),
+          _transactionMessage(id: 101),
+        ];
+
+      final restored = await bridge.restorePurchases();
+
+      expect(restored.map((purchase) => purchase.transactionId), <String>[
+        '90',
+        '100',
+        '101',
+        '200',
+      ]);
+      final byId = <String, ApplePurchase>{
+        for (final purchase in restored) purchase.transactionId: purchase,
+      };
+      expect(byId['90']!.signedTransaction, isEmpty);
+      expect(byId['90']!.canVerify, isFalse);
+      expect(byId['90']!.pendingCompletion, isFalse);
+      expect(byId['100']!.signedTransaction, 'entitlement.jws.100');
+      expect(byId['100']!.canVerify, isTrue);
+      expect(byId['100']!.pendingCompletion, isFalse);
+      expect(byId['101']!.signedTransaction, 'unfinished.jws.101');
+      expect(byId['101']!.pendingCompletion, isTrue);
+      // Missing from the history read, but still a current entitlement.
+      expect(byId['200']!.productId, 'premium_lifetime');
+      expect(byId['200']!.signedTransaction, 'entitlement.jws.200');
+      expect(byId['200']!.canVerify, isTrue);
+      expect(byId['200']!.pendingCompletion, isFalse);
+
+      for (final purchase in restored) {
+        await bridge.completePurchase(purchase);
+      }
+      expect(storeKit.finished, <int>[101]);
+    },
+  );
+
+  test(
+    'restore submits finished entitlements and counts unsigned history',
+    () async {
+      storeKit
+        ..entitlements = <SK2TransactionMessage>[
+          _transactionMessage(
+            id: 100,
+            originalId: 90,
+            receiptData: 'entitlement.jws.100',
+          ),
+        ]
+        ..history = <SK2TransactionMessage>[
+          _transactionMessage(id: 90),
+          _transactionMessage(id: 100, originalId: 90),
+          _transactionMessage(
+            id: 300,
+            appAccountToken: '018F59D0-A200-7000-8000-000000000002',
+          ),
+        ];
+      final submitted = <Object?>[];
+      final apple = AppleIapStack(
+        client: IapStackClient(
+          IapStackConfig(
+            baseUri: Uri.parse('https://iap.example'),
+            applicationId: 'application-1',
+            customerToken: 'customer-token',
+            retryPolicy: const IapStackRetryPolicy(maxAttempts: 1),
+          ),
+          httpClient: MockClient((request) async {
+            final body = (jsonDecode(request.body) as Map)
+                .cast<String, Object?>();
+            final purchases = body['purchases']! as List<Object?>;
+            submitted.addAll(purchases);
+            return http.Response(
+              jsonEncode(<String, Object?>{
+                'results': List<Object?>.filled(
+                  purchases.length,
+                  _verificationJson,
+                ),
+              }),
+              200,
+            );
+          }),
+        ),
+        productKinds: const <String, AppleProductKind>{
+          'premium_monthly': AppleProductKind.subscription,
+        },
+        platform: bridge,
+      );
+
+      final result = await apple.restorePurchases(
+        externalCustomerId: '018f59d0-a200-7000-8000-000000000001',
+      );
+
+      expect(submitted, hasLength(1));
+      final evidence =
+          (submitted.single! as Map)['evidence']! as Map<String, Object?>;
+      expect(evidence['signed_transaction'], 'entitlement.jws.100');
+      expect(result.results, hasLength(1));
+      expect(result.skipped.unsigned, 1);
+      expect(result.skipped.differentCustomer, 1);
+      expect(result.skipped.total, 2);
+      expect(storeKit.finished, isEmpty);
     },
   );
 
@@ -598,33 +728,51 @@ final PurchaseVerificationData _verificationData = PurchaseVerificationData(
   source: 'app_store',
 );
 
+final Map<String, Object?> _verificationJson = <String, Object?>{
+  'verified_at': '2026-08-26T10:00:00Z',
+  'customer_id': 'customer-internal',
+  'entitlements': <Object?>[
+    <String, Object?>{
+      'key': 'premium',
+      'access': 'allowed',
+      'reason': 'purchase_valid',
+      'version': 1,
+    },
+  ],
+};
+
 SK2TransactionMessage _transactionMessage({
   required int id,
   String? receiptData,
+  int? originalId,
+  String productId = 'premium_monthly',
+  String? appAccountToken = '018F59D0-A200-7000-8000-000000000001',
 }) => SK2TransactionMessage(
   id: id,
-  originalId: id,
-  productId: 'premium_monthly',
-  appAccountToken: '018F59D0-A200-7000-8000-000000000001',
+  originalId: originalId ?? id,
+  productId: productId,
+  appAccountToken: appAccountToken,
   receiptData: receiptData,
   status: SK2PurchaseStatusMessage.purchased,
 );
 
 /// Answers the StoreKit 2 Pigeon channels the bridge calls during restore.
 ///
-/// Like `in_app_purchase_storekit`, history rows carry no JWS; only the
-/// unfinished read does.
+/// Like `in_app_purchase_storekit` 0.4.16, history rows carry no JWS; only the
+/// unfinished and current entitlements reads do.
 final class _FakeStoreKit2 {
   static const String _prefix =
       'dev.flutter.pigeon.in_app_purchase_storekit.InAppPurchase2API';
   static const List<String> _methods = <String>[
     'restorePurchases',
     'unfinishedTransactions',
+    'currentEntitlements',
     'transactions',
     'finish',
   ];
 
   List<SK2TransactionMessage> unfinished = <SK2TransactionMessage>[];
+  List<SK2TransactionMessage> entitlements = <SK2TransactionMessage>[];
   List<SK2TransactionMessage> history = <SK2TransactionMessage>[];
   final List<String> calls = <String>[];
   final List<int> finished = <int>[];
@@ -638,6 +786,8 @@ final class _FakeStoreKit2 {
         switch (method) {
           case 'unfinishedTransactions':
             result = unfinished;
+          case 'currentEntitlements':
+            result = entitlements;
           case 'transactions':
             result = history;
           case 'finish':

@@ -44,6 +44,9 @@
   delivered to another `ApplePluginPlatform`. `verifyPurchase` then throws
   after IAPStack has verified the purchase. Before, it returned success and
   StoreKit kept the transaction open.
+- Flutter Apple requires `in_app_purchase_storekit` 0.4.16, so the minimum is
+  now Dart 3.11 and Flutter 3.41. That version adds
+  `SK2Transaction.currentEntitlements()`, which restore needs.
 
 ### Fixed
 
@@ -51,6 +54,12 @@
   after IAPStack accepts the batch that carried them, as Swift does. Rows in a
   failed batch stay unfinished. Restored rows can now have
   `pendingCompletion == true`.
+- Flutter Apple `restorePurchases` submits finished current entitlements. The
+  plugin returns history rows without a JWS, so on a real device restore
+  submitted only unfinished rows and dropped the rest without counting them.
+  Restore now takes the JWS from `currentEntitlements()`. Finished rows that
+  still have no JWS, such as earlier renewals, are counted on
+  `skipped.unsigned`. Swift still submits them.
 
 ### Added
 
@@ -62,6 +71,8 @@
 - `RestoreResult.skipped` (`unbound`, `differentCustomer`, `unknownProduct`,
   `multipleProducts`) and `RestoreResult.pageLimitReached`. Direct HTTP
   `fromJson` still reads only `results`.
+- Flutter: `RestoreSkipCounts.unsigned`, included in `total`. Flutter Apple
+  counts restore rows with no JWS there. Swift and Kotlin have no such count.
 
 ## 0.1.0-sdk.2
 

@@ -315,6 +315,20 @@ void main() {
             _purchase(transactionId: 'legacy-unbound', appAccountToken: ''),
             _purchase(transactionId: 'empty', signedTransaction: ''),
             _purchase(transactionId: 'malformed', signedTransaction: 'not-jws'),
+            // Another customer's row counts as that, even without a JWS.
+            _purchase(
+              transactionId: 'other-customer-unsigned',
+              appAccountToken: '018f59d0-a200-7000-8000-000000000002',
+              signedTransaction: '',
+            ),
+            const ApplePurchase(
+              transactionId: 'pending',
+              productId: 'premium_monthly',
+              signedTransaction: '',
+              appAccountToken: _customerId,
+              status: ApplePurchaseStatus.pending,
+              pendingCompletion: false,
+            ),
             _purchase(transactionId: 'configured'),
           ],
         );
@@ -350,9 +364,11 @@ void main() {
         );
         expect(result.results, hasLength(1));
         expect(result.skipped.unknownProduct, 1);
-        expect(result.skipped.differentCustomer, 1);
+        expect(result.skipped.differentCustomer, 2);
         expect(result.skipped.unbound, 1);
         expect(result.skipped.multipleProducts, 0);
+        expect(result.skipped.unsigned, 2);
+        expect(result.skipped.total, 6);
         expect(result.pageLimitReached, isFalse);
       },
     );

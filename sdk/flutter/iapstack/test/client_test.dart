@@ -932,6 +932,20 @@ void main() {
     });
   });
 
+  group('RestoreSkipCounts', () {
+    test('adds unsigned rows to the total', () {
+      final counts = const RestoreSkipCounts(unbound: 1)
+          .byAdding(unsigned: 2)
+          .byAdding(differentCustomer: 1, unsigned: 1);
+
+      expect(counts.unsigned, 3);
+      expect(counts.unbound, 1);
+      expect(counts.differentCustomer, 1);
+      expect(counts.total, 5);
+      expect(const RestoreSkipCounts().unsigned, 0);
+    });
+  });
+
   group('IapStackConfig', () {
     test('requires HTTPS unless insecure HTTP is explicit', () {
       expect(

@@ -132,9 +132,11 @@ abstract interface class AppleIapPlatform {
     required String appAccountToken,
   });
 
-  /// Synchronizes App Store ownership and returns the current transaction history.
+  /// Returns the StoreKit transaction history to restore.
   ///
   /// Rows that StoreKit has not finished yet have `pendingCompletion == true`.
+  /// A row with no JWS has `canVerify == false`. Restore counts it on
+  /// `RestoreSkipCounts.unsigned` and does not submit it.
   Future<List<ApplePurchase>> restorePurchases();
 
   /// Finishes one StoreKit transaction after authoritative server verification.

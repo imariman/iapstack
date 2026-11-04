@@ -115,21 +115,39 @@ final class ApplePluginPlatform implements AppleIapPlatform {
   Future<List<ApplePurchase>> restorePurchases() => _guard(
     operation: 'restore',
     callback: () async {
+      // The plugin's restore re-emits current entitlements on the purchase
+      // stream. It does not call `AppStore.sync()`.
       await SK2Transaction.restorePurchases();
-      // `transactions()` is the full history, finished or not. Only rows still
+      // `transactions()` is the full history, finished or not, but the plugin
+      // returns it without a JWS. Unfinished rows and current entitlements
+      // carry one, so history rows take it from those reads. Only rows still
       // in `unfinishedTransactions()` need finish(), so only those keep a
-      // handle. The plugin's history rows carry no JWS; unfinished rows do.
-      final unfinished = <String, SK2Transaction>{
-        for (final transaction in await SK2Transaction.unfinishedTransactions())
-          transaction.id: transaction,
-      };
+      // handle.
+      final unfinished = _byId(await SK2Transaction.unfinishedTransactions());
+      final entitlements = _byId(await SK2Transaction.currentEntitlements());
+      final history = await SK2Transaction.transactions();
       final purchases = <ApplePurchase>[];
-      for (final transaction in await SK2Transaction.transactions()) {
+      final seen = <String>{};
+      // A row missing from the history read is still restored.
+      for (final transaction in <SK2Transaction>[
+        ...history,
+        ...unfinished.values,
+        ...entitlements.values,
+      ]) {
+        if (!seen.add(transaction.id)) {
+          continue;
+        }
         final pending = unfinished[transaction.id];
         if (pending != null) {
           _unfinishedRestoredTransactions.add(transaction.id);
         }
-        purchases.add(_restoredPurchase(transaction, unfinished: pending));
+        purchases.add(
+          _restoredPurchase(
+            transaction,
+            unfinished: pending,
+            entitlement: entitlements[transaction.id],
+          ),
+        );
       }
       return purchases;
     },
@@ -227,17 +245,34 @@ AppleProduct _appleProduct(AppStoreProduct2Details details) {
   );
 }
 
+/// _byId keys StoreKit 2 rows by transaction ID. The first row for an ID wins.
+Map<String, SK2Transaction> _byId(List<SK2Transaction> transactions) {
+  final rows = <String, SK2Transaction>{};
+  for (final transaction in transactions) {
+    rows.putIfAbsent(transaction.id, () => transaction);
+  }
+  return rows;
+}
+
 /// _restoredPurchase converts a StoreKit 2 history row into signed evidence.
 ///
 /// [unfinished] is the same transaction from the unfinished read, when StoreKit
-/// still expects it to be finished.
+/// still expects it to be finished. [entitlement] is the same transaction from
+/// the current entitlements read. Either one supplies the JWS that the plugin
+/// leaves out of history rows. A row with neither has an empty
+/// `signedTransaction`, so `canVerify` is false.
 ApplePurchase _restoredPurchase(
   SK2Transaction transaction, {
   SK2Transaction? unfinished,
+  SK2Transaction? entitlement,
 }) => ApplePurchase(
   transactionId: transaction.id,
   productId: transaction.productId,
-  signedTransaction: transaction.receiptData ?? unfinished?.receiptData ?? '',
+  signedTransaction: <String?>[
+    transaction.receiptData,
+    unfinished?.receiptData,
+    entitlement?.receiptData,
+  ].nonNulls.firstWhere((jws) => jws.isNotEmpty, orElse: () => ''),
   appAccountToken: transaction.appAccountToken?.toLowerCase(),
   status: ApplePurchaseStatus.restored,
   pendingCompletion: unfinished != null,

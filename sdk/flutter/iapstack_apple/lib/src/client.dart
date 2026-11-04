@@ -121,7 +121,8 @@ final class AppleIapStack {
   /// accepted are finished and the rest stay unfinished. Unbound,
   /// different-customer, and unknown-product rows are counted on
   /// [RestoreResult.skipped] and are not submitted. Another customer's rows
-  /// are never verified.
+  /// are never verified. A row with no usable JWS is counted as
+  /// [RestoreSkipCounts.unsigned] when no other reason applies.
   Future<RestoreResult> restorePurchases({
     required String externalCustomerId,
     String? requestId,
@@ -133,7 +134,8 @@ final class AppleIapStack {
     final observedTransactions = <String>{};
     var skipped = const RestoreSkipCounts();
     for (final purchase in purchases) {
-      if (!purchase.canVerify) {
+      if (purchase.status != ApplePurchaseStatus.purchased &&
+          purchase.status != ApplePurchaseStatus.restored) {
         continue;
       }
       final account = purchase.appAccountToken?.toLowerCase();
@@ -148,6 +150,11 @@ final class AppleIapStack {
       }
       if (!bound) {
         skipped = skipped.byAdding(unbound: 1);
+        continue;
+      }
+      if (!purchase.canVerify) {
+        // The plugin returns finished history rows without a JWS.
+        skipped = skipped.byAdding(unsigned: 1);
         continue;
       }
       if (!observedTransactions.add(purchase.transactionId)) {
