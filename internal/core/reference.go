@@ -86,3 +86,13 @@ func (reference StoreReference) LogValue() slog.Value {
 		slog.String("value", "[REDACTED]"),
 	)
 }
+
+// FirstReferenceValue returns the private value of the first reference of one kind, or an empty string.
+func FirstReferenceValue(references []StoreReference, kind string) string {
+	for _, reference := range references {
+		if reference.Kind == kind {
+			return reference.value
+		}
+	}
+	return ""
+}

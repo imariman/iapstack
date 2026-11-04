@@ -283,13 +283,7 @@ func (adapter *Adapter) Reconcile(
 	if len(request.ExpectedProducts) != 1 {
 		return stores.VerificationResult{}, invalid("reconcile", errors.New("google play reconciliation requires one expected product"))
 	}
-	purchaseToken := ""
-	for _, reference := range request.QueryReferences {
-		if reference.Kind == "purchase_token" {
-			purchaseToken = reference.Value()
-			break
-		}
-	}
+	purchaseToken := core.FirstReferenceValue(request.QueryReferences, "purchase_token")
 	if purchaseToken == "" {
 		return stores.VerificationResult{}, invalid("reconcile", errors.New("google play reconciliation requires a purchase token"))
 	}
@@ -308,6 +302,54 @@ func (adapter *Adapter) Reconcile(
 		return stores.VerificationResult{}, invalid("reconcile", err)
 	}
 	return verificationResult, nil
+}
+
+// LinkedPurchase reads one subscription purchase token that no customer has verified yet.
+// It runs the same subscriptionsv2 query and normalization as Verify and Reconcile, so a purchase they would
+// reject is rejected here too. It returns the product of the item that grants access now, the query reference
+// of linkedPurchaseToken when the purchase replaces another one, and the obfuscated account binding.
+// Google documents linkedPurchaseToken as the way to find the account of an upgrade, downgrade, or resubscribe.
+func (adapter *Adapter) LinkedPurchase(
+	ctx context.Context,
+	request stores.LinkedPurchaseRequest,
+) (stores.LinkedPurchase, error) {
+	if err := request.Validate(); err != nil {
+		return stores.LinkedPurchase{}, invalid("linked_purchase", err)
+	}
+	if request.Application.Store.Provider != adapter.Provider() || request.ProductKind != core.ProductKindSubscription {
+		return stores.LinkedPurchase{}, invalid("linked_purchase", errors.New("google play linked purchases are subscriptions"))
+	}
+	purchaseToken := core.FirstReferenceValue(request.QueryReferences, "purchase_token")
+	if purchaseToken == "" {
+		return stores.LinkedPurchase{}, invalid("linked_purchase", errors.New("google play linked purchase requires a purchase token"))
+	}
+	configuration, err := adapter.configuration(ctx, request.Application)
+	if err != nil {
+		return stores.LinkedPurchase{}, err
+	}
+	result, err := adapter.query(ctx, request.Application, configuration, purchaseToken, core.ProductKindSubscription)
+	if err != nil {
+		return stores.LinkedPurchase{}, err
+	}
+	current := result.observations[0]
+	linked := stores.LinkedPurchase{
+		ProductID:        current.ProductID,
+		CustomerBindings: current.ReferencesFor(core.ReferenceCustomerBinding),
+	}
+	for _, reference := range current.ReferencesFor(core.ReferenceLinkedLineage) {
+		if reference.Kind != "purchase_token" {
+			continue
+		}
+		query, err := core.NewStoreReference(core.ReferenceQuery, "purchase_token", reference.Value())
+		if err != nil {
+			return stores.LinkedPurchase{}, invalid("linked_purchase", err)
+		}
+		linked.LinkedReferences = append(linked.LinkedReferences, query)
+	}
+	if err := linked.Validate(); err != nil {
+		return stores.LinkedPurchase{}, invalid("linked_purchase", err)
+	}
+	return linked, nil
 }
 
 // PostCommit acknowledges verified Google Play purchases only after their durable state has committed.

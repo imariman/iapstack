@@ -244,6 +244,13 @@ transaction for both client submissions and RTDN reconciliation: a transient Goo
 failure leaves the entitlement durable and causes the API request or worker job to retry.
 The RTDN itself is retained as encrypted reconciliation evidence and cannot grant access
 without the protected purchase-token, product, kind, and customer-binding lookup.
+A replacement token that no client submitted is bound from its RTDN only through the
+stored token in its `linkedPurchaseToken` and a matching obfuscated account id (see
+`docs/api-v1.md`). That adds one `subscriptionsv2.get` call per worker attempt for an
+unknown subscription token. An unknown token stays retryable until
+`IAPSTACK_WORKER_MAX_ATTEMPTS`, about 11 hours with the default 12 attempts, which is
+inside Google's three-day acknowledgement window. If the attempts run out before the
+token is bound, Google refunds and revokes the unacknowledged purchase.
 Google `409` concurrent updates, `429` rate limits,
 and `5xx` responses are retryable. A persistent `401` or `403` means the protected
 service account credential or Play Console application permission must be corrected.

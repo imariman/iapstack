@@ -42,6 +42,23 @@ type PostCommitRequest struct {
 	Actions     []PostCommitAction
 }
 
+// LinkedPurchaseRequest asks a provider which earlier purchase one purchase replaces.
+// No customer is known for the purchase yet, so the request carries only its application scope.
+type LinkedPurchaseRequest struct {
+	Application     core.Application
+	ProductKind     core.ProductKind
+	QueryReferences []core.StoreReference
+}
+
+// LinkedPurchase is the provider's authoritative link from one purchase to the purchase it replaces.
+// ProductID is the product that grants access now. LinkedReferences are query references of the replaced
+// purchase and are empty when the purchase replaces nothing. CustomerBindings are the purchase's own bindings.
+type LinkedPurchase struct {
+	ProductID        core.ProviderProductID
+	LinkedReferences []core.StoreReference
+	CustomerBindings []core.StoreReference
+}
+
 // VerificationResult is one authoritative provider answer.
 // NamedProducts is set only when the provider purchase names more than one product, such as a Google Play
 // deferred replacement. It lists every product the purchase names, including each observed product. A claim
@@ -70,11 +87,39 @@ type PostCommitter interface {
 	PostCommit(context.Context, PostCommitRequest) error
 }
 
+// LinkedPurchaseResolver reads the replacement link of a purchase that no customer has verified yet.
+type LinkedPurchaseResolver interface {
+	// LinkedPurchase queries authoritative provider state without a customer and returns nothing to persist.
+	LinkedPurchase(context.Context, LinkedPurchaseRequest) (LinkedPurchase, error)
+}
+
 type Adapter interface {
 	// Provider identifies the purchase provider implemented by the adapter.
 	Provider() core.Provider
 	Verifier
 	Reconciler
+}
+
+// Validate checks the application scope, product kind, and query references of one link lookup.
+func (request LinkedPurchaseRequest) Validate() error {
+	if err := errors.Join(request.Application.Validate(), request.ProductKind.Validate()); err != nil {
+		return err
+	}
+	if len(request.QueryReferences) == 0 {
+		return errors.New("linked purchase lookup requires at least one query reference")
+	}
+	return validateReferencesWithRole(request.QueryReferences, core.ReferenceQuery)
+}
+
+// Validate checks the current product, the replaced purchase's query references, and the customer bindings.
+func (purchase LinkedPurchase) Validate() error {
+	if err := purchase.ProductID.Validate(); err != nil {
+		return err
+	}
+	if err := validateReferencesWithRole(purchase.LinkedReferences, core.ReferenceQuery); err != nil {
+		return err
+	}
+	return validateReferencesWithRole(purchase.CustomerBindings, core.ReferenceCustomerBinding)
 }
 
 // Validate checks a post-commit action's kind, product identity, and opaque query references.

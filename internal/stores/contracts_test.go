@@ -322,6 +322,60 @@ func TestPostCommitRequestRejectsDuplicateActions(t *testing.T) {
 	}
 }
 
+// TestLinkedPurchaseContractsCheckReferenceRoles verifies the customer-free replacement lookup contracts.
+func TestLinkedPurchaseContractsCheckReferenceRoles(t *testing.T) {
+	t.Parallel()
+
+	newToken := storeReference(t, core.ReferenceQuery, "purchase_token", "new-token")
+	request := stores.LinkedPurchaseRequest{
+		Application: googleApplication(), ProductKind: core.ProductKindSubscription,
+		QueryReferences: []core.StoreReference{newToken},
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("LinkedPurchaseRequest.Validate() error = %v", err)
+	}
+	for name, invalid := range map[string]stores.LinkedPurchaseRequest{
+		"no query reference": {Application: request.Application, ProductKind: request.ProductKind},
+		"lineage reference": {
+			Application: request.Application, ProductKind: request.ProductKind,
+			QueryReferences: []core.StoreReference{storeReference(t, core.ReferenceLineage, "purchase_token", "new-token")},
+		},
+		"missing product kind": {Application: request.Application, QueryReferences: request.QueryReferences},
+	} {
+		if err := invalid.Validate(); err == nil {
+			t.Fatalf("LinkedPurchaseRequest.Validate() %s error = nil", name)
+		}
+	}
+
+	linked := stores.LinkedPurchase{
+		ProductID:        "premium_yearly",
+		LinkedReferences: []core.StoreReference{storeReference(t, core.ReferenceQuery, "purchase_token", "old-token")},
+		CustomerBindings: []core.StoreReference{storeReference(
+			t, core.ReferenceCustomerBinding, "obfuscated_external_account_id", "account-1",
+		)},
+	}
+	if err := linked.Validate(); err != nil {
+		t.Fatalf("LinkedPurchase.Validate() error = %v", err)
+	}
+	unlinked := stores.LinkedPurchase{ProductID: "premium_yearly"}
+	if err := unlinked.Validate(); err != nil {
+		t.Fatalf("LinkedPurchase.Validate() without a replaced purchase error = %v", err)
+	}
+	for name, invalid := range map[string]stores.LinkedPurchase{
+		"missing product": {LinkedReferences: linked.LinkedReferences},
+		"binding as replaced purchase": {
+			ProductID: linked.ProductID, LinkedReferences: linked.CustomerBindings,
+		},
+		"query reference as binding": {
+			ProductID: linked.ProductID, CustomerBindings: linked.LinkedReferences,
+		},
+	} {
+		if err := invalid.Validate(); err == nil {
+			t.Fatalf("LinkedPurchase.Validate() %s error = nil", name)
+		}
+	}
+}
+
 // TestRegistrySupportsBuiltInAndFutureProviders verifies extensible and duplicate-safe registration.
 func TestRegistrySupportsBuiltInAndFutureProviders(t *testing.T) {
 	t.Parallel()

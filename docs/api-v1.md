@@ -329,6 +329,24 @@ the RTDN lifecycle type. The normalized native RTDN is retained as protected
 `provider_notification_reconciliation` evidence; it is not rewritten as a client
 purchase submission. Unknown purchase tokens
 remain retryable so a client verification racing the notification can arrive first.
+
+A subscription notification for an unknown token can still be bound when the token
+replaces a stored purchase. Google issues a new purchase token for an upgrade, a
+downgrade, a `DEFERRED` replacement, or a resubscribe before expiry, and names the old
+token in `linkedPurchaseToken`. The worker reads `purchases.subscriptionsv2` for the
+unknown token before any customer is known and stores nothing from that read. It then
+looks up the linked token in its protected query scope. The new purchase's
+`obfuscatedExternalAccountId` must be the old purchase's `external_customer_id`, or an
+external id of the same canonical customer after a merge. When both hold, the token is
+reconciled like a stored one for that customer and the product that grants access now.
+Its state, projection, and outbox event commit first, and then IAPStack acknowledges the
+purchase, which Google requires within three days. The daily refresh is scheduled for the
+new token. Later notifications and redeliveries find the stored token and do not repeat
+the link lookup. A token that replaces nothing, whose linked token is not stored yet, or
+that Android Publisher does not return yet stays retryable. A different or missing
+account id fails the job without a retry; the client can still submit that token for
+its own customer. Voided-purchase notifications for unknown tokens are not bound
+this way.
 When that authoritative state requires purchase acknowledgement, the worker commits
 the normalized state first and then calls Google using the same protected purchase
 token. HTTP `409`, `429`, and `5xx` acknowledgement failures remain retryable.
