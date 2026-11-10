@@ -1,17 +1,14 @@
 -- Keep a failed subscription schedule until a worker inserts its reconciliation job.
 -- attempts and next_attempt_at keep a poison row out of the due batch.
--- A dead row is terminal and no longer occupies the live payload identity.
+-- A scheduled or dead row is terminal and no longer occupies the pending payload identity.
 CREATE TABLE reconciliation_schedule_retries (
     id text PRIMARY KEY,
     project_id text NOT NULL,
     application_id text NOT NULL,
     customer_id text NOT NULL,
-    kind text NOT NULL,
     payload_ciphertext bytea NOT NULL,
     payload_fingerprint bytea NOT NULL,
     encryption_key_id text NOT NULL,
-    metadata jsonb NOT NULL,
-    available_at timestamptz NOT NULL,
     attempts integer NOT NULL DEFAULT 0,
     next_attempt_at timestamptz NOT NULL DEFAULT now(),
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -24,26 +21,22 @@ CREATE TABLE reconciliation_schedule_retries (
     CONSTRAINT reconciliation_schedule_retries_id_valid CHECK (
         id <> '' AND id = btrim(id) AND id !~ '[[:cntrl:]]'
     ),
-    CONSTRAINT reconciliation_schedule_retries_kind_valid CHECK (
-        kind IN ('reconciliation_request', 'purchase_evidence')
-    ),
     CONSTRAINT reconciliation_schedule_retries_payload_valid CHECK (
         octet_length(payload_ciphertext) > 0 AND octet_length(payload_fingerprint) = 32
     ),
     CONSTRAINT reconciliation_schedule_retries_key_valid CHECK (
         encryption_key_id <> '' AND encryption_key_id = btrim(encryption_key_id)
     ),
-    CONSTRAINT reconciliation_schedule_retries_metadata_valid CHECK (jsonb_typeof(metadata) = 'object'),
     CONSTRAINT reconciliation_schedule_retries_attempts_valid CHECK (attempts >= 0),
     CONSTRAINT reconciliation_schedule_retries_outcome_exclusive CHECK (
         scheduled_at IS NULL OR dead_at IS NULL
     )
 );
 
--- Live rows only. A dead retry must not block a later schedule for the same payload.
+-- Pending rows only. A scheduled or dead retry must not block a later retry for the same payload.
 CREATE UNIQUE INDEX reconciliation_schedule_retries_payload_unique
-    ON reconciliation_schedule_retries (application_id, customer_id, kind, payload_fingerprint)
-    WHERE dead_at IS NULL;
+    ON reconciliation_schedule_retries (application_id, customer_id, payload_fingerprint)
+    WHERE scheduled_at IS NULL AND dead_at IS NULL;
 
 CREATE INDEX reconciliation_schedule_retries_pending_idx
     ON reconciliation_schedule_retries (next_attempt_at, id)
@@ -59,7 +52,7 @@ CREATE INDEX reconciliation_schedule_retries_dead_retention_idx
 
 ---- create above / drop below ----
 
--- Unscheduled rows, including dead ones, still hold protected purchase evidence and never became a job.
+-- Unscheduled rows, including dead ones, still hold protected verification payloads and never became a job.
 DO $$
 BEGIN
     IF EXISTS (

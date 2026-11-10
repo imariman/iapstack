@@ -40,10 +40,11 @@ type scriptedPurchaseVerifier struct {
 
 // scheduleProtection records reconciliation protection attempts.
 type scheduleProtection struct {
-	err      error
-	calls    int
-	purposes []string
-	opened   []byte
+	err         error
+	failCount   int
+	calls       int
+	purposes    []string
+	ciphertexts map[[sha256.Size]byte][]byte
 }
 
 // reconciliationScheduleStore records or rejects one reconciliation job write.
@@ -64,12 +65,11 @@ type reconciliationScheduleTransaction struct {
 
 // scheduleRecovery describes one HTTP purchase whose schedule insert fails once.
 type scheduleRecovery struct {
-	path             string
-	body             string
-	restore          bool
-	jobSaveFailures  int
-	protectErr       error
-	purchaseEvidence protection.Value
+	path            string
+	body            string
+	restore         bool
+	jobSaveFailures int
+	protectFailures int
 }
 
 // scheduleRetryRegistry satisfies verification service construction without calling a provider.
@@ -98,7 +98,7 @@ func TestVerifyReturnsSnapshotWhenReconciliationSchedulingFails(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			api, verifier, protector, operations, logs := newVerifyScheduleAPI(nil, test.protectErr, test.saveErr)
+			api, verifier, protector, operations, logs := newVerifyScheduleAPI(t, nil, test.protectErr, test.saveErr)
 			input := subscriptionVerificationRequest(verifySchedulePurchaseToken)
 			principal := verifySchedulePrincipal()
 
@@ -113,8 +113,11 @@ func TestVerifyReturnsSnapshotWhenReconciliationSchedulingFails(t *testing.T) {
 			if err != nil || again.Customer.ID != result.Customer.ID {
 				t.Fatalf("second verify() = (%#v, %v), want the same snapshot", again, err)
 			}
-			if protector.calls != 2 || !containsString(protector.purposes, reconciliationProtectionPurpose) {
-				t.Fatalf("protection calls = %d purposes %#v, want two reconciliation attempts", protector.calls, protector.purposes)
+			if protector.calls != 4 ||
+				!containsString(protector.purposes, "reconciliation_request") ||
+				!containsString(protector.purposes, "reconciliation_schedule_retry") {
+				t.Fatalf("protection calls = %d purposes %#v, want schedule and retry protection attempts",
+					protector.calls, protector.purposes)
 			}
 			if test.saveErr == nil && operations.calls != 0 {
 				t.Fatalf("operations calls = %d, want no job write when protection fails", operations.calls)
@@ -132,7 +135,7 @@ func TestVerifyReturnsSnapshotWhenReconciliationSchedulingFails(t *testing.T) {
 func TestVerifySchedulesSubscriptionReconciliation(t *testing.T) {
 	t.Parallel()
 
-	api, verifier, protector, operations, logs := newVerifyScheduleAPI(nil, nil, nil)
+	api, verifier, protector, operations, logs := newVerifyScheduleAPI(t, nil, nil, nil)
 	result, err := api.verify(context.Background(), verifySchedulePrincipal(), subscriptionVerificationRequest("token-1"))
 	if err != nil {
 		t.Fatalf("verify() error = %v", err)
@@ -160,7 +163,7 @@ func TestVerifySchedulesSubscriptionReconciliation(t *testing.T) {
 func TestVerifyLeavesNonSubscriptionAndVerificationErrorsUnscheduled(t *testing.T) {
 	t.Parallel()
 
-	api, _, protector, operations, _ := newVerifyScheduleAPI(nil, errors.New(verifyScheduleSecret), nil)
+	api, _, protector, operations, _ := newVerifyScheduleAPI(t, nil, errors.New(verifyScheduleSecret), nil)
 	input := subscriptionVerificationRequest(verifySchedulePurchaseToken)
 	input.Evidence = json.RawMessage(`{"product_kind":"non_consumable","purchase_token":"` + verifySchedulePurchaseToken + `"}`)
 	if _, err := api.verify(context.Background(), verifySchedulePrincipal(), input); err != nil {
@@ -170,7 +173,7 @@ func TestVerifyLeavesNonSubscriptionAndVerificationErrorsUnscheduled(t *testing.
 		t.Fatalf("non-subscription schedule calls = (protect %d, operate %d), want none", protector.calls, operations.calls)
 	}
 
-	failing, _, protector, operations, logs := newVerifyScheduleAPI(persistence.ErrUnavailable, nil, nil)
+	failing, _, protector, operations, logs := newVerifyScheduleAPI(t, persistence.ErrUnavailable, nil, nil)
 	_, err := failing.verify(context.Background(), verifySchedulePrincipal(), subscriptionVerificationRequest(verifySchedulePurchaseToken))
 	if !errors.Is(err, persistence.ErrUnavailable) {
 		t.Fatalf("verify() error = %v, want ErrUnavailable", err)
@@ -189,7 +192,6 @@ func TestWorkerInsertsOneReconciliationJobAfterScheduleFailure(t *testing.T) {
 	t.Parallel()
 
 	token, sessions := newVerifyScheduleCustomerSession(t)
-	evidence := protectedScheduleEvidence(t)
 
 	t.Run("verify database", func(t *testing.T) {
 		t.Parallel()
@@ -211,10 +213,9 @@ func TestWorkerInsertsOneReconciliationJobAfterScheduleFailure(t *testing.T) {
 	t.Run("verify protection", func(t *testing.T) {
 		t.Parallel()
 		assertWorkerRecoversSchedule(t, token, sessions, scheduleRecovery{
-			path:             "/v1/applications/application-1/purchases:verify",
-			body:             subscriptionPurchaseJSON(verifySchedulePurchaseToken, "subscription"),
-			protectErr:       errors.New(verifyScheduleSecret),
-			purchaseEvidence: evidence,
+			path:            "/v1/applications/application-1/purchases:verify",
+			body:            subscriptionPurchaseJSON(verifySchedulePurchaseToken, "subscription"),
+			protectFailures: 1,
 		})
 	})
 }
@@ -236,13 +237,11 @@ func assertWorkerRecoversSchedule(
 ) {
 	t.Helper()
 
-	api, verifier, _, operations, logs := newVerifyScheduleAPI(nil, recovery.protectErr, nil)
+	api, verifier, protector, operations, logs := newVerifyScheduleAPI(t, nil, nil, nil)
 	api.customerSessions = sessions
 	api.clock = func() time.Time { return verifyScheduleNow }
 	operations.jobSaveFailures = recovery.jobSaveFailures
-	if recovery.purchaseEvidence.Validate() == nil {
-		verifier.result.PurchaseEvidence = recovery.purchaseEvidence
-	}
+	protector.failCount = recovery.protectFailures
 	recorder := httptest.NewRecorder()
 	request := verifyScheduleRequest(http.MethodPost, recovery.path, token, recovery.body)
 	if recovery.restore {
@@ -260,26 +259,21 @@ func assertWorkerRecoversSchedule(
 	if len(operations.jobs) != 0 || len(operations.retries) != 1 {
 		t.Fatalf("before worker jobs=%d retries=%d, want one retry and no job", len(operations.jobs), len(operations.retries))
 	}
-	workerProtector := &scheduleProtection{}
-	if recovery.protectErr != nil {
-		workerProtector.opened = []byte(`{"product_kind":"subscription","purchase_token":"` + verifySchedulePurchaseToken + `"}`)
-	} else {
-		workerProtector.err = errors.New("stored reconciliation payload must be inserted without re-protecting")
-	}
 	verificationService, err := verification.NewService(
 		&webhookAPIStore{application: webhookAPIApplication()},
 		scheduleRetryRegistry{},
-		workerProtector,
+		protector,
 		verification.NewDefaultProjector(),
 		scheduleRetryClock{},
 	)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	worker, err := processing.New(operations, workerProtector, verificationService)
+	worker, err := processing.New(operations, protector, verificationService)
 	if err != nil {
 		t.Fatalf("processing.New() error = %v", err)
 	}
+	worker.SetClock(func() time.Time { return verifyScheduleNow })
 	if err := worker.RetryReconciliationSchedules(context.Background()); err != nil {
 		t.Fatalf("RetryReconciliationSchedules() error = %v", err)
 	}
@@ -287,12 +281,11 @@ func assertWorkerRecoversSchedule(
 		t.Fatalf("jobs = %d, want 1", len(operations.jobs))
 	}
 	job := operations.jobs[0]
+	wantAvailable := time.Date(2026, time.November, 2, 0, 0, 0, 0, time.UTC)
 	if job.CustomerID != verifier.result.Customer.ID || job.ProjectID != "project-1" ||
-		job.ApplicationID != "application-1" || !strings.HasPrefix(job.ID, "reconcile-") {
-		t.Fatalf("reconciliation job = %#v", job)
-	}
-	if recovery.protectErr == nil && string(job.Payload.Ciphertext) != "ciphertext" {
-		t.Fatalf("job payload = %q, want the protected schedule that failed to insert", job.Payload.Ciphertext)
+		job.ApplicationID != "application-1" || !job.AvailableAt.Equal(wantAvailable) ||
+		!strings.HasPrefix(job.ID, "reconcile-") {
+		t.Fatalf("reconciliation job = %#v, want available %s", job, wantAvailable)
 	}
 	if err := worker.RetryReconciliationSchedules(context.Background()); err != nil {
 		t.Fatalf("second RetryReconciliationSchedules() error = %v", err)
@@ -334,18 +327,6 @@ func assertScheduleSnapshot(t *testing.T, body []byte, restore bool, customerID 
 	}
 }
 
-// protectedScheduleEvidence is purchase evidence already stored by a committed verify.
-func protectedScheduleEvidence(t *testing.T) protection.Value {
-	t.Helper()
-
-	value := protection.Value{Ciphertext: []byte("protected-evidence"), KeyID: "key-1"}
-	value.Fingerprint = sha256.Sum256([]byte("purchase-evidence"))
-	if err := value.Validate(); err != nil {
-		t.Fatalf("purchase evidence Validate() error = %v", err)
-	}
-	return value
-}
-
 // TestPurchaseEndpointsReturnCommittedSnapshotsWhenSchedulingFails verifies verify and restore stay HTTP 200.
 func TestPurchaseEndpointsReturnCommittedSnapshotsWhenSchedulingFails(t *testing.T) {
 	t.Parallel()
@@ -356,7 +337,7 @@ func TestPurchaseEndpointsReturnCommittedSnapshotsWhenSchedulingFails(t *testing
 	t.Run("verify", func(t *testing.T) {
 		t.Parallel()
 
-		api, verifier, _, operations, logs := newVerifyScheduleAPI(nil, nil, errors.New(verifyScheduleSecret))
+		api, verifier, _, operations, logs := newVerifyScheduleAPI(t, nil, nil, errors.New(verifyScheduleSecret))
 		api.customerSessions = sessions
 		api.clock = func() time.Time { return now }
 		recorder := httptest.NewRecorder()
@@ -389,7 +370,7 @@ func TestPurchaseEndpointsReturnCommittedSnapshotsWhenSchedulingFails(t *testing
 	t.Run("restore", func(t *testing.T) {
 		t.Parallel()
 
-		api, verifier, _, operations, _ := newVerifyScheduleAPI(nil, nil, errors.New(verifyScheduleSecret))
+		api, verifier, _, operations, _ := newVerifyScheduleAPI(t, nil, nil, errors.New(verifyScheduleSecret))
 		api.customerSessions = sessions
 		api.clock = func() time.Time { return now }
 		body := `{"purchases":[` + subscriptionPurchaseJSON("token-a", "subscription") + `,` +
@@ -427,7 +408,7 @@ func TestPurchaseEndpointsReturnCommittedSnapshotsWhenSchedulingFails(t *testing
 	t.Run("verification failure", func(t *testing.T) {
 		t.Parallel()
 
-		api, _, protector, operations, _ := newVerifyScheduleAPI(persistence.ErrUnavailable, nil, errors.New(verifyScheduleSecret))
+		api, _, protector, operations, _ := newVerifyScheduleAPI(t, persistence.ErrUnavailable, nil, errors.New(verifyScheduleSecret))
 		api.customerSessions = sessions
 		recorder := httptest.NewRecorder()
 		request := verifyScheduleRequest(
@@ -460,27 +441,40 @@ func (verifier *scriptedPurchaseVerifier) Verify(
 	return verifier.result, nil
 }
 
-// Protect records the reconciliation scope and optionally fails before ciphertext is returned.
+// Protect records the protection scope, optionally fails, and stores the plaintext by fingerprint for Open.
 func (service *scheduleProtection) Protect(_ context.Context, request protection.Request) (protection.Value, error) {
 	service.calls++
 	service.purposes = append(service.purposes, request.Scope.Purpose)
+	if service.failCount > 0 {
+		service.failCount--
+		return protection.Value{}, errors.New(verifyScheduleSecret)
+	}
 	if service.err != nil {
 		return protection.Value{}, service.err
 	}
-	value := protection.Value{Ciphertext: []byte("ciphertext"), KeyID: "key-1"}
-	value.Fingerprint = sha256.Sum256([]byte("reconciliation-test"))
-	return value, nil
+	plaintext := request.Bytes()
+	fingerprint := sha256.Sum256(append([]byte(request.Scope.Purpose+"\x00"), plaintext...))
+	if service.ciphertexts == nil {
+		service.ciphertexts = make(map[[sha256.Size]byte][]byte)
+	}
+	service.ciphertexts[fingerprint] = plaintext
+	return protection.Value{
+		Ciphertext:  []byte("ciphertext"),
+		Fingerprint: fingerprint,
+		KeyID:       "key-1",
+	}, nil
 }
 
-// Open returns configured purchase evidence or rejects an unexpected read.
+// Open returns the plaintext previously protected under the request fingerprint.
 func (service *scheduleProtection) Open(_ context.Context, request protection.OpenRequest) ([]byte, error) {
 	if err := request.Validate(); err != nil {
 		return nil, err
 	}
-	if len(service.opened) == 0 {
+	plaintext, ok := service.ciphertexts[request.Value.Fingerprint]
+	if !ok {
 		return nil, errors.New("unexpected open")
 	}
-	return append([]byte(nil), service.opened...), nil
+	return append([]byte(nil), plaintext...), nil
 }
 
 // Operate applies one reconciliation write or returns the configured storage failure.
@@ -489,7 +483,23 @@ func (store *reconciliationScheduleStore) Operate(_ context.Context, operation p
 	if store.err != nil {
 		return store.err
 	}
-	return operation(&reconciliationScheduleTransaction{store: store})
+	snapshot := &reconciliationScheduleStore{
+		jobs:            append([]persistence.ReconciliationJob(nil), store.jobs...),
+		retries:         append([]persistence.ReconciliationScheduleRetry(nil), store.retries...),
+		scheduled:       make(map[string]time.Time, len(store.scheduled)),
+		err:             store.err,
+		jobSaveFailures: store.jobSaveFailures,
+		calls:           store.calls,
+	}
+	for id, at := range store.scheduled {
+		snapshot.scheduled[id] = at
+	}
+	if err := operation(&reconciliationScheduleTransaction{store: snapshot}); err != nil {
+		store.jobSaveFailures = snapshot.jobSaveFailures
+		return err
+	}
+	*store = *snapshot
+	return nil
 }
 
 // SaveReconciliationJob records one validated reconciliation job.
@@ -504,11 +514,18 @@ func (transaction *reconciliationScheduleTransaction) SaveReconciliationJob(
 		transaction.store.jobSaveFailures--
 		return "", errors.New(verifyScheduleSecret)
 	}
+	for _, existing := range transaction.store.jobs {
+		if existing.ApplicationID == job.ApplicationID &&
+			existing.CustomerID == job.CustomerID &&
+			existing.Payload.Fingerprint == job.Payload.Fingerprint {
+			return existing.ID, nil
+		}
+	}
 	transaction.store.jobs = append(transaction.store.jobs, job)
 	return job.ID, nil
 }
 
-// SaveReconciliationScheduleRetry records one idempotent schedule retry.
+// SaveReconciliationScheduleRetry records one idempotent pending schedule retry.
 func (transaction *reconciliationScheduleTransaction) SaveReconciliationScheduleRetry(
 	_ context.Context,
 	retry persistence.ReconciliationScheduleRetry,
@@ -517,7 +534,12 @@ func (transaction *reconciliationScheduleTransaction) SaveReconciliationSchedule
 		return err
 	}
 	for _, existing := range transaction.store.retries {
-		if existing.ID == retry.ID {
+		if _, done := transaction.store.scheduled[existing.ID]; done {
+			continue
+		}
+		if existing.ApplicationID == retry.ApplicationID &&
+			existing.CustomerID == retry.CustomerID &&
+			existing.Payload.Fingerprint == retry.Payload.Fingerprint {
 			return nil
 		}
 	}
@@ -553,44 +575,66 @@ func (transaction *reconciliationScheduleTransaction) ListPendingReconciliationS
 	return pending, nil
 }
 
-// CompleteReconciliationScheduleRetry marks one retry so a later pass does not insert another job.
+// CompleteReconciliationScheduleRetry claims one pending retry so a later pass does not insert another job.
 func (transaction *reconciliationScheduleTransaction) CompleteReconciliationScheduleRetry(
 	_ context.Context,
 	id string,
 	scheduledAt time.Time,
-) error {
+) (bool, error) {
 	if scheduledAt.IsZero() {
-		return errors.New("reconciliation schedule retry completion time is required")
+		return false, errors.New("reconciliation schedule retry completion time is required")
+	}
+	if _, done := transaction.store.scheduled[id]; done {
+		return false, nil
 	}
 	if transaction.store.scheduled == nil {
 		transaction.store.scheduled = map[string]time.Time{}
 	}
 	transaction.store.scheduled[id] = scheduledAt
-	return nil
+	return true, nil
 }
 
 // newVerifyScheduleAPI builds one API whose verifier succeeds unless verifyErr is set.
-func newVerifyScheduleAPI(verifyErr, protectErr, saveErr error) (
+func newVerifyScheduleAPI(t *testing.T, verifyErr, protectErr, saveErr error) (
 	*API,
 	*scriptedPurchaseVerifier,
 	*scheduleProtection,
 	*reconciliationScheduleStore,
 	*bytes.Buffer,
 ) {
+	t.Helper()
+
 	logs := &bytes.Buffer{}
 	verifier := &scriptedPurchaseVerifier{result: verifyScheduleResult(), err: verifyErr}
 	protector := &scheduleProtection{err: protectErr}
 	operations := &reconciliationScheduleStore{err: saveErr}
+	store := &webhookAPIStore{application: webhookAPIApplication()}
+	verificationService, err := verification.NewService(
+		store,
+		scheduleRetryRegistry{},
+		protector,
+		verification.NewDefaultProjector(),
+		scheduleRetryClock{},
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	scheduler, err := processing.New(operations, protector, verificationService)
+	if err != nil {
+		t.Fatalf("processing.New() error = %v", err)
+	}
 	api := &API{
-		store:        &webhookAPIStore{application: webhookAPIApplication()},
+		store:        store,
 		operations:   operations,
 		verification: verifier,
+		scheduler:    scheduler,
 		protection:   protector,
 		metrics:      metrics.New(),
 		bodyLimit:    1 << 20,
 		clock:        func() time.Time { return verifyScheduleNow },
 		logger:       slog.New(slog.NewJSONHandler(logs, nil)),
 	}
+	scheduler.SetClock(func() time.Time { return api.clock() })
 	return api, verifier, protector, operations, logs
 }
 

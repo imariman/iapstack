@@ -93,10 +93,6 @@ type Result struct {
 	VerifiedAt   time.Time
 	Customer     core.Customer
 	Entitlements []persistence.CustomerEntitlement
-	// PurchaseEvidence is the protected client submission stored for this verification.
-	// It is not part of the HTTP response. A failed reconciliation schedule can retry
-	// from it without protecting the purchase again.
-	PurchaseEvidence protection.Value
 }
 
 // Service coordinates catalog resolution, provider verification, protection, and persistence.
@@ -202,11 +198,7 @@ func (service *Service) Verify(ctx context.Context, command Command) (Result, er
 		return Result{}, fmt.Errorf("verify purchase with %s: %w", application.Store.Provider, err)
 	}
 	validationRequest := request
-	validationRequest.ClaimedProducts = productsForValidation(
-		application.Store.Provider,
-		request.ClaimedProducts,
-		providerResult,
-	)
+	validationRequest.ClaimedProducts = providerResult.ProductsForClaim(request.ClaimedProducts)
 	if err := providerResult.ValidateForVerification(validationRequest); err != nil {
 		return Result{}, fmt.Errorf("validate provider verification result: %w", err)
 	}
@@ -282,11 +274,7 @@ func (service *Service) Reconcile(ctx context.Context, command ReconciliationCom
 		return Result{}, fmt.Errorf("reconcile purchase with %s: %w", application.Store.Provider, err)
 	}
 	validationRequest := request
-	validationRequest.ExpectedProducts = productsForValidation(
-		application.Store.Provider,
-		request.ExpectedProducts,
-		providerResult,
-	)
+	validationRequest.ExpectedProducts = providerResult.ProductsForClaim(request.ExpectedProducts)
 	if err := providerResult.ValidateForReconciliation(validationRequest); err != nil {
 		return Result{}, fmt.Errorf("validate provider reconciliation result: %w", err)
 	}
@@ -714,49 +702,7 @@ func (service *Service) persist(
 	if err != nil {
 		return Result{}, fmt.Errorf("persist verification result: %w", err)
 	}
-	verificationResult.PurchaseEvidence = prepared.evidence.Payload.Clone()
 	return verificationResult, nil
-}
-
-// claimedProductsForValidation selects the product set checked against a provider result.
-// App Store subscription status can move one lineage onto its current product after an upgrade
-// or crossgrade. Daily reconciliation replays the original claim, so both the historical product
-// and the signed current product are mapped into the catalog. A single current observation still
-// replaces the historical claim, which is how an upgrade was stored before the previous product
-// was closed in the same result.
-func claimedProductsForValidation(
-	provider core.Provider,
-	claimed []core.ProviderProductID,
-	result stores.VerificationResult,
-) []core.ProviderProductID {
-	if provider != core.ProviderAppleAppStore || len(claimed) != 1 || len(result.Observations) == 0 {
-		return claimed
-	}
-	claimedProduct := claimed[0]
-	extras := make([]core.ProviderProductID, 0, len(result.Observations))
-	seen := map[core.ProviderProductID]struct{}{claimedProduct: {}}
-	sawClaim := false
-	for _, observation := range result.Observations {
-		if observation.ProductKind != core.ProductKindSubscription {
-			return claimed
-		}
-		if observation.ProductID == claimedProduct {
-			sawClaim = true
-			continue
-		}
-		if _, exists := seen[observation.ProductID]; exists {
-			continue
-		}
-		seen[observation.ProductID] = struct{}{}
-		extras = append(extras, observation.ProductID)
-	}
-	if len(extras) == 0 {
-		return claimed
-	}
-	if sawClaim || len(extras) != 1 || len(result.Observations) != 1 {
-		return append([]core.ProviderProductID{claimedProduct}, extras...)
-	}
-	return extras
 }
 
 // observationProductIDs returns each observed provider product ID once in result order.
@@ -807,17 +753,6 @@ func indexCatalogProducts(
 		}
 	}
 	return catalogByProviderID, nil
-}
-
-// productsForValidation selects the product set a provider result is checked against.
-// A provider result that names several products for one purchase, such as a Google Play deferred
-// replacement, maps a claim on one of them onto the observed products. Any other claim is kept.
-func productsForValidation(
-	provider core.Provider,
-	claimed []core.ProviderProductID,
-	result stores.VerificationResult,
-) []core.ProviderProductID {
-	return claimedProductsForValidation(provider, result.ProductsForClaim(claimed), result)
 }
 
 // EntitlementChangedEvent builds one idempotent outbox event for a changed projection.

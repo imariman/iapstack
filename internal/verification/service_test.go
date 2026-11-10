@@ -477,6 +477,7 @@ func TestVerifyMapsCurrentAppleSubscriptionProduct(t *testing.T) {
 	observation.ProductKind = core.ProductKindSubscription
 	observation.EffectivePeriod.EndsAt = &end
 	observation.Renewal = core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled}
+	fixture.result.NamedProducts = []core.ProviderProductID{upgradedProviderProduct, verificationProviderProductID}
 	store := newFakeStore(fixture)
 	store.repository.catalog[upgradedProviderProduct] = annual
 	service := newVerificationService(
@@ -685,6 +686,7 @@ func TestVerifyDeniesPreviousAppleEntitlementAfterUpgrade(t *testing.T) {
 	second := fixture.result
 	second.VerifiedAt = now.Add(time.Hour)
 	second.Observations = []core.PurchaseObservation{annualActive, monthlyClosed}
+	second.NamedProducts = []core.ProviderProductID{"annual", "monthly"}
 	adapter := &fakeAdapter{provider: core.ProviderAppleAppStore, result: first}
 	service := newVerificationService(t, store, adapter, &fakeProtector{}, fixture.clock)
 
@@ -765,6 +767,10 @@ func appleSubscriptionObservation(
 	if err != nil {
 		panic(err)
 	}
+	lineage, err := core.NewStoreReference(core.ReferenceLineage, "original_transaction_id", "2000000123456789")
+	if err != nil {
+		panic(err)
+	}
 	renewal := core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalEnabled}
 	if access != core.AccessAllowed {
 		renewal.Status = core.RenewalDisabled
@@ -788,7 +794,7 @@ func appleSubscriptionObservation(
 			EndsAt:   endsAt,
 		},
 		Renewal:    renewal,
-		References: []core.StoreReference{reference},
+		References: []core.StoreReference{reference, lineage},
 	}
 }
 

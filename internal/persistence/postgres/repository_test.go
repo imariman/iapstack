@@ -1304,12 +1304,81 @@ func TestReconciliationScheduleRetryBackoffAndRetention(t *testing.T) {
 		t.Fatalf("RecordReconciliationScheduleRetryFailure() dead error = %v", err)
 	}
 	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
-		if completeErr := repository.CompleteReconciliationScheduleRetry(database.ctx, oldDone.ID, now.Add(-31*24*time.Hour)); completeErr != nil {
+		claimedDead, deadErr := repository.CompleteReconciliationScheduleRetry(database.ctx, oldDead.ID, now)
+		if deadErr != nil {
+			return deadErr
+		}
+		if claimedDead {
+			t.Fatal("CompleteReconciliationScheduleRetry() claimed an already-dead retry")
+		}
+		claimedOld, completeErr := repository.CompleteReconciliationScheduleRetry(database.ctx, oldDone.ID, now.Add(-31*24*time.Hour))
+		if completeErr != nil {
 			return completeErr
 		}
-		return repository.CompleteReconciliationScheduleRetry(database.ctx, freshDone.ID, now.Add(-24*time.Hour))
+		if !claimedOld {
+			t.Fatal("CompleteReconciliationScheduleRetry() did not claim oldDone")
+		}
+		claimedAgain, repeatErr := repository.CompleteReconciliationScheduleRetry(database.ctx, oldDone.ID, now)
+		if repeatErr != nil {
+			return repeatErr
+		}
+		if claimedAgain {
+			t.Fatal("CompleteReconciliationScheduleRetry() claimed an already-scheduled retry")
+		}
+		claimedFresh, freshErr := repository.CompleteReconciliationScheduleRetry(database.ctx, freshDone.ID, now.Add(-24*time.Hour))
+		if freshErr != nil {
+			return freshErr
+		}
+		if !claimedFresh {
+			t.Fatal("CompleteReconciliationScheduleRetry() did not claim freshDone")
+		}
+		return nil
 	}); err != nil {
 		t.Fatalf("CompleteReconciliationScheduleRetry() error = %v", err)
+	}
+
+	// Verify FOR UPDATE SKIP LOCKED hides a row locked by another worker transaction.
+	lockedReady := make(chan struct{})
+	releaseLock := make(chan struct{})
+	lockDone := make(chan error, 1)
+	go func() {
+		lockDone <- store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+			locked, listErr := repository.ListPendingReconciliationScheduleRetries(database.ctx, now.Add(time.Minute), 1)
+			if listErr != nil {
+				return listErr
+			}
+			if len(locked) != 1 || locked[0].ID != pending.ID {
+				return errors.New("unexpected locked retry")
+			}
+			close(lockedReady)
+			<-releaseLock
+			return nil
+		})
+	}()
+	<-lockedReady
+	unlockedDue, err := listScheduleRetries(t, store, database.ctx, now.Add(time.Minute))
+	close(releaseLock)
+	if lockErr := <-lockDone; lockErr != nil {
+		t.Fatalf("locking worker error = %v", lockErr)
+	}
+	if err != nil {
+		t.Fatalf("ListPendingReconciliationScheduleRetries() while locked error = %v", err)
+	}
+	if scheduleRetryIDs(unlockedDue)[pending.ID] {
+		t.Fatal("FOR UPDATE SKIP LOCKED returned a row already locked by another worker")
+	}
+
+	// Verify a scheduled row does not block a later retry for the same payload fingerprint.
+	rescheduled := freshDone
+	rescheduled.ID = "retry-rescheduled"
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		if saveErr := repository.SaveReconciliationScheduleRetry(database.ctx, rescheduled); saveErr != nil {
+			return saveErr
+		}
+		_, completeErr := repository.CompleteReconciliationScheduleRetry(database.ctx, rescheduled.ID, now.Add(-31*24*time.Hour))
+		return completeErr
+	}); err != nil {
+		t.Fatalf("save retry after scheduled row error = %v", err)
 	}
 
 	var deleted int64
@@ -1320,7 +1389,7 @@ func TestReconciliationScheduleRetryBackoffAndRetention(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PurgeTerminalQueueRecords() error = %v", err)
 	}
-	if deleted != 2 {
+	if deleted != 3 {
 		t.Fatalf("PurgeTerminalQueueRecords() deleted = %d, want the expired dead and scheduled rows", deleted)
 	}
 	var remaining int
@@ -1350,14 +1419,11 @@ func newScheduleRetry(fixture catalogFixture, id string, mark byte) persistence.
 		ProjectID:     core.ProjectID(fixture.projectID),
 		ApplicationID: core.ApplicationID(fixture.applicationID),
 		CustomerID:    core.CustomerID(fixture.customerID),
-		Kind:          persistence.ReconciliationRetryReconciliationRequest,
 		Payload: protection.Value{
 			Ciphertext:  []byte("ciphertext-" + id),
 			Fingerprint: fingerprint,
 			KeyID:       repositoryEncryptionKeyID,
 		},
-		Metadata:    json.RawMessage(`{}`),
-		AvailableAt: time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC),
 	}
 }
 

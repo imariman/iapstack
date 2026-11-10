@@ -60,9 +60,9 @@ type LinkedPurchase struct {
 }
 
 // VerificationResult is one authoritative provider answer.
-// NamedProducts is set only when the provider purchase names more than one product, such as a Google Play
-// deferred replacement. It lists every product the purchase names, including each observed product. A claim
-// on one of them is checked against the observed products, see ProductsForClaim.
+// NamedProducts is set only when the provider purchase names more than one product, such as an App Store
+// subscription upgrade or a Google Play deferred replacement. It lists every product the purchase names,
+// including each observed product. A claim on one of them is checked against the observed products, see ProductsForClaim.
 type VerificationResult struct {
 	VerifiedAt        time.Time
 	Artifacts         []VerifiedArtifact

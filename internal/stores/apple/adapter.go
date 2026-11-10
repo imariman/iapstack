@@ -446,11 +446,15 @@ func (adapter *Adapter) subscriptionResult(
 	if previous.ProductID == "" || previous.ProductID == current.ProductID {
 		return result, nil
 	}
-	closed, err := adapter.supersededSubscriptionObservation(application, kind, previous, current, artifact)
+	closed, err := supersededSubscriptionObservation(application, kind, previous, current, result.VerifiedAt)
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}
 	result.Observations = append(result.Observations, closed)
+	result.NamedProducts = []core.ProviderProductID{
+		core.ProviderProductID(current.ProductID),
+		core.ProviderProductID(previous.ProductID),
+	}
 	return result, nil
 }
 
@@ -459,40 +463,66 @@ func (adapter *Adapter) subscriptionResult(
 // A stale client JWS still carries the original period end, so the new purchase time is what
 // cuts that period off. Downgrades stay on the old product until renewal, so this runs only
 // after status has already moved.
-func (adapter *Adapter) supersededSubscriptionObservation(
+func supersededSubscriptionObservation(
 	application core.Application,
 	kind core.ProductKind,
 	previous transactionPayload,
 	current transactionPayload,
-	artifact stores.Evidence,
+	observedAt time.Time,
 ) (core.PurchaseObservation, error) {
-	upgraded := previous
-	upgraded.IsUpgraded = true
 	if current.PurchaseDate <= 0 {
 		return core.PurchaseObservation{}, invalid("normalize", errors.New("apple upgrade time is missing"))
 	}
-	if upgraded.ExpiresDate <= 0 || current.PurchaseDate < upgraded.ExpiresDate {
-		upgraded.ExpiresDate = current.PurchaseDate
+	endMillis := current.PurchaseDate
+	if previous.ExpiresDate > 0 && previous.ExpiresDate < endMillis {
+		endMillis = previous.ExpiresDate
 	}
 	// A purchase and its upgrade can share a millisecond. Access still ends, and the stored
 	// period has to be non-empty.
-	if upgraded.ExpiresDate <= upgraded.PurchaseDate {
-		upgraded.ExpiresDate = upgraded.PurchaseDate + 1
+	if endMillis <= previous.PurchaseDate {
+		endMillis = previous.PurchaseDate + 1
 	}
-	closed, err := adapter.result(application, kind, upgraded, artifact, &subscriptionSnapshot{
-		Status: subscriptionStatusExpired,
-		Renewal: renewalPayload{
-			AutoRenewStatus:       autoRenewDisabled,
-			ProductID:             upgraded.ProductID,
-			OriginalTransactionID: upgraded.OriginalTransactionID,
-			AppAccountToken:       upgraded.AppAccountToken,
-			Environment:           upgraded.Environment,
-		},
-	})
+	startsAt := milliseconds(previous.PurchaseDate)
+	endsAt := milliseconds(endMillis)
+	quantity := transactionQuantity(previous)
+	ownership := transactionOwnership(previous)
+	references, err := transactionReferences(previous)
 	if err != nil {
-		return core.PurchaseObservation{}, err
+		return core.PurchaseObservation{}, invalid("normalize", err)
 	}
-	return closed.Observations[0], nil
+	state := core.LifecycleExpired
+	access := core.AccessDenied
+	reason := core.AccessReasonExpired
+	renewal := core.Renewal{Mode: core.RenewalAuto, Status: core.RenewalDisabled}
+	identityTransaction := previous
+	identityTransaction.IsUpgraded = true
+	identityTransaction.RevocationDate = 0
+	identityTransaction.RevocationReason = nil
+	identity := observationSnapshotIdentity(
+		application.ID, kind, identityTransaction, state, access, reason, renewal, ownership, quantity, &endsAt,
+	)
+	observation := core.PurchaseObservation{
+		ID:              core.ObservationID("app-" + hex.EncodeToString(identity[:16])),
+		ApplicationID:   application.ID,
+		Store:           application.Store,
+		ProductID:       core.ProviderProductID(previous.ProductID),
+		ProductKind:     kind,
+		State:           state,
+		ProviderState:   "upgraded",
+		Access:          access,
+		AccessReason:    reason,
+		Ownership:       ownership,
+		Quantity:        quantity,
+		OccurredAt:      startsAt,
+		ObservedAt:      observedAt,
+		EffectivePeriod: core.EffectivePeriod{StartsAt: startsAt, EndsAt: &endsAt},
+		Renewal:         renewal,
+		References:      references,
+	}
+	if err := observation.Validate(); err != nil {
+		return core.PurchaseObservation{}, invalid("normalize", err)
+	}
+	return observation, nil
 }
 
 // result normalizes one authoritative Apple transaction into shared artifacts and observations.
@@ -523,40 +553,15 @@ func (adapter *Adapter) result(
 			return stores.VerificationResult{}, invalid("normalize", errors.New("apple active subscription expiry is missing"))
 		}
 	}
-	quantity := transaction.Quantity
-	if quantity == 0 {
-		quantity = 1
-	}
+	quantity := transactionQuantity(transaction)
 	price, err := applePurchasePrice(transaction)
 	if err != nil {
 		return stores.VerificationResult{}, invalid("normalize", err)
 	}
-	ownership := core.OwnershipUnknown
-	switch transaction.OwnershipType {
-	case applePurchasedOwnership, "":
-		ownership = core.OwnershipPurchased
-	case appleFamilySharedOwnership:
-		ownership = core.OwnershipFamilyShared
-	}
-	references := make([]core.StoreReference, 0, 4)
-	for _, candidate := range []struct {
-		role  core.ReferenceRole
-		kind  string
-		value string
-	}{
-		{role: core.ReferenceTransaction, kind: "transaction_id", value: transaction.TransactionID},
-		{role: core.ReferenceLineage, kind: "original_transaction_id", value: transaction.OriginalTransactionID},
-		{role: core.ReferenceQuery, kind: "transaction_id", value: transaction.TransactionID},
-		{role: core.ReferenceCustomerBinding, kind: "app_account_token", value: transaction.AppAccountToken},
-	} {
-		if candidate.value == "" {
-			continue
-		}
-		reference, err := core.NewStoreReference(candidate.role, candidate.kind, candidate.value)
-		if err != nil {
-			return stores.VerificationResult{}, invalid("normalize", err)
-		}
-		references = append(references, reference)
+	ownership := transactionOwnership(transaction)
+	references, err := transactionReferences(transaction)
+	if err != nil {
+		return stores.VerificationResult{}, invalid("normalize", err)
 	}
 	identity := observationSnapshotIdentity(
 		application.ID, kind, transaction, state, access, reason, renewal, ownership, quantity, endsAt,
@@ -618,6 +623,51 @@ func applePurchasePrice(transaction transactionPayload) (*core.PurchasePrice, er
 		return nil, fmt.Errorf("apple transaction price: %w", err)
 	}
 	return price, nil
+}
+
+// transactionQuantity normalizes Apple's optional positive quantity to at least one item.
+func transactionQuantity(transaction transactionPayload) uint32 {
+	if transaction.Quantity == 0 {
+		return 1
+	}
+	return transaction.Quantity
+}
+
+// transactionOwnership maps Apple's ownershipType claim onto the shared domain.
+func transactionOwnership(transaction transactionPayload) core.Ownership {
+	switch transaction.OwnershipType {
+	case applePurchasedOwnership, "":
+		return core.OwnershipPurchased
+	case appleFamilySharedOwnership:
+		return core.OwnershipFamilyShared
+	default:
+		return core.OwnershipUnknown
+	}
+}
+
+// transactionReferences builds the store references carried by one signed Apple transaction.
+func transactionReferences(transaction transactionPayload) ([]core.StoreReference, error) {
+	references := make([]core.StoreReference, 0, 4)
+	for _, candidate := range []struct {
+		role  core.ReferenceRole
+		kind  string
+		value string
+	}{
+		{role: core.ReferenceTransaction, kind: "transaction_id", value: transaction.TransactionID},
+		{role: core.ReferenceLineage, kind: "original_transaction_id", value: transaction.OriginalTransactionID},
+		{role: core.ReferenceQuery, kind: "transaction_id", value: transaction.TransactionID},
+		{role: core.ReferenceCustomerBinding, kind: "app_account_token", value: transaction.AppAccountToken},
+	} {
+		if candidate.value == "" {
+			continue
+		}
+		reference, err := core.NewStoreReference(candidate.role, candidate.kind, candidate.value)
+		if err != nil {
+			return nil, err
+		}
+		references = append(references, reference)
+	}
+	return references, nil
 }
 
 // parseEvidence decodes the submitted versioned Apple evidence envelope.

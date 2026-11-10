@@ -2,6 +2,8 @@ package processing
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,8 +17,9 @@ import (
 )
 
 const (
-	// purchaseEvidencePurpose matches verification's protected client-submission scope.
-	purchaseEvidencePurpose = "purchase_evidence"
+	// reconciliationScheduleRetryPurpose authenticates protected verification payloads awaiting scheduling.
+	reconciliationScheduleRetryPurpose = "reconciliation_schedule_retry"
+
 	// reconciliationRetryBatch bounds one worker pass over failed subscription schedules.
 	reconciliationRetryBatch = 32
 	// reconciliationRetryMaxAttempts marks a schedule dead after this many failed promotions.
@@ -37,40 +40,167 @@ func (service *Service) SetLogger(logger *slog.Logger) {
 	service.logger = logger
 }
 
+// SetClock overrides the time source used for reconciliation scheduling and retry promotion.
+func (service *Service) SetClock(clock func() time.Time) {
+	if service == nil {
+		return
+	}
+	if clock == nil {
+		service.clock = time.Now
+		return
+	}
+	service.clock = clock
+}
+
+// ScheduleReconciliation stores the next daily refresh job or records a worker retry when that insert fails.
+func (service *Service) ScheduleReconciliation(
+	ctx context.Context,
+	projectID core.ProjectID,
+	applicationID core.ApplicationID,
+	customerID core.CustomerID,
+	verificationPayload jobs.VerificationPayload,
+) error {
+	if service == nil || service.store == nil || service.protection == nil {
+		return errors.New("processing service is not initialized")
+	}
+	scheduleErr := service.schedule(ctx, projectID, applicationID, customerID, verificationPayload)
+	if scheduleErr == nil {
+		return nil
+	}
+	retryErr := service.saveReconciliationScheduleRetry(
+		ctx, projectID, applicationID, customerID, verificationPayload,
+	)
+	return errors.Join(scheduleErr, retryErr)
+}
+
 // RetryReconciliationSchedules inserts reconciliation jobs for schedules the HTTP request could not commit.
 func (service *Service) RetryReconciliationSchedules(ctx context.Context) error {
 	if service == nil || service.store == nil || service.protection == nil {
 		return errors.New("processing service is not initialized")
 	}
 	now := service.now()
-	var pending []persistence.ReconciliationScheduleRetry
-	err := service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
-		var listErr error
-		pending, listErr = repository.ListPendingReconciliationScheduleRetries(ctx, now, reconciliationRetryBatch)
-		return listErr
-	})
-	if err != nil {
-		return err
-	}
-	var first error
-	for _, retry := range pending {
+	for range reconciliationRetryBatch {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		promoteErr := service.promoteReconciliationScheduleRetry(ctx, retry, now)
+		retry, hasRow, promoteErr := service.promoteNextReconciliationScheduleRetry(ctx, now)
+		if !hasRow && promoteErr == nil {
+			return nil
+		}
 		if promoteErr == nil {
 			continue
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// The promotion error can mention storage internals. Persist the backoff and
-		// return only a failure to record that backoff. One poison row must not stop the batch.
-		if recordErr := service.recordReconciliationScheduleRetryFailure(ctx, retry, now); recordErr != nil && first == nil {
-			first = recordErr
+		if !hasRow {
+			return promoteErr
+		}
+		// The promotion error can mention storage internals. Persist the backoff so one poison
+		// row leaves the due batch, and return only a failure to record that backoff.
+		if recordErr := service.recordReconciliationScheduleRetryFailure(ctx, retry, now); recordErr != nil {
+			return recordErr
 		}
 	}
-	return first
+	return nil
+}
+
+// saveReconciliationScheduleRetry protects and persists one verification payload for worker promotion.
+func (service *Service) saveReconciliationScheduleRetry(
+	ctx context.Context,
+	projectID core.ProjectID,
+	applicationID core.ApplicationID,
+	customerID core.CustomerID,
+	verificationPayload jobs.VerificationPayload,
+) error {
+	payload, err := json.Marshal(verificationPayload)
+	if err != nil {
+		return err
+	}
+	defer zero(payload)
+	protected, err := protection.Protect(ctx, service.protection, protection.Scope{
+		ProjectID: projectID, ApplicationID: applicationID, Purpose: reconciliationScheduleRetryPurpose,
+	}, payload)
+	if err != nil {
+		return fmt.Errorf("protect reconciliation schedule retry: %w", err)
+	}
+	id, err := newReconciliationScheduleRetryID()
+	if err != nil {
+		return err
+	}
+	retry := persistence.ReconciliationScheduleRetry{
+		ID:            id,
+		ProjectID:     projectID,
+		ApplicationID: applicationID,
+		CustomerID:    customerID,
+		Payload:       protected,
+	}
+	return service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		return repository.SaveReconciliationScheduleRetry(ctx, retry)
+	})
+}
+
+// promoteNextReconciliationScheduleRetry locks one due retry, claims it, and inserts its reconciliation job.
+func (service *Service) promoteNextReconciliationScheduleRetry(
+	ctx context.Context,
+	now time.Time,
+) (persistence.ReconciliationScheduleRetry, bool, error) {
+	var selected persistence.ReconciliationScheduleRetry
+	var hasRow bool
+	err := service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		pending, listErr := repository.ListPendingReconciliationScheduleRetries(ctx, now, 1)
+		if listErr != nil || len(pending) == 0 {
+			return listErr
+		}
+		selected = pending[0]
+		hasRow = true
+		verificationPayload, openErr := service.openScheduleRetry(ctx, selected)
+		if openErr != nil {
+			return openErr
+		}
+		defer zero(verificationPayload.Evidence)
+		job, jobErr := service.reconciliationJob(
+			ctx,
+			selected.ProjectID,
+			selected.ApplicationID,
+			selected.CustomerID,
+			verificationPayload,
+			nextReconciliationTime(now),
+		)
+		if jobErr != nil {
+			return jobErr
+		}
+		claimed, claimErr := repository.CompleteReconciliationScheduleRetry(ctx, selected.ID, now)
+		if claimErr != nil || !claimed {
+			return claimErr
+		}
+		_, saveErr := repository.SaveReconciliationJob(ctx, job)
+		return saveErr
+	})
+	return selected, hasRow, err
+}
+
+// openScheduleRetry decrypts and decodes one stored verification payload.
+func (service *Service) openScheduleRetry(
+	ctx context.Context,
+	retry persistence.ReconciliationScheduleRetry,
+) (jobs.VerificationPayload, error) {
+	request, err := protection.NewOpenRequest(protection.Scope{
+		ProjectID: retry.ProjectID, ApplicationID: retry.ApplicationID, Purpose: reconciliationScheduleRetryPurpose,
+	}, retry.Payload)
+	if err != nil {
+		return jobs.VerificationPayload{}, err
+	}
+	plaintext, err := service.protection.Open(ctx, request)
+	if err != nil {
+		return jobs.VerificationPayload{}, fmt.Errorf("open reconciliation schedule retry: %w", err)
+	}
+	defer zero(plaintext)
+	var payload jobs.VerificationPayload
+	if err := decodeStrict(plaintext, &payload); err != nil {
+		return jobs.VerificationPayload{}, fmt.Errorf("decode reconciliation schedule retry: %w", err)
+	}
+	return payload, nil
 }
 
 // now returns the processing clock in UTC.
@@ -153,91 +283,11 @@ func (service *Service) logDeadScheduleRetry(
 	)
 }
 
-// promoteReconciliationScheduleRetry inserts one idempotent reconciliation job and marks its retry scheduled.
-func (service *Service) promoteReconciliationScheduleRetry(
-	ctx context.Context,
-	retry persistence.ReconciliationScheduleRetry,
-	now time.Time,
-) error {
-	payload, err := service.reconciliationRetryPayload(ctx, retry)
-	if err != nil {
-		return err
+// newReconciliationScheduleRetryID generates one unique non-secret identifier per retry row.
+func newReconciliationScheduleRetryID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate reconciliation schedule retry ID: %w", err)
 	}
-	return service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
-		if _, saveErr := repository.SaveReconciliationJob(ctx, persistence.ReconciliationJob{
-			ID:            deterministicID("reconcile", payload.Fingerprint),
-			ProjectID:     retry.ProjectID,
-			ApplicationID: retry.ApplicationID,
-			CustomerID:    retry.CustomerID,
-			Payload:       payload,
-			AvailableAt:   retry.AvailableAt,
-		}); saveErr != nil {
-			return saveErr
-		}
-		return repository.CompleteReconciliationScheduleRetry(ctx, retry.ID, now)
-	})
-}
-
-// reconciliationRetryPayload returns the protected reconciliation job body for one retry.
-func (service *Service) reconciliationRetryPayload(
-	ctx context.Context,
-	retry persistence.ReconciliationScheduleRetry,
-) (protection.Value, error) {
-	switch retry.Kind {
-	case persistence.ReconciliationRetryReconciliationRequest:
-		return retry.Payload, nil
-	case persistence.ReconciliationRetryPurchaseEvidence:
-		return service.protectReconciliationFromEvidence(ctx, retry)
-	default:
-		return protection.Value{}, fmt.Errorf("unsupported reconciliation schedule retry kind %q", retry.Kind)
-	}
-}
-
-// protectReconciliationFromEvidence rebuilds a daily refresh from purchase evidence already stored by verify.
-func (service *Service) protectReconciliationFromEvidence(
-	ctx context.Context,
-	retry persistence.ReconciliationScheduleRetry,
-) (protection.Value, error) {
-	var metadata persistence.ReconciliationScheduleMetadata
-	if err := json.Unmarshal(retry.Metadata, &metadata); err != nil {
-		return protection.Value{}, fmt.Errorf("decode reconciliation schedule retry: %w", err)
-	}
-	if err := metadata.Validate(); err != nil {
-		return protection.Value{}, err
-	}
-	request, err := protection.NewOpenRequest(protection.Scope{
-		ProjectID: retry.ProjectID, ApplicationID: retry.ApplicationID, Purpose: purchaseEvidencePurpose,
-	}, retry.Payload)
-	if err != nil {
-		return protection.Value{}, err
-	}
-	evidence, err := service.protection.Open(ctx, request)
-	if err != nil {
-		return protection.Value{}, fmt.Errorf("open purchase evidence for reconciliation schedule: %w", err)
-	}
-	defer zero(evidence)
-	bindings := make([]jobs.Binding, 0, len(metadata.CustomerBindings))
-	for _, binding := range metadata.CustomerBindings {
-		bindings = append(bindings, jobs.Binding{Kind: binding.Kind, Value: binding.Value})
-	}
-	body, err := json.Marshal(jobs.ReconciliationPayload{
-		Verification: jobs.VerificationPayload{
-			ExternalCustomerID: metadata.ExternalCustomerID,
-			ClaimedProducts:    append([]core.ProviderProductID(nil), metadata.ClaimedProducts...),
-			CustomerBindings:   bindings,
-			Evidence:           append(json.RawMessage(nil), evidence...),
-		},
-		ScheduledFor: retry.AvailableAt.UTC(),
-	})
-	if err != nil {
-		return protection.Value{}, err
-	}
-	defer zero(body)
-	protected, err := protection.Protect(ctx, service.protection, protection.Scope{
-		ProjectID: retry.ProjectID, ApplicationID: retry.ApplicationID, Purpose: reconciliationProtectionPurpose,
-	}, body)
-	if err != nil {
-		return protection.Value{}, fmt.Errorf("protect reconciliation schedule retry: %w", err)
-	}
-	return protected, nil
+	return "reconcile-retry-" + hex.EncodeToString(raw[:]), nil
 }

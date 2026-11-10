@@ -541,11 +541,11 @@ func TestReconciliationScheduleRetryMigrationRefusesDirtyDown(t *testing.T) {
 	fingerprint := bytes.Repeat([]byte{11}, 32)
 	mustExec(t, database, `
 		INSERT INTO reconciliation_schedule_retries (
-			id, project_id, application_id, customer_id, kind,
-			payload_ciphertext, payload_fingerprint, encryption_key_id, metadata, available_at
+			id, project_id, application_id, customer_id,
+			payload_ciphertext, payload_fingerprint, encryption_key_id
 		) VALUES (
-			'retry-pending', $1, $2, $3, 'reconciliation_request',
-			'ciphertext', $4, 'test-key', '{}'::jsonb, now()
+			'retry-pending', $1, $2, $3,
+			'ciphertext', $4, 'test-key'
 		)
 	`, fixture.projectID, fixture.applicationID, fixture.customerID, fingerprint)
 	if err := database.migrator.MigrateTo(database.ctx, scheduleRetrySchemaVersion-1); err == nil {
@@ -562,24 +562,22 @@ func TestReconciliationScheduleRetryMigrationRefusesDirtyDown(t *testing.T) {
 	mustExec(t, database, `DELETE FROM reconciliation_schedule_retries`)
 	mustExec(t, database, `
 		INSERT INTO reconciliation_schedule_retries (
-			id, project_id, application_id, customer_id, kind,
-			payload_ciphertext, payload_fingerprint, encryption_key_id, metadata,
-			available_at, scheduled_at
+			id, project_id, application_id, customer_id,
+			payload_ciphertext, payload_fingerprint, encryption_key_id, scheduled_at
 		) VALUES (
-			'retry-scheduled', $1, $2, $3, 'reconciliation_request',
-			'ciphertext', $4, 'test-key', '{}'::jsonb, now(), now()
+			'retry-scheduled', $1, $2, $3,
+			'ciphertext', $4, 'test-key', now()
 		)
 	`, fixture.projectID, fixture.applicationID, fixture.customerID, fingerprint)
 	mustMigrateTo(t, database, scheduleRetrySchemaVersion-1)
 	mustMigrateTo(t, database, scheduleRetrySchemaVersion)
 	expectConstraint(t, database, "reconciliation_schedule_retries_outcome_exclusive", `
 		INSERT INTO reconciliation_schedule_retries (
-			id, project_id, application_id, customer_id, kind,
-			payload_ciphertext, payload_fingerprint, encryption_key_id, metadata,
-			available_at, scheduled_at, dead_at
+			id, project_id, application_id, customer_id,
+			payload_ciphertext, payload_fingerprint, encryption_key_id, scheduled_at, dead_at
 		) VALUES (
-			'retry-both', $1, $2, $3, 'reconciliation_request',
-			'ciphertext', $4, 'test-key', '{}'::jsonb, now(), now(), now()
+			'retry-both', $1, $2, $3,
+			'ciphertext', $4, 'test-key', now(), now()
 		)
 	`, fixture.projectID, fixture.applicationID, fixture.customerID, fingerprint)
 }

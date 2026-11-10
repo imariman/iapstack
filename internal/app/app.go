@@ -212,11 +212,16 @@ func runAPI(
 	if err != nil {
 		return err
 	}
+	providerProcessing, err := processing.New(store, keyring, verificationService)
+	if err != nil {
+		return err
+	}
 	api, err := httpapi.New(httpapi.Dependencies{
 		Store: store, Operations: store, Admin: store, Authentication: authentication,
 		AdminSessions: adminSessions, CustomerSessions: customerSessions,
 		Credentials: credentialService, Webhooks: webhookService,
-		Verification: verificationService, Huawei: huaweiAdapter, Apple: appleAdapter, GooglePlay: googlePlayAdapter,
+		Verification: verificationService, Scheduler: providerProcessing,
+		Huawei: huaweiAdapter, Apple: appleAdapter, GooglePlay: googlePlayAdapter,
 		Protection: keyring, FinancialReports: financialReportService, Metrics: metricRegistry,
 		BodyLimit:         cfg.HTTPBodyLimit,
 		OfferingDirectory: cfg.OfferingDirectory, OfferingCatalog: store,
