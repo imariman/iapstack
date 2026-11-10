@@ -198,11 +198,7 @@ func (service *Service) Verify(ctx context.Context, command Command) (Result, er
 		return Result{}, fmt.Errorf("verify purchase with %s: %w", application.Store.Provider, err)
 	}
 	validationRequest := request
-	validationRequest.ClaimedProducts = productsForValidation(
-		application.Store.Provider,
-		request.ClaimedProducts,
-		providerResult,
-	)
+	validationRequest.ClaimedProducts = providerResult.ProductsForClaim(request.ClaimedProducts)
 	if err := providerResult.ValidateForVerification(validationRequest); err != nil {
 		return Result{}, fmt.Errorf("validate provider verification result: %w", err)
 	}
@@ -278,11 +274,7 @@ func (service *Service) Reconcile(ctx context.Context, command ReconciliationCom
 		return Result{}, fmt.Errorf("reconcile purchase with %s: %w", application.Store.Provider, err)
 	}
 	validationRequest := request
-	validationRequest.ExpectedProducts = productsForValidation(
-		application.Store.Provider,
-		request.ExpectedProducts,
-		providerResult,
-	)
+	validationRequest.ExpectedProducts = providerResult.ProductsForClaim(request.ExpectedProducts)
 	if err := providerResult.ValidateForReconciliation(validationRequest); err != nil {
 		return Result{}, fmt.Errorf("validate provider reconciliation result: %w", err)
 	}
@@ -713,25 +705,6 @@ func (service *Service) persist(
 	return verificationResult, nil
 }
 
-// claimedProductsForValidation selects the product set checked against a provider result.
-// App Store subscription status can move one lineage onto its current product after an upgrade
-// or crossgrade. Daily reconciliation replays the original claim, so the signed current product
-// is the one mapped into the catalog.
-func claimedProductsForValidation(
-	provider core.Provider,
-	claimed []core.ProviderProductID,
-	result stores.VerificationResult,
-) []core.ProviderProductID {
-	if provider != core.ProviderAppleAppStore || len(claimed) != 1 || len(result.Observations) != 1 {
-		return claimed
-	}
-	observation := result.Observations[0]
-	if observation.ProductKind != core.ProductKindSubscription || observation.ProductID == claimed[0] {
-		return claimed
-	}
-	return []core.ProviderProductID{observation.ProductID}
-}
-
 // observationProductIDs returns each observed provider product ID once in result order.
 func observationProductIDs(observations []core.PurchaseObservation) []core.ProviderProductID {
 	productIDs := make([]core.ProviderProductID, 0, len(observations))
@@ -780,17 +753,6 @@ func indexCatalogProducts(
 		}
 	}
 	return catalogByProviderID, nil
-}
-
-// productsForValidation selects the product set a provider result is checked against.
-// A provider result that names several products for one purchase, such as a Google Play deferred
-// replacement, maps a claim on one of them onto the observed products. Any other claim is kept.
-func productsForValidation(
-	provider core.Provider,
-	claimed []core.ProviderProductID,
-	result stores.VerificationResult,
-) []core.ProviderProductID {
-	return claimedProductsForValidation(provider, result.ProductsForClaim(claimed), result)
 }
 
 // EntitlementChangedEvent builds one idempotent outbox event for a changed projection.

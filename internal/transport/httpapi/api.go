@@ -23,6 +23,7 @@ import (
 	"github.com/imariman/iapstack/internal/jobs"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/platform/metrics"
+	"github.com/imariman/iapstack/internal/processing"
 	"github.com/imariman/iapstack/internal/protection"
 	"github.com/imariman/iapstack/internal/stores"
 	"github.com/imariman/iapstack/internal/stores/apple"
@@ -38,10 +39,7 @@ const (
 	inboxProtectionPurpose = "inbox_notification"
 	// providerReferencePurpose scopes protected identifiers exactly like verification persistence.
 	providerReferencePurpose = "provider_reference"
-	// reconciliationProtectionPurpose authenticates protected periodic verification requests.
-	reconciliationProtectionPurpose = "reconciliation_request"
-	// defaultReconciliationDelay schedules a conservative daily authoritative refresh.
-	defaultReconciliationDelay = 24 * time.Hour
+
 	// restoreRequestTimeout keeps sequential restore work inside the HTTP server write budget.
 	restoreRequestTimeout = 25 * time.Second
 )
@@ -50,6 +48,12 @@ const (
 type purchaseVerifier interface {
 	// Verify persists one purchase and returns the current entitlement snapshot.
 	Verify(context.Context, verification.Command) (verification.Result, error)
+}
+
+// reconciliationScheduler enqueues daily authoritative subscription refreshes.
+type reconciliationScheduler interface {
+	// ScheduleReconciliation stores the next refresh job or records a worker retry when that insert fails.
+	ScheduleReconciliation(context.Context, core.ProjectID, core.ApplicationID, core.CustomerID, jobs.VerificationPayload) error
 }
 
 // API owns versioned routes and application services without direct database access.
@@ -63,6 +67,7 @@ type API struct {
 	credentials       *credentials.Service
 	webhooks          *webhooks.Service
 	verification      purchaseVerifier
+	scheduler         reconciliationScheduler
 	huawei            *huawei.Adapter
 	apple             *apple.Adapter
 	googlePlay        *googleplay.Adapter
@@ -88,6 +93,8 @@ type Dependencies struct {
 	Credentials      *credentials.Service
 	Webhooks         *webhooks.Service
 	Verification     *verification.Service
+	// Scheduler enqueues daily subscription refreshes; nil builds one from Operations, Protection, and Verification.
+	Scheduler        reconciliationScheduler
 	Huawei           *huawei.Adapter
 	Apple            *apple.Adapter
 	GooglePlay       *googleplay.Adapter
@@ -248,6 +255,16 @@ func New(dependencies Dependencies) (*API, error) {
 		offeringCatalog:   dependencies.OfferingCatalog,
 		clock:             time.Now,
 		logger:            slog.Default(),
+	}
+	if dependencies.Scheduler != nil {
+		api.scheduler = dependencies.Scheduler
+	} else {
+		scheduler, err := processing.New(dependencies.Operations, dependencies.Protection, dependencies.Verification)
+		if err != nil {
+			return nil, err
+		}
+		scheduler.SetClock(func() time.Time { return api.clock() })
+		api.scheduler = scheduler
 	}
 	mux := http.NewServeMux()
 	for _, route := range api.v1Routes() {
@@ -890,8 +907,11 @@ func (api *API) verify(
 	if requiresReconciliation(input.Evidence) {
 		// Verify has already committed the purchase in its own transaction. The reconciliation
 		// insert uses the operations store, so it cannot join that commit. A scheduling failure
-		// must not hide the committed snapshot. The counter and log are the recovery signal.
-		if scheduleErr := api.scheduleReconciliation(ctx, principal, result.Customer.ID, input); scheduleErr != nil {
+		// must not hide the committed snapshot. The retry row is what the worker promotes;
+		// the counter and log remain the signal that the first insert did not commit.
+		if scheduleErr := api.scheduler.ScheduleReconciliation(
+			ctx, principal.ProjectID, principal.ApplicationID, result.Customer.ID, input,
+		); scheduleErr != nil {
 			api.recordReconcileScheduleFailure(principal, result.Customer.ID, application.Store.Provider)
 		}
 	}
@@ -929,37 +949,6 @@ func reconciliationScheduleProvider(provider core.Provider) string {
 	default:
 		return "unknown"
 	}
-}
-
-// scheduleReconciliation stores a protected idempotent daily authoritative refresh request.
-func (api *API) scheduleReconciliation(
-	ctx context.Context,
-	principal auth.Principal,
-	customerID core.CustomerID,
-	input verificationRequest,
-) error {
-	availableAt := nextReconciliationTime(api.clock().UTC())
-	payload, err := json.Marshal(jobs.ReconciliationPayload{Verification: input, ScheduledFor: availableAt})
-	if err != nil {
-		return err
-	}
-	defer zero(payload)
-	application, err := api.application(ctx, string(principal.ProjectID), string(principal.ApplicationID))
-	if err != nil {
-		return err
-	}
-	protected, err := api.protect(ctx, application, reconciliationProtectionPurpose, payload)
-	if err != nil {
-		return err
-	}
-	return api.operations.Operate(ctx, func(repository persistence.OperationsTransaction) error {
-		_, saveErr := repository.SaveReconciliationJob(ctx, persistence.ReconciliationJob{
-			ID: deterministicID("reconcile", protected.Fingerprint), ProjectID: principal.ProjectID,
-			ApplicationID: principal.ApplicationID, CustomerID: customerID,
-			Payload: protected, AvailableAt: availableAt,
-		})
-		return saveErr
-	})
 }
 
 // requireAdmin authenticates one control-plane bearer.
@@ -1255,11 +1244,6 @@ func requiresReconciliation(evidence json.RawMessage) bool {
 		ProductKind core.ProductKind `json:"product_kind"`
 	}
 	return json.Unmarshal(evidence, &metadata) == nil && metadata.ProductKind == core.ProductKindSubscription
-}
-
-// nextReconciliationTime returns one deterministic UTC generation boundary for idempotent scheduling.
-func nextReconciliationTime(now time.Time) time.Time {
-	return now.UTC().Truncate(defaultReconciliationDelay).Add(defaultReconciliationDelay)
 }
 
 // deterministicID derives a non-sensitive durable identity from an authenticated fingerprint.

@@ -205,6 +205,9 @@ func TestAdapterNormalizesExpiredSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
+	if len(result.Observations) != 1 {
+		t.Fatalf("Verify() observations = %d, want the same product only", len(result.Observations))
+	}
 	observation := result.Observations[0]
 	if observation.State != core.LifecycleExpired || observation.Access != core.AccessDenied ||
 		observation.AccessReason != core.AccessReasonExpired || observation.Renewal.Status != core.RenewalDisabled ||
@@ -687,18 +690,22 @@ func TestAdapterFollowsSubscriptionProductChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
+	if len(result.Observations) != 2 {
+		t.Fatalf("Verify() observations = %d, want the current product and the closed previous product", len(result.Observations))
+	}
 	observation := result.Observations[0]
 	if observation.ProductID != upgradedProduct || observation.State != core.LifecycleActive ||
 		observation.Access != core.AccessAllowed || observation.ProductKind != core.ProductKindSubscription {
 		t.Fatalf("Verify() observation = %#v, want active %s", observation, upgradedProduct)
 	}
+	assertSupersededAppleProduct(t, result.Observations[1], fixtureProductID, milliseconds(submitted.ExpiresDate))
 	if err := result.ValidateForVerification(request); err == nil {
 		t.Fatal("ValidateForVerification() accepted the historical product claim")
 	}
 	currentClaim := request
-	currentClaim.ClaimedProducts = []core.ProviderProductID{upgradedProduct}
+	currentClaim.ClaimedProducts = result.ProductsForClaim(request.ClaimedProducts)
 	if err := result.ValidateForVerification(currentClaim); err != nil {
-		t.Fatalf("ValidateForVerification() current product error = %v", err)
+		t.Fatalf("ValidateForVerification() upgraded lineage error = %v", err)
 	}
 
 	queryReference, err := core.NewStoreReference(core.ReferenceQuery, "transaction_id", submitted.TransactionID)
@@ -715,8 +722,212 @@ func TestAdapterFollowsSubscriptionProductChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
-	if reconciled.Observations[0].ProductID != upgradedProduct || reconciled.Observations[0].Access != core.AccessAllowed {
-		t.Fatalf("Reconcile() observation = %#v, want active %s", reconciled.Observations[0], upgradedProduct)
+	if len(reconciled.Observations) != 2 || reconciled.Observations[0].ProductID != upgradedProduct ||
+		reconciled.Observations[0].Access != core.AccessAllowed {
+		t.Fatalf("Reconcile() observations = %#v, want active %s and a closed previous product", reconciled.Observations, upgradedProduct)
+	}
+	assertSupersededAppleProduct(t, reconciled.Observations[1], fixtureProductID, milliseconds(submitted.ExpiresDate))
+}
+
+// TestAdapterClosesStalePreviousProductAtUpgrade denies the old entitlement at the new purchase time.
+// Daily replay and a missed notification verify the original signed transaction. That JWS still has
+// the pre-upgrade expiry, while subscription status has already moved to the new product.
+func TestAdapterClosesStalePreviousProductAtUpgrade(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	fixture := newSigningFixture(t, now)
+	const upgradedProduct = "iapstack.pro.annual"
+	upgradeAt := now.Add(-time.Minute)
+	submitted := transactionPayload{
+		OriginalTransactionID: "2000000723456789", TransactionID: "2000000723456790",
+		BundleID: fixtureBundleID, ProductID: fixtureProductID,
+		PurchaseDate: now.Add(-10 * 24 * time.Hour).UnixMilli(), ExpiresDate: now.Add(20 * 24 * time.Hour).UnixMilli(),
+		Quantity: 1, Type: appleSubscriptionType, AppAccountToken: fixtureAccountToken,
+		OwnershipType: applePurchasedOwnership, SignedDate: now.Add(-time.Hour).UnixMilli(),
+		Environment: "Sandbox",
+	}
+	current := submitted
+	current.TransactionID = "2000000723456791"
+	current.ProductID = upgradedProduct
+	current.PurchaseDate = upgradeAt.UnixMilli()
+	current.ExpiresDate = now.Add(365 * 24 * time.Hour).UnixMilli()
+	current.SignedDate = now.UnixMilli()
+	current.IsUpgraded = false
+	renewal := renewalPayload{
+		AppAccountToken: current.AppAccountToken, AutoRenewProductID: upgradedProduct,
+		AutoRenewStatus: autoRenewEnabled, Environment: current.Environment,
+		OriginalTransactionID: current.OriginalTransactionID, ProductID: upgradedProduct,
+		RenewalDate: current.ExpiresDate, SignedDate: now.UnixMilli(),
+	}
+	adapter, err := New(
+		fakeCredentialSource{credential: credentialFixture(t, fixture, core.EnvironmentSandbox)},
+		time.Second,
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	adapter.clock = func() time.Time { return now }
+	adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/inApps/v1/subscriptions/" + submitted.OriginalTransactionID:
+			return jsonResponse(t, http.StatusOK, statusResponse{
+				Environment: current.Environment, BundleID: current.BundleID,
+				Data: []subscriptionGroupIdentifierItem{{
+					SubscriptionGroupIdentifier: "subscription-group-1",
+					LastTransactions: []lastTransactionsItem{{
+						OriginalTransactionID: current.OriginalTransactionID,
+						Status:                subscriptionStatusActive,
+						SignedTransactionInfo: signTransactionFixture(t, fixture, current),
+						SignedRenewalInfo:     signApplePayloadFixture(t, fixture, renewal),
+					}},
+				}},
+			}, nil), nil
+		default:
+			t.Fatalf("unexpected provider request path %q", request.URL.Path)
+			return nil, nil
+		}
+	})
+	binding, err := core.NewStoreReference(core.ReferenceCustomerBinding, "app_account_token", fixtureAccountToken)
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	result, err := adapter.Verify(context.Background(), stores.VerificationRequest{
+		Application: appleApplication(core.EnvironmentSandbox), CustomerID: "customer-1",
+		ClaimedProducts:          []core.ProviderProductID{fixtureProductID},
+		ExpectedCustomerBindings: []core.StoreReference{binding},
+		Evidence:                 evidenceFixture(t, fixture, submitted, core.ProductKindSubscription),
+	})
+	if err != nil {
+		t.Fatalf("Verify() error = %v cause = %v", err, errors.Unwrap(err))
+	}
+	if len(result.Observations) != 2 || len(result.Artifacts) != 1 {
+		t.Fatalf("Verify() observations=%d artifacts=%d, want 2 and 1", len(result.Observations), len(result.Artifacts))
+	}
+	currentObservation := result.Observations[0]
+	if currentObservation.ProductID != upgradedProduct || currentObservation.Access != core.AccessAllowed ||
+		currentObservation.EffectivePeriod.EndsAt == nil ||
+		!currentObservation.EffectivePeriod.EndsAt.Equal(milliseconds(current.ExpiresDate)) {
+		t.Fatalf("current observation = %#v, want allowed %s", currentObservation, upgradedProduct)
+	}
+	assertSupersededAppleProduct(t, result.Observations[1], fixtureProductID, upgradeAt)
+	if result.Observations[0].ID == result.Observations[1].ID {
+		t.Fatal("upgrade reused one observation ID for both products")
+	}
+	lineage := stores.VerificationRequest{
+		Application: appleApplication(core.EnvironmentSandbox), CustomerID: "customer-1",
+		ClaimedProducts:          result.ProductsForClaim([]core.ProviderProductID{fixtureProductID}),
+		ExpectedCustomerBindings: []core.StoreReference{binding},
+		Evidence:                 evidenceFixture(t, fixture, submitted, core.ProductKindSubscription),
+	}
+	if err := result.ValidateForVerification(lineage); err != nil {
+		t.Fatalf("ValidateForVerification() error = %v", err)
+	}
+}
+
+// TestAdapterUpgradeIgnoresPreviousPriceAndRevocation builds the closed observation from identity fields alone.
+// An older client JWS can carry a price without currency or a historical revocation date; closing the previous
+// product on an active upgrade must not fail price parsing or record the upgrade close as a refund.
+func TestAdapterUpgradeIgnoresPreviousPriceAndRevocation(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC)
+	fixture := newSigningFixture(t, now)
+	const upgradedProduct = "iapstack.pro.annual"
+	upgradeAt := now.Add(-time.Minute)
+	orphanPrice := int64(4990)
+	revocationReason := 0
+	submitted := transactionPayload{
+		OriginalTransactionID: "2000000823456789", TransactionID: "2000000823456790",
+		BundleID: fixtureBundleID, ProductID: fixtureProductID,
+		PurchaseDate: now.Add(-10 * 24 * time.Hour).UnixMilli(), ExpiresDate: now.Add(20 * 24 * time.Hour).UnixMilli(),
+		Quantity: 1, Type: appleSubscriptionType, AppAccountToken: fixtureAccountToken,
+		OwnershipType: applePurchasedOwnership, SignedDate: now.Add(-time.Hour).UnixMilli(),
+		Environment: "Sandbox", Price: &orphanPrice,
+		RevocationDate: now.Add(-2 * time.Minute).UnixMilli(), RevocationReason: &revocationReason,
+	}
+	current := transactionPayload{
+		OriginalTransactionID: submitted.OriginalTransactionID, TransactionID: "2000000823456791",
+		BundleID: fixtureBundleID, ProductID: upgradedProduct,
+		PurchaseDate: upgradeAt.UnixMilli(), ExpiresDate: now.Add(365 * 24 * time.Hour).UnixMilli(),
+		Quantity: 1, Type: appleSubscriptionType, AppAccountToken: fixtureAccountToken,
+		OwnershipType: applePurchasedOwnership, SignedDate: now.UnixMilli(),
+		Environment: "Sandbox",
+	}
+	renewal := renewalPayload{
+		AppAccountToken: current.AppAccountToken, AutoRenewProductID: upgradedProduct,
+		AutoRenewStatus: autoRenewEnabled, Environment: current.Environment,
+		OriginalTransactionID: current.OriginalTransactionID, ProductID: upgradedProduct,
+		RenewalDate: current.ExpiresDate, SignedDate: now.UnixMilli(),
+	}
+	adapter, err := New(
+		fakeCredentialSource{credential: credentialFixture(t, fixture, core.EnvironmentSandbox)},
+		time.Second,
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	adapter.clock = func() time.Time { return now }
+	adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/inApps/v1/subscriptions/"+submitted.OriginalTransactionID {
+			t.Fatalf("unexpected provider request path %q", request.URL.Path)
+			return nil, nil
+		}
+		return jsonResponse(t, http.StatusOK, statusResponse{
+			Environment: current.Environment, BundleID: current.BundleID,
+			Data: []subscriptionGroupIdentifierItem{{
+				SubscriptionGroupIdentifier: "subscription-group-1",
+				LastTransactions: []lastTransactionsItem{{
+					OriginalTransactionID: current.OriginalTransactionID,
+					Status:                subscriptionStatusActive,
+					SignedTransactionInfo: signTransactionFixture(t, fixture, current),
+					SignedRenewalInfo:     signApplePayloadFixture(t, fixture, renewal),
+				}},
+			}},
+		}, nil), nil
+	})
+	binding, err := core.NewStoreReference(core.ReferenceCustomerBinding, "app_account_token", fixtureAccountToken)
+	if err != nil {
+		t.Fatalf("NewStoreReference() error = %v", err)
+	}
+	request := stores.VerificationRequest{
+		Application: appleApplication(core.EnvironmentSandbox), CustomerID: "customer-1",
+		ClaimedProducts:          []core.ProviderProductID{fixtureProductID},
+		ExpectedCustomerBindings: []core.StoreReference{binding},
+		Evidence:                 evidenceFixture(t, fixture, submitted, core.ProductKindSubscription),
+	}
+	result, err := adapter.Verify(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Verify() error = %v cause = %v", err, errors.Unwrap(err))
+	}
+	if len(result.Observations) != 2 || len(result.Artifacts) != 1 {
+		t.Fatalf("Verify() observations=%d artifacts=%d, want 2 and 1", len(result.Observations), len(result.Artifacts))
+	}
+	closed := result.Observations[1]
+	assertSupersededAppleProduct(t, closed, fixtureProductID, upgradeAt)
+	if closed.Price != nil {
+		t.Fatalf("closed observation price = %#v, want nil", closed.Price)
+	}
+	validationRequest := request
+	validationRequest.ClaimedProducts = result.ProductsForClaim(request.ClaimedProducts)
+	if err := result.ValidateForVerification(validationRequest); err != nil {
+		t.Fatalf("ValidateForVerification() error = %v", err)
+	}
+}
+
+// assertSupersededAppleProduct checks that an upgraded product no longer grants access.
+func assertSupersededAppleProduct(
+	t *testing.T,
+	observation core.PurchaseObservation,
+	productID core.ProviderProductID,
+	endsAt time.Time,
+) {
+	t.Helper()
+	if observation.ProductID != productID || observation.State != core.LifecycleExpired ||
+		observation.Access != core.AccessDenied || observation.AccessReason != core.AccessReasonExpired ||
+		observation.ProviderState != "upgraded" || observation.Renewal.Status != core.RenewalDisabled ||
+		observation.EffectivePeriod.EndsAt == nil || !observation.EffectivePeriod.EndsAt.Equal(endsAt) {
+		t.Fatalf("superseded observation = %#v, want denied %s ending %s", observation, productID, endsAt)
 	}
 }
 

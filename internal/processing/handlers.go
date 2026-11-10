@@ -55,6 +55,7 @@ type Service struct {
 	replacements linkedPurchaseReader
 	verification *verification.Service
 	clock        func() time.Time
+	logger       *slog.Logger
 }
 
 // New validates and constructs durable provider processing handlers.
@@ -641,32 +642,52 @@ func (service *Service) scheduleNext(
 	customerID core.CustomerID,
 	verificationPayload jobs.VerificationPayload,
 ) (string, error) {
-	availableAt := nextReconciliationTime(service.clock().UTC())
+	job, err := service.reconciliationJob(
+		ctx, projectID, applicationID, customerID, verificationPayload, nextReconciliationTime(service.now()),
+	)
+	if err != nil {
+		return "", err
+	}
+	var jobID string
+	err = service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var saveErr error
+		jobID, saveErr = repository.SaveReconciliationJob(ctx, job)
+		return saveErr
+	})
+	return jobID, err
+}
+
+// reconciliationJob marshals and protects one daily reconciliation generation for durable insertion.
+func (service *Service) reconciliationJob(
+	ctx context.Context,
+	projectID core.ProjectID,
+	applicationID core.ApplicationID,
+	customerID core.CustomerID,
+	verificationPayload jobs.VerificationPayload,
+	availableAt time.Time,
+) (persistence.ReconciliationJob, error) {
 	payload, err := json.Marshal(jobs.ReconciliationPayload{
 		Verification: verificationPayload,
 		ScheduledFor: availableAt,
 	})
 	if err != nil {
-		return "", err
+		return persistence.ReconciliationJob{}, err
 	}
 	defer zero(payload)
 	protected, err := protection.Protect(ctx, service.protection, protection.Scope{
 		ProjectID: projectID, ApplicationID: applicationID, Purpose: reconciliationProtectionPurpose,
 	}, payload)
 	if err != nil {
-		return "", fmt.Errorf("protect reconciliation request: %w", err)
+		return persistence.ReconciliationJob{}, fmt.Errorf("protect reconciliation request: %w", err)
 	}
-	var jobID string
-	err = service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
-		var saveErr error
-		jobID, saveErr = repository.SaveReconciliationJob(ctx, persistence.ReconciliationJob{
-			ID: deterministicID("reconcile", protected.Fingerprint), ProjectID: projectID,
-			ApplicationID: applicationID, CustomerID: customerID,
-			Payload: protected, AvailableAt: availableAt,
-		})
-		return saveErr
-	})
-	return jobID, err
+	return persistence.ReconciliationJob{
+		ID:            deterministicID("reconcile", protected.Fingerprint),
+		ProjectID:     projectID,
+		ApplicationID: applicationID,
+		CustomerID:    customerID,
+		Payload:       protected,
+		AvailableAt:   availableAt,
+	}, nil
 }
 
 // retire closes one future reconciliation generation so the worker skips it when it becomes due.

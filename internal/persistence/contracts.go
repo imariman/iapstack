@@ -187,6 +187,18 @@ type QueueRepository interface {
 	SaveInboxMessage(context.Context, InboxMessage) (string, error)
 	// SaveReconciliationJob stores one protected reconciliation request idempotently.
 	SaveReconciliationJob(context.Context, ReconciliationJob) (string, error)
+	// SaveReconciliationScheduleRetry stores one protected verification payload for a later job insert.
+	// The insert is idempotent for the same application, customer, and payload fingerprint
+	// while that row is still pending. A scheduled or dead row does not block a later retry.
+	SaveReconciliationScheduleRetry(context.Context, ReconciliationScheduleRetry) error
+	// ListPendingReconciliationScheduleRetries locks and returns due, unscheduled retries in next-attempt order.
+	ListPendingReconciliationScheduleRetries(context.Context, time.Time, int) ([]ReconciliationScheduleRetry, error)
+	// CompleteReconciliationScheduleRetry claims one pending retry before its reconciliation job is inserted.
+	// A row that is already scheduled or dead is left unchanged and reported as not claimed.
+	CompleteReconciliationScheduleRetry(context.Context, string, time.Time) (bool, error)
+	// RecordReconciliationScheduleRetryFailure advances one pending retry after a promotion failure.
+	// A row that is already scheduled or dead is left unchanged and reported as not updated.
+	RecordReconciliationScheduleRetryFailure(context.Context, ReconciliationScheduleRetryFailure) (bool, error)
 	// QueueMessage returns one durable payload by its fixed queue and record identity.
 	QueueMessage(context.Context, QueueName, string) (QueueMessage, error)
 	// CompleteQueue records successful processing or delivery idempotently.

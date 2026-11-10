@@ -25,6 +25,9 @@ const (
 	queueMetricsInterval = time.Minute
 	// queueCleanupInterval bounds how long expired terminal audit rows remain after retention.
 	queueCleanupInterval = time.Minute
+	// reconciliationRetryInterval is how often the worker looks for due schedule retries.
+	// Each row's next_attempt_at decides when it is eligible again.
+	reconciliationRetryInterval = time.Minute
 	// queueCleanupBatchSize bounds row locks and transaction work per queue and cleanup pass.
 	queueCleanupBatchSize = 1_000
 
@@ -72,6 +75,7 @@ type Runner struct {
 	shutdownTimeout time.Duration
 	queueRetention  time.Duration
 	clock           func() time.Time
+	retrySchedules  func(context.Context) error
 }
 
 // executor loads durable payloads, invokes handlers, and records terminal audit outcomes.
@@ -173,6 +177,15 @@ func New(
 	}, nil
 }
 
+// SetReconciliationScheduleRetry promotes subscription schedules the API could not commit.
+// Call it before Run. A nil retry leaves those rows for a later worker.
+func (runner *Runner) SetReconciliationScheduleRetry(retry func(context.Context) error) {
+	if runner == nil {
+		return
+	}
+	runner.retrySchedules = retry
+}
+
 // Run starts River, stops accepting work on cancellation, and bounds graceful shutdown.
 func (runner *Runner) Run(ctx context.Context) error {
 	if runner == nil || runner.client == nil {
@@ -193,6 +206,13 @@ func (runner *Runner) Run(ctx context.Context) error {
 		defer maintenanceWorkers.Done()
 		runner.cleanTerminalQueues(maintenanceContext)
 	}()
+	if runner.retrySchedules != nil {
+		maintenanceWorkers.Add(1)
+		go func() {
+			defer maintenanceWorkers.Done()
+			runner.promoteReconciliationScheduleRetries(maintenanceContext)
+		}()
+	}
 	defer func() {
 		maintenanceCancel()
 		maintenanceWorkers.Wait()
@@ -213,6 +233,24 @@ func (runner *Runner) Run(ctx context.Context) error {
 		)
 	}
 	return nil
+}
+
+// promoteReconciliationScheduleRetries inserts daily jobs for schedules the API request could not commit.
+func (runner *Runner) promoteReconciliationScheduleRetries(ctx context.Context) {
+	ticker := time.NewTicker(reconciliationRetryInterval)
+	defer ticker.Stop()
+	for {
+		if runner.retrySchedules != nil {
+			if err := runner.retrySchedules(ctx); err != nil && ctx.Err() == nil && runner.logger != nil {
+				runner.logger.Error("retry reconciliation schedules", "error_code", "reconciliation_schedule_retry_failed")
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // cleanTerminalQueues periodically removes expired audit rows that cannot be executed again.
