@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	cloud.google.com/go/auth v0.24.4
-	github.com/getkin/kin-openapi v0.152.0
+	github.com/getkin/kin-openapi v0.153.0
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/jackc/tern/v2 v2.4.3
 	github.com/riverqueue/river v0.51.1
@@ -41,8 +41,6 @@ require (
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
-	github.com/oasdiff/yaml v0.1.1 // indirect
-	github.com/oasdiff/yaml3 v0.0.14 // indirect
 	github.com/riverqueue/river/riverdriver v0.51.1 // indirect
 	github.com/riverqueue/river/rivershared v0.51.1 // indirect
 	github.com/riverqueue/river/rivertype v0.51.1 // indirect
@@ -58,6 +56,7 @@ require (
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
+	go.yaml.in/yaml/v4 v4.0.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
