@@ -1,5 +1,5 @@
-cloud.google.com/go/auth v0.24.2 h1:B1/4OLie/oVowCTrVgFS3NpEtIrLsuudX0/BxKsEk6s=
-cloud.google.com/go/auth v0.24.2/go.mod h1:p4UXqfSXnMVUDutk9xePzI8lj8yyoJ3BLsKWv0NSvQk=
+cloud.google.com/go/auth v0.24.4 h1:m49juFKXOaeRwmLgcrd3e4hrwqLDe1+4g8fH0EoznUU=
+cloud.google.com/go/auth v0.24.4/go.mod h1:p4UXqfSXnMVUDutk9xePzI8lj8yyoJ3BLsKWv0NSvQk=
 cloud.google.com/go/compute/metadata v0.10.0 h1:pyKMUQSwchgkIBBJGdILqQbs/BNJXqwSA7Ej6LAvvtY=
 cloud.google.com/go/compute/metadata v0.10.0/go.mod h1:rGFHRrIif570kSibjFTMbt6/4/tzgJWFGI/HVol4GIk=
 dario.cat/mergo v1.0.2 h1:85+piFYR1tMbRrLcDwR18y4UKJ3aH1Tbzi24VRW1TK8=
