@@ -123,7 +123,7 @@ final class IAPStackStore: RCTEventEmitter {
           do {
             let result = try await companion.verifyPurchase(externalCustomerId: next.customer, purchase: purchase)
             guard !Task.isCancelled else { return }
-            self?.emit(next, ["type": "verified", "result": verification(result)])
+            self?.emit(next, ["type": purchaseListenerEventType(result.entitlements), "result": verification(result)])
           } catch {
             if Task.isCancelled { return }
             self?.emit(next, errorEvent(error))
@@ -227,6 +227,18 @@ final class IAPStackStore: RCTEventEmitter {
 /// Devices identify React Native traffic even though the canonical native client sends it.
 private let reactNativeSDKName = "react-native"
 
+/// Event name for a purchase update after the server has answered. Mirrors
+/// `purchaseListenerEventType` in the Android Google Play companion: an empty
+/// snapshot, or one whose unresolved entitlements grant nothing, is `pending`,
+/// never `verified` — an app unlocking on the event name must not treat a
+/// purchase the server did not grant as verified. Classifies native
+/// entitlements before they are mapped to the emitted dictionary.
+private func purchaseListenerEventType(_ entitlements: [Entitlement]) -> String {
+  if entitlements.isEmpty { return "pending" }
+  let unresolved = entitlements.filter { $0.access == "unresolved" || $0.reason == "pending_payment" }
+  if !unresolved.isEmpty && !unresolved.contains(where: { $0.grantsAccess() }) { return "pending" }
+  return "verified"
+}
 private func bridgeError(_ code: String) -> AppleIAPStackError {
   AppleIAPStackError(code: code, message: "IAPStack operation failed (\(code))")
 }

@@ -82,11 +82,22 @@ test('pending purchase updates stay distinct from verified access', () => {
   callback({type: 'pending', result: {customer_id: 'internal-id', verified_at: '2026-10-06T12:00:00Z',
     entitlements: [{key: 'premium', access: 'unresolved', reason: 'pending_payment', version: 1}]}});
   callback({type: 'pending', result: {entitlements: 'invalid'}});
+  // #252: iOS emits pending (not verified) for an empty snapshot or one mixing an
+  // allowed entitlement with a pending_payment one; JS must keep it pending.
+  callback({type: 'pending', result: {customer_id: 'internal-id', verified_at: '2026-10-06T12:00:00Z',
+    entitlements: []}});
+  callback({type: 'pending', result: {customer_id: 'internal-id', verified_at: '2026-10-06T12:00:00Z',
+    entitlements: [{key: 'premium', access: 'allowed', reason: 'active', version: 1},
+      {key: 'extra', access: 'unresolved', reason: 'pending_payment', version: 1}]}});
   expect(received[0]).toEqual({type: 'pending', productIds: ['premium']});
   const pendingResult = received[1]?.result as {entitlements: {grantsAccess: boolean}[]};
   expect(received[1]?.type).toBe('pending');
   expect(pendingResult.entitlements[0]?.grantsAccess).toBe(false);
   expect(received[2]).toEqual({type: 'error', code: 'protocol_error', message: 'Invalid native verification result'});
+  expect(received[3]?.type).toBe('pending');
+  expect((received[3]?.result as {entitlements: unknown[]}).entitlements).toHaveLength(0);
+  expect(received[4]?.type).toBe('pending');
+  expect((received[4]?.result as {entitlements: {grantsAccess: boolean}[]}).entitlements[1].grantsAccess).toBe(false);
   listener.remove();
 });
 test('purchase updates decode and malformed native payloads fail closed', () => {
