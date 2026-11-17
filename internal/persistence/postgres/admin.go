@@ -487,7 +487,11 @@ func (repository *transaction) adminCustomers(
 	rows, err := repository.tx.Query(ctx, `
 		SELECT customer.id, customer.external_id, customer.merged_into_customer_id, customer.created_at,
 			count(DISTINCT projection.entitlement_id),
-			count(DISTINCT projection.entitlement_id) FILTER (WHERE projection.access_status = 'allowed'),
+			count(DISTINCT projection.entitlement_id) FILTER (
+				WHERE projection.access_status = 'allowed'
+					AND projection.effective_starts_at <= CURRENT_TIMESTAMP
+					AND (projection.effective_ends_at IS NULL OR projection.effective_ends_at > CURRENT_TIMESTAMP)
+			),
 			max(observation.observed_at),
 			(
 				SELECT count(*)

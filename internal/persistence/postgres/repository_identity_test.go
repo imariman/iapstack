@@ -529,3 +529,108 @@ func TestMergeCustomersEnforcesConflictIdempotencyAndAliasOwnership(t *testing.T
 	}
 	assertTableCount(t, database, "customer_merges", 1)
 }
+
+// TestMergeCustomersIgnoresExpiredAllowedRows verifies lapsed stored-allowed
+// rows do not block a merge while a real current overlap still conflicts.
+func TestMergeCustomersIgnoresExpiredAllowedRows(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	projectID := core.ProjectID(fixture.projectID)
+	persistAllowedCustomer(t, database, store, fixture, fixture.customerID)
+	persistAllowedCustomer(t, database, store, fixture, "customer-source")
+
+	merge := func(key string) error {
+		return store.Transact(database.ctx, func(repository persistence.Transaction) error {
+			_, mergeErr := repository.MergeCustomers(database.ctx, persistence.CustomerMergeWrite{
+				ProjectID: projectID, CanonicalCustomerID: core.CustomerID(fixture.customerID),
+				SourceCustomerID: "customer-source", IdempotencyKey: key, ActorKeyID: "admin-key",
+			})
+			return mergeErr
+		})
+	}
+
+	setStoredProjectionPeriod(t, database, fixture.customerID, "-2 hours", "1 hour")
+	setStoredProjectionPeriod(t, database, "customer-source", "-2 hours", "1 hour")
+	if err := merge("merge-current-overlap"); !errors.Is(err, persistence.ErrEntitlementConflict) {
+		t.Fatalf("current overlap merge error = %v, want ErrEntitlementConflict", err)
+	}
+	assertTableCount(t, database, "customer_merges", 0)
+
+	setStoredProjectionPeriod(t, database, fixture.customerID, "-2 hours", "-1 hour")
+	setStoredProjectionPeriod(t, database, "customer-source", "-2 hours", "-1 hour")
+	if err := merge("merge-expired-overlap"); err != nil {
+		t.Fatalf("expired overlap merge error = %v, want success", err)
+	}
+	assertTableCount(t, database, "customer_merges", 1)
+}
+
+// TestMergeCustomersAllowsOneExpiredOneCurrentAllowed verifies conflict needs
+// current access on both sides, matching the period applied to reads.
+func TestMergeCustomersAllowsOneExpiredOneCurrentAllowed(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	projectID := core.ProjectID(fixture.projectID)
+	persistAllowedCustomer(t, database, store, fixture, fixture.customerID)
+	persistAllowedCustomer(t, database, store, fixture, "customer-source")
+
+	setStoredProjectionPeriod(t, database, fixture.customerID, "-2 hours", "-1 hour")
+	setStoredProjectionPeriod(t, database, "customer-source", "-2 hours", "1 hour")
+	err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		_, mergeErr := repository.MergeCustomers(database.ctx, persistence.CustomerMergeWrite{
+			ProjectID: projectID, CanonicalCustomerID: core.CustomerID(fixture.customerID),
+			SourceCustomerID: "customer-source", IdempotencyKey: "merge-one-expired", ActorKeyID: "admin-key",
+		})
+		return mergeErr
+	})
+	if err != nil {
+		t.Fatalf("one expired merge error = %v, want success", err)
+	}
+	assertTableCount(t, database, "customer_merges", 1)
+}
+
+// persistAllowedCustomer stores one allowed projection for a catalog customer.
+func persistAllowedCustomer(
+	t *testing.T,
+	database *testDatabase,
+	store *postgres.Store,
+	fixture catalogFixture,
+	customerID string,
+) {
+	t.Helper()
+	writes := newPurchaseWrites(t, fixture)
+	if customerID != fixture.customerID {
+		mustExec(t, database, `
+			INSERT INTO customers (id, project_id, external_id)
+			VALUES ($1, $2, $3)
+		`, customerID, fixture.projectID, customerID+"-external")
+		writes.evidence.CustomerID = core.CustomerID(customerID)
+		writes.evidence.Payload = repositoryProtectedValue(customerID + "-evidence")
+		writes.observation.CustomerID = core.CustomerID(customerID)
+		writes.observation.Observation.ID = core.ObservationID("observation-" + customerID)
+		writes.projection.CustomerID = core.CustomerID(customerID)
+		writes.projection.SourceObservationID = writes.observation.Observation.ID
+		writes.outbox.ID = "outbox-" + customerID
+		writes.outbox.AggregateID = customerID
+	}
+	persistPurchaseWrites(t, database.ctx, store, writes)
+}
+
+// setStoredProjectionPeriod rewrites one stored projection period relative to
+// the database clock; an empty end interval stores a durable open end.
+func setStoredProjectionPeriod(
+	t *testing.T,
+	database *testDatabase,
+	customerID string,
+	startInterval string,
+	endInterval string,
+) {
+	t.Helper()
+	mustExec(t, database, `
+		UPDATE customer_entitlements
+		SET effective_starts_at = now() + $2::interval,
+			effective_ends_at = CASE WHEN $3 = '' THEN NULL ELSE now() + $3::interval END
+		WHERE customer_id = $1
+	`, customerID, startInterval, endInterval)
+}
