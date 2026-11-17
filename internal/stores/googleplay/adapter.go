@@ -263,7 +263,7 @@ func (adapter *Adapter) Verify(
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}
-	verificationResult := result.verificationResult(adapter.clock().UTC(), request.ClaimedProducts)
+	verificationResult := result.verificationResult(adapter.clock().UTC())
 	validationRequest := request
 	validationRequest.ClaimedProducts = verificationResult.ProductsForClaim(request.ClaimedProducts)
 	if err := verificationResult.ValidateForVerification(validationRequest); err != nil {
@@ -295,7 +295,7 @@ func (adapter *Adapter) Reconcile(
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}
-	verificationResult := result.verificationResult(adapter.clock().UTC(), request.ExpectedProducts)
+	verificationResult := result.verificationResult(adapter.clock().UTC())
 	validationRequest := request
 	validationRequest.ExpectedProducts = verificationResult.ProductsForClaim(request.ExpectedProducts)
 	if err := verificationResult.ValidateForReconciliation(validationRequest); err != nil {
@@ -771,8 +771,9 @@ func replacedItemObservation(
 // Google documents two items on a token after a deferred change, but a one-item response that names the
 // replaced product is accepted for a token stored with that product. Without an expired snapshot, the
 // stored allowed snapshot of the replaced product would keep its entitlement source after its end. Google
-// reports no period for that product here, so the snapshot has no end, and it is added to a result only
-// when the request names the replaced product.
+// reports no period for that product here, so the snapshot has no end. The purchase itself naming the
+// replacement is the gate, not the request: the snapshot is derived only when this token's one item names
+// a different replaced product, so including it for a new-product request cannot deny an unrelated product.
 func itemReplacementObservation(
 	application core.Application,
 	purchaseToken string,
@@ -875,13 +876,14 @@ func subscriptionProducts(purchase subscriptionPurchase) []core.ProviderProductI
 
 // verificationResult builds the provider result for one request.
 // A purchase that names more than one product reports them all, so a claim on any of them is checked against
-// the observed products. The itemReplacement snapshot is added only when the request names that product.
+// the observed products. The itemReplacement snapshot is always added when the purchase names a replaced
+// product, including when the request names the new product: verifying the replacement is exactly when the
+// old product must stop granting, and gating on the request left it allowed until an old-product refresh.
 func (result queryResult) verificationResult(
 	verifiedAt time.Time,
-	requested []core.ProviderProductID,
 ) stores.VerificationResult {
 	observations := result.observations
-	if result.itemReplaced != nil && len(requested) == 1 && requested[0] == result.itemReplaced.ProductID {
+	if result.itemReplaced != nil {
 		observations = append(append([]core.PurchaseObservation(nil), observations...), *result.itemReplaced)
 	}
 	verificationResult := stores.VerificationResult{

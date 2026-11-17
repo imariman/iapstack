@@ -822,13 +822,20 @@ func TestAdapterFollowsItemReplacementOnOneItemPurchase(t *testing.T) {
 		t.Fatalf("Reconcile() replaced observation = %#v, want expired stored product without a period", replaced)
 	}
 
+	// Naming the new product must still expire the replaced one (#251): that verify/reconcile
+	// is what records the replacement, so dropping the snapshot left the old product allowed.
 	request.ExpectedProducts = []core.ProviderProductID{fixtureReplacementProductID}
 	result, err = fixture.adapter.Reconcile(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Reconcile(expected replacement) error = %v", err)
 	}
-	if len(result.Observations) != 1 || result.Observations[0].ProductID != fixtureReplacementProductID {
-		t.Fatalf("Reconcile(expected replacement) observations = %#v, want only the current item", result.Observations)
+	if len(result.Observations) != 2 || result.Observations[0].ProductID != fixtureReplacementProductID ||
+		result.Observations[0].Access != core.AccessAllowed {
+		t.Fatalf("Reconcile(expected replacement) observations = %#v, want allowed new and denied old", result.Observations)
+	}
+	if denied := result.Observations[1]; denied.ProductID != fixtureProductID ||
+		denied.State != core.LifecycleExpired || denied.Access != core.AccessDenied || denied.ID != replaced.ID {
+		t.Fatalf("Reconcile(expected replacement) replaced = %#v, want same denied snapshot %q", denied, replaced.ID)
 	}
 	verify := verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription)
 	verify.ClaimedProducts = []core.ProviderProductID{fixtureReplacementProductID}
@@ -836,8 +843,26 @@ func TestAdapterFollowsItemReplacementOnOneItemPurchase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify(claim replacement) error = %v", err)
 	}
-	if len(verified.Observations) != 1 {
-		t.Fatalf("Verify(claim replacement) observations = %#v, want only the current item", verified.Observations)
+	if len(verified.Observations) != 2 || verified.Observations[0].ProductID != fixtureReplacementProductID ||
+		verified.Observations[0].Access != core.AccessAllowed ||
+		verified.Observations[1].ProductID != fixtureProductID ||
+		verified.Observations[1].Access != core.AccessDenied || verified.Observations[1].ID != replaced.ID {
+		t.Fatalf("Verify(claim replacement) observations = %#v, want allowed new and same denied old", verified.Observations)
+	}
+
+	// A following renewal of the new item reuses the same replaced snapshot instead of minting a second one.
+	current["expiryTime"] = newExpiry.Add(30 * 24 * time.Hour).Format(time.RFC3339)
+	current["latestSuccessfulOrderId"] = "GPA.3372-8415-2906-11223"
+	fixture.adapter.client.Transport = providerTransport(t, fixture, payload)
+	renewed, err := fixture.adapter.Reconcile(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Reconcile(renewed replacement) error = %v", err)
+	}
+	if len(renewed.Observations) != 2 || renewed.Observations[1].ID != replaced.ID {
+		t.Fatalf("Reconcile(renewed replacement) observations = %#v, want replaced snapshot %q reused", renewed.Observations, replaced.ID)
+	}
+	if renewed.Observations[0].ID == result.Observations[0].ID {
+		t.Fatal("renewal reused the current item observation ID, so the renewal fixture did not change the current item")
 	}
 	request.ExpectedProducts = []core.ProviderProductID{fixtureProductID}
 
