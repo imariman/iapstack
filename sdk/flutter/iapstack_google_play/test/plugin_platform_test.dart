@@ -83,6 +83,78 @@ void main() {
     expect(purchase.toString(), isNot(contains('native-purchase-json')));
   });
 
+  test(
+    'maps a plain cancelled purchase sentinel and keeps the stream open',
+    () async {
+      final updates = bridge.purchaseUpdates.take(2).toList();
+      officialPlatform.emitPurchases(<PurchaseDetails>[
+        _pluginSentinel(
+          status: PurchaseStatus.canceled,
+          errorCode: 'purchase_error',
+        ),
+      ]);
+      officialPlatform.emitPurchase(_nativePurchase);
+
+      final purchases = await updates;
+
+      expect(purchases, hasLength(2));
+      expect(purchases.first.status, GooglePlayPurchaseStatus.cancelled);
+      expect(purchases.first.errorCode, 'purchase_error');
+      expect(purchases.first.purchaseToken, isEmpty);
+      expect(purchases.first.productIds, isEmpty);
+      expect(purchases.first.isAcknowledged, isFalse);
+      expect(purchases.first.canVerify, isFalse);
+      expect(purchases.last.status, GooglePlayPurchaseStatus.purchased);
+      expect(purchases.last.purchaseToken, 'opaque-purchase-token');
+    },
+  );
+
+  test(
+    'maps a plain error purchase sentinel and preserves its billing code',
+    () async {
+      final updates = bridge.purchaseUpdates.take(2).toList();
+      officialPlatform.emitPurchases(<PurchaseDetails>[
+        _pluginSentinel(
+          status: PurchaseStatus.error,
+          errorCode: 'billing_service_unavailable',
+        ),
+      ]);
+      officialPlatform.emitPurchase(_nativePurchase);
+
+      final purchases = await updates;
+
+      expect(purchases, hasLength(2));
+      expect(purchases.first.status, GooglePlayPurchaseStatus.failed);
+      expect(purchases.first.errorCode, 'billing_service_unavailable');
+      expect(purchases.first.purchaseToken, isEmpty);
+      expect(purchases.first.productIds, isEmpty);
+      expect(purchases.first.canVerify, isFalse);
+      expect(purchases.last.status, GooglePlayPurchaseStatus.purchased);
+      expect(purchases.last.purchaseToken, 'opaque-purchase-token');
+    },
+  );
+
+  test(
+    'still rejects a plain purchase that is not a cancel or error sentinel',
+    () async {
+      final update = bridge.purchaseUpdates.first;
+      officialPlatform.emitPurchases(<PurchaseDetails>[
+        _pluginSentinel(status: PurchaseStatus.purchased),
+      ]);
+
+      await expectLater(
+        update,
+        throwsA(
+          isA<GooglePlayIapStackException>().having(
+            (error) => error.code,
+            'code',
+            'invalid_plugin_response',
+          ),
+        ),
+      );
+    },
+  );
+
   test('preserves exact one-time product price micros', () async {
     final nativeProduct = GooglePlayProductDetails.fromProductDetails(
       _oneTimeDetails,
@@ -379,7 +451,37 @@ final class _FakeOfficialPlatform extends Fake
     _purchases.add(GooglePlayPurchaseDetails.fromPurchase(purchase));
   }
 
+  void emitPurchases(List<PurchaseDetails> purchases) {
+    _purchases.add(purchases);
+  }
+
   Future<void> close() => _purchases.close();
+}
+
+/// Builds the plain sentinel the plugin emits for an empty purchase list.
+PurchaseDetails _pluginSentinel({
+  required PurchaseStatus status,
+  String? errorCode,
+}) {
+  final details = PurchaseDetails(
+    purchaseID: '',
+    productID: '',
+    status: status,
+    transactionDate: null,
+    verificationData: PurchaseVerificationData(
+      localVerificationData: '',
+      serverVerificationData: '',
+      source: 'google_play',
+    ),
+  );
+  if (errorCode != null) {
+    details.error = IAPError(
+      source: 'google_play',
+      code: errorCode,
+      message: 'plugin billing failure',
+    );
+  }
+  return details;
 }
 
 const ProductDetailsWrapper _subscriptionDetails = ProductDetailsWrapper(

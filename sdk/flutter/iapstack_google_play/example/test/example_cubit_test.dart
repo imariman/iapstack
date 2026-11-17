@@ -150,6 +150,8 @@ void main() {
       updates.add(_purchase(status: GooglePlayPurchaseStatus.cancelled));
       await _flushAsync();
       expect(cubit.state.message, 'Purchase cancelled.');
+      expect(cubit.state.status, ExampleStatus.ready);
+      expect(cubit.state.message, isNot(contains('Restart')));
 
       updates.addError(StateError('native secret'));
       await _flushAsync();

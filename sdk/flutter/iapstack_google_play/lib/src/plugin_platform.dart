@@ -235,6 +235,20 @@ GooglePlayPricingPhase _googlePlayPricingPhase(PricingPhaseWrapper phase) {
 /// _googlePlayPurchase converts one official purchase update without logging evidence.
 GooglePlayPurchase _googlePlayPurchase(PurchaseDetails details) {
   if (details is! GooglePlayPurchaseDetails) {
+    // The plugin emits a plain sentinel when Play returns no purchase rows:
+    // canceled for USER_CANCELED, error for other non-OK billing results.
+    if (details.status == PurchaseStatus.canceled ||
+        details.status == PurchaseStatus.error) {
+      return GooglePlayPurchase(
+        purchaseToken: details.verificationData.serverVerificationData,
+        productIds: details.productID.isEmpty
+            ? const <String>[]
+            : <String>[details.productID],
+        status: _purchaseStatus(details.status),
+        isAcknowledged: false,
+        errorCode: details.error?.code,
+      );
+    }
     throw const GooglePlayIapStackException(
       code: 'invalid_plugin_response',
       message: 'The purchase plugin returned a non-Google purchase',
