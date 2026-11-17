@@ -33,6 +33,9 @@ final class IapStackClient {
   /// Last successful offering response body. It is not an application bearer.
   OfferingDocument? _lastOfferingBody;
 
+  /// Monotonic generation of the latest started [getOffering] call.
+  int _offeringGeneration = 0;
+
   /// Verifies one signed store purchase and returns current projections.
   Future<VerificationResult> verifyPurchase(
     PurchaseSubmission purchase, {
@@ -168,6 +171,13 @@ final class IapStackClient {
     OfferingDocument fallback, {
     String? requestId,
   }) async {
+    // Cache-write rule: each call claims the next generation at start. Only
+    // a completion whose generation is still the latest started may set or
+    // clear _lastOfferingBody, so a stale 200 cannot resurrect an offering
+    // a newer 404 withdrew and a stale 404 cannot clear a newer 200. The
+    // rule gates only the shared cache; every caller still returns its own
+    // request's document, fallback, cached body, or error as before.
+    final generation = ++_offeringGeneration;
     try {
       final json = await _request(
         method: 'GET',
@@ -181,7 +191,9 @@ final class IapStackClient {
         authorize: false,
       );
       final document = _decode(() => OfferingDocument.fromJson(json));
-      _lastOfferingBody = document;
+      if (generation == _offeringGeneration) {
+        _lastOfferingBody = document;
+      }
       return document;
     } on IapStackTransportException {
       return _lastOfferingBody ?? fallback;
@@ -189,7 +201,9 @@ final class IapStackClient {
       return _lastOfferingBody ?? fallback;
     } on IapStackApiException catch (error) {
       if (error.statusCode == 404) {
-        _lastOfferingBody = null;
+        if (generation == _offeringGeneration) {
+          _lastOfferingBody = null;
+        }
         return fallback;
       }
       rethrow;

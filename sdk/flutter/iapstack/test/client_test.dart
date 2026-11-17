@@ -837,6 +837,104 @@ void main() {
           'revision-1');
     });
 
+    test('a slow 200 does not resurrect an offering a newer 404 withdrew',
+        () async {
+      final pending = <Completer<http.Response>>[
+        Completer<http.Response>(),
+        Completer<http.Response>(),
+      ];
+      final bothStarted = Completer<void>();
+      var requestCount = 0;
+      var hang = false;
+      final client = IapStackClient(
+        _config(),
+        httpClient: MockClient((request) async {
+          if (hang) {
+            return Completer<http.Response>().future;
+          }
+          final index = requestCount++;
+          if (requestCount == 2 && !bothStarted.isCompleted) {
+            bothStarted.complete();
+          }
+          return pending[index].future;
+        }),
+      );
+      final fallbackA = _fallbackOffering('bundled-race-a');
+      final fallbackB = _fallbackOffering('bundled-race-b');
+
+      final futureA = client.getOffering(fallbackA);
+      final futureB = client.getOffering(fallbackB);
+      await bothStarted.future.timeout(const Duration(seconds: 1));
+
+      pending[1].complete(http.Response(
+        jsonEncode(<String, Object?>{
+          'error': <String, Object?>{
+            'code': 'not_found',
+            'message': 'the requested resource was not found',
+          },
+        }),
+        404,
+      ));
+      expect(await futureB, same(fallbackB));
+
+      pending[0].complete(http.Response(jsonEncode(_offeringJson), 200));
+      // Caller A still gets its own response; only the cache write is stale.
+      expect((await futureA).revision, 'revision-1');
+
+      hang = true;
+      final afterRemoval = _fallbackOffering('bundled-after-race');
+      expect(await client.getOffering(afterRemoval), same(afterRemoval));
+    });
+
+    test('a slow 404 does not clear an offering a newer 200 cached', () async {
+      final pending = <Completer<http.Response>>[
+        Completer<http.Response>(),
+        Completer<http.Response>(),
+      ];
+      final bothStarted = Completer<void>();
+      var requestCount = 0;
+      var failTransport = false;
+      final client = IapStackClient(
+        _config(),
+        httpClient: MockClient((request) async {
+          if (failTransport) {
+            throw http.ClientException('offline');
+          }
+          final index = requestCount++;
+          if (requestCount == 2 && !bothStarted.isCompleted) {
+            bothStarted.complete();
+          }
+          return pending[index].future;
+        }),
+      );
+      final fallbackA = _fallbackOffering('bundled-stale-404-a');
+      final fallbackB = _fallbackOffering('bundled-stale-404-b');
+
+      final futureA = client.getOffering(fallbackA);
+      final futureB = client.getOffering(fallbackB);
+      await bothStarted.future.timeout(const Duration(seconds: 1));
+
+      pending[1].complete(http.Response(jsonEncode(_offeringJson), 200));
+      expect((await futureB).revision, 'revision-1');
+
+      pending[0].complete(http.Response(
+        jsonEncode(<String, Object?>{
+          'error': <String, Object?>{
+            'code': 'not_found',
+            'message': 'the requested resource was not found',
+          },
+        }),
+        404,
+      ));
+      expect(await futureA, same(fallbackA));
+
+      failTransport = true;
+      expect(
+          (await client.getOffering(_fallbackOffering('bundled-cached')))
+              .revision,
+          'revision-1');
+    });
+
     test('an offering failure does not change purchase or entitlement calls',
         () async {
       final requests = <http.Request>[];
