@@ -80,7 +80,7 @@ final class IAPStackStore: RCTEventEmitter {
         case "purchases:restore":
           guard let rows = payload["purchases"] as? [NSDictionary] else { throw bridgeError("invalid_submission") }
           let result = try await client.restorePurchases(rows.map(submission), requestId: requestId)
-          resolve(["results": result.results.map(verification)])
+          resolve(restoreResult(result))
         case "entitlements":
           let result = try await client.getEntitlements(customer, requestId: requestId)
           resolve(["customer_id": result.customerId, "entitlements": result.entitlements.map(entitlement)])
@@ -170,7 +170,7 @@ final class IAPStackStore: RCTEventEmitter {
   func restore(_ requestId: String?, resolve: @escaping RCTPromiseResolveBlock, reject: @escaping RCTPromiseRejectBlock) {
     operation(resolve, reject) { current in
       let result = try await current.companion.restorePurchases(externalCustomerId: current.customer, requestId: requestId)
-      return ["results": result.results.map(verification)]
+      return restoreResult(result)
     }
   }
   @objc(getEntitlements:resolve:reject:)
@@ -257,15 +257,35 @@ private func errorEvent(_ error: Error) -> [String: Any] {
   return ["type": "error", "code": code, "message": "IAPStack operation failed (\(code))"]
 }
 private func rejectError(_ reject: RCTPromiseRejectBlock, _ error: Error) {
-  let event = errorEvent(error)
+  // An incomplete restore committed earlier batches before failing (their
+  // StoreKit transactions may already be finished in the companion). Keep the
+  // underlying failure's code/message and carry the committed rows in the
+  // rejection userInfo, where JS decodes them into a typed error.
+  let incomplete = error as? IAPStackIncompleteRestoreError
+  let effective: Error = incomplete?.underlying ?? error
+  let event = errorEvent(effective)
   var info: [String: Any] = [:]
-  if case let IAPStackSDKError.apiError(status, _, _, requestId, retryable, retryAfter) = error {
+  if case let IAPStackSDKError.apiError(status, _, _, requestId, retryable, retryAfter) = effective {
     info = ["statusCode": status, "retryable": retryable]
     if let requestId { info["requestId"] = requestId }
     if let retryAfter { info["retryAfterMs"] = retryAfter * 1000 }
   }
+  if let incomplete, !incomplete.committedResults.isEmpty {
+    info["committedResults"] = incomplete.committedResults.map(verification)
+    info["skipped"] = skipCounts(incomplete.skipped)
+    // The Apple companion has no page cap; the flag stays false.
+    info["pageLimitReached"] = false
+  }
   reject(event["code"] as? String, event["message"] as? String,
     NSError(domain: "IAPStack", code: 1, userInfo: info))
+}
+private func skipCounts(_ skipped: RestoreSkipCounts) -> [String: Any] {
+  ["unbound": skipped.unbound, "differentCustomer": skipped.differentCustomer,
+   "unknownProduct": skipped.unknownProduct, "multipleProducts": skipped.multipleProducts]
+}
+private func restoreResult(_ result: RestoreResult) -> [String: Any] {
+  ["results": result.results.map(verification), "skipped": skipCounts(result.skipped),
+   "pageLimitReached": result.pageLimitReached]
 }
 private func timestamp(_ date: Date?, rounding: FloatingPointRoundingRule = .down) -> Any {
   guard let date else { return NSNull() }

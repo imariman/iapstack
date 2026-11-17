@@ -7,11 +7,12 @@ let callback: (event: unknown) => void;
 const sessionWire = {base_url: 'https://iapstack.example.com', application_id: 'app', token: 'short-lived-token',
   external_customer_id: '00000000-0000-4000-8000-000000000001', expires_at: '2999-01-01T00:00:00Z'};
 let sessionResponse: Record<string, unknown> = sessionWire;
+let restoreImpl: () => Promise<Record<string, unknown>> = async () => ({results: [wire]});
 const native = {
   requestSession: async (...args: unknown[]) => { calls.push({operation: 'session', args}); return sessionResponse; },
   configure: async (...args: unknown[]) => { calls.push({operation: 'configure', args}); },
   purchase: async (...args: unknown[]) => { calls.push({operation: 'purchase', args}); return wire; },
-  restore: async () => ({results: [wire]}),
+  restore: async () => restoreImpl(),
   getEntitlements: async () => wire,
   dispose: async () => { calls.push({operation: 'dispose', args: []}); },
   httpRequest: async (...args: unknown[]) => { calls.push({operation: 'http', args}); return wire; },
@@ -21,12 +22,14 @@ mock.module('react-native', () => ({Platform: platform, NativeModules: {IAPStack
     callback = listener; return {remove() {}};
   }}}));
 const {IapStackStore} = await import('../src/native');
+const {IapStackIncompleteRestoreError} = await import('../src/errors');
 const {NativeIapStackClient} = await import('../src/native_client');
 const {IapStackConfig} = await import('../src/config');
 const config = {storefront: 'apple' as const, baseUri: 'https://iapstack.example.com', applicationId: 'app',
   customerToken: 'short-lived-token', externalCustomerId: '00000000-0000-4000-8000-000000000001',
   productKinds: {premium: 'subscription' as const}};
-beforeEach(() => { calls.length = 0; platform.OS = 'ios'; sessionResponse = sessionWire; });
+beforeEach(() => { calls.length = 0; platform.OS = 'ios'; sessionResponse = sessionWire;
+  restoreImpl = async () => ({results: [wire]}); });
 test('customer session bootstrap validates endpoint before sending credentials', async () => {
   for (const endpoint of ['http://host.test/session', 'https://user:pass@host.test/session', 'https://host.test/session?secret=1']) {
     await expect(IapStackStore.requestCustomerSession(endpoint, 'login-token')).rejects.toThrow('HTTPS');
@@ -126,6 +129,53 @@ test('listener exceptions propagate once without emitting a false protocol error
   expect(() => callback({type: 'verified', result: wire})).toThrow(appError);
   expect(calls).toBe(1);
   listener.remove();
+});
+test('restore surfaces skip counts and the Huawei page cap', async () => {
+  restoreImpl = async () => ({results: [wire], pageLimitReached: true,
+    skipped: {unbound: 1, differentCustomer: 2, unknownProduct: 3, multipleProducts: 4}});
+  const restored = await IapStackStore.restore();
+  expect(restored.results[0].entitlements[0].key).toBe('premium');
+  expect(restored.pageLimitReached).toBe(true);
+  expect(restored.skipped).toEqual({unbound: 1, differentCustomer: 2, unknownProduct: 3,
+    multipleProducts: 4, total: 10});
+});
+test('restore defaults skip counts and page cap for older native builds', async () => {
+  const restored = await IapStackStore.restore();
+  expect(restored.pageLimitReached).toBe(false);
+  expect(restored.skipped).toEqual({unbound: 0, differentCustomer: 0, unknownProduct: 0,
+    multipleProducts: 0, total: 0});
+});
+test('restore rejects on malformed skip metadata instead of guessing counts', async () => {
+  restoreImpl = async () => ({results: [wire], skipped: {differentCustomer: -1}});
+  await expect(IapStackStore.restore()).rejects.toThrow('contract');
+  restoreImpl = async () => ({results: [wire], pageLimitReached: 'yes'});
+  await expect(IapStackStore.restore()).rejects.toThrow('contract');
+});
+test('a later restore batch failure rejects with the committed first batch attached', async () => {
+  const nativeError = {code: 'service_unavailable', message: 'IAPStack operation failed (service_unavailable)',
+    userInfo: {statusCode: 503, committedResults: [wire], pageLimitReached: true,
+      skipped: {differentCustomer: 1}}};
+  restoreImpl = async () => { throw nativeError; };
+  let thrown: unknown;
+  try { await IapStackStore.restore(); } catch (error) { thrown = error; }
+  expect(thrown).toBeInstanceOf(IapStackIncompleteRestoreError);
+  const incomplete = thrown as InstanceType<typeof IapStackIncompleteRestoreError>;
+  expect(incomplete.code).toBe('service_unavailable');
+  expect(incomplete.committedResults).toHaveLength(1);
+  expect(incomplete.committedResults[0].entitlements[0].grantsAccess).toBe(true);
+  expect(incomplete.skipped.differentCustomer).toBe(1);
+  expect(incomplete.pageLimitReached).toBe(true);
+  expect(incomplete.cause).toBe(nativeError);
+});
+test('restore failures without committed batches keep the plain native rejection', async () => {
+  for (const nativeError of [{code: 'transport_error', message: 'IAPStack operation failed (transport_error)'},
+    {code: 'transport_error', message: 'offline', userInfo: {committedResults: []}},
+    {code: 'transport_error', message: 'offline', userInfo: {committedResults: [{entitlements: 'invalid'}]}}]) {
+    restoreImpl = async () => { throw nativeError; };
+    let thrown: unknown;
+    try { await IapStackStore.restore(); } catch (error) { thrown = error; }
+    expect(thrown).toBe(nativeError);
+  }
 });
 test('dispose delegates credential release to native session', async () => {
   await IapStackStore.dispose(); expect(calls[0].operation).toBe('dispose');

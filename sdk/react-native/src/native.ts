@@ -1,8 +1,8 @@
 import {NativeEventEmitter, NativeModules, Platform} from 'react-native';
 import {IapStackConfig} from './config';
-import {IapStackProtocolError} from './errors';
+import {IapStackIncompleteRestoreError, IapStackProtocolError} from './errors';
 import {
-  decodeEntitlementSnapshot, decodeRestoreResult, decodeVerificationResult,
+  decodeEntitlementSnapshot, decodeRestoreResult, decodeRestoreSkipCounts, decodeVerificationResult,
   type EntitlementSnapshot, type ProductKind, type RestoreResult, type VerificationResult,
 } from './models';
 
@@ -138,8 +138,20 @@ export const IapStackStore = {
     const result = await nativeModule().purchase(selectionKey, requestId ?? null);
     return result === null ? null : decode(() => decodeVerificationResult(result));
   },
+  /**
+   * Resolves with results plus `skipped` counts and `pageLimitReached`
+   * (Huawei page cap). When a later batch fails after earlier batches
+   * committed, rejects with {@link IapStackIncompleteRestoreError} carrying the
+   * committed `committedResults`, `skipped`, and `pageLimitReached`; failures
+   * before any batch committed keep the plain native code+message rejection.
+   */
   async restore(requestId?: string): Promise<RestoreResult> {
-    const result = await nativeModule().restore(requestId ?? null);
+    let result: Record<string, unknown>;
+    try {
+      result = await nativeModule().restore(requestId ?? null);
+    } catch (error) {
+      throw incompleteRestoreError(error) ?? error;
+    }
     return decode(() => decodeRestoreResult(result));
   },
   async getEntitlements(requestId?: string): Promise<EntitlementSnapshot> {
@@ -186,6 +198,42 @@ export const IapStackStore = {
   /** Cancels native work and releases the customer bearer. Restore after interrupted checkout. */
   dispose(): Promise<void> { return nativeModule().dispose(); },
 };
+
+/**
+ * Native bridges attach restore progress to the promise rejection's `userInfo`
+ * (`committedResults`, `skipped`, `pageLimitReached`) — the same channel that
+ * already carries API error fields. Returns a typed error only when a
+ * non-empty committed batch is present; otherwise null so the original
+ * rejection reaches the caller unchanged.
+ */
+function incompleteRestoreError(error: unknown): IapStackIncompleteRestoreError | null {
+  if (!error || typeof error !== 'object') return null;
+  const failure = error as {code?: unknown; message?: unknown; userInfo?: unknown;
+    committedResults?: unknown; skipped?: unknown; pageLimitReached?: unknown};
+  const info = (failure.userInfo && typeof failure.userInfo === 'object' && !Array.isArray(failure.userInfo))
+    ? failure.userInfo as {committedResults?: unknown; skipped?: unknown; pageLimitReached?: unknown}
+    : failure;
+  const committed = info.committedResults;
+  if (!Array.isArray(committed) || committed.length === 0) return null;
+  try {
+    const committedResults = committed.map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new TypeError('invalid committed result');
+      return decodeVerificationResult(entry as Record<string, unknown>);
+    });
+    return new IapStackIncompleteRestoreError(
+      typeof failure.message === 'string' && failure.message ? failure.message : 'Restore committed earlier batches and then failed',
+      typeof failure.code === 'string' && failure.code ? failure.code : undefined,
+      committedResults,
+      decodeRestoreSkipCounts(info.skipped),
+      info.pageLimitReached === true,
+      error,
+    );
+  } catch {
+    // Malformed committed payload: keep the original rejection rather than
+    // inventing results the caller might unlock on.
+    return null;
+  }
+}
 
 function pendingProductIds(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;

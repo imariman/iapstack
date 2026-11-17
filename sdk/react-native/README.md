@@ -110,7 +110,13 @@ listener. Always grant access from verified `entitlements`, never from checkout
 success. Play acknowledgement remains server-owned; Apple transactions are
 finished only after successful verification by the Swift companion.
 
-`restore()` verifies bounded, customer-bound batches in native code. Refresh
+`restore()` verifies bounded, customer-bound batches in native code. Its result
+also reports `skipped` counts (rows not submitted, e.g. `skipped.differentCustomer`)
+and `pageLimitReached` (Huawei stopped at its page cap after submitting what it
+had read). If a later batch fails after earlier batches committed, `restore()`
+rejects with `IapStackIncompleteRestoreError`, whose `committedResults` are
+already entitled (on iOS those transactions may already be finished) alongside
+`skipped` and `pageLimitReached`. Refresh
 entitlements when the app resumes. Restore after a network failure, cancelled
 session, missed update, or process restart. When a bearer expires, authenticate
 again, `dispose()`, then configure with a fresh bearer and restore. Configuration
