@@ -105,6 +105,68 @@ class HuaweiIapStackTest {
   }
 
   @Test
+  fun rejectsPaddedCustomerIdOnRestoreBeforePaging() = runBlocking {
+    val platform = FakePlatform(
+      owned = listOf(
+        HuaweiSignedPurchase(
+          purchaseData("premium_monthly", "customer-1"),
+          "signature-premium_monthly",
+        ),
+      ),
+    )
+    val huawei = HuaweiIapStack(unusedClient(), productKinds, platform)
+    for (customerId in listOf(" customer-1", "customer-1 ", " customer-1 ", "", " ")) {
+      val error = assertFailsWith<IllegalArgumentException> {
+        huawei.restorePurchases(customerId)
+      }
+      assertTrue(error.message!!.contains("whitespace"))
+    }
+    assertEquals(0, platform.ownedPurchaseCalls)
+  }
+
+  @Test
+  fun restoreStillSubmitsRowsBoundToUnpaddedCustomerId() = runBlocking {
+    MockWebServer().use { server ->
+      server.enqueue(MockResponse().setBody("""{"results":[$VERIFICATION_JSON]}""").setResponseCode(200))
+      val http = client(server)
+      val platform = FakePlatform(
+        owned = listOf(
+          HuaweiSignedPurchase(
+            purchaseData("premium_monthly", "customer-1"),
+            "signature-premium_monthly",
+          ),
+        ),
+      )
+      val huawei = HuaweiIapStack(http, productKinds, platform)
+      val result = huawei.restorePurchases(
+        "customer-1",
+        productKinds = setOf(HuaweiProductKind.SUBSCRIPTION),
+      )
+      assertEquals(1, result.results.size)
+      assertEquals(0, result.skipped.differentCustomer)
+      assertEquals(1, server.requestCount)
+      val body = server.takeRequest().body.readUtf8()
+      assertTrue(body.contains("\"external_customer_id\":\"customer-1\""))
+      assertTrue(body.contains("signature-premium_monthly"))
+      http.close()
+    }
+  }
+
+  @Test
+  fun evidenceRejectsPaddedCustomerIdWhenBuildingSubmission() {
+    val evidence = HuaweiPurchaseEvidence(
+      purchaseData = purchaseData("premium_monthly", "customer-1"),
+      signature = "sig",
+      productKind = HuaweiProductKind.SUBSCRIPTION,
+    )
+    val error = assertFailsWith<IllegalArgumentException> {
+      evidence.toSubmission(externalCustomerId = " customer-1 ")
+    }
+    assertTrue(error.message!!.contains("whitespace"))
+    assertEquals("customer-1", evidence.toSubmission("customer-1").externalCustomerId)
+  }
+
+  @Test
   fun exposesSandboxEligibilityBeforePurchase() = runBlocking {
     val expected = HuaweiSandboxStatus(
       isSandboxUser = true,

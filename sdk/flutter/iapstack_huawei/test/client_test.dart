@@ -132,6 +132,124 @@ void main() {
       expect(platform.purchaseCalls, 0);
     });
 
+    test('rejects a padded customer id on restore before paging', () async {
+      final platform = _FakePlatform(
+        pages: <HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>{
+          HuaweiProductKind.subscription: Queue<HuaweiOwnedPurchasesPage>.of(
+            <HuaweiOwnedPurchasesPage>[
+              HuaweiOwnedPurchasesPage(
+                purchases: <HuaweiSignedPurchase>[
+                  _signedPurchase('premium_monthly', customerId: 'customer-1'),
+                ],
+              ),
+            ],
+          ),
+        },
+      );
+      var backendCalled = false;
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async {
+          backendCalled = true;
+          return http.Response('{}', 500);
+        }),
+        productKinds: _productKinds,
+        platform: platform,
+      );
+
+      for (final customerId in <String>[
+        ' customer-1',
+        'customer-1 ',
+        ' customer-1 ',
+        '',
+        ' ',
+      ]) {
+        await expectLater(
+          huawei.restorePurchases(externalCustomerId: customerId),
+          throwsA(
+            isA<ArgumentError>().having(
+              (error) => error.message,
+              'message',
+              'must be non-empty without surrounding whitespace',
+            ),
+          ),
+        );
+      }
+      expect(platform.restoreCalls, isEmpty);
+      expect(backendCalled, isFalse);
+    });
+
+    test('restore still submits rows bound to the unpadded customer id',
+        () async {
+      late List<dynamic> submittedPurchases;
+      final platform = _FakePlatform(
+        pages: <HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>{
+          HuaweiProductKind.subscription: Queue<HuaweiOwnedPurchasesPage>.of(
+            <HuaweiOwnedPurchasesPage>[
+              HuaweiOwnedPurchasesPage(
+                purchases: <HuaweiSignedPurchase>[
+                  _signedPurchase('premium_monthly', customerId: 'customer-1'),
+                ],
+              ),
+            ],
+          ),
+        },
+      );
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async {
+          submittedPurchases = (jsonDecode(request.body)
+              as Map<String, dynamic>)['purchases']! as List<dynamic>;
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'results': <Object?>[_verificationJson],
+            }),
+            200,
+          );
+        }),
+        productKinds: _productKinds,
+        platform: platform,
+      );
+
+      final result = await huawei.restorePurchases(
+        externalCustomerId: 'customer-1',
+        productKinds: const <HuaweiProductKind>{HuaweiProductKind.subscription},
+      );
+
+      expect(submittedPurchases, hasLength(1));
+      final submission =
+          (submittedPurchases.single as Map).cast<String, Object?>();
+      expect(submission['external_customer_id'], 'customer-1');
+      expect((submission['evidence']! as Map)['purchase_data'],
+          _purchaseData('premium_monthly', customerId: 'customer-1'));
+      expect(result.results, hasLength(1));
+      expect(result.skipped.differentCustomer, 0);
+    });
+
+    test('rejects a padded customer id when building a submission', () {
+      final evidence = HuaweiPurchaseEvidence(
+        purchaseData:
+            _purchaseData('premium_monthly', customerId: 'customer-1'),
+        signature: 'signature-premium_monthly',
+        productKind: HuaweiProductKind.subscription,
+      );
+
+      expect(
+        () => evidence.toSubmission(externalCustomerId: ' customer-1 '),
+        throwsA(
+          isA<ArgumentError>().having(
+            (error) => error.message,
+            'message',
+            'must be non-empty without surrounding whitespace',
+          ),
+        ),
+      );
+      expect(
+        evidence
+            .toSubmission(externalCustomerId: 'customer-1')
+            .externalCustomerId,
+        'customer-1',
+      );
+    });
+
     test('evicts requested products when a re-query fails part-way', () async {
       final platform = _FakePlatform(
         purchaseResult:

@@ -8,6 +8,21 @@ import com.iapstack.core.PurchaseSubmission
 private val huaweiGson = Gson()
 
 /**
+ * Requires one non-empty customer identity without surrounding whitespace.
+ *
+ * The same rule as core verification. A padded id would be charged as
+ * `developerPayload` and then rejected before an entitlement is written, or
+ * on restore would never match the bound payload and silently skip rows.
+ */
+internal fun requireExternalCustomerId(value: String) {
+  if (value.isEmpty() || value.trim() != value) {
+    throw IllegalArgumentException(
+      "externalCustomerId must be non-empty without surrounding whitespace",
+    )
+  }
+}
+
+/**
  * Exact signed Huawei purchase evidence accepted by IAPStack.
  */
 class HuaweiPurchaseEvidence(
@@ -66,9 +81,7 @@ class HuaweiPurchaseEvidence(
     externalCustomerId: String,
     expectedProductId: String? = null,
   ): PurchaseSubmission {
-    if (externalCustomerId.isBlank()) {
-      throw IllegalArgumentException("externalCustomerId must not be empty")
-    }
+    requireExternalCustomerId(externalCustomerId)
     if (developerPayload != externalCustomerId) {
       throw HuaweiIapStackException(
         code = "customer_binding_mismatch",
