@@ -257,6 +257,8 @@ func TestAdapterReconcilesAuthoritativeGracePeriod(t *testing.T) {
 			return jsonResponse(t, http.StatusOK, transactionInfoResponse{
 				SignedTransactionInfo: signTransactionFixture(t, fixture, transaction),
 			}, nil), nil
+		case "/inApps/v2/history/" + transaction.OriginalTransactionID:
+			return jsonResponse(t, http.StatusOK, emptyTransactionHistory(transaction), nil), nil
 		case "/inApps/v1/subscriptions/" + transaction.OriginalTransactionID:
 			return jsonResponse(t, http.StatusOK, statusResponse{
 				Environment: transaction.Environment, BundleID: transaction.BundleID,
@@ -919,6 +921,171 @@ func TestAdapterClosesStalePreviousProductAtUpgrade(t *testing.T) {
 	}
 }
 
+// TestAdapterClosesPreviousProductFromHistoryWhenEvidenceIsNewProduct closes the old product in the
+// same verify that records an upgrade whose submitted JWS is already the new transaction (#250).
+// The upgraded monthly transaction exists only in transaction history (second page), and an
+// UPGRADE notification reaches this same Verify path through NotificationEnvelope evidence.
+func TestAdapterClosesPreviousProductFromHistoryWhenEvidenceIsNewProduct(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, time.UTC)
+	upgradeAt := now.Add(-time.Minute)
+	const upgradedProduct = "iapstack.pro.annual"
+
+	for _, test := range []struct {
+		name         string
+		historyFails bool
+		sameProduct  bool
+		wantClosed   bool
+	}{
+		{name: "upgraded predecessor in history", wantClosed: true},
+		{name: "history endpoint failure degrades", historyFails: true},
+		{name: "same product predecessor does not close", sameProduct: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSigningFixture(t, now)
+			monthly := transactionPayload{
+				OriginalTransactionID: "2000000923456789", TransactionID: "2000000923456790",
+				BundleID: fixtureBundleID, ProductID: fixtureProductID,
+				PurchaseDate: now.Add(-10 * 24 * time.Hour).UnixMilli(), ExpiresDate: now.Add(20 * 24 * time.Hour).UnixMilli(),
+				Quantity: 1, Type: appleSubscriptionType, AppAccountToken: fixtureAccountToken,
+				OwnershipType: applePurchasedOwnership, SignedDate: now.UnixMilli(),
+				Environment: "Sandbox", IsUpgraded: true,
+			}
+			annual := monthly
+			annual.TransactionID = "2000000923456791"
+			annual.ProductID = upgradedProduct
+			annual.PurchaseDate = upgradeAt.UnixMilli()
+			annual.ExpiresDate = now.Add(365 * 24 * time.Hour).UnixMilli()
+			annual.IsUpgraded = false
+			predecessor := monthly
+			if test.sameProduct {
+				predecessor.ProductID = upgradedProduct
+				predecessor.IsUpgraded = false
+			}
+			renewal := renewalPayload{
+				AppAccountToken: annual.AppAccountToken, AutoRenewProductID: upgradedProduct,
+				AutoRenewStatus: autoRenewEnabled, Environment: annual.Environment,
+				OriginalTransactionID: annual.OriginalTransactionID, ProductID: upgradedProduct,
+				RenewalDate: annual.ExpiresDate, SignedDate: now.UnixMilli(),
+			}
+			adapter, err := New(
+				fakeCredentialSource{credential: credentialFixture(t, fixture, core.EnvironmentSandbox)},
+				time.Second,
+			)
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			adapter.clock = func() time.Time { return now }
+			historyCalls := 0
+			adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				verifyAuthorizationFixture(t, strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer "), &fixture.apiKey.PublicKey, now)
+				switch request.URL.Path {
+				case "/inApps/v1/transactions/" + annual.TransactionID:
+					return jsonResponse(t, http.StatusOK, transactionInfoResponse{
+						SignedTransactionInfo: signTransactionFixture(t, fixture, annual),
+					}, nil), nil
+				case "/inApps/v1/subscriptions/" + annual.OriginalTransactionID:
+					return jsonResponse(t, http.StatusOK, statusResponse{
+						Environment: annual.Environment, BundleID: annual.BundleID,
+						Data: []subscriptionGroupIdentifierItem{{
+							SubscriptionGroupIdentifier: "subscription-group-1",
+							LastTransactions: []lastTransactionsItem{{
+								OriginalTransactionID: annual.OriginalTransactionID,
+								Status:                subscriptionStatusActive,
+								SignedTransactionInfo: signTransactionFixture(t, fixture, annual),
+								SignedRenewalInfo:     signApplePayloadFixture(t, fixture, renewal),
+							}},
+						}},
+					}, nil), nil
+				case "/inApps/v2/history/" + annual.OriginalTransactionID:
+					historyCalls++
+					if request.URL.Query().Get("sort") != historySortDescending {
+						t.Fatalf("history sort = %q, want %q", request.URL.Query().Get("sort"), historySortDescending)
+					}
+					if test.historyFails {
+						return jsonResponse(t, http.StatusInternalServerError, map[string]string{}, nil), nil
+					}
+					if request.URL.Query().Get("revision") == "" {
+						return jsonResponse(t, http.StatusOK, transactionHistoryResponse{
+							Revision: "rev-2", HasMore: true, Environment: annual.Environment, BundleID: annual.BundleID,
+							SignedTransactions: []string{signTransactionFixture(t, fixture, annual)},
+						}, nil), nil
+					}
+					if request.URL.Query().Get("revision") != "rev-2" {
+						t.Fatalf("history revision = %q, want rev-2", request.URL.Query().Get("revision"))
+					}
+					return jsonResponse(t, http.StatusOK, transactionHistoryResponse{
+						Revision: "rev-3", HasMore: false, Environment: annual.Environment, BundleID: annual.BundleID,
+						SignedTransactions: []string{signTransactionFixture(t, fixture, predecessor)},
+					}, nil), nil
+				default:
+					t.Fatalf("unexpected provider request path %q", request.URL.Path)
+					return nil, nil
+				}
+			})
+			binding, err := core.NewStoreReference(core.ReferenceCustomerBinding, "app_account_token", fixtureAccountToken)
+			if err != nil {
+				t.Fatalf("NewStoreReference() error = %v", err)
+			}
+			result, err := adapter.Verify(context.Background(), stores.VerificationRequest{
+				Application: appleApplication(core.EnvironmentSandbox), CustomerID: "customer-1",
+				ClaimedProducts:          []core.ProviderProductID{upgradedProduct},
+				ExpectedCustomerBindings: []core.StoreReference{binding},
+				Evidence:                 evidenceFixture(t, fixture, annual, core.ProductKindSubscription),
+			})
+			if err != nil {
+				t.Fatalf("Verify() error = %v", err)
+			}
+			if historyCalls == 0 {
+				t.Fatal("Verify() made no transaction history request")
+			}
+			if test.historyFails && historyCalls != 1 {
+				t.Fatalf("history calls = %d, want one failed attempt", historyCalls)
+			}
+			if !test.historyFails && historyCalls != 2 {
+				t.Fatalf("history calls = %d, want two paginated requests", historyCalls)
+			}
+			wantObservations := 1
+			if test.wantClosed {
+				wantObservations = 2
+			}
+			if len(result.Observations) != wantObservations {
+				t.Fatalf("Verify() observations = %#v, want %d", result.Observations, wantObservations)
+			}
+			current := result.Observations[0]
+			if current.ProductID != upgradedProduct || current.Access != core.AccessAllowed {
+				t.Fatalf("current observation = %#v, want allowed %s", current, upgradedProduct)
+			}
+			if !test.wantClosed {
+				return
+			}
+			assertSupersededAppleProduct(t, result.Observations[1], fixtureProductID, upgradeAt)
+			closedID := result.Observations[1].ID
+
+			// Reconciling the new transaction reuses the same history path and snapshot identity.
+			historyCalls = 0
+			queryReference, err := core.NewStoreReference(core.ReferenceQuery, "transaction_id", annual.TransactionID)
+			if err != nil {
+				t.Fatalf("NewStoreReference() query error = %v", err)
+			}
+			reconciled, err := adapter.Reconcile(context.Background(), stores.ReconciliationRequest{
+				Application: appleApplication(core.EnvironmentSandbox), CustomerID: "customer-1",
+				ExpectedProducts:         []core.ProviderProductID{upgradedProduct},
+				ExpectedProductKind:      core.ProductKindSubscription,
+				ExpectedCustomerBindings: []core.StoreReference{binding},
+				QueryReferences:          []core.StoreReference{queryReference},
+			})
+			if err != nil {
+				t.Fatalf("Reconcile() error = %v", err)
+			}
+			if len(reconciled.Observations) != 2 || reconciled.Observations[1].ID != closedID {
+				t.Fatalf("Reconcile() observations = %#v, want closed snapshot %q reused", reconciled.Observations, closedID)
+			}
+		})
+	}
+}
+
 // TestAdapterUpgradeIgnoresPreviousPriceAndRevocation builds the closed observation from identity fields alone.
 // An older client JWS can carry a price without currency or a historical revocation date; closing the previous
 // product on an active upgrade must not fail price parsing or record the upgrade close as a refund.
@@ -1146,6 +1313,9 @@ func TestAdapterPublishesClockSkewAllowance(t *testing.T) {
 	}
 	adapter.clock = func() time.Time { return now }
 	adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/inApps/v2/history/"+transaction.OriginalTransactionID {
+			return jsonResponse(t, http.StatusOK, emptyTransactionHistory(transaction), nil), nil
+		}
 		if request.URL.Path != "/inApps/v1/subscriptions/"+transaction.OriginalTransactionID {
 			t.Fatalf("subscription status path = %q", request.URL.Path)
 		}
@@ -1525,6 +1695,9 @@ func adapterFixture(
 	adapter.clock = func() time.Time { return now }
 	adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var response any = transactionInfoResponse{SignedTransactionInfo: signTransactionFixture(t, fixture, transaction)}
+		if request.URL.Path == "/inApps/v2/history/"+transaction.OriginalTransactionID {
+			return jsonResponse(t, status, emptyTransactionHistory(transaction), header), nil
+		}
 		if transaction.Type == appleSubscriptionType && status >= http.StatusOK && status < http.StatusMultipleChoices {
 			expectedPath := "/inApps/v1/subscriptions/" + transaction.OriginalTransactionID
 			if request.URL.Path != expectedPath {
@@ -1555,6 +1728,11 @@ func adapterFixture(
 		return jsonResponse(t, status, response, header), nil
 	})
 	return adapter
+}
+
+// emptyTransactionHistory returns a scoped history page with no predecessor for one transaction.
+func emptyTransactionHistory(transaction transactionPayload) transactionHistoryResponse {
+	return transactionHistoryResponse{Environment: transaction.Environment, BundleID: transaction.BundleID}
 }
 
 // evidenceFixture signs and wraps one transaction evidence fixture.

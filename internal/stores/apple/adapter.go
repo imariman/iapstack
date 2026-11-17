@@ -190,7 +190,7 @@ func (adapter *Adapter) Verify(
 			return stores.VerificationResult{}, invalid("verify", err)
 		}
 		return adapter.subscriptionResult(
-			request.Application, evidence.ProductKind, submitted, transaction, artifact,
+			ctx, request.Application, configuration, evidence.ProductKind, submitted, transaction, artifact,
 			&subscriptionSnapshot{Status: status, Renewal: renewal},
 		)
 	}
@@ -273,7 +273,7 @@ func (adapter *Adapter) Reconcile(
 			return stores.VerificationResult{}, invalid("reconcile", err)
 		}
 		return adapter.subscriptionResult(
-			request.Application, productKind, authoritative, transaction, statusArtifact,
+			ctx, request.Application, configuration, productKind, authoritative, transaction, statusArtifact,
 			&subscriptionSnapshot{Status: status, Renewal: renewal},
 		)
 	}
@@ -431,8 +431,15 @@ func (adapter *Adapter) do(request *http.Request) ([]byte, int, http.Header, err
 // The signed transaction they already hold is often the pre-upgrade JWS: isUpgraded is still
 // false and expiresDate is still the original period end. Subscription status replaces that
 // transaction with the current product and would otherwise leave the old entitlement in place.
+// When the evidence is already the new product (the StoreKit upgrade purchase, or an UPGRADE
+// notification whose signed transaction is the new one), status names no replaced product, so
+// a bounded transaction-history lookup discovers the upgraded predecessor instead. History is
+// enrichment only: its failure degrades to the current-product result rather than denying a
+// purchase Apple has already confirmed through subscription status.
 func (adapter *Adapter) subscriptionResult(
+	ctx context.Context,
 	application core.Application,
+	configuration configuration,
 	kind core.ProductKind,
 	previous transactionPayload,
 	current transactionPayload,
@@ -442,6 +449,11 @@ func (adapter *Adapter) subscriptionResult(
 	result, err := adapter.result(application, kind, current, artifact, subscription)
 	if err != nil {
 		return stores.VerificationResult{}, err
+	}
+	if previous.ProductID == current.ProductID && needsUpgradeHistory(previous, current, result.VerifiedAt) {
+		if predecessor, found, historyErr := adapter.queryUpgradedPredecessor(ctx, application, configuration, current); historyErr == nil && found {
+			previous = predecessor
+		}
 	}
 	if previous.ProductID == "" || previous.ProductID == current.ProductID {
 		return result, nil
