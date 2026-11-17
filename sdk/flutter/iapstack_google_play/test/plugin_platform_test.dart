@@ -224,6 +224,98 @@ void main() {
     );
   });
 
+  test('fails a product query when Billing returns a non-OK code', () async {
+    final rawBridge = GooglePlayPluginPlatform.withRawProductQuery(
+      rawProductQuery: (productIds) async =>
+          const <ProductDetailsResponseWrapper>[
+            ProductDetailsResponseWrapper(
+              billingResult: BillingResultWrapper(
+                responseCode: BillingResponse.serviceUnavailable,
+              ),
+              productDetailsList: <ProductDetailsWrapper>[],
+            ),
+            ProductDetailsResponseWrapper(
+              billingResult: BillingResultWrapper(
+                responseCode: BillingResponse.serviceUnavailable,
+              ),
+              productDetailsList: <ProductDetailsWrapper>[],
+            ),
+          ],
+    );
+
+    await expectLater(
+      rawBridge.queryProducts(const <String>{'premium_monthly'}),
+      throwsA(
+        isA<GooglePlayIapStackException>()
+            .having(
+              (error) => error.code,
+              'code',
+              'google_play_product_query_failed',
+            )
+            .having(
+              (error) => error.message,
+              'message',
+              contains('serviceUnavailable'),
+            ),
+      ),
+    );
+  });
+
+  test('returns not-found ids when Billing reports OK', () async {
+    final rawBridge = GooglePlayPluginPlatform.withRawProductQuery(
+      rawProductQuery: (productIds) async =>
+          const <ProductDetailsResponseWrapper>[
+            ProductDetailsResponseWrapper(
+              billingResult: BillingResultWrapper(
+                responseCode: BillingResponse.ok,
+              ),
+              productDetailsList: <ProductDetailsWrapper>[_oneTimeDetails],
+            ),
+            ProductDetailsResponseWrapper(
+              billingResult: BillingResultWrapper(
+                responseCode: BillingResponse.ok,
+              ),
+              productDetailsList: <ProductDetailsWrapper>[],
+            ),
+          ],
+    );
+
+    final result = await rawBridge.queryProducts(const <String>{
+      'premium_lifetime',
+      'missing_product',
+    });
+
+    expect(result.products.single.id, 'premium_lifetime');
+    expect(result.notFoundProductIds, <String>{'missing_product'});
+  });
+
+  test('treats ITEM_UNAVAILABLE as per-product not found', () async {
+    final rawBridge = GooglePlayPluginPlatform.withRawProductQuery(
+      rawProductQuery: (productIds) async =>
+          const <ProductDetailsResponseWrapper>[
+            ProductDetailsResponseWrapper(
+              billingResult: BillingResultWrapper(
+                responseCode: BillingResponse.itemUnavailable,
+              ),
+              productDetailsList: <ProductDetailsWrapper>[],
+            ),
+            ProductDetailsResponseWrapper(
+              billingResult: BillingResultWrapper(
+                responseCode: BillingResponse.itemUnavailable,
+              ),
+              productDetailsList: <ProductDetailsWrapper>[],
+            ),
+          ],
+    );
+
+    final result = await rawBridge.queryProducts(const <String>{
+      'premium_lifetime',
+    });
+
+    expect(result.products, isEmpty);
+    expect(result.notFoundProductIds, <String>{'premium_lifetime'});
+  });
+
   test('failed refresh invalidates cached native choices', () async {
     final nativeProduct = GooglePlayProductDetails.fromProductDetails(
       _oneTimeDetails,
