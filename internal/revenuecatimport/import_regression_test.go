@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -275,6 +276,111 @@ func TestPlanReportWarnsToReimportNotYetStartedGrants(t *testing.T) {
 	}
 	if startedResult.Report.Counts.NotYetStarted != 0 || startedResult.Report.NotYetStartedEarliestAt != nil || startedResult.Report.Warning != "" {
 		t.Fatalf("started report = %#v, want no not-yet-started warning", startedResult.Report)
+	}
+}
+
+// TestPlanEarlierRefundDoesNotOverrideLaterRenewal verifies the current period
+// is chosen before a refund denies one lineage.
+func TestPlanEarlierRefundDoesNotOverrideLaterRenewal(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.October, 26, 0, 0, 0, 0, time.UTC)
+	catalog := testCatalog(t)
+	header := "rc_original_app_user_id,rc_last_seen_app_user_id_alias,product_identifier,entitlement_identifiers,start_time,effective_end_time,store,is_auto_renewable,is_sandbox,updated_at,refunded_at,original_store_transaction_id,store_transaction_id"
+	olderRefunded := "user-1,user-1,com.example.annual,\"[\"\"premium\"\"]\",2026-09-01 00:00:00,2026-10-01 00:00:00,app_store,true,false,2026-10-25 00:00:00,2026-10-25 00:00:00,orig-1,txn-old"
+	newerValid := "user-1,user-1,com.example.annual,\"[\"\"premium\"\"]\",2026-10-01 00:00:00,2026-11-01 00:00:00,app_store,true,false,2026-10-02 00:00:00,,orig-1,txn-new"
+	renewalStart := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	renewalEnd := time.Date(2026, time.November, 1, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name        string
+		rows        []string
+		wantAccess  core.AccessStatus
+		wantReason  core.AccessReason
+		wantStart   time.Time
+		wantEnd     time.Time
+		wantIgnored int
+	}{
+		{
+			name:        "older refund updated later than valid renewal",
+			rows:        []string{olderRefunded, newerValid},
+			wantAccess:  core.AccessAllowed,
+			wantReason:  core.AccessReasonPurchaseValid,
+			wantStart:   renewalStart,
+			wantEnd:     renewalEnd,
+			wantIgnored: 1,
+		},
+		{
+			name:        "older refund listed after valid renewal",
+			rows:        []string{newerValid, olderRefunded},
+			wantAccess:  core.AccessAllowed,
+			wantReason:  core.AccessReasonPurchaseValid,
+			wantStart:   renewalStart,
+			wantEnd:     renewalEnd,
+			wantIgnored: 1,
+		},
+		{
+			name: "refund on the current renewal denies",
+			rows: []string{
+				"user-1,user-1,com.example.annual,\"[\"\"premium\"\"]\",2026-09-01 00:00:00,2026-10-01 00:00:00,app_store,true,false,2026-09-02 00:00:00,,orig-1,txn-old",
+				"user-1,user-1,com.example.annual,\"[\"\"premium\"\"]\",2026-10-01 00:00:00,2026-11-01 00:00:00,app_store,true,false,2026-10-02 00:00:00,2026-10-20 00:00:00,orig-1,txn-new",
+			},
+			wantAccess: core.AccessDenied,
+			wantReason: core.AccessReasonRefunded,
+			wantStart:  renewalStart,
+			wantEnd:    renewalEnd,
+		},
+		{
+			name:       "single refunded row still denies",
+			rows:       []string{"user-1,user-1,com.example.annual,\"[\"\"premium\"\"]\",2026-10-01 00:00:00,2026-11-01 00:00:00,app_store,true,false,2026-10-02 00:00:00,2026-10-20 00:00:00,orig-1,txn-only"},
+			wantAccess: core.AccessDenied,
+			wantReason: core.AccessReasonRefunded,
+			wantStart:  renewalStart,
+			wantEnd:    renewalEnd,
+		},
+		{
+			name: "later snapshot of the same transaction still wins",
+			rows: []string{
+				newerValid,
+				"user-1,user-1,com.example.annual,\"[\"\"premium\"\"]\",2026-10-01 00:00:00,2026-11-01 00:00:00,app_store,true,false,2026-10-25 00:00:00,2026-10-25 00:00:00,orig-1,txn-new",
+			},
+			wantAccess: core.AccessDenied,
+			wantReason: core.AccessReasonRefunded,
+			wantStart:  renewalStart,
+			wantEnd:    renewalEnd,
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			input := testInput(t, now, false, catalog)
+			input.Export = []byte(transactionsCSV(header, test.rows...))
+			result, err := Plan(input)
+			if err != nil {
+				t.Fatalf("Plan() error = %v", err)
+			}
+			subscriber := result.Subscribers[0]
+			if subscriber.Fatal || len(subscriber.Grants) != 1 {
+				t.Fatalf("subscriber = %#v, want one grant", subscriber)
+			}
+			grant := subscriber.Grants[0]
+			if grant.Access != test.wantAccess || grant.Reason != test.wantReason || !grant.StartsAt.Equal(test.wantStart) {
+				t.Fatalf("grant = %#v", grant)
+			}
+			if grant.EndsAt == nil || !grant.EndsAt.Equal(test.wantEnd) {
+				t.Fatalf("grant end = %v, want %s", grant.EndsAt, test.wantEnd)
+			}
+			if result.Report.Counts.IgnoredEarlierRefunds != test.wantIgnored {
+				t.Fatalf("ignored earlier refunds = %d, want %d", result.Report.Counts.IgnoredEarlierRefunds, test.wantIgnored)
+			}
+			payload, err := json.Marshal(result.Report)
+			if err != nil {
+				t.Fatalf("marshal report: %v", err)
+			}
+			fragment := `"ignored_earlier_refunds":` + strconv.Itoa(test.wantIgnored)
+			if !bytes.Contains(payload, []byte(fragment)) {
+				t.Fatalf("report JSON missing %s: %s", fragment, payload)
+			}
+		})
 	}
 }
 

@@ -74,6 +74,7 @@ func Plan(input Input) (Result, error) {
 		}
 		result.Report.Counts.CustomersCreated++
 		result.Report.Counts.GrantsUpserted += len(subscriber.Grants)
+		result.Report.Counts.IgnoredEarlierRefunds += subscriber.IgnoredEarlierRefunds
 		for _, failure := range subscriber.Failures {
 			if failure.Code == CodeAliasRefused {
 				result.Report.Counts.AliasRefused++
@@ -151,6 +152,7 @@ func planSubscriber(input Input, draft subscriberDraft) Subscriber {
 		grant Grant
 	}
 	grouped := map[string]candidate{}
+	groupedRows := map[string][]sourceRow{}
 	var failures []Failure
 	for _, row := range draft.rows {
 		if row.ambiguousProduct {
@@ -171,6 +173,7 @@ func planSubscriber(input Input, draft subscriberDraft) Subscriber {
 				continue
 			}
 			key := string(grant.ApplicationID) + "\x00" + string(grant.ProductID) + "\x00" + string(grant.EntitlementID) + "\x00" + hex.EncodeToString(grant.LineageFingerprint[:])
+			groupedRows[key] = append(groupedRows[key], row)
 			existing, exists := grouped[key]
 			if !exists || row.after(existing.row) {
 				grouped[key] = candidate{row: row, grant: grant}
@@ -183,8 +186,9 @@ func planSubscriber(input Input, draft subscriberDraft) Subscriber {
 		subscriber.Grants = nil
 		return subscriber
 	}
-	for _, candidate := range grouped {
+	for key, candidate := range grouped {
 		subscriber.Grants = append(subscriber.Grants, candidate.grant)
+		subscriber.IgnoredEarlierRefunds += ignoredEarlierRefunds(candidate.row, groupedRows[key])
 	}
 	sort.Slice(subscriber.Grants, func(left, right int) bool {
 		if subscriber.Grants[left].EntitlementKey != subscriber.Grants[right].EntitlementKey {
@@ -370,17 +374,21 @@ func firstEntitlement(row sourceRow) string {
 	return row.entitlementIDs[0]
 }
 
-// after reports whether row is a more recent lineage record than other.
+// after reports whether row is the current lineage record over other. The row
+// with the latest period start wins, so a refund recorded later against an
+// earlier period cannot replace a still-valid renewal. The export update time
+// only breaks ties between snapshots of the same store transaction, after
+// which the later effective end decides.
 func (row sourceRow) after(other sourceRow) bool {
-	leftUpdated, rightUpdated := time.Time{}, time.Time{}
-	if row.updated != nil {
-		leftUpdated = *row.updated
+	leftStart, rightStart := timeOrZero(row.start), timeOrZero(other.start)
+	if !leftStart.Equal(rightStart) {
+		return leftStart.After(rightStart)
 	}
-	if other.updated != nil {
-		rightUpdated = *other.updated
-	}
-	if !leftUpdated.Equal(rightUpdated) {
-		return leftUpdated.After(rightUpdated)
+	if sameStoreTransaction(row, other) {
+		leftUpdated, rightUpdated := timeOrZero(row.updated), timeOrZero(other.updated)
+		if !leftUpdated.Equal(rightUpdated) {
+			return leftUpdated.After(rightUpdated)
+		}
 	}
 	leftHas, rightHas := row.effectiveEnd != nil, other.effectiveEnd != nil
 	if leftHas != rightHas {
@@ -389,12 +397,35 @@ func (row sourceRow) after(other sourceRow) bool {
 	if leftHas && !row.effectiveEnd.Equal(*other.effectiveEnd) {
 		return row.effectiveEnd.After(*other.effectiveEnd)
 	}
-	leftStart, rightStart := time.Time{}, time.Time{}
-	if row.start != nil {
-		leftStart = *row.start
+	leftUpdated, rightUpdated := timeOrZero(row.updated), timeOrZero(other.updated)
+	return leftUpdated.After(rightUpdated)
+}
+
+// ignoredEarlierRefunds counts refunded rows from an earlier period that the
+// winning unrefunded row superseded within one lineage.
+func ignoredEarlierRefunds(winner sourceRow, rows []sourceRow) int {
+	if winner.refunded != nil {
+		return 0
 	}
-	if other.start != nil {
-		rightStart = *other.start
+	winnerStart := timeOrZero(winner.start)
+	count := 0
+	for _, row := range rows {
+		if row.refunded != nil && timeOrZero(row.start).Before(winnerStart) {
+			count++
+		}
 	}
-	return leftStart.After(rightStart)
+	return count
+}
+
+// sameStoreTransaction reports whether two rows name the same store transaction.
+func sameStoreTransaction(left, right sourceRow) bool {
+	return left.storeTransactionID != "" && left.storeTransactionID == right.storeTransactionID
+}
+
+// timeOrZero dereferences an optional export timestamp.
+func timeOrZero(value *time.Time) time.Time {
+	if value == nil {
+		return time.Time{}
+	}
+	return *value
 }
