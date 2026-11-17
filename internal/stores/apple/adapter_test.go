@@ -472,6 +472,100 @@ func TestNormalizeActiveStatusNearExpiry(t *testing.T) {
 	}
 }
 
+// TestNormalizeGracePeriodNearExpiry keeps a grace end inside the clock-skew window allowed, like an active expiry.
+func TestNormalizeGracePeriodNearExpiry(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 25, 11, 0, 0, 0, time.UTC)
+	transaction := transactionPayload{
+		OriginalTransactionID: "2000000723456789", TransactionID: "2000000723456790",
+		BundleID: fixtureBundleID, ProductID: fixtureProductID,
+		PurchaseDate: now.Add(-24 * time.Hour).UnixMilli(), ExpiresDate: now.Add(-2 * time.Minute).UnixMilli(),
+		Quantity: 1, Type: appleSubscriptionType, AppAccountToken: fixtureAccountToken,
+		OwnershipType: applePurchasedOwnership, Environment: "Sandbox",
+	}
+	tests := []struct {
+		name       string
+		graceEnd   time.Time
+		wantState  core.LifecycleState
+		wantAccess core.AccessStatus
+		wantReason core.AccessReason
+		wantEnd    time.Time
+	}{
+		{
+			name: "one minute before now", graceEnd: now.Add(-time.Minute),
+			wantState: core.LifecycleGracePeriod, wantAccess: core.AccessAllowed,
+			wantReason: core.AccessReasonGracePeriod, wantEnd: now.Add(-time.Minute).Add(maximumNotificationClockSkew),
+		},
+		{
+			name: "six minutes before now", graceEnd: now.Add(-6 * time.Minute),
+			wantState: core.LifecycleOnHold, wantAccess: core.AccessDenied,
+			wantReason: core.AccessReasonBillingIssue, wantEnd: now.Add(-6 * time.Minute),
+		},
+		{
+			name: "skew boundary denied", graceEnd: now.Add(-maximumNotificationClockSkew),
+			wantState: core.LifecycleOnHold, wantAccess: core.AccessDenied,
+			wantReason: core.AccessReasonBillingIssue, wantEnd: now.Add(-maximumNotificationClockSkew),
+		},
+		{
+			name: "still in future", graceEnd: now.Add(time.Minute),
+			wantState: core.LifecycleGracePeriod, wantAccess: core.AccessAllowed,
+			wantReason: core.AccessReasonGracePeriod, wantEnd: now.Add(time.Minute),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := subscriptionSnapshot{Status: subscriptionStatusGracePeriod, Renewal: renewalPayload{
+				AutoRenewStatus: autoRenewEnabled, AutoRenewProductID: fixtureProductID,
+				RenewalDate: now.Add(time.Hour).UnixMilli(), GracePeriodExpiresDate: test.graceEnd.UnixMilli(),
+			}}
+			state, access, reason, endsAt, _ := normalizeSubscriptionStatus(transaction, snapshot, now)
+			if state != test.wantState || access != test.wantAccess || reason != test.wantReason {
+				t.Fatalf("normalizeSubscriptionStatus() = (%q, %q, %q), want (%q, %q, %q)",
+					state, access, reason, test.wantState, test.wantAccess, test.wantReason)
+			}
+			if endsAt == nil || !endsAt.Equal(test.wantEnd) {
+				t.Fatalf("effective end = %v, want %v", endsAt, test.wantEnd)
+			}
+		})
+	}
+
+	// The adjusted end flows into the observation identity, so a changed adjusted end is a new snapshot.
+	adapter := &Adapter{clock: func() time.Time { return now }}
+	artifact, err := stores.NewEvidence("application/json", []byte(`{"subscription":"status"}`))
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	application := appleApplication(core.EnvironmentSandbox)
+	observe := func(graceEndsAt time.Time) core.PurchaseObservation {
+		t.Helper()
+		result, resultErr := adapter.result(application, core.ProductKindSubscription, transaction, artifact, &subscriptionSnapshot{
+			Status: subscriptionStatusGracePeriod,
+			Renewal: renewalPayload{
+				AutoRenewStatus: autoRenewEnabled, AutoRenewProductID: fixtureProductID,
+				GracePeriodExpiresDate: graceEndsAt.UnixMilli(), RenewalDate: now.Add(time.Hour).UnixMilli(),
+			},
+		})
+		if resultErr != nil {
+			t.Fatalf("result() error = %v", resultErr)
+		}
+		return result.Observations[0]
+	}
+	first := observe(now.Add(-time.Minute))
+	second := observe(now.Add(-2 * time.Minute))
+	replayed := observe(now.Add(-time.Minute))
+	if first.Access != core.AccessAllowed || first.EffectivePeriod.EndsAt == nil ||
+		!first.EffectivePeriod.EndsAt.Equal(now.Add(-time.Minute).Add(maximumNotificationClockSkew)) {
+		t.Fatalf("first adjusted observation = %#v", first)
+	}
+	if first.ID == second.ID {
+		t.Fatal("changed adjusted grace end reused the observation ID")
+	}
+	if first.ID != replayed.ID {
+		t.Fatalf("unchanged adjusted grace observations = (%q, %q), want one identity", first.ID, replayed.ID)
+	}
+}
+
 // TestNonGraceObservationIDMatchesHistoricalEncoding pins the id main stored for one active subscription.
 // The effective end equals the transaction expiry, so grace encoding must not change this id.
 func TestNonGraceObservationIDMatchesHistoricalEncoding(t *testing.T) {

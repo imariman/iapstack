@@ -252,8 +252,15 @@ func normalizeSubscriptionStatus(
 		return core.LifecycleOnHold, core.AccessDenied, core.AccessReasonBillingIssue, endsAt, renewal
 	case subscriptionStatusGracePeriod:
 		graceEndsAt := optionalMilliseconds(subscription.Renewal.GracePeriodExpiresDate)
-		if graceEndsAt == nil || !graceEndsAt.After(now) {
+		if graceEndsAt == nil || !graceEndsAt.After(now.Add(-maximumNotificationClockSkew)) {
 			return core.LifecycleOnHold, core.AccessDenied, core.AccessReasonBillingIssue, graceEndsAt, renewal
+		}
+		// Mirror the active arm: a signed grace end inside the clock-skew window stays
+		// allowed, and the stored end is extended by that allowance so readers and
+		// clients, which add no window of their own, still see access after now.
+		if !graceEndsAt.After(now) {
+			adjusted := graceEndsAt.Add(maximumNotificationClockSkew)
+			graceEndsAt = &adjusted
 		}
 		return core.LifecycleGracePeriod, core.AccessAllowed, core.AccessReasonGracePeriod, graceEndsAt, renewal
 	case subscriptionStatusRevoked:
