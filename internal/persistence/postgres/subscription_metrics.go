@@ -21,13 +21,14 @@ const (
 			FROM applications AS application
 			WHERE application.project_id = $1 AND application.environment = $2
 		), snapshots AS MATERIALIZED (
-			SELECT po.id, po.application_id, scope.provider, po.product_id,
+			SELECT po.id, po.application_id, scope.provider, po.product_id, po.provider_product_id,
 				po.lifecycle_state, po.access_status, po.access_reason, po.renewal_status,
 				po.effective_starts_at, po.effective_ends_at, po.observed_at, po.created_at, po.offer_phase,
 				po.transaction_reason, po.lineage_started_at, po.cancellation_reason,
 				COALESCE(customer.merged_into_customer_id, customer.id) AS customer_id,
 				COALESCE(NULLIF(lineage.key, ''), 'observation:' || po.id) AS lineage,
 				transaction_reference.key AS transaction_key,
+				transaction_reference.reference_id AS transaction_reference_id,
 				EXISTS (
 					SELECT 1
 					FROM observation_references AS linked_link
@@ -44,7 +45,7 @@ const (
 				ON customer.id = po.customer_id AND customer.project_id = po.project_id
 			CROSS JOIN LATERAL (SELECT ` + observationLineageSQL + ` AS key) AS lineage
 			LEFT JOIN LATERAL (
-				SELECT 'reference:' || transaction_ref.id::text AS key
+				SELECT 'reference:' || transaction_ref.id::text AS key, transaction_ref.id AS reference_id
 				FROM observation_references AS transaction_link
 				JOIN provider_references AS transaction_ref
 					ON transaction_ref.id = transaction_link.reference_id
@@ -99,14 +100,13 @@ const (
 			SELECT application_id, lineage,
 				bool_or(linked) AS linked,
 				bool_or(offer_phase IS NOT NULL) AS phase_recorded,
-				min(lineage_started_at) AS started_at,
-				(array_agg(cancellation_reason ORDER BY observed_at DESC, created_at DESC, id DESC)
-					FILTER (WHERE cancellation_reason IS NOT NULL))[1] AS cancellation_reason
+				min(lineage_started_at) AS started_at
 			FROM snapshots
 			GROUP BY application_id, lineage
 		), latest AS (
 			SELECT DISTINCT ON (application_id, lineage)
-				application_id, lineage, provider, customer_id, lifecycle_state, access_status, access_reason, renewal_status
+				application_id, lineage, provider, customer_id, lifecycle_state, access_status, access_reason, renewal_status,
+				cancellation_reason
 			FROM snapshots
 			ORDER BY application_id, lineage, observed_at DESC, created_at DESC, id DESC
 		), last_live AS (
@@ -116,28 +116,34 @@ const (
 			WHERE lifecycle_state IN ('active', 'grace_period', 'on_hold', 'canceled')
 			ORDER BY application_id, lineage, observed_at DESC, created_at DESC, id DESC
 		), transactions AS (
-			SELECT application_id, lineage, transaction_key, min(created_at) AS first_stored_at,
+			SELECT application_id, lineage, transaction_key, min(transaction_reference_id) AS transaction_reference_id,
+				min(created_at) AS first_stored_at,
+				min(effective_starts_at) AS first_starts_at,
 				(array_agg(product_id ORDER BY created_at, id))[1] AS product_id,
+				(array_agg(provider_product_id ORDER BY created_at, id))[1] AS provider_product_id,
 				(array_agg(transaction_reason ORDER BY created_at, id)
 					FILTER (WHERE transaction_reason IS NOT NULL))[1] AS reason
 			FROM snapshots
 			WHERE transaction_key IS NOT NULL
 			GROUP BY application_id, lineage, transaction_key
 		), ranked_transactions AS (
-			SELECT application_id, lineage, product_id, first_stored_at, transaction_key, reason,
-				row_number() OVER (
-					PARTITION BY application_id, lineage ORDER BY first_stored_at, transaction_key
-				) AS transaction_rank,
-				lag(product_id) OVER (
-					PARTITION BY application_id, lineage ORDER BY first_stored_at, transaction_key
-				) AS previous_product_id
+			-- Transactions stored in one database transaction share first_stored_at, so the signed period
+			-- start orders them next (Apple stores an upgrade before the transaction it supersedes), then
+			-- the numeric reference id.
+			SELECT application_id, lineage, product_id, provider_product_id, first_stored_at, transaction_key, reason,
+				row_number() OVER transaction_order AS transaction_rank,
+				lag(provider_product_id) OVER transaction_order AS previous_provider_product_id
 			FROM transactions
+			WINDOW transaction_order AS (
+				PARTITION BY application_id, lineage
+				ORDER BY first_stored_at, first_starts_at NULLS LAST, transaction_reference_id
+			)
 		), classified_transactions AS (
 			-- Without a signed reason every later transaction stays a renewal, as before migration 014.
 			SELECT application_id, lineage, product_id, first_stored_at, transaction_key, transaction_rank,
 				CASE
 					WHEN reason IS NULL THEN 'renewal'
-					WHEN product_id IS DISTINCT FROM previous_product_id THEN 'plan_change'
+					WHEN provider_product_id IS DISTINCT FROM previous_provider_product_id THEN 'plan_change'
 					WHEN reason = 'purchase' THEN 'resubscription'
 					ELSE 'renewal'
 				END AS transaction_kind
@@ -173,7 +179,8 @@ const (
 				ON later.application_id = trial.application_id
 				AND later.lineage = trial.lineage
 				AND later.access_status = 'allowed'
-				AND later.created_at > trial.first_stored_at
+				AND later.created_at >= trial.first_stored_at
+				AND later.effective_starts_at >= trial.starts_at
 				AND later.offer_phase IS DISTINCT FROM 'free_trial'
 			GROUP BY trial.application_id, trial.lineage, trial.starts_at, trial.ends_at
 		)
@@ -185,7 +192,7 @@ const (
 			COALESCE(renewals.products, ARRAY[]::text[]),
 			trial_outcomes.starts_at, trial_outcomes.ends_at,
 			COALESCE(trial_outcomes.converted, false), COALESCE(trial_outcomes.unknown_after, false),
-			lineage_facts.started_at, COALESCE(lineage_facts.cancellation_reason, ''),
+			lineage_facts.started_at, COALESCE(latest.cancellation_reason, ''),
 			COALESCE(renewals.plan_changes, 0), COALESCE(renewals.resubscriptions, 0)
 		FROM window_intervals
 		JOIN latest USING (application_id, lineage)
@@ -231,9 +238,9 @@ func (repository *transaction) adminSubscriptionMetrics(
 	var window persistence.SubscriptionWindow
 	if err := repository.tx.QueryRow(ctx, `
 		SELECT CURRENT_TIMESTAMP,
-			(date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+			`+utcTodayStartSQL+`
 				- ($1::integer - 1) * INTERVAL '1 day',
-			(date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') + INTERVAL '1 day'
+			`+utcTodayStartSQL+` + INTERVAL '1 day'
 	`, query.WindowDays).Scan(&window.MeasuredAt, &window.Start, &window.End); err != nil {
 		return persistence.SubscriptionMetrics{}, classifyError("load subscription metrics window", err)
 	}

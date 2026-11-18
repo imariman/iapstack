@@ -36,6 +36,8 @@ type subscriptionSnapshotSpec struct {
 	txReason     core.TransactionReason
 	lineageAgo   time.Duration
 	cancellation core.CancellationReason
+	// providerProduct overrides the store-<product> provider product id.
+	providerProduct string
 }
 
 // TestAdminSubscriptionMetricsReadsStoredLineages verifies the SQL lineage evidence against the stated definitions.
@@ -232,7 +234,11 @@ func TestAdminSubscriptionMetricsUsesSignedLineageEvidence(t *testing.T) {
 			`, projectID, application.id, product)
 		}
 	}
-	for _, customer := range []string{"customer-1", "customer-2", "customer-3", "customer-4"} {
+	mustExec(t, database, `
+		INSERT INTO store_products (project_id, application_id, product_id, provider_product_id)
+		VALUES ($1, 'app-apple', 'monthly', 'store-monthly-b')
+	`, projectID)
+	for _, customer := range []string{"customer-1", "customer-2", "customer-3", "customer-4", "customer-5", "customer-6"} {
 		mustExec(t, database, `INSERT INTO customers (id, project_id, external_id) VALUES ($1, $2, $1)`, customer, projectID)
 	}
 	var base time.Time
@@ -304,16 +310,44 @@ func TestAdminSubscriptionMetricsUsesSignedLineageEvidence(t *testing.T) {
 		transaction: "d-t1", lineage: "token-d", cancellation: core.CancellationReasonCustomer,
 	})
 
+	// An upgrade out of a free trial stored in one verification: the paid upgrade is saved before the
+	// superseded trial, so both share created_at and the upgrade has the lower reference id.
+	save(subscriptionSnapshotSpec{
+		id: "e-upgrade", customer: "customer-5", product: "annual", startsAgo: 2 * day, endsIn: 363 * day,
+		observedAgo: 2 * day, storedAgo: 2 * day, phase: core.OfferPhaseBase, transaction: "e-t2", lineage: "e",
+		txReason: core.TransactionReasonPurchase, lineageAgo: 5 * day,
+	})
+	save(subscriptionSnapshotSpec{
+		id: "e-trial", customer: "customer-5", state: core.LifecycleExpired, access: core.AccessDenied,
+		reason: core.AccessReasonExpired, renewal: core.RenewalDisabled, startsAgo: 5 * day, endsIn: -2 * day,
+		observedAgo: 2 * day, storedAgo: 2 * day, phase: core.OfferPhaseFreeTrial, transaction: "e-t1", lineage: "e",
+		txReason: core.TransactionReasonPurchase, lineageAgo: 5 * day,
+	})
+	// Two Apple SKUs mapped to one catalog product: a change between them is still a plan change.
+	save(subscriptionSnapshotSpec{
+		id: "f-first", customer: "customer-6", startsAgo: 20 * day, endsIn: -4 * day, observedAgo: 20 * day,
+		storedAgo: 20 * day, transaction: "f-t1", lineage: "f", txReason: core.TransactionReasonPurchase, lineageAgo: 100 * day,
+	})
+	save(subscriptionSnapshotSpec{
+		id: "f-second", customer: "customer-6", providerProduct: "store-monthly-b", startsAgo: 4 * day, endsIn: 26 * day,
+		observedAgo: day, storedAgo: 4 * day, transaction: "f-t2", lineage: "f", txReason: core.TransactionReasonPurchase,
+		lineageAgo: 100 * day,
+	})
+
 	metrics, err := store.AdminSubscriptionMetrics(database.ctx, projectID, persistence.SubscriptionMetricsQuery{
 		Environment: core.EnvironmentProduction, WindowDays: 30,
 	})
 	if err != nil {
 		t.Fatalf("AdminSubscriptionMetrics() error = %v", err)
 	}
+	apple := metrics.Providers[0]
+	if apple.Provider != core.ProviderAppleAppStore || apple.TrialsEnded != 1 || apple.TrialsConverted != 1 {
+		t.Fatalf("Apple trials = %#v, want the same-transaction upgrade counted as a conversion", apple)
+	}
 	for name, got := range map[string][2]int64{
-		"new":             {metrics.New, 1},
+		"new":             {metrics.New, 2},
 		"renewals":        {metrics.Renewals, 1},
-		"plan changes":    {metrics.PlanChanges, 2},
+		"plan changes":    {metrics.PlanChanges, 4},
 		"resubscriptions": {metrics.Resubscriptions, 0},
 		"replaced":        {metrics.Churn.Replaced, 1},
 		"churned":         {metrics.Churn.Churned, 1},
@@ -342,6 +376,10 @@ func storeSubscriptionSnapshot(
 	product := spec.product
 	if product == "" {
 		product = "monthly"
+	}
+	providerProduct := spec.providerProduct
+	if providerProduct == "" {
+		providerProduct = "store-" + product
 	}
 	var lineageStartedAt *time.Time
 	if spec.lineageAgo > 0 {
@@ -382,7 +420,7 @@ func storeSubscriptionSnapshot(
 		Store: core.StoreApplication{
 			Provider: spec.provider, Environment: spec.environment, ID: core.ProviderApplicationID(spec.application),
 		},
-		ProductID: core.ProviderProductID("store-" + product), ProductKind: core.ProductKindSubscription,
+		ProductID: core.ProviderProductID(providerProduct), ProductKind: core.ProductKindSubscription,
 		State: spec.state, ProviderState: string(spec.state), Access: spec.access, AccessReason: spec.reason,
 		Ownership: ownership, Quantity: 1, OfferPhase: spec.phase,
 		TransactionReason: spec.txReason, LineageStartedAt: lineageStartedAt, CancellationReason: spec.cancellation,

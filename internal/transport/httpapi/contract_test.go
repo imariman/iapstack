@@ -119,7 +119,7 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 			"plan_changes", "resubscriptions", "churn",
 			"trials", "breakdown", "breakdown_truncated", "daily_active",
 		},
-		"AdminSubscriptionChurn": {"churned", "voluntary", "billing", "reversed", "unclassified", "replaced", "paused", "rate"},
+		"AdminSubscriptionChurn": {"churned", "voluntary", "billing", "reversed", "unclassified", "replaced", "paused", "awaiting_evidence", "rate"},
 		"AdminSubscriptionTrials": {
 			"provider", "availability", "active_during_window", "with_offer_phase", "started", "ended",
 			"converted", "not_converted", "outcome_not_recorded", "conversion_rate",

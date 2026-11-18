@@ -43,14 +43,16 @@ type adminSubscriptionMetricsResponse struct {
 // adminSubscriptionChurnResponse splits ended subscriptions and states the churn rate.
 // Rate is churned divided by active_during_window, or null when nothing was active.
 type adminSubscriptionChurnResponse struct {
-	Churned      int64    `json:"churned"`
-	Voluntary    int64    `json:"voluntary"`
-	Billing      int64    `json:"billing"`
-	Reversed     int64    `json:"reversed"`
-	Unclassified int64    `json:"unclassified"`
-	Replaced     int64    `json:"replaced"`
-	Paused       int64    `json:"paused"`
-	Rate         *float64 `json:"rate"`
+	Churned      int64 `json:"churned"`
+	Voluntary    int64 `json:"voluntary"`
+	Billing      int64 `json:"billing"`
+	Reversed     int64 `json:"reversed"`
+	Unclassified int64 `json:"unclassified"`
+	Replaced     int64 `json:"replaced"`
+	Paused       int64 `json:"paused"`
+	// AwaitingEvidence counts periods that ended recently with no stored outcome yet. Not churn.
+	AwaitingEvidence int64    `json:"awaiting_evidence"`
+	Rate             *float64 `json:"rate"`
 }
 
 // adminSubscriptionTrialResponse reports trial evidence for one provider. Counts are null when the
@@ -140,7 +142,7 @@ func subscriptionMetricsFromRecord(metrics persistence.SubscriptionMetrics) admi
 		Churn: adminSubscriptionChurnResponse{
 			Churned: metrics.Churn.Churned, Voluntary: metrics.Churn.Voluntary, Billing: metrics.Churn.Billing,
 			Reversed: metrics.Churn.Reversed, Unclassified: metrics.Churn.Unclassified,
-			Replaced: metrics.Churn.Replaced, Paused: metrics.Churn.Paused,
+			Replaced: metrics.Churn.Replaced, Paused: metrics.Churn.Paused, AwaitingEvidence: metrics.Churn.AwaitingEvidence,
 			Rate: ratio(metrics.Churn.Churned, metrics.ActiveDuringWindow),
 		},
 		Trials:             make([]adminSubscriptionTrialResponse, 0, len(metrics.Providers)),

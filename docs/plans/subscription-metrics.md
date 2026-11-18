@@ -87,16 +87,17 @@ A subscription is one lineage of a `subscription` product in one application of 
 - **In a free trial now.** Active now, and the covering period's phase is `free_trial`. Counted only where the phase is recorded.
 - **Active during the window.** Some allowed period starts before `measured_at` and ends after `window_start`.
 - **New subscription.** The lineage starts in [`window_start`, `measured_at`): its signed lineage start when any snapshot carries one (Apple `originalPurchaseDate`, so a subscriber first seen at a renewal is not new), otherwise its earliest stored allowed period. The earliest stored allowed period must also be inside the window, the lineage has no `linked_lineage` reference (Google Play upgrade, downgrade, or resubscribe), and no other lineage of the same canonical customer in the same application has a period that started before and ends at or after that start. Trials count as new.
-- **Later transaction.** A provider transaction first stored in the window, in a lineage that already had an earlier stored transaction. The first transaction IAPStack ever saw in a lineage is never one. A later transaction is exactly one of:
-  - **plan change:** it has a signed transaction reason and its product differs from the previous stored transaction of the lineage (an Apple upgrade is `purchase`, a downgrade takes effect as `renewal`);
+- **Later transaction.** A provider transaction first stored in the window, in a lineage that already had an earlier stored transaction. The first transaction IAPStack ever saw in a lineage is never one. Transactions are ordered by first storage time, then by the earliest signed period start (one verification stores an Apple upgrade before the transaction it supersedes), then by reference id. A later transaction is exactly one of:
+  - **plan change:** it has a signed transaction reason and its provider product (store SKU, not catalog product) differs from the previous stored transaction of the lineage (an Apple upgrade is `purchase`, a downgrade takes effect as `renewal`);
   - **resubscription:** its signed reason is `purchase` and the product is unchanged;
   - **renewal:** otherwise. A transaction with no signed reason is always a renewal, as before. The first paid period after a free trial is a renewal.
 - **Ended.** The lineage's last allowed period ends after `window_start` and at or before `measured_at`.
-- **Replaced.** Ended, and the latest recorded cancellation reason is `replacement` (Google Play `replacementCancellation`, which holds even when the old and new periods leave a gap), or another lineage of the same canonical customer and application has a period that started at or before that end and ends after it. Not churn.
+- **Replaced.** Ended, and the latest snapshot's cancellation reason is `replacement` and that snapshot is not a refund or revocation (Google Play `replacementCancellation`, which holds even when the old and new periods leave a gap), or another lineage of the same canonical customer and application has a period that started at or before that end and ends after it. Not churn.
 - **Paused.** Ended, and the latest snapshot is `paused`. Not churn.
-- **Churned.** Ended and neither replaced nor paused. The reason is the first that matches:
+- **Awaiting evidence.** Ended less than 48 hours (`SubscriptionEvidenceGrace`, two daily reconciliations) before `measured_at`, and the latest stored snapshot is still `active`, allowed, with renewal enabled and no cancellation reason. The renewal or expiry has not been stored yet. Not churn; after 48 hours without evidence the subscription is churned.
+- **Churned.** Ended and not replaced, paused, or awaiting evidence. The reason is the first that matches:
   1. reversed: the latest snapshot is `refunded` or `revoked` with access `denied`;
-  2. the latest recorded cancellation reason: `customer` is voluntary, `system` is billing; `developer` and no reason fall through;
+  2. the latest snapshot's cancellation reason (an older context from before a restore is ignored): `customer` is voluntary, `system` is billing; `developer` and no reason fall through;
   3. billing: the last live snapshot (latest of `active`, `grace_period`, `on_hold`, `canceled`) is `grace_period` or `on_hold`, or its reason is `billing_issue`;
   4. voluntary: that snapshot has renewal `disabled`, is `canceled`, or its reason is `canceled_at_period_end`;
   5. unclassified: otherwise, including a lineage with no live snapshot.
@@ -104,8 +105,8 @@ A subscription is one lineage of a `subscription` product in one application of 
 - **Churn rate.** Churned ÷ active during the window. Null when nothing was active. The numerator is a subset of the denominator.
 - **Trial started.** The earliest start of the lineage's `free_trial` snapshots is in [`window_start`, `measured_at`).
 - **Trial ended.** The latest end of those snapshots is after `window_start` and at or before `measured_at`.
-- **Converted.** An ended trial whose lineage has an allowed snapshot with phase `base` or `discounted`, stored after the first trial snapshot.
-- **Outcome not recorded.** An ended trial that did not convert but has a later allowed snapshot whose phase is not recorded, `unknown`, or `proration`.
+- **Converted.** An ended trial whose lineage has an allowed snapshot with phase `base` or `discounted`, stored at or after the first trial snapshot (one verification can store both) and whose signed period does not start before the trial.
+- **Outcome not recorded.** An ended trial that did not convert but has such a later allowed snapshot whose phase is not recorded, `unknown`, or `proration`, or whose lineage is awaiting evidence.
 - **Not converted.** An ended trial with neither.
 - **Trial conversion rate.** Converted ÷ (converted + not converted). Outcome-not-recorded trials are left out of both sides.
 - **Offer phase coverage.** Lineages active during the window with at least one snapshot carrying a phase, out of all lineages active during the window, per provider.
@@ -119,6 +120,7 @@ A subscription is one lineage of a `subscription` product in one application of 
 - Google Play plan changes always use a new token, so they appear as replaced plus a linked subscription, not in `plan_changes`. `plan_changes` and `resubscriptions` are Apple-only today.
 - A Google Play allowed snapshot covers the span from the subscription `startTime` to the current expiry, so a hold that later recovered is not a gap in the history.
 - Huawei renewals count only if the order id changes at renewal. No captured Huawei renewal fixture confirms it.
+- Renewals, plan changes, and resubscriptions are placed in a window by IAPStack's first storage time of the transaction, not by a signed period start: Google Play keeps the subscription `startTime` on every renewal, so storage time is the only clock all providers share. After downtime or a late replay, those transactions land on the day they were stored.
 - Counts follow what IAPStack has observed. An unobserved renewal or expiry is missing until the next notification or reconciliation, and a past window can change when late evidence arrives.
 - Observations stored before migration 014 have no phase. Coverage grows as reconciliation re-reads active subscriptions.
 - Google Play prepaid plans have no renewal status, so their expiry is unclassified churn.

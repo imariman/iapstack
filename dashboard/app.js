@@ -216,7 +216,8 @@ async function loadOverview(projectID, focusWorkspace = false) {
     renderProjectNavigation();
     renderOverview();
     elements.updatedAt.textContent = `Updated ${formatTime(new Date().toISOString())}`;
-    await loadSubscriptionMetrics(projectID);
+    // Not awaited: the subscription query is slower, and it must not hold the overview or the refresh button.
+    loadSubscriptionMetrics(projectID);
     if (focusWorkspace) elements.appShell.querySelector("#workspace").focus({ preventScroll: true });
   } catch (error) {
     if (error.status === 401) {
@@ -661,11 +662,15 @@ function syncSubscriptionControls(environments) {
 
 async function loadSubscriptionMetrics(projectID) {
   const environments = subscriptionEnvironments(state.overview?.applications || []);
-  if (state.subscriptionProject !== projectID || !environments.includes(state.subscriptionEnvironment)) {
+  const projectChanged = state.subscriptionProject !== projectID;
+  if (projectChanged || !environments.includes(state.subscriptionEnvironment)) {
     state.subscriptionProject = projectID;
     state.subscriptionEnvironment = environments[0] || "";
   }
   syncSubscriptionControls(environments);
+  if (projectChanged && environments.length) {
+    renderEmptySubscriptions("Loading subscription metrics for this project…");
+  }
   if (!environments.length) {
     renderEmptySubscriptions("This project has no applications, so it has no subscriptions to count.");
     return;
@@ -826,7 +831,7 @@ function renderSubscriptionChurn(churn) {
   excluded.append(node(
     "dd",
     "",
-    `${formatNumber(churn.replaced)} replaced · ${formatNumber(churn.paused)} paused`,
+    `${formatNumber(churn.replaced)} replaced · ${formatNumber(churn.paused)} paused · ${formatNumber(churn.awaiting_evidence)} awaiting store evidence`,
   ));
   list.append(excluded);
 }

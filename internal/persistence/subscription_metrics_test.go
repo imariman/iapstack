@@ -216,6 +216,53 @@ func TestComputeSubscriptionMetricsUsesSignedLineageEvidence(t *testing.T) {
 	}
 }
 
+// TestComputeSubscriptionMetricsWaitsForEvidenceAndPrefersRefunds covers a renewal not yet stored and a refund after a replacement.
+func TestComputeSubscriptionMetricsWaitsForEvidenceAndPrefersRefunds(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, time.October, 20, 0, 0, 0, 0, time.UTC)
+	measuredAt := start.Add(29*24*time.Hour + 12*time.Hour)
+	window := persistence.SubscriptionWindow{Start: start, End: start.Add(30 * 24 * time.Hour), MeasuredAt: measuredAt}
+	active := persistence.SubscriptionEvidence{
+		State: core.LifecycleActive, Access: core.AccessAllowed, Reason: core.AccessReasonPurchaseValid, RenewalStatus: core.RenewalEnabled,
+	}
+	lineage := func(key string, customer core.CustomerID, from, to time.Time, phase core.OfferPhase) persistence.SubscriptionLineage {
+		return persistence.SubscriptionLineage{
+			Key: key, ApplicationID: "app-1", Provider: core.ProviderGooglePlay, CustomerID: customer, FirstStartsAt: from,
+			Intervals: []persistence.SubscriptionInterval{{ProductID: "monthly", StartsAt: from, EndsAt: to, OfferPhase: phase}},
+			Latest:    active, LastLive: &active,
+		}
+	}
+	renewalNotStored := lineage("renewal-pending", "customer-1", start.Add(-20*24*time.Hour), measuredAt.Add(-3*time.Hour), core.OfferPhaseBase)
+	silentForDays := lineage("silent", "customer-2", start.Add(-20*24*time.Hour), measuredAt.Add(-3*24*time.Hour), core.OfferPhaseBase)
+	trialEnding := lineage("trial-pending", "customer-3", measuredAt.Add(-7*24*time.Hour-time.Hour), measuredAt.Add(-time.Hour), core.OfferPhaseFreeTrial)
+	trialEnding.Trial = &persistence.SubscriptionTrialEvidence{StartsAt: trialEnding.FirstStartsAt, EndsAt: measuredAt.Add(-time.Hour)}
+	refundedAfterReplacement := lineage("refunded", "customer-4", start.Add(-20*24*time.Hour), start.Add(5*24*time.Hour), core.OfferPhaseBase)
+	refundedAfterReplacement.CancellationReason = core.CancellationReasonReplacement
+	refundedAfterReplacement.Latest = persistence.SubscriptionEvidence{
+		State: core.LifecycleRevoked, Access: core.AccessDenied, Reason: core.AccessReasonRevoked,
+	}
+
+	metrics := persistence.ComputeSubscriptionMetrics(
+		persistence.SubscriptionMetricsQuery{Environment: core.EnvironmentProduction, WindowDays: 30}, window,
+		[]core.Provider{core.ProviderGooglePlay},
+		[]persistence.SubscriptionLineage{renewalNotStored, silentForDays, trialEnding, refundedAfterReplacement},
+	)
+	for name, got := range map[string][2]int64{
+		"awaiting evidence":          {metrics.Churn.AwaitingEvidence, 2},
+		"churned":                    {metrics.Churn.Churned, 2},
+		"unclassified":               {metrics.Churn.Unclassified, 1},
+		"reversed":                   {metrics.Churn.Reversed, 1},
+		"replaced":                   {metrics.Churn.Replaced, 0},
+		"trial outcome not recorded": {metrics.Providers[0].TrialsOutcomeNotRecorded, 1},
+		"trial not converted":        {metrics.Providers[0].TrialsNotConverted, 0},
+	} {
+		if got[0] != got[1] {
+			t.Errorf("%s = %d, want %d", name, got[0], got[1])
+		}
+	}
+}
+
 // TestComputeSubscriptionMetricsNeverEvaluatesTheFuture keeps the daily series at or before generation time.
 func TestComputeSubscriptionMetricsNeverEvaluatesTheFuture(t *testing.T) {
 	t.Parallel()

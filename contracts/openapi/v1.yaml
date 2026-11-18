@@ -2613,8 +2613,8 @@ components:
       description: >-
         A subscription ended inside the window when its last allowed period ends after window_start and at or
         before measured_at. churned is voluntary + billing + reversed + unclassified. replaced and paused ended
-        a period but are not churn.
-      required: [churned, voluntary, billing, reversed, unclassified, replaced, paused, rate]
+        a period but are not churn, and neither is awaiting_evidence.
+      required: [churned, voluntary, billing, reversed, unclassified, replaced, paused, awaiting_evidence, rate]
       properties:
         churned:
           type: integer
@@ -2655,6 +2655,14 @@ components:
           type: integer
           format: int64
           minimum: 0
+        awaiting_evidence:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Not churn. The period ended less than 48 hours (two daily reconciliations) before measured_at, and the
+            latest stored snapshot is still an allowed, active subscription with renewal on and no cancellation
+            context, so no renewal or expiry has been stored yet.
         rate:
           type: number
           format: double
@@ -2714,7 +2722,9 @@ components:
           format: int64
           minimum: 0
           nullable: true
-          description: Ended trials followed by an allowed period whose offer phase was not recorded. Excluded from conversion_rate.
+          description: >-
+            Ended trials followed by an allowed period whose offer phase was not recorded, or whose outcome is still
+            awaiting evidence (same rule as churn awaiting_evidence). Excluded from conversion_rate.
         conversion_rate:
           type: number
           format: double

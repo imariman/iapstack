@@ -17,6 +17,10 @@ const (
 	SubscriptionMetricsBreakdownLimit = 200
 	// subscriptionDay is one UTC calendar day in the daily series.
 	subscriptionDay = 24 * time.Hour
+	// SubscriptionEvidenceGrace is how long a period end may pass without stored evidence before the
+	// subscription counts as churn. It is two of processing's 24-hour reconciliation intervals, so one
+	// missed refresh does not turn a renewal that has not been stored yet into churn.
+	SubscriptionEvidenceGrace = 2 * subscriptionDay
 
 	// churnUnclassified marks an ended subscription whose stored evidence names no reason.
 	churnUnclassified subscriptionChurnReason = iota
@@ -101,7 +105,7 @@ type SubscriptionLineage struct {
 }
 
 // SubscriptionChurn splits subscriptions that ended in the window. Churned is the sum of the four
-// reasons. Replaced and Paused ended a period but are not churn.
+// reasons. Replaced, Paused, and AwaitingEvidence ended a period but are not churn.
 type SubscriptionChurn struct {
 	Churned      int64
 	Voluntary    int64
@@ -110,6 +114,9 @@ type SubscriptionChurn struct {
 	Unclassified int64
 	Replaced     int64
 	Paused       int64
+	// AwaitingEvidence counts periods that ended within SubscriptionEvidenceGrace while the latest stored
+	// snapshot still showed an allowed, renewing subscription, so no outcome has been stored yet.
+	AwaitingEvidence int64
 }
 
 // SubscriptionProviderMetrics reports trial evidence and offer phase coverage for one provider.
@@ -347,7 +354,7 @@ func ComputeSubscriptionMetrics(
 		if ending, found := lineage.lastEnd(); found && ending.EndsAt.After(start) && !ending.EndsAt.After(measuredAt) {
 			endedAt := ending.EndsAt
 			switch {
-			case lineage.CancellationReason == core.CancellationReasonReplacement:
+			case lineage.CancellationReason == core.CancellationReasonReplacement && !lineage.reversed():
 				metrics.Churn.Replaced++
 			case otherCovers(index, func(interval SubscriptionInterval) bool {
 				return !interval.StartsAt.After(endedAt) && interval.EndsAt.After(endedAt)
@@ -355,6 +362,8 @@ func ComputeSubscriptionMetrics(
 				metrics.Churn.Replaced++
 			case lineage.Latest.State == core.LifecyclePaused:
 				metrics.Churn.Paused++
+			case lineage.awaitingEvidence(endedAt, measuredAt):
+				metrics.Churn.AwaitingEvidence++
 			default:
 				switch churnReason(lineage) {
 				case churnReversed:
@@ -380,7 +389,7 @@ func ComputeSubscriptionMetrics(
 				switch {
 				case trial.Converted:
 					providerRow.TrialsConverted++
-				case trial.UnknownAfter:
+				case trial.UnknownAfter, lineage.awaitingEvidence(trial.EndsAt, measuredAt):
 					providerRow.TrialsOutcomeNotRecorded++
 				default:
 					providerRow.TrialsNotConverted++
@@ -433,6 +442,22 @@ func ComputeSubscriptionMetrics(
 	return metrics
 }
 
+// reversed reports whether the latest snapshot is a refund or revocation that denies access.
+func (lineage SubscriptionLineage) reversed() bool {
+	return (lineage.Latest.State == core.LifecycleRefunded || lineage.Latest.State == core.LifecycleRevoked) &&
+		lineage.Latest.Access == core.AccessDenied
+}
+
+// awaitingEvidence reports whether a period that ended at endedAt has no stored outcome yet: it ended
+// within SubscriptionEvidenceGrace, and the latest stored snapshot is still an allowed, active subscription
+// with renewal enabled and no cancellation context. Any later stored expiry, hold, or cancellation is evidence.
+func (lineage SubscriptionLineage) awaitingEvidence(endedAt, measuredAt time.Time) bool {
+	return measuredAt.Sub(endedAt) < SubscriptionEvidenceGrace &&
+		lineage.Latest.State == core.LifecycleActive && lineage.Latest.Access == core.AccessAllowed &&
+		lineage.Latest.RenewalStatus == core.RenewalEnabled &&
+		lineage.CancellationReason == core.CancellationReasonNotRecorded
+}
+
 // nonEmptyIntervals returns a copy without periods whose end is not after their start.
 func nonEmptyIntervals(intervals []SubscriptionInterval) []SubscriptionInterval {
 	kept := make([]SubscriptionInterval, 0, len(intervals))
@@ -449,8 +474,7 @@ func nonEmptyIntervals(intervals []SubscriptionInterval) []SubscriptionInterval 
 // live snapshot: billing evidence comes before a disabled renewal, because a customer can turn renewal
 // off while a payment is already failing. Missing evidence stays unclassified.
 func churnReason(lineage SubscriptionLineage) subscriptionChurnReason {
-	if (lineage.Latest.State == core.LifecycleRefunded || lineage.Latest.State == core.LifecycleRevoked) &&
-		lineage.Latest.Access == core.AccessDenied {
+	if lineage.reversed() {
 		return churnReversed
 	}
 	switch lineage.CancellationReason {
