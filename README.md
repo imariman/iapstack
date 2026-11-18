@@ -139,6 +139,13 @@ secret-backed configuration, HTTPS API, and private worker through the official 
 Its free web and database allowances can support only a short supervised check; a
 persistent worker is paid, and the complete always-on topology requires paid resources.
 
+Railway's [Infrastructure as Code definition](deploy/railway/README.md) creates
+PostgreSQL and one service that runs the API and worker together by default, with
+TLS on a generated domain. A small installation normally stays within the Hobby plan's
+included usage, so it costs USD 5 per month in total. A split API/worker topology is
+one constant away. There is no Deploy on Railway button yet, because a Railway
+template must first be published from a Railway account.
+
 Coolify can deploy the complete stack from the repository-owned [Docker Compose
 definition](deploy/coolify/README.md), including generated secrets, PostgreSQL,
 migrations, HTTPS API routing, and a private worker. Self-hosted Coolify is free, but

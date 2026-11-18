@@ -8,7 +8,7 @@ checked in August 2026; always review the provider's live estimate before approv
 | Target | Account and free allowance | Complete IAPStack test | Repository definition |
 | --- | --- | --- | --- |
 | Render | Free signup; free web and 30-day PostgreSQL support a disposable compact sandbox | Default Blueprint uses free compact API/worker and signed-webhook receiver services; production can use one paid compact service or split API/worker services | [`render.yaml`](../render.yaml) |
-| Railway | New account trial: USD 5 for up to 30 days; then USD 1 monthly Free credit | Trial can cover a short test; an always-on stack will normally exceed the recurring credit | [Railway guide](railway/README.md) |
+| Railway | New account trial: USD 5 for up to 30 days; then USD 1 monthly Free credit; Hobby plan USD 5/month including USD 5 of usage | The default compact topology (PostgreSQL + one API/worker service) measured about USD 1–2/month idle, so it normally fits the Hobby plan's included usage; the Free credit is too small for an always-on stack | [Railway guide](railway/README.md) |
 | Heroku | Payment method required; no permanent free runtime | About USD 19/month for the committed two-dyno and PostgreSQL shape | [`app.json`](../app.json) |
 | DigitalOcean | Account signup is free; App Platform free tier is static-only | About USD 17/month for API, worker, and development PostgreSQL on App Platform; USD 6–12/month for the single-VM stack on a Droplet | [`.do/app.yaml`](../.do/app.yaml) and the [Droplet guide](digitalocean/droplet.md) |
 | Fly.io | Short trial only: two Machine-hours or seven days | Managed PostgreSQL starts around USD 40.80/month with default storage, before API and worker Machines | [`fly.toml`](../fly.toml) |
@@ -18,8 +18,9 @@ checked in August 2026; always review the provider's live estimate before approv
 
 For the first provider-sandbox exercise, Render is the least complicated compact
 deployment: its Blueprint creates all resources together and returns an HTTPS domain.
-Railway is attractive for a brief cost-controlled trial, but its account verification,
-credit ceiling, and account-owned template publication add variables. For the lowest
+Railway's Hobby plan is the simplest managed option at a predictable USD 5 per month
+for the default compact topology, though its account verification and
+account-owned template publication add variables. For the lowest
 long-term cost, the [single-VM deployment](vps/README.md) runs the complete stack on an
 always-free or few-euro VM behind a Cloudflare Tunnel. Like Coolify, it is economical
 only when you accept responsibility for backups, updates, and uptime.
