@@ -620,8 +620,10 @@ function renderActivityChart(activity, summary = summarizeActivity(activity)) {
 
 function niceAxisMaximum(value) {
   const magnitude = 10 ** Math.floor(Math.log10(value));
-  for (const step of [1, 2, 4, 6, 8, 10]) {
-    if (step * magnitude >= value) return step * magnitude;
+  // Prefer the tightest round ceiling whose half is still a whole number, so the midline tick stays exact.
+  for (const step of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) {
+    const candidate = Math.round(step * magnitude);
+    if (candidate >= value && (candidate % 2 === 0 || candidate === 1)) return candidate;
   }
   return 10 * magnitude;
 }
