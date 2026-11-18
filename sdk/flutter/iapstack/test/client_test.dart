@@ -845,12 +845,12 @@ void main() {
       ];
       final bothStarted = Completer<void>();
       var requestCount = 0;
-      var hang = false;
+      var failTransport = false;
       final client = IapStackClient(
         _config(),
         httpClient: MockClient((request) async {
-          if (hang) {
-            return Completer<http.Response>().future;
+          if (failTransport) {
+            throw http.ClientException('offline');
           }
           final index = requestCount++;
           if (requestCount == 2 && !bothStarted.isCompleted) {
@@ -881,7 +881,7 @@ void main() {
       // Caller A still gets its own response; only the cache write is stale.
       expect((await futureA).revision, 'revision-1');
 
-      hang = true;
+      failTransport = true;
       final afterRemoval = _fallbackOffering('bundled-after-race');
       expect(await client.getOffering(afterRemoval), same(afterRemoval));
     });
@@ -931,6 +931,106 @@ void main() {
       failTransport = true;
       expect(
           (await client.getOffering(_fallbackOffering('bundled-cached')))
+              .revision,
+          'revision-1');
+    });
+
+    test('an older 404 that lands first clears the cache for a newer call',
+        () async {
+      final pending = <Completer<http.Response>>[
+        Completer<http.Response>(),
+        Completer<http.Response>(),
+      ];
+      final bothStarted = Completer<void>();
+      var requestCount = 0;
+      var primed = false;
+      final client = IapStackClient(
+        _config(),
+        httpClient: MockClient((request) async {
+          if (!primed) {
+            primed = true;
+            return http.Response(jsonEncode(_offeringJson), 200);
+          }
+          final index = requestCount++;
+          if (requestCount == 2 && !bothStarted.isCompleted) {
+            bothStarted.complete();
+          }
+          return pending[index].future;
+        }),
+      );
+      expect(
+          (await client.getOffering(_fallbackOffering('bundled-primed')))
+              .revision,
+          'revision-1');
+
+      final fallbackA = _fallbackOffering('bundled-withdrawn-a');
+      final fallbackB = _fallbackOffering('bundled-withdrawn-b');
+      final futureA = client.getOffering(fallbackA);
+      final futureB = client.getOffering(fallbackB);
+      await bothStarted.future.timeout(const Duration(seconds: 1));
+
+      pending[0].complete(http.Response(
+        jsonEncode(<String, Object?>{
+          'error': <String, Object?>{
+            'code': 'not_found',
+            'message': 'the requested resource was not found',
+          },
+        }),
+        404,
+      ));
+      expect(await futureA, same(fallbackA));
+
+      // The newer call fails offline after the older 404 was applied, so the
+      // withdrawn revision-1 must not come back.
+      pending[1].completeError(http.ClientException('offline'));
+      expect(await futureB, same(fallbackB));
+    });
+
+    test('an older 200 is cached when a newer overlapping call fails',
+        () async {
+      final pending = <Completer<http.Response>>[
+        Completer<http.Response>(),
+        Completer<http.Response>(),
+      ];
+      final bothStarted = Completer<void>();
+      var requestCount = 0;
+      var failTransport = false;
+      final client = IapStackClient(
+        _config(),
+        httpClient: MockClient((request) async {
+          if (failTransport) {
+            throw http.ClientException('offline');
+          }
+          final index = requestCount++;
+          if (requestCount == 2 && !bothStarted.isCompleted) {
+            bothStarted.complete();
+          }
+          return pending[index].future;
+        }),
+      );
+      final futureA = client.getOffering(_fallbackOffering('bundled-first-a'));
+      final futureB = client.getOffering(_fallbackOffering('bundled-first-b'));
+      await bothStarted.future.timeout(const Duration(seconds: 1));
+
+      pending[0].complete(http.Response(jsonEncode(_offeringJson), 200));
+      expect((await futureA).revision, 'revision-1');
+
+      // The newer call produced nothing to cache, so it must not discard the
+      // older 200: both it and later offline calls fall back to revision-1.
+      pending[1].complete(http.Response(
+        jsonEncode(<String, Object?>{
+          'error': <String, Object?>{
+            'code': 'internal_error',
+            'message': 'the request could not be completed',
+          },
+        }),
+        500,
+      ));
+      await expectLater(futureB, throwsA(isA<IapStackApiException>()));
+
+      failTransport = true;
+      expect(
+          (await client.getOffering(_fallbackOffering('bundled-offline')))
               .revision,
           'revision-1');
     });
