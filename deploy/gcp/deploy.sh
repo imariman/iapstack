@@ -9,7 +9,7 @@
 #   IAPSTACK_ZONE            Zone in us-west1, us-central1, or us-east1 (default: us-central1-a)
 #   IAPSTACK_INSTANCE        Instance name (default: iapstack)
 #   IAPSTACK_MACHINE_TYPE    Machine type (default: e2-micro, the Free Tier type)
-#   IAPSTACK_REF             IAPStack Git tag, branch, or commit (default: main)
+#   IAPSTACK_REF             IAPStack Git tag, branch, or full commit SHA (default: main)
 #   CLOUDFLARE_TUNNEL_TOKEN  Tunnel connector token; prompted for when unset in a terminal
 #   IAPSTACK_DRY_RUN=1       Print the gcloud commands instead of running them
 #

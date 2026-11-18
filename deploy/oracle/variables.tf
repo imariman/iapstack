@@ -81,7 +81,7 @@ variable "ssh_source_cidr" {
 }
 
 variable "iapstack_ref" {
-  description = "IAPStack Git tag, branch, or commit to deploy."
+  description = "IAPStack Git tag, branch, or full 40-character commit SHA to deploy."
   type        = string
   default     = "main"
 

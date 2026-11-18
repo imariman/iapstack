@@ -83,7 +83,7 @@ backup before changing commits and keeps the existing `.env`. Without
 `IAPSTACK_REF`, it stays on the deployed commit:
 
 ```sh
-sudo IAPSTACK_REF=<tag-or-commit> sh /opt/iapstack/deploy/vps/install.sh
+sudo IAPSTACK_REF=<tag-or-full-commit-sha> sh /opt/iapstack/deploy/vps/install.sh
 ```
 
 Changing the stack's variables and applying again does not change the running VM.

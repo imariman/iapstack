@@ -106,7 +106,7 @@ variables:
   iapstack_ref:
     type: string
     title: IAPStack Git ref
-    description: Tag, branch, or commit to deploy.
+    description: Tag, branch, or full 40-character commit SHA to deploy.
     default: main
     required: true
 

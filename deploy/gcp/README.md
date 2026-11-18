@@ -75,7 +75,7 @@ before changing commits, keeps the existing `.env`, and stays on the deployed co
 when `IAPSTACK_REF` is omitted:
 
 ```sh
-sudo IAPSTACK_REF=<tag-or-commit> sh /opt/iapstack/deploy/vps/install.sh
+sudo IAPSTACK_REF=<tag-or-full-commit-sha> sh /opt/iapstack/deploy/vps/install.sh
 ```
 
 ## Cleanup

@@ -6,7 +6,8 @@
 #   sudo --preserve-env=CLOUDFLARE_TUNNEL_TOKEN IAPSTACK_REF=main sh install.sh
 #
 # Settings (environment variables, all optional):
-#   IAPSTACK_REF                  Git tag, branch, or commit to deploy. Without it, an
+#   IAPSTACK_REF                  Git tag, branch, or full 40-character commit SHA to
+#                                 deploy (short SHAs cannot be fetched). Without it, an
 #                                 existing checkout stays on its current commit and a
 #                                 new one uses main.
 #   IAPSTACK_REPO                 Repository URL (default: the public IAPStack repository)
@@ -143,6 +144,10 @@ checkout_source() {
   fi
 
   ref="${IAPSTACK_REF:-main}"
+  if printf '%s' "$ref" | grep -Eq '^[0-9a-f]{7,39}$' &&
+    ! git -C "$IAPSTACK_DIR" ls-remote --exit-code origin "$ref" >/dev/null 2>&1; then
+    fail "IAPSTACK_REF looks like a short commit SHA; use the full 40-character SHA"
+  fi
   log "fetching $ref"
   git -C "$IAPSTACK_DIR" fetch -q --depth 1 origin "$ref"
   target="$(git -C "$IAPSTACK_DIR" rev-parse FETCH_HEAD)"

@@ -90,7 +90,8 @@ sudo --preserve-env=CLOUDFLARE_TUNNEL_TOKEN IAPSTACK_REF=main sh install.sh
 
 Reading the token with `read -s` keeps it out of shell history and the process list.
 
-Set `IAPSTACK_REF` to a release tag or the commit you have tested. Without
+Set `IAPSTACK_REF` to a release tag or the full 40-character SHA of the commit you
+have tested. Without
 `CLOUDFLARE_TUNNEL_TOKEN`, the stack starts without the tunnel; add the token to `.env`
 later and run the script again. Re-running it is also the upgrade path: with
 `IAPSTACK_REF` it backs up the database and moves to that ref; without it, it stays on

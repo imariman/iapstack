@@ -107,7 +107,7 @@ keeps the existing `.env`, and stays on the deployed commit when `IAPSTACK_REF` 
 omitted:
 
 ```sh
-IAPSTACK_REF=<tag-or-commit> sh /opt/iapstack/deploy/vps/install.sh
+IAPSTACK_REF=<tag-or-full-commit-sha> sh /opt/iapstack/deploy/vps/install.sh
 ```
 
 ## Cleanup
