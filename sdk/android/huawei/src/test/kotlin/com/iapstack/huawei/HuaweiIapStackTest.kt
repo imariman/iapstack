@@ -95,7 +95,7 @@ class HuaweiIapStackTest {
     val platform = FakePlatform(products = listOf(monthlyProduct()))
     val huawei = HuaweiIapStack(unusedClient(), productKinds, platform)
     val product = huawei.queryProducts(setOf("premium_monthly")).products.single()
-    for (customerId in listOf(" customer-1", "customer-1 ", " customer-1 ", " ") + CONTROL_CHARACTER_IDS) {
+    for (customerId in listOf(" customer-1", "customer-1 ", " customer-1 ", " ") + INVALID_CHARACTER_IDS) {
       val error = assertFailsWith<IllegalArgumentException> {
         huawei.purchaseAndVerify(customerId, product)
       }
@@ -115,7 +115,7 @@ class HuaweiIapStackTest {
       ),
     )
     val huawei = HuaweiIapStack(unusedClient(), productKinds, platform)
-    for (customerId in listOf(" customer-1", "customer-1 ", " customer-1 ", "", " ") + CONTROL_CHARACTER_IDS) {
+    for (customerId in listOf(" customer-1", "customer-1 ", " customer-1 ", "", " ") + INVALID_CHARACTER_IDS) {
       val error = assertFailsWith<IllegalArgumentException> {
         huawei.restorePurchases(customerId)
       }
@@ -159,7 +159,7 @@ class HuaweiIapStackTest {
       signature = "sig",
       productKind = HuaweiProductKind.SUBSCRIPTION,
     )
-    for (customerId in listOf(" customer-1 ") + CONTROL_CHARACTER_IDS) {
+    for (customerId in listOf(" customer-1 ") + INVALID_CHARACTER_IDS) {
       val error = assertFailsWith<IllegalArgumentException> {
         evidence.toSubmission(externalCustomerId = customerId)
       }
@@ -170,7 +170,7 @@ class HuaweiIapStackTest {
 
   @Test
   fun evidenceAcceptsIdsTheServerAccepts() {
-    for (customerId in listOf("customer 1", "müşteri-1", "user@example.com", "顧客-1")) {
+    for (customerId in listOf("customer 1", "müşteri-1", "user@example.com", "顧客-1", "customer-\ud83d\ude00")) {
       val evidence = HuaweiPurchaseEvidence(
         purchaseData = purchaseData("premium_monthly", customerId),
         signature = "sig",
@@ -445,11 +445,12 @@ class HuaweiIapStackTest {
       "premium_lifetime" to HuaweiProductKind.NON_CONSUMABLE,
     )
     private const val CUSTOMER_ID_MESSAGE =
-      "externalCustomerId must be non-empty, without surrounding whitespace or control characters"
+      "externalCustomerId must be non-empty valid Unicode without surrounding whitespace or control characters"
 
-    // Ids the server's validateIdentifier rejects for a control character:
-    // C0 (U+0000-U+001F), DEL, or C1 (U+0080-U+009F) anywhere in the id.
-    private val CONTROL_CHARACTER_IDS = listOf(
+    // Ids the server's validateIdentifier rejects: a control character (C0
+    // U+0000-U+001F, DEL, or C1 U+0080-U+009F) anywhere in the id, or an
+    // unpaired surrogate, which UTF-8 encoding replaces.
+    private val INVALID_CHARACTER_IDS = listOf(
       "customer\u00001",
       "customer\t1",
       "customer\n1",
@@ -457,6 +458,9 @@ class HuaweiIapStackTest {
       "customer\u007f1",
       "customer\u00851",
       "customer\u009f1",
+      "customer\ud8001",
+      "customer\udc001",
+      "customer-1\ud83d",
     )
     private const val VERIFICATION_JSON =
       """{"verified_at":"2026-08-24T20:00:00Z","customer_id":"customer-internal","entitlements":[{"key":"premium","access":"allowed","reason":"purchase_valid","version":1}]}"""

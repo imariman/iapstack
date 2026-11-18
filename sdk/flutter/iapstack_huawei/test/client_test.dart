@@ -120,7 +120,7 @@ void main() {
         'customer-1 ',
         ' customer-1 ',
         ' ',
-        ..._controlCharacterIds,
+        ..._invalidCharacterIds,
       ]) {
         await expectLater(
           huawei.purchaseAndVerify(
@@ -163,7 +163,7 @@ void main() {
         ' customer-1 ',
         '',
         ' ',
-        ..._controlCharacterIds,
+        ..._invalidCharacterIds,
       ]) {
         await expectLater(
           huawei.restorePurchases(externalCustomerId: customerId),
@@ -236,7 +236,7 @@ void main() {
 
       for (final customerId in <String>[
         ' customer-1 ',
-        ..._controlCharacterIds,
+        ..._invalidCharacterIds,
       ]) {
         expect(
           () => evidence.toSubmission(externalCustomerId: customerId),
@@ -264,6 +264,7 @@ void main() {
         'müşteri-1',
         'user@example.com',
         '顧客-1',
+        'customer-\u{1f600}',
       ]) {
         final evidence = HuaweiPurchaseEvidence(
           purchaseData:
@@ -769,12 +770,13 @@ const Map<String, HuaweiProductKind> _productKinds =
   'premium_monthly': HuaweiProductKind.subscription,
 };
 
-const String _customerIdMessage =
-    'must be non-empty, without surrounding whitespace or control characters';
+const String _customerIdMessage = 'must be non-empty valid Unicode without '
+    'surrounding whitespace or control characters';
 
-/// Ids the server's `validateIdentifier` rejects for a control character:
-/// C0 (U+0000-U+001F), DEL, or C1 (U+0080-U+009F) anywhere in the id.
-const List<String> _controlCharacterIds = <String>[
+/// Ids the server's `validateIdentifier` rejects: a control character (C0
+/// U+0000-U+001F, DEL, or C1 U+0080-U+009F) anywhere in the id, or an
+/// unpaired surrogate, which UTF-8 encoding replaces with U+FFFD.
+const List<String> _invalidCharacterIds = <String>[
   'customer\u00001',
   'customer\t1',
   'customer\n1',
@@ -782,6 +784,9 @@ const List<String> _controlCharacterIds = <String>[
   'customer\u007f1',
   'customer\u00851',
   'customer\u009f1',
+  'customer\ud8001',
+  'customer\udc001',
+  'customer-1\ud83d',
 ];
 
 HuaweiProduct _product(String id, {int status = 0}) => HuaweiProduct(

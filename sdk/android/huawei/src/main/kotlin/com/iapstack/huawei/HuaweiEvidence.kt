@@ -8,23 +8,42 @@ import com.iapstack.core.PurchaseSubmission
 private val huaweiGson = Gson()
 
 /**
- * Requires one non-empty customer identity without surrounding whitespace or
- * control characters.
+ * Requires one non-empty customer identity in valid Unicode without
+ * surrounding whitespace or control characters.
  *
  * This mirrors the server's identifier rule (`validateIdentifier` in
- * `internal/core/identifiers.go`), whose control characters are C0
- * (U+0000-U+001F), DEL, and C1 (U+0080-U+009F), the same set as
- * [Char.isISOControl]. It runs before the Huawei purchase UI opens: an id the
- * server rejects would be charged as `developerPayload` and then never produce
- * an entitlement, and a padded id on restore would never match the bound
- * payload and silently skip rows.
+ * `internal/core/identifiers.go`): valid UTF-8, which for a Kotlin string
+ * means no unpaired surrogate (UTF-8 encoding would replace it), and no C0
+ * (U+0000-U+001F), DEL, or C1 (U+0080-U+009F) control character, the same set
+ * as [Char.isISOControl]. It runs before the Huawei purchase UI opens: an id
+ * the server rejects would be charged as `developerPayload` and then never
+ * produce an entitlement, and a padded id on restore would never match the
+ * bound payload and silently skip rows.
  */
 internal fun requireExternalCustomerId(value: String) {
-  if (value.isEmpty() || value.trim() != value || value.any { it.isISOControl() }) {
+  if (value.isEmpty() ||
+    value.trim() != value ||
+    value.any { it.isISOControl() } ||
+    hasUnpairedSurrogate(value)
+  ) {
     throw IllegalArgumentException(
-      "externalCustomerId must be non-empty, without surrounding whitespace or control characters",
+      "externalCustomerId must be non-empty valid Unicode without surrounding whitespace or control characters",
     )
   }
+}
+
+private fun hasUnpairedSurrogate(value: String): Boolean {
+  var index = 0
+  while (index < value.length) {
+    val char = value[index]
+    if (char.isHighSurrogate() && index + 1 < value.length && value[index + 1].isLowSurrogate()) {
+      index += 2
+      continue
+    }
+    if (char.isSurrogate()) return true
+    index++
+  }
+  return false
 }
 
 /**
