@@ -51,6 +51,10 @@ func TestManualGrantRepositoryFollowsClosureAndRevokes(t *testing.T) {
 		INSERT INTO product_entitlements (project_id, product_id, entitlement_id) VALUES ($1, 'product-consumable', $2)
 	`, fixture.projectID, fixture.entitlementID)
 	mustExec(t, database, `INSERT INTO products (id, project_id, kind) VALUES ('product-unmapped', $1, 'subscription')`, fixture.projectID)
+	mustExec(t, database, `
+		INSERT INTO applications (id, project_id, provider, environment, provider_application_id)
+		VALUES ('application-unmapped', $1, 'huawei_appgallery', 'sandbox', 'huawei-app-2')
+	`, fixture.projectID)
 	now := time.Date(2026, time.November, 18, 12, 0, 0, 0, time.UTC)
 	err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
 		_, mergeErr := repository.MergeCustomers(database.ctx, persistence.CustomerMergeWrite{
@@ -112,6 +116,10 @@ func TestManualGrantRepositoryFollowsClosureAndRevokes(t *testing.T) {
 		"unknown app":      {mutate: func(w *persistence.ManualGrantWrite) { w.ApplicationID = "application-missing" }, want: persistence.ErrNotFound},
 		"unknown product":  {mutate: func(w *persistence.ManualGrantWrite) { w.ProductID = "product-missing" }, want: persistence.ErrNotFound},
 		"unknown customer": {mutate: func(w *persistence.ManualGrantWrite) { w.CustomerID = "customer-missing" }, want: persistence.ErrNotFound},
+		"app without mapping": {
+			mutate: func(w *persistence.ManualGrantWrite) { w.ApplicationID = "application-unmapped" },
+			want:   persistence.ErrManualGrantProductNotMapped,
+		},
 	} {
 		invalid := write
 		invalid.IdempotencyKey = "grant-" + name
@@ -133,7 +141,8 @@ func TestManualGrantRepositoryFollowsClosureAndRevokes(t *testing.T) {
 	if len(entitlements) != 1 || entitlements[0].Projection.SourceKind != persistence.SourceKindManual ||
 		entitlements[0].Projection.SourceManualGrantID != created.Grant.ID ||
 		entitlements[0].SourceApplicationID != core.ApplicationID(fixture.applicationID) ||
-		entitlements[0].SourceLineage != "manual:"+created.Grant.ID || entitlements[0].Projection.Access != core.AccessAllowed {
+		entitlements[0].SourceLineage != "manual:"+created.Grant.ID || entitlements[0].Projection.Access != core.AccessAllowed ||
+		entitlements[0].Projection.AccessReason != core.AccessReasonManualGrant {
 		t.Fatalf("manual projection = %#v", entitlements)
 	}
 	assertTableCount(t, database, "purchase_observations", 0)

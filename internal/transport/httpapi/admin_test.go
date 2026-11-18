@@ -68,6 +68,20 @@ func fakeAdminAnalytics() persistence.AdminAnalytics {
 	}
 }
 
+// fakeAdminCustomerEntitlement returns one allowed manual-grant projection that starts at now.
+func fakeAdminCustomerEntitlement(now time.Time) persistence.CustomerEntitlement {
+	endsAt := now.AddDate(0, 0, 30)
+	return persistence.CustomerEntitlement{
+		Projection: persistence.EntitlementProjection{
+			ProjectID: "project-1", CustomerID: "customer-1", EntitlementID: "entitlement-1",
+			SourceKind: persistence.SourceKindManual, SourceManualGrantID: "mgr-0123456789abcdef0123456789abcdef",
+			SourceProductID: "product-1", Access: core.AccessAllowed, AccessReason: core.AccessReasonManualGrant,
+			EffectivePeriod: core.EffectivePeriod{StartsAt: now, EndsAt: &endsAt},
+		},
+		SourceApplicationID: "application-1", Key: "premium", Version: 1,
+	}
+}
+
 // fakeAdminCustomerDetail returns one customer whose access comes from an active manual grant.
 func fakeAdminCustomerDetail(projectID core.ProjectID) persistence.AdminCustomerDetail {
 	createdAt := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
@@ -93,7 +107,7 @@ func fakeAdminCustomerDetail(projectID core.ProjectID) persistence.AdminCustomer
 		Entitlements: []persistence.AdminCustomerEntitlement{{
 			EntitlementID: "entitlement-1", Key: "premium", SourceKind: persistence.SourceKindManual,
 			SourceID: grant.ID, SourceApplicationID: "application-1", SourceProductID: "product-1",
-			SourceCustomerID: "customer-1", Access: core.AccessAllowed, AccessReason: core.AccessReasonPurchaseValid,
+			SourceCustomerID: "customer-1", Access: core.AccessAllowed, AccessReason: core.AccessReasonManualGrant,
 			EffectivePeriod: core.EffectivePeriod{StartsAt: createdAt, EndsAt: &endsAt},
 			Version:         1, UpdatedAt: createdAt,
 		}},
@@ -106,7 +120,7 @@ func fakeAdminCustomerDetail(projectID core.ProjectID) persistence.AdminCustomer
 			Kind: persistence.AdminTimelineManualGrantCreated, OccurredAt: createdAt, CustomerID: "customer-1",
 			SourceID: grant.ID, SourceKind: persistence.SourceKindManual, ApplicationID: "application-1",
 			ProductID: "product-1", EntitlementID: "entitlement-1", EntitlementKey: "premium",
-			Access: core.AccessAllowed, AccessReason: core.AccessReasonPurchaseValid, EffectiveEndsAt: &endsAt,
+			Access: core.AccessAllowed, AccessReason: core.AccessReasonManualGrant, EffectiveEndsAt: &endsAt,
 			ActorKeyID: grant.ActorKeyID, Reason: grant.Reason,
 		}, {
 			Kind: persistence.AdminTimelinePurchaseObserved, OccurredAt: createdAt.Add(-time.Hour),

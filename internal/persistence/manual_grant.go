@@ -23,6 +23,11 @@ const (
 	manualGrantIDPrefix = "mgr-"
 )
 
+var (
+	// ErrManualGrantProductNotMapped means the chosen application has no store product mapped to the product.
+	ErrManualGrantProductNotMapped = errors.New("the application does not map the product to a store product")
+)
+
 // ManualGrantRepository stores operator-issued access sources and their early revocations.
 type ManualGrantRepository interface {
 	// CreateManualGrant stores one grant for the canonical customer or returns the stored replay.

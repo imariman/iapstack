@@ -57,6 +57,9 @@ const (
 	AccessReasonProviderDecision AccessReason = "provider_decision"
 	// AccessReasonUnresolved indicates that no safe access decision is available yet.
 	AccessReasonUnresolved AccessReason = "unresolved"
+	// AccessReasonManualGrant indicates access from an audited administrator grant, not a store purchase.
+	// Only a manual entitlement source may carry it; observations and imports never do.
+	AccessReasonManualGrant AccessReason = "manual_grant"
 
 	// OwnershipPurchased indicates that the current customer bought the product.
 	OwnershipPurchased Ownership = "purchased"
@@ -181,7 +184,7 @@ func (reason AccessReason) Validate() error {
 	case AccessReasonPurchaseValid, AccessReasonGracePeriod, AccessReasonPendingPayment,
 		AccessReasonCanceledAtPeriodEnd, AccessReasonExpired, AccessReasonBillingIssue,
 		AccessReasonPaused, AccessReasonRefunded, AccessReasonRevoked,
-		AccessReasonProviderDecision, AccessReasonUnresolved:
+		AccessReasonProviderDecision, AccessReasonUnresolved, AccessReasonManualGrant:
 		return nil
 	default:
 		return fmt.Errorf("unsupported access reason %q", reason)
@@ -297,6 +300,7 @@ func (observation PurchaseObservation) Validate() error {
 		validateIdentifier("provider state", observation.ProviderState),
 		observation.Access.Validate(),
 		observation.AccessReason.Validate(),
+		observationReasonIsNotManual(observation.AccessReason),
 		observation.Ownership.Validate(),
 		observation.EffectivePeriod.Validate(),
 		observation.Renewal.Validate(observation.ProductKind),
@@ -377,6 +381,14 @@ func validateReferenceSet(references []StoreReference) error {
 				return errors.New("duplicate store reference")
 			}
 		}
+	}
+	return nil
+}
+
+// observationReasonIsNotManual rejects the operator-only reason on verified store evidence.
+func observationReasonIsNotManual(reason AccessReason) error {
+	if reason == AccessReasonManualGrant {
+		return errors.New("a purchase observation cannot carry the manual grant access reason")
 	}
 	return nil
 }

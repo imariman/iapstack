@@ -2013,6 +2013,10 @@ components:
           enum: [allowed, denied, unresolved]
         reason:
           type: string
+          description: >-
+            Normalized access reason. manual_grant means an administrator's audited manual
+            grant allows access; it is not store verification. Clients should treat unknown
+            values as forward-compatible strings.
           enum:
             - purchase_valid
             - grace_period
@@ -2025,6 +2029,7 @@ components:
             - revoked
             - provider_decision
             - unresolved
+            - manual_grant
         effective_starts_at:
           type: string
           format: date-time

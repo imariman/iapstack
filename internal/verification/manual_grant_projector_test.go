@@ -175,7 +175,8 @@ func TestEntitlementChangedEventUsesManualSchema(t *testing.T) {
 		t.Fatalf("unmarshal event: %v", err)
 	}
 	if payload["schema_version"] != float64(3) || payload["source"] != "manual" ||
-		payload["source_manual_grant_id"] != manualGrantIDOne || payload["access"] != "allowed" {
+		payload["source_manual_grant_id"] != manualGrantIDOne || payload["access"] != "allowed" ||
+		payload["access_reason"] != "manual_grant" {
 		t.Fatalf("payload = %#v, want manual schema 3", payload)
 	}
 	for _, field := range []string{"source_observation_id", "source_import_id", "verified_at", "reason"} {
@@ -188,6 +189,46 @@ func TestEntitlementChangedEventUsesManualSchema(t *testing.T) {
 	}
 }
 
+// TestEntitlementChangedEventSchemaVersionsBySource verifies only manual grants use schema version 3.
+func TestEntitlementChangedEventSchemaVersionsBySource(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.November, 18, 12, 0, 0, 0, time.UTC)
+	for name, test := range map[string]struct {
+		projection persistence.EntitlementProjection
+		version    float64
+	}{
+		"store observation": {projection: projectionFor(verificationProductID, "observation-1", core.AccessAllowed), version: 1},
+		"import":            {projection: importProjection(verificationProductID, "imp-55555555555555555555555555555555", core.AccessAllowed), version: 2},
+		"manual grant": {
+			projection: manualCandidate(verificationProductID, manualGrantIDOne, core.AccessAllowed, now, now.AddDate(0, 0, 30)).Projection,
+			version:    3,
+		},
+		"revoked manual grant": {
+			projection: manualCandidate(verificationProductID, manualGrantIDOne, core.AccessDenied, now, now.AddDate(0, 0, 30)).Projection,
+			version:    3,
+		},
+	} {
+		event, err := verification.EntitlementChangedEvent(verificationApplicationID, persistence.CustomerEntitlement{
+			Projection: test.projection, SourceApplicationID: verificationApplicationID,
+			Key: verificationEntitlementKey, Version: 1,
+		}, now)
+		if err != nil {
+			t.Fatalf("%s EntitlementChangedEvent() error = %v", name, err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatalf("%s unmarshal event: %v", name, err)
+		}
+		if payload["schema_version"] != test.version {
+			t.Fatalf("%s schema_version = %v, want %v", name, payload["schema_version"], test.version)
+		}
+		if test.version != 3 && payload["access_reason"] == "manual_grant" {
+			t.Fatalf("%s payload carries the manual grant reason: %#v", name, payload)
+		}
+	}
+}
+
 // manualCandidate builds one manual grant candidate. A denied candidate is a revoked grant.
 func manualCandidate(
 	productID core.ProductID,
@@ -197,7 +238,7 @@ func manualCandidate(
 	endsAt time.Time,
 ) verification.ProjectionCandidate {
 	end := endsAt
-	reason := core.AccessReasonPurchaseValid
+	reason := core.AccessReasonManualGrant
 	if access != core.AccessAllowed {
 		reason = core.AccessReasonRevoked
 	}

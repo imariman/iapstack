@@ -242,6 +242,12 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 			Customers: []adminCustomerResponse{}, RecentTransactions: []adminTransactionResponse{},
 			Queues: []adminQueueResponse{}, RecentWebhookEvents: []adminWebhookEventResponse{},
 		}},
+		{name: "manual grant entitlement", schema: "EntitlementSnapshot", value: map[string]any{
+			"customer_id": "customer-1",
+			"entitlements": entitlementResponses([]persistence.CustomerEntitlement{
+				fakeAdminCustomerEntitlement(now),
+			}, now),
+		}},
 		{name: "customer search page", schema: "AdminCustomerSearchPage", value: adminCustomerSearchResponse{
 			Customers: []adminCustomerMatchResponse{{
 				adminCustomerResponse: adminCustomerResponse{

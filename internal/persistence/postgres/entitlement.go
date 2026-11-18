@@ -37,9 +37,8 @@ const (
 	manualLineageSQL = `'manual:' || mg.id`
 	// manualAccessSQL derives a manual grant's access: allowed until revoked, then denied.
 	manualAccessSQL = `CASE WHEN mg.revoked_at IS NULL THEN 'allowed' ELSE 'denied' END`
-	// manualReasonSQL derives a manual grant's access reason. The public v1 enum has no
-	// operator reason; the source kind, not the reason, carries the manual fact.
-	manualReasonSQL = `CASE WHEN mg.revoked_at IS NULL THEN 'purchase_valid' ELSE 'revoked' END`
+	// manualReasonSQL derives a manual grant's access reason: manual_grant until revoked, then revoked.
+	manualReasonSQL = `CASE WHEN mg.revoked_at IS NULL THEN 'manual_grant' ELSE 'revoked' END`
 	// manualEndSQL ends a revoked grant's period at its revocation when that falls inside the period.
 	manualEndSQL = `CASE
 		WHEN mg.revoked_at IS NOT NULL

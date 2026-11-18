@@ -818,6 +818,7 @@ func (projection EntitlementProjection) Validate() error {
 		projection.CustomerID.Validate(),
 		projection.EntitlementID.Validate(),
 		projection.validateSource(),
+		projection.validateManualReason(),
 		projection.SourceProductID.Validate(),
 		sourceCustomerError,
 		projection.Access.Validate(),
@@ -835,6 +836,15 @@ func (projection EntitlementProjection) Normalized() EntitlementProjection {
 		projection.SourceKind = SourceKindStoreObservation
 	}
 	return projection
+}
+
+// validateManualReason requires the manual grant reason on, and only on, an allowed manual source.
+func (projection EntitlementProjection) validateManualReason() error {
+	manualAllowed := projection.SourceKind == SourceKindManual && projection.Access == core.AccessAllowed
+	if manualAllowed != (projection.AccessReason == core.AccessReasonManualGrant) {
+		return errors.New("an allowed manual grant projection must carry exactly the manual grant reason")
+	}
+	return nil
 }
 
 // validateSource requires the source id that matches the projection source kind.
@@ -906,6 +916,7 @@ func (grant ImportGrant) Validate() error {
 		fingerprintError,
 		grant.Access.Validate(),
 		grant.AccessReason.Validate(),
+		importReasonIsNotManual(grant.AccessReason),
 		grant.EffectivePeriod.Validate(),
 		validateTime("import grant observation time", grant.ObservedAt),
 	)
@@ -944,6 +955,14 @@ func (event OutboxEvent) Validate() error {
 		validateTime("outbox occurrence time", event.OccurredAt),
 		validateTime("outbox availability time", event.AvailableAt),
 	)
+}
+
+// importReasonIsNotManual keeps imported history on the reasons it already uses.
+func importReasonIsNotManual(reason core.AccessReason) error {
+	if reason == core.AccessReasonManualGrant {
+		return errors.New("an import grant cannot carry the manual grant access reason")
+	}
+	return nil
 }
 
 // validateText enforces the database-safe shape shared by persistence metadata.

@@ -1154,6 +1154,8 @@ func (api *API) writeError(writer http.ResponseWriter, request *http.Request, er
 		status, code, message = http.StatusBadRequest, "invalid_notification", "notification payload is invalid"
 	} else if errors.Is(err, persistence.ErrNotFound) {
 		status, code, message = http.StatusNotFound, "not_found", "the requested resource was not found"
+	} else if errors.Is(err, persistence.ErrManualGrantProductNotMapped) {
+		status, code, message = http.StatusUnprocessableEntity, "product_not_mapped", persistence.ErrManualGrantProductNotMapped.Error()
 	} else if errors.Is(err, persistence.ErrEntitlementConflict) {
 		status, code, message = http.StatusConflict, "entitlement_conflict", entitlementConflictMessage
 	} else if errors.Is(err, persistence.ErrConflict) {

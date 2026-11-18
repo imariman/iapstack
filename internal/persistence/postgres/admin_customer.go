@@ -918,7 +918,7 @@ func (timeline *adminTimeline) addManualGrants(grants []persistence.ManualGrant)
 			CustomerID: grant.CustomerID, SourceID: grant.ID, SourceKind: persistence.SourceKindManual,
 			ApplicationID: grant.ApplicationID, ProductID: grant.ProductID,
 			EntitlementID: grant.EntitlementID, EntitlementKey: grant.EntitlementKey,
-			Access: core.AccessAllowed, AccessReason: core.AccessReasonPurchaseValid,
+			Access: core.AccessAllowed, AccessReason: core.AccessReasonManualGrant,
 			EffectiveEndsAt: &endsAt, ActorKeyID: grant.ActorKeyID, Reason: grant.Reason,
 		})
 		if grant.RevokedAt != nil {

@@ -97,6 +97,31 @@ ALTER TABLE customer_entitlements
     ADD CONSTRAINT customer_entitlements_source_manual_fk FOREIGN KEY (source_manual_grant_id)
         REFERENCES manual_grants (id) ON DELETE RESTRICT;
 
+-- An allowed manual projection reports manual_grant, and nothing else does. Observations and imports keep their checks.
+ALTER TABLE customer_entitlements
+    DROP CONSTRAINT customer_entitlements_reason_valid;
+
+ALTER TABLE customer_entitlements
+    ADD CONSTRAINT customer_entitlements_reason_valid CHECK (
+        access_reason IN (
+            'purchase_valid',
+            'grace_period',
+            'pending_payment',
+            'canceled_at_period_end',
+            'expired',
+            'billing_issue',
+            'paused',
+            'refunded',
+            'revoked',
+            'provider_decision',
+            'unresolved',
+            'manual_grant'
+        )
+    ),
+    ADD CONSTRAINT customer_entitlements_manual_reason_valid CHECK (
+        (access_reason = 'manual_grant') = (source_kind = 'manual' AND access_status = 'allowed')
+    );
+
 CREATE INDEX customer_entitlements_source_manual_idx
     ON customer_entitlements (source_manual_grant_id)
     WHERE source_manual_grant_id IS NOT NULL;
@@ -137,6 +162,27 @@ DROP INDEX customers_external_id_pattern_idx;
 DROP INDEX customers_project_created_idx;
 
 DROP INDEX customer_entitlements_source_manual_idx;
+
+ALTER TABLE customer_entitlements
+    DROP CONSTRAINT customer_entitlements_manual_reason_valid,
+    DROP CONSTRAINT customer_entitlements_reason_valid;
+
+ALTER TABLE customer_entitlements
+    ADD CONSTRAINT customer_entitlements_reason_valid CHECK (
+        access_reason IN (
+            'purchase_valid',
+            'grace_period',
+            'pending_payment',
+            'canceled_at_period_end',
+            'expired',
+            'billing_issue',
+            'paused',
+            'refunded',
+            'revoked',
+            'provider_decision',
+            'unresolved'
+        )
+    );
 
 ALTER TABLE customer_entitlements
     DROP CONSTRAINT customer_entitlements_source_manual_fk,

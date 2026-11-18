@@ -176,7 +176,7 @@ func (repository *transaction) lockCanonicalClosure(
 
 // requireManualGrantCatalog confirms the application and the product's entitlement grant exist in the project.
 func (repository *transaction) requireManualGrantCatalog(ctx context.Context, write persistence.ManualGrantWrite) error {
-	var applicationFound, entitlementFound, mappingFound bool
+	var applicationFound, entitlementFound, mappingFound, storeMappingFound bool
 	var productKind pgtype.Text
 	err := repository.tx.QueryRow(ctx, `
 		SELECT
@@ -186,9 +186,13 @@ func (repository *transaction) requireManualGrantCatalog(ctx context.Context, wr
 			EXISTS (
 				SELECT 1 FROM product_entitlements
 				WHERE project_id = $1 AND product_id = $3 AND entitlement_id = $4
+			),
+			EXISTS (
+				SELECT 1 FROM store_products
+				WHERE project_id = $1 AND application_id = $2 AND product_id = $3
 			)
 	`, write.ProjectID, write.ApplicationID, write.ProductID, write.EntitlementID).Scan(
-		&applicationFound, &productKind, &entitlementFound, &mappingFound,
+		&applicationFound, &productKind, &entitlementFound, &mappingFound, &storeMappingFound,
 	)
 	if err != nil {
 		return classifyError("check manual grant catalog", err)
@@ -201,6 +205,9 @@ func (repository *transaction) requireManualGrantCatalog(ctx context.Context, wr
 	}
 	if core.ProductKind(productKind.String) == core.ProductKindConsumable {
 		return validation.Wrap(errors.New("a consumable product cannot back a manual grant"))
+	}
+	if !storeMappingFound {
+		return fmt.Errorf("manual grant catalog: %w", persistence.ErrManualGrantProductNotMapped)
 	}
 	return nil
 }

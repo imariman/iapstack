@@ -19,6 +19,8 @@ const (
 	supportBonusEntitlementID = "http-entitlement-bonus"
 	// supportBonusProductID identifies the product that can back a bonus manual grant.
 	supportBonusProductID = "http-product-bonus"
+	// supportUnmappedApplicationID identifies an application that maps no store product.
+	supportUnmappedApplicationID = "http-application-unmapped"
 )
 
 // TestCustomerSupportSearchDetailAndManualGrantHTTP verifies search, the timeline, and the manual grant lifecycle.
@@ -97,6 +99,12 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 		ApplicationID: apiIntegrationApplicationID, Reason: "Support ticket 1042: store outage", DurationDays: &duration,
 	}
 	fixture.requestJSON(t, http.MethodPost, grantPath, bootstrap, bonusGrant, http.StatusForbidden, nil)
+	unmapped := bonusGrant
+	unmapped.IdempotencyKey, unmapped.ApplicationID = "grant-unmapped", supportUnmappedApplicationID
+	unmappedBody := fixture.requestJSON(t, http.MethodPost, grantPath, admin, unmapped, http.StatusUnprocessableEntity, nil)
+	if !bytes.Contains(unmappedBody, []byte(`"code":"product_not_mapped"`)) {
+		t.Fatalf("unmapped application grant = %s", unmappedBody)
+	}
 	var granted manualGrantResultResponse
 	fixture.requestJSON(t, http.MethodPost, grantPath, admin, bonusGrant, http.StatusOK, &granted)
 	if granted.Replay || granted.ProjectionsChanged != 1 || granted.WebhooksEnqueued != 1 ||
@@ -144,7 +152,8 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 		}
 		return byKey
 	}
-	if bonus := publicEntitlements()["bonus"]; bonus.Access != core.AccessAllowed || bonus.EffectiveEndsAt == nil {
+	if bonus := publicEntitlements()["bonus"]; bonus.Access != core.AccessAllowed || bonus.EffectiveEndsAt == nil ||
+		bonus.Reason != core.AccessReasonManualGrant {
 		t.Fatalf("public bonus entitlement = %#v", bonus)
 	}
 
@@ -160,8 +169,28 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 	}
 	if payload["schema_version"] != float64(3) || payload["source_manual_grant_id"] != granted.Grant.ID ||
 		payload["source_observation_id"] != nil || payload["source_import_id"] != nil ||
-		payload["entitlement_key"] != "bonus" || payload["access"] != "allowed" {
+		payload["entitlement_key"] != "bonus" || payload["access"] != "allowed" ||
+		payload["access_reason"] != "manual_grant" {
 		t.Fatalf("manual outbox payload = %s", rawPayload)
+	}
+	var storeVersions []int
+	rows, err := fixture.database.conn.Query(fixture.database.ctx, `
+		SELECT DISTINCT (payload->>'schema_version')::int FROM outbox_events
+		WHERE COALESCE(payload->>'source', '') <> 'manual'
+	`)
+	if err != nil {
+		t.Fatalf("load store outbox versions: %v", err)
+	}
+	for rows.Next() {
+		var version int
+		if err := rows.Scan(&version); err != nil {
+			t.Fatalf("scan store outbox version: %v", err)
+		}
+		storeVersions = append(storeVersions, version)
+	}
+	rows.Close()
+	if len(storeVersions) != 1 || storeVersions[0] != 1 {
+		t.Fatalf("store outbox schema versions = %v, want only 1", storeVersions)
 	}
 	if bytes.Contains(rawPayload, []byte(bonusGrant.Reason)) {
 		t.Fatalf("manual outbox payload exposed the audit reason: %s", rawPayload)
@@ -267,6 +296,14 @@ func seedCustomerSupportCatalog(t *testing.T, fixture *apiIntegrationFixture, bo
 	fixture.requestJSON(t, http.MethodPut,
 		project+"/applications/"+apiIntegrationApplicationID+"/store-products/"+apiIntegrationProviderProductID,
 		bootstrap, storeProductRequest{ProductID: apiIntegrationProductID}, http.StatusOK, nil)
+	fixture.requestJSON(t, http.MethodPut,
+		project+"/applications/"+apiIntegrationApplicationID+"/store-products/bonus_monthly",
+		bootstrap, storeProductRequest{ProductID: supportBonusProductID}, http.StatusOK, nil)
+	fixture.requestJSON(t, http.MethodPut, project+"/applications/"+supportUnmappedApplicationID, bootstrap,
+		applicationRequest{
+			Provider: core.ProviderGooglePlay, Environment: core.EnvironmentTest,
+			ProviderApplicationID: "com.example.iapstack.unmapped",
+		}, http.StatusOK, nil)
 
 	var applicationKey map[string]string
 	fixture.requestJSON(t, http.MethodPost, "/v1/admin/api-keys", bootstrap, keyRequest{

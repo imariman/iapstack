@@ -614,14 +614,26 @@ func TestManualGrantMigrationConstraintsAndDirtyDown(t *testing.T) {
 		INSERT INTO customer_entitlements (
 			project_id, customer_id, entitlement_id, source_kind, source_observation_id, source_manual_grant_id,
 			source_product_id, source_customer_id, access_status, access_reason, effective_starts_at
-		) VALUES ($1, $2, $3, 'manual', $4, 'mgr-0123456789abcdef0123456789abcdef', $5, $2, 'allowed', 'purchase_valid', now())
+		) VALUES ($1, $2, $3, 'manual', $4, 'mgr-0123456789abcdef0123456789abcdef', $5, $2, 'allowed', 'manual_grant', now())
 	`, fixture.projectID, fixture.customerID, fixture.entitlementID, purchase.observationID, fixture.productID)
 	mustExec(t, database, `
 		INSERT INTO customer_entitlements (
 			project_id, customer_id, entitlement_id, source_kind, source_manual_grant_id,
 			source_product_id, source_customer_id, access_status, access_reason, effective_starts_at
-		) VALUES ($1, $2, $3, 'manual', 'mgr-0123456789abcdef0123456789abcdef', $4, $2, 'allowed', 'purchase_valid', now())
+		) VALUES ($1, $2, $3, 'manual', 'mgr-0123456789abcdef0123456789abcdef', $4, $2, 'allowed', 'manual_grant', now())
 	`, fixture.projectID, fixture.customerID, fixture.entitlementID, fixture.productID)
+	expectConstraint(t, database, "customer_entitlements_manual_reason_valid", `
+		UPDATE customer_entitlements SET access_reason = 'purchase_valid' WHERE customer_id = $1
+	`, fixture.customerID)
+	expectConstraint(t, database, "customer_entitlements_manual_reason_valid", `
+		INSERT INTO customer_entitlements (
+			project_id, customer_id, entitlement_id, source_observation_id,
+			source_product_id, source_customer_id, access_status, access_reason, effective_starts_at
+		) VALUES ($1, 'customer-store', $2, $3, $4, 'customer-store', 'allowed', 'manual_grant', now())
+	`, fixture.projectID, fixture.entitlementID, purchase.observationID, fixture.productID)
+	expectConstraint(t, database, "purchase_observations_reason_valid", `
+		UPDATE purchase_observations SET access_reason = 'manual_grant' WHERE id = $1
+	`, purchase.observationID)
 	expectConstraint(t, database, "customer_entitlements_source_manual_fk", `
 		UPDATE customer_entitlements SET source_manual_grant_id = 'mgr-ffffffffffffffffffffffffffffffff'
 		WHERE customer_id = $1

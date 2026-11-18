@@ -67,7 +67,7 @@ func TestManualGrantIdentityAndProjectionSource(t *testing.T) {
 	projection := persistence.EntitlementProjection{
 		ProjectID: "project-1", CustomerID: "customer-1", EntitlementID: "entitlement-1",
 		SourceKind: persistence.SourceKindManual, SourceManualGrantID: "mgr-0123456789abcdef0123456789abcdef",
-		SourceProductID: "product-1", Access: core.AccessAllowed, AccessReason: core.AccessReasonPurchaseValid,
+		SourceProductID: "product-1", Access: core.AccessAllowed, AccessReason: core.AccessReasonManualGrant,
 		EffectivePeriod: core.EffectivePeriod{StartsAt: start, EndsAt: &end},
 	}
 	if err := projection.Validate(); err != nil {
@@ -82,15 +82,49 @@ func TestManualGrantIdentityAndProjectionSource(t *testing.T) {
 	storeWithGrant.SourceObservationID = "observation-1"
 	missingGrant := projection
 	missingGrant.SourceManualGrantID = ""
+	manualAsPurchase := projection
+	manualAsPurchase.AccessReason = core.AccessReasonPurchaseValid
+	storeAsManual := projection
+	storeAsManual.SourceKind, storeAsManual.SourceManualGrantID = persistence.SourceKindStoreObservation, ""
+	storeAsManual.SourceObservationID = "observation-1"
+	importAsManual := projection
+	importAsManual.SourceKind, importAsManual.SourceManualGrantID = persistence.SourceKindImport, ""
+	importAsManual.SourceImportID = "imp-0123456789abcdef0123456789abcdef"
+	revokedAsManual := projection
+	revokedAsManual.Access = core.AccessDenied
 	for name, invalid := range map[string]persistence.EntitlementProjection{
-		"manual with observation": withObservation,
-		"manual with import":      withImport,
-		"store citing a grant":    storeWithGrant,
-		"manual without grant":    missingGrant,
+		"manual with observation":          withObservation,
+		"manual with import":               withImport,
+		"store citing a grant":             storeWithGrant,
+		"manual without grant":             missingGrant,
+		"allowed manual as purchase":       manualAsPurchase,
+		"store with manual reason":         storeAsManual,
+		"import with manual reason":        importAsManual,
+		"denied manual with manual reason": revokedAsManual,
 	} {
 		if err := invalid.Validate(); err == nil {
 			t.Fatalf("%s projection validated", name)
 		}
+	}
+	revoked := projection
+	revoked.Access, revoked.AccessReason = core.AccessDenied, core.AccessReasonRevoked
+	if err := revoked.Validate(); err != nil {
+		t.Fatalf("revoked manual projection error = %v", err)
+	}
+	importGrant := persistence.ImportGrant{
+		ID: "imp-0123456789abcdef0123456789abcdef", ProjectID: "project-1", CustomerID: "customer-1",
+		ApplicationID: "application-1", ProductID: "product-1", EntitlementID: "entitlement-1",
+		Origin: persistence.ImportOriginRevenueCat, OriginStore: "app_store", Environment: core.EnvironmentSandbox,
+		Access: core.AccessAllowed, AccessReason: core.AccessReasonManualGrant,
+		EffectivePeriod: core.EffectivePeriod{StartsAt: start}, ObservedAt: start,
+		ExportSHA256: [32]byte{1}, LineageFingerprint: [32]byte{2},
+	}
+	if err := importGrant.Validate(); err == nil {
+		t.Fatal("import grant with the manual grant reason validated")
+	}
+	importGrant.AccessReason = core.AccessReasonPurchaseValid
+	if err := importGrant.Validate(); err != nil {
+		t.Fatalf("import grant keeps purchase_valid, error = %v", err)
 	}
 
 	grant := persistence.ManualGrant{
