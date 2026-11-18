@@ -108,6 +108,7 @@ Compare account requirements, free-tier limitations, and complete-stack costs in
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/imariman/iapstack)
 [![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://www.heroku.com/deploy?template=https://github.com/imariman/iapstack)
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://imariman.github.io/iapstack/deploy/iapstack-oracle-stack.zip)
 
 The default Render Blueprint provisions one free web service running the API and worker
 together, one free signed-webhook test receiver, one disposable free PostgreSQL
@@ -125,7 +126,8 @@ the live total before creating the app.
 DigitalOcean App Platform is available through the complete [App Spec deployment
 guide](deploy/digitalocean/README.md). Its official Deploy Button cannot express the
 required worker and migration job, so the full topology uses one `doctl apps create`
-command instead.
+command instead. For a lower monthly cost, a [Droplet](deploy/digitalocean/droplet.md)
+can run the single-VM stack described below.
 
 Fly.io process groups are configured in [`fly.toml`](fly.toml); the [Fly.io deployment
 guide](deploy/fly/README.md) covers app creation, private Managed Postgres attachment,
@@ -137,11 +139,96 @@ secret-backed configuration, HTTPS API, and private worker through the official 
 Its free web and database allowances can support only a short supervised check; a
 persistent worker is paid, and the complete always-on topology requires paid resources.
 
+Railway's [Infrastructure as Code definition](deploy/railway/README.md) creates
+PostgreSQL and one service that runs the API and worker together by default, with
+TLS on a generated domain. A small installation normally stays within the Hobby plan's
+included usage, so it costs USD 5 per month in total. A split API/worker topology is
+one constant away. There is no Deploy on Railway button yet, because a Railway
+template must first be published from a Railway account.
+
 Coolify can deploy the complete stack from the repository-owned [Docker Compose
 definition](deploy/coolify/README.md), including generated secrets, PostgreSQL,
 migrations, HTTPS API routing, and a private worker. Self-hosted Coolify is free, but
 you provide an always-on Linux server; Coolify Cloud and the deployment server are
 separately billed.
+
+### Lowest-cost option: a single VM
+
+The [single-VM deployment](deploy/vps/README.md) is the cheapest way to run the
+complete stack continuously. One Linux machine runs everything from
+[`deploy/vps/compose.yaml`](deploy/vps/compose.yaml):
+
+- PostgreSQL 18 on a private Docker network, never published to the host
+- a one-shot `migrate` container that applies schema changes before each start
+- one compact `server` process containing both the API and the durable worker
+- a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+  connector that publishes the API over HTTPS through outbound connections only, so
+  the VM needs no open inbound ports
+
+The worker needs a process that stays running. It ingests store notifications,
+delivers signed webhooks, and retries due reconciliation every minute. Scale-to-zero
+platforms throttle or suspend that work between requests, and the same per-minute
+queries keep scale-to-zero databases awake until their free compute allowance runs out.
+A small always-on VM fits this workload better.
+
+| Host | Typical cost | Fit |
+| --- | --- | --- |
+| Oracle Cloud Always Free, Ampere A1 | USD 0 | Up to 4 Arm OCPUs and 24 GB RAM. Upgrade the account to Pay As You Go, which still costs nothing within Always Free limits, so idle instances are not reclaimed. |
+| Google Cloud e2-micro (Free Tier, US regions) | USD 0–4/month | 1 GB RAM for low traffic; the installer tunes PostgreSQL and the worker automatically. The in-use external IPv4 address may be billed. |
+| Hetzner Cloud CAX11 / CX22 | About EUR 4–5/month | Predictable billing and the fewest provider surprises; installed from one cloud-init file. |
+| DigitalOcean Droplet `s-1vcpu-1gb` / `s-1vcpu-2gb` | USD 6 / 12 per month | Public IPv4 included; installed from the same cloud-init file as Hetzner. |
+| A server you already operate | USD 0 | The tunnel works behind NAT, but store notifications need continuous uptime. |
+
+You also need a domain whose DNS is on Cloudflare's free plan, because store
+notification URLs must be stable HTTPS endpoints. Confirm each provider's live terms
+before creating resources.
+
+There are four automated ways to install it:
+
+- **Oracle Cloud, one click.** The **Deploy to Oracle Cloud** button opens an Oracle
+  Resource Manager stack. The stack creates an outbound-only network and an Always
+  Free Ampere A1 VM, then installs IAPStack on first boot. You paste the tunnel token
+  into the form, and the bootstrap administrator key appears in the job outputs. See
+  the [Oracle guide](deploy/oracle/README.md).
+
+  [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://imariman.github.io/iapstack/deploy/iapstack-oracle-stack.zip)
+
+- **Google Cloud, Cloud Shell walkthrough.** **Open in Cloud Shell** starts a guided
+  walkthrough that runs [`deploy/gcp/deploy.sh`](deploy/gcp/deploy.sh). The script
+  creates an IAP-only SSH network and a Free Tier `e2-micro`, then waits for the
+  installation. See the [Google Cloud guide](deploy/gcp/README.md).
+
+  [![Open in Cloud Shell](https://www.gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/imariman/iapstack&cloudshell_git_branch=main&cloudshell_tutorial=deploy/gcp/tutorial.md&show=terminal)
+
+- **Hetzner Cloud or DigitalOcean, one pasted file.** Fill in the tunnel token in
+  [`deploy/vps/cloud-init.yaml`](deploy/vps/cloud-init.yaml) and paste it into
+  Hetzner's **Cloud config** or a Droplet's **initialization script** field, or pass it
+  to `hcloud` or `doctl`. It runs the installer below on first boot. See the
+  [Hetzner guide](deploy/hetzner/README.md) and the
+  [DigitalOcean Droplet guide](deploy/digitalocean/droplet.md).
+
+- **Any Ubuntu or Debian host, one command.** [`install.sh`](deploy/vps/install.sh)
+  installs Docker, checks out the requested ref into `/opt/iapstack`, generates
+  secrets, starts the stack, and schedules daily backups. Re-running it upgrades in
+  place after taking a backup.
+
+  ```sh
+  curl -fsSLO https://raw.githubusercontent.com/imariman/iapstack/main/deploy/vps/install.sh
+  less install.sh   # review before running as root
+  read -rs CLOUDFLARE_TUNNEL_TOKEN && export CLOUDFLARE_TUNNEL_TOKEN   # paste, then Enter
+  sudo --preserve-env=CLOUDFLARE_TUNNEL_TOKEN IAPSTACK_REF=main sh install.sh
+  ```
+
+In the Cloudflare tunnel, route your hostname to `http://iapstack:8080`. Then create
+a durable administrator in the dashboard with the bootstrap key, remove the bootstrap
+key from `.env`, and register the store notification URLs on your hostname. [`backup.sh`](deploy/vps/backup.sh) takes verified `pg_dump` backups and can
+upload them to an encrypted rclone remote such as Cloudflare R2. Schedule it with cron
+and rehearse a restore before you rely on it.
+
+With this option you operate the host yourself: operating-system updates, off-server
+backups, uptime monitoring, and edge rate limiting for the public notification
+endpoints. The [single-VM guide](deploy/vps/README.md) covers each step, plus upgrades
+and how to split the API and worker or move to managed PostgreSQL later.
 
 ## Design principles
 

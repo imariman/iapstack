@@ -1,0 +1,22 @@
+#cloud-config
+# Runs deploy/vps/install.sh once on first boot. Progress is written to
+# /var/log/cloud-init-output.log.
+write_files:
+  - path: /root/iapstack-install.env
+    permissions: "0600"
+    owner: root:root
+    content: |
+      IAPSTACK_REPO='${iapstack_repo}'
+      IAPSTACK_REF='${iapstack_ref}'
+      CLOUDFLARE_TUNNEL_TOKEN='${cloudflare_tunnel_token}'
+      IAPSTACK_BOOTSTRAP_ADMIN_KEY='${bootstrap_admin_key}'
+
+runcmd:
+  - - sh
+    - -c
+    - >-
+      set -eu;
+      curl -fsSL --retry 5 '${install_script_url}' -o /root/iapstack-install.sh;
+      set -a; . /root/iapstack-install.env; set +a;
+      sh /root/iapstack-install.sh;
+      rm -f /root/iapstack-install.env
