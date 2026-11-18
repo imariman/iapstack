@@ -71,11 +71,11 @@ class IAPStackModule(private val context: ReactApplicationContext) :
         )).apply { sdkName = SDK_NAME }
         val result = when (operation) {
           "purchases:verify" -> verification(client.verifyPurchase(submission(payload.toHashMap()), requestId))
-          "purchases:restore" -> mapOf("results" to client.restorePurchases(
+          "purchases:restore" -> restoreResult(client.restorePurchases(
             requireNotNull(payload.getArray("purchases")).toArrayList().map {
               @Suppress("UNCHECKED_CAST")
               submission(it as Map<String, Any?>)
-            }, requestId).results.map(::verification))
+            }, requestId))
           "entitlements" -> client.getEntitlements(customer, requestId).let {
             mapOf("customer_id" to it.customerId, "entitlements" to it.entitlements.map(::entitlement))
           }
@@ -197,7 +197,7 @@ class IAPStackModule(private val context: ReactApplicationContext) :
   }
   @ReactMethod fun restore(requestId: String?, promise: Promise) = operation(promise) { s ->
     val result = s.play?.restorePurchases(s.customer, requestId) ?: s.huawei!!.restorePurchases(s.customer, requestId = requestId)
-    Arguments.makeNativeMap(mapOf("results" to result.results.map(::verification)))
+    Arguments.makeNativeMap(restoreResult(result))
   }
   @ReactMethod fun getEntitlements(requestId: String?, promise: Promise) = operation(promise) { s ->
     val result = s.client.getEntitlements(s.customer, requestId)
@@ -261,12 +261,30 @@ class IAPStackModule(private val context: ReactApplicationContext) :
       .emit("IAPStackStoreUpdate", Arguments.makeNativeMap(event))
   }
   private fun reject(promise: Promise, error: Exception) {
-    val event = errorEvent(error)
-    val info = if (error is IapStackApiException) Arguments.makeNativeMap(mapOf(
-      "statusCode" to error.statusCode, "requestId" to error.requestId,
-      "retryable" to error.retryable, "retryAfterMs" to error.retryAfter?.inWholeMilliseconds?.toDouble(),
-    )) else Arguments.createMap()
-    promise.reject(event["code"] as String, event["message"] as String, info)
+    // A partial restore committed earlier batches before failing. Keep the
+    // underlying failure's code/message and carry the committed rows in the
+    // rejection userInfo, where JS decodes them into a typed error.
+    val effective = ((error as? IapStackIncompleteRestoreException)?.cause as? Exception) ?: error
+    val event = errorEvent(effective)
+    val fields = mutableMapOf<String, Any?>()
+    val api = effective as? IapStackApiException
+    if (api != null) {
+      fields["statusCode"] = api.statusCode
+      fields["requestId"] = api.requestId
+      fields["retryable"] = api.retryable
+      fields["retryAfterMs"] = api.retryAfter?.inWholeMilliseconds?.toDouble()
+    }
+    val partial = error as? IapStackException
+    if (partial != null && partial.committedRestoreResults.isNotEmpty()) {
+      // Same serializer as a resolved restore, with `results` renamed.
+      val progress = restoreResult(RestoreResult(
+        partial.committedRestoreResults, partial.restoreSkips, partial.restorePageLimitReached,
+      ))
+      fields["committedResults"] = progress["results"]
+      fields["skipped"] = progress["skipped"]
+      fields["pageLimitReached"] = progress["pageLimitReached"]
+    }
+    promise.reject(event["code"] as String, event["message"] as String, Arguments.makeNativeMap(fields))
   }
 }
 
@@ -289,6 +307,15 @@ private fun errorEvent(error: Exception): Map<String, Any?> {
   // Avoid forwarding provider/network exception text, which may contain purchase evidence or URLs.
   return mapOf("type" to "error", "code" to code, "message" to "IAPStack operation failed ($code)")
 }
+private fun skipCounts(skipped: RestoreSkipCounts): Map<String, Any?> = mapOf(
+  "unbound" to skipped.unbound, "differentCustomer" to skipped.differentCustomer,
+  "unknownProduct" to skipped.unknownProduct, "multipleProducts" to skipped.multipleProducts,
+)
+private fun restoreResult(result: RestoreResult): Map<String, Any?> = mapOf(
+  "results" to result.results.map(::verification),
+  "skipped" to skipCounts(result.skipped),
+  "pageLimitReached" to result.pageLimitReached,
+)
 private fun verification(result: VerificationResult): Map<String, Any?> = mapOf(
   "verified_at" to result.verifiedAt.toString(), "customer_id" to result.customerId,
   "entitlements" to result.entitlements.map(::entitlement),

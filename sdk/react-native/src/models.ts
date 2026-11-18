@@ -90,8 +90,28 @@ export interface VerificationResult {
   entitlements: Entitlement[];
 }
 
+/** Store rows a restore did not submit. Field names mirror the native
+ * `RestoreSkipCounts` in the Kotlin/Swift companions (and Flutter). */
+export interface RestoreSkipCounts {
+  /** Purchases with no store account binding. */
+  unbound: number;
+  /** Purchases bound to a different customer. These are never submitted. */
+  differentCustomer: number;
+  /** Purchases whose product is not in the local catalog. */
+  unknownProduct: number;
+  /** Play purchases that list more than one product id. */
+  multipleProducts: number;
+  /** Sum of the reason counts. */
+  total: number;
+}
+
 export interface RestoreResult {
   results: VerificationResult[];
+  /** Client-side skip counts; all zero for direct HTTP restores and older native builds. */
+  skipped: RestoreSkipCounts;
+  /** True when a Huawei restore stopped paging at its configured cap after
+   * submitting the purchases already read. False where not applicable. */
+  pageLimitReached: boolean;
 }
 
 export interface EntitlementSnapshot {
@@ -145,7 +165,54 @@ export function decodeRestoreResult(json: Record<string, unknown>): RestoreResul
     results: objectList(json, 'results').map((entry) =>
       decodeVerificationResult(entry),
     ),
+    // Older native builds send only `results`; default the client-side fields.
+    skipped: decodeRestoreSkipCounts(json.skipped),
+    pageLimitReached: optionalBool(json, 'pageLimitReached'),
   };
+}
+
+/** Decodes native skip counts. Absent (older native builds) decodes to all zero. */
+export function decodeRestoreSkipCounts(value: unknown): RestoreSkipCounts {
+  if (value === null || value === undefined) {
+    return {unbound: 0, differentCustomer: 0, unknownProduct: 0, multipleProducts: 0, total: 0};
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('skipped must be an object');
+  }
+  const json = value as Record<string, unknown>;
+  const unbound = optionalCount(json, 'unbound');
+  const differentCustomer = optionalCount(json, 'differentCustomer');
+  const unknownProduct = optionalCount(json, 'unknownProduct');
+  const multipleProducts = optionalCount(json, 'multipleProducts');
+  return {
+    unbound,
+    differentCustomer,
+    unknownProduct,
+    multipleProducts,
+    total: unbound + differentCustomer + unknownProduct + multipleProducts,
+  };
+}
+
+function optionalCount(json: Record<string, unknown>, key: string): number {
+  const value = json[key];
+  if (value === null || value === undefined) {
+    return 0;
+  }
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${key} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function optionalBool(json: Record<string, unknown>, key: string): boolean {
+  const value = json[key];
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (typeof value !== 'boolean') {
+    throw new Error(`${key} must be a boolean`);
+  }
+  return value;
 }
 
 export function decodeEntitlementSnapshot(
