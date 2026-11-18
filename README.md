@@ -108,6 +108,7 @@ Compare account requirements, free-tier limitations, and complete-stack costs in
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/imariman/iapstack)
 [![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://www.heroku.com/deploy?template=https://github.com/imariman/iapstack)
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://imariman.github.io/iapstack/deploy/iapstack-oracle-stack.zip)
 
 The default Render Blueprint provisions one free web service running the API and worker
 together, one free signed-webhook test receiver, one disposable free PostgreSQL
@@ -173,20 +174,30 @@ You also need a domain whose DNS is on Cloudflare's free plan, because store
 notification URLs must be stable HTTPS endpoints. Confirm each provider's live terms
 before creating resources.
 
-The setup on a fresh Ubuntu host with Docker installed:
+There are two automated ways to install it:
 
-```sh
-git clone https://github.com/imariman/iapstack.git /opt/iapstack
-cd /opt/iapstack/deploy/vps
-./init-env.sh                       # writes .env with generated secrets (mode 600)
-# add CLOUDFLARE_TUNNEL_TOKEN to .env and route your hostname to http://iapstack:8080
-docker compose up --build -d --wait
-curl --fail https://iapstack.example.com/readyz
-```
+- **Oracle Cloud, one click.** The **Deploy to Oracle Cloud** button opens an Oracle
+  Resource Manager stack. The stack creates an outbound-only network and an Always
+  Free Ampere A1 VM, then installs IAPStack on first boot. You paste the tunnel token
+  into the form, and the bootstrap administrator key appears in the job outputs. See
+  the [Oracle guide](deploy/oracle/README.md).
 
-Then create a durable administrator in the dashboard with the bootstrap key, remove
-the bootstrap key from `.env`, and register the store notification URLs on your
-hostname. [`backup.sh`](deploy/vps/backup.sh) takes verified `pg_dump` backups and can
+  [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://imariman.github.io/iapstack/deploy/iapstack-oracle-stack.zip)
+
+- **Any Ubuntu or Debian host, one command.** [`install.sh`](deploy/vps/install.sh)
+  installs Docker, checks out the requested ref into `/opt/iapstack`, generates
+  secrets, starts the stack, and schedules daily backups. Re-running it upgrades in
+  place after taking a backup.
+
+  ```sh
+  curl -fsSLO https://raw.githubusercontent.com/imariman/iapstack/main/deploy/vps/install.sh
+  less install.sh   # review before running as root
+  sudo IAPSTACK_REF=main CLOUDFLARE_TUNNEL_TOKEN='<token>' sh install.sh
+  ```
+
+In the Cloudflare tunnel, route your hostname to `http://iapstack:8080`. Then create
+a durable administrator in the dashboard with the bootstrap key, remove the bootstrap
+key from `.env`, and register the store notification URLs on your hostname. [`backup.sh`](deploy/vps/backup.sh) takes verified `pg_dump` backups and can
 upload them to an encrypted rclone remote such as Cloudflare R2. Schedule it with cron
 and rehearse a restore before you rely on it.
 

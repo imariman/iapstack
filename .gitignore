@@ -68,3 +68,5 @@ sdk/flutter/**/coverage/
 deploy/vps/.env
 deploy/vps/backups/
 deploy/vps/backup.log
+deploy/oracle/.terraform/
+deploy/oracle/.terraform.lock.hcl

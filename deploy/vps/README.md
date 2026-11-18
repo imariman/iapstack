@@ -42,7 +42,37 @@ notification endpoints must be stable HTTPS URLs on that domain.
 Recommended sizing: 1–2 vCPU, 2 GB RAM or more, and 20 GB disk. On Oracle, a
 2 OCPU / 12 GB `VM.Standard.A1.Flex` instance leaves room for a second environment.
 
-## Deploy
+## Automated install
+
+### Oracle Cloud: one click
+
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://imariman.github.io/iapstack/deploy/iapstack-oracle-stack.zip)
+
+The button creates the network and an Always Free Ampere A1 VM through Oracle
+Resource Manager, then runs the installer below on first boot. See the
+[Oracle guide](../oracle/README.md) for the form fields, outputs, and troubleshooting.
+
+### Any Ubuntu or Debian host: one command
+
+[`install.sh`](install.sh) performs the manual steps below on a fresh host. It
+installs Docker and base packages, adds swap on hosts with less than 2 GB RAM, checks
+out IAPStack into `/opt/iapstack`, generates `.env`, starts the stack, and installs a
+daily backup cron entry. Download and review it, then run it as root:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/imariman/iapstack/main/deploy/vps/install.sh
+less install.sh
+sudo IAPSTACK_REF=main CLOUDFLARE_TUNNEL_TOKEN='<token>' sh install.sh
+```
+
+Set `IAPSTACK_REF` to a release tag or the commit you have tested. Without
+`CLOUDFLARE_TUNNEL_TOKEN`, the stack starts without the tunnel; add the token to `.env`
+later and run the script again. Re-running it is also the upgrade path: it takes a
+backup, moves to the requested ref (or stays on the installed one), keeps the existing
+`.env`, and restarts the stack. Create the tunnel as in step 4 before running it, and
+continue with steps 6–8 afterwards.
+
+## Manual deploy
 
 1. **Create the VM.** Use Ubuntu 24.04 LTS (Arm64 on Oracle A1 and Hetzner CAX,
    x86_64 elsewhere) with SSH key authentication. Allow inbound SSH only, ideally
