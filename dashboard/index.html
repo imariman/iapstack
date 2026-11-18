@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
-    <meta name="theme-color" content="#080d17">
+    <meta name="theme-color" content="#09090b">
     <title>IAPStack Operations</title>
     <link rel="stylesheet" href="./app.css">
     <script src="./app.js" defer></script>
@@ -16,10 +16,9 @@
       <section class="auth-card" aria-labelledby="auth-title">
         <div class="auth-main">
           <div class="brand-lockup" aria-label="IAPStack">
-            <span class="brand-mark" aria-hidden="true">IS</span>
+            <span class="brand-mark" aria-hidden="true"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 21 7.5 12 12 3 7.5Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg></span>
             <span><span class="brand-word">IAPStack</span><small class="brand-caption">Control plane</small></span>
           </div>
-          <p class="eyebrow">Self-hosted purchase operations</p>
           <h1 id="auth-title">Every purchase.<br>One control plane.</h1>
           <p class="auth-copy">Connect with an admin bearer to configure store authority, inspect purchase verification, and monitor entitlement delivery.</p>
           <form id="auth-form" class="auth-form">
@@ -33,14 +32,13 @@
           </form>
         </div>
         <aside class="auth-preview" aria-label="Purchase pipeline preview">
-          <div class="preview-header"><span>Live purchase route</span><span class="live-badge"><i aria-hidden="true"></i>System online</span></div>
-          <div class="preview-terminal" aria-hidden="true">
-            <span><b>01</b><code>store.authority</code><em>connected</em></span>
-            <span><b>02</b><code>purchase.verify</code><em>ready</em></span>
-            <span><b>03</b><code>access.project</code><em>atomic</em></span>
-            <span><b>04</b><code>webhook.deliver</code><em>signed</em></span>
-          </div>
-          <div class="auth-signal" aria-hidden="true"><span>STORE</span><i></i><span>VERIFY</span><i></i><span>ACCESS</span><i></i><span>DELIVER</span></div>
+          <div class="preview-header"><span>Purchase route</span><span class="live-badge"><i aria-hidden="true"></i>Self-hosted</span></div>
+          <ol class="preview-route" aria-hidden="true">
+            <li><span class="preview-node"></span><div><strong>Store</strong><small>Provider evidence received</small></div><code>store.authority</code></li>
+            <li><span class="preview-node"></span><div><strong>Verify</strong><small>Signed and checked server-side</small></div><code>purchase.verify</code></li>
+            <li><span class="preview-node"></span><div><strong>Access</strong><small>Entitlement changed atomically</small></div><code>access.project</code></li>
+            <li><span class="preview-node"></span><div><strong>Deliver</strong><small>HMAC-signed webhook sent</small></div><code>webhook.deliver</code></li>
+          </ol>
           <p class="preview-note">Provider evidence is verified before access changes. Every state transition remains durable and observable.</p>
         </aside>
       </section>
@@ -49,7 +47,7 @@
     <div class="app-shell" id="app-shell" hidden>
       <aside class="sidebar">
         <div class="brand-lockup compact" aria-label="IAPStack">
-          <span class="brand-mark" aria-hidden="true">IS</span>
+          <span class="brand-mark" aria-hidden="true"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 21 7.5 12 12 3 7.5Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg></span>
           <span><span class="brand-word">IAPStack</span><small class="brand-caption">Control plane</small></span>
         </div>
         <div class="sidebar-heading">
@@ -65,14 +63,14 @@
 
       <main class="workspace" id="workspace" tabindex="-1">
         <header class="topbar">
-          <div>
-            <p class="eyebrow">Project operations</p>
-            <div class="project-title-row"><h1 id="project-title">—</h1><span class="control-badge"><i aria-hidden="true"></i>Live control plane</span></div>
+          <div class="topbar-title">
+            <div class="project-title-row"><h1 id="project-title">—</h1><span class="control-badge"><i aria-hidden="true"></i>Live</span></div>
           </div>
           <div class="topbar-actions">
             <span id="updated-at" class="updated-at">Not refreshed yet</span>
             <button class="secondary-button" id="open-api-keys" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 7a5 5 0 1 0-4.6 5H12l2 2h2v2h2v2h3v-3l-6.1-6.1A5 5 0 0 0 15 7Z"/></svg><span>Access keys</span></button>
             <button class="secondary-button" id="refresh" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span>Refresh</span></button>
+            <button class="primary-button" id="open-setup-primary" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>New catalog</span></button>
             <button class="text-button" id="logout" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M14 4h5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5"/></svg><span>Sign out</span></button>
           </div>
         </header>
@@ -81,8 +79,8 @@
 
         <section class="signal-line" aria-labelledby="signal-title">
           <div class="signal-heading">
-            <p class="eyebrow">Live route</p>
-            <h2 id="signal-title">Purchase signal</h2>
+            <h2 id="signal-title">Purchase route</h2>
+            <p>Store evidence to delivered entitlement</p>
           </div>
           <ol>
             <li data-signal="store"><span class="signal-node"></span><strong>Store</strong><small id="signal-store">—</small></li>
@@ -101,37 +99,38 @@
 
         <section class="commerce-panel" aria-labelledby="commerce-title">
           <header class="commerce-heading">
-            <div><p class="eyebrow">30-day commerce pulse</p><h2 id="commerce-title">Revenue &amp; activity</h2></div>
+            <div><h2 id="commerce-title">Revenue &amp; activity</h2><p>Daily verification outcomes and store-reported proceeds</p></div>
             <span class="commerce-window" id="analytics-window">UTC · 30 days</span>
           </header>
           <div class="commerce-grid">
             <div class="activity-pane">
-              <div class="activity-vitals" aria-label="Activity totals">
-                <span><small>Verified events</small><strong id="analytics-verified">0</strong></span>
-                <span><small>Active access</small><strong id="analytics-active">0</strong></span>
-                <span><small>Reversed</small><strong id="analytics-reversed">0</strong></span>
-              </div>
+              <dl class="activity-vitals" aria-label="Activity totals">
+                <div><dt>Verified</dt><dd id="analytics-verified">0</dd></div>
+                <div><dt>Denial rate</dt><dd id="analytics-denied-rate">—</dd></div>
+                <div><dt>Peak day</dt><dd id="analytics-peak">—</dd></div>
+                <div><dt>Reversed</dt><dd id="analytics-reversed">0</dd></div>
+              </dl>
               <figure class="activity-figure">
-                <svg class="activity-chart" id="activity-chart" viewBox="0 0 760 220" role="img" aria-label="No verification activity in the last 30 days"></svg>
+                <svg class="activity-chart" id="activity-chart" viewBox="0 0 760 260" role="img" aria-label="No verification activity in the last 30 days"></svg>
                 <figcaption>
                   <span class="chart-legend"><i class="allowed" aria-hidden="true"></i>Allowed</span>
                   <span class="chart-legend"><i class="denied" aria-hidden="true"></i>Denied</span>
-                  <span class="chart-legend"><i class="unresolved" aria-hidden="true"></i>Unresolved</span>
+                  <span class="chart-legend" id="legend-unresolved"><i class="unresolved" aria-hidden="true"></i>Unresolved</span>
                   <span class="chart-caption">Daily verification outcomes · UTC</span>
                 </figcaption>
               </figure>
             </div>
             <aside class="revenue-card" aria-labelledby="revenue-title" aria-live="polite">
               <div class="revenue-card-top">
-                <p class="eyebrow" id="revenue-eyebrow">Not calculated</p>
+                <h3 id="revenue-title">Recognized store revenue</h3>
                 <span class="revenue-badge" id="revenue-status">Sandbox only</span>
               </div>
               <div class="revenue-number"><strong id="revenue-value">0</strong><span id="revenue-currency">real revenue</span></div>
-              <h3 id="revenue-title">Recognized store revenue</h3>
+              <p class="revenue-state" id="revenue-eyebrow">Not calculated</p>
               <p id="revenue-note">Test purchases never create real store revenue.</p>
               <section class="sandbox-value" aria-labelledby="sandbox-value-title">
                 <div class="sandbox-value-heading">
-                  <div><small>Signed store price</small><h3 id="sandbox-value-title">Sandbox test value</h3></div>
+                  <h3 id="sandbox-value-title">Sandbox test value</h3>
                   <span id="sandbox-value-count">0 transactions</span>
                 </div>
                 <strong id="sandbox-value-amounts">0</strong>
@@ -148,7 +147,7 @@
         <div class="dashboard-grid">
           <section class="panel applications-panel" aria-labelledby="apps-title">
             <div class="panel-heading">
-              <div><p class="eyebrow">Configuration</p><h2 id="apps-title">Applications</h2></div>
+              <h2 id="apps-title">Applications</h2>
               <span class="panel-count" id="apps-count">0 records</span>
             </div>
             <div class="application-grid" id="application-grid"></div>
@@ -157,7 +156,7 @@
           <div class="side-stack">
             <section class="panel" aria-labelledby="catalog-title">
               <div class="panel-heading">
-                <div><p class="eyebrow">Catalog</p><h2 id="catalog-title">Product map</h2></div>
+                <h2 id="catalog-title">Product map</h2>
                 <span class="panel-count" id="products-count">0 records</span>
               </div>
               <div class="stack-list" id="product-list"></div>
@@ -165,7 +164,7 @@
 
             <section class="panel queue-panel" aria-labelledby="queue-title">
               <div class="panel-heading">
-                <div><p class="eyebrow">Durability</p><h2 id="queue-title">Job queues</h2></div>
+                <h2 id="queue-title">Job queues</h2>
               </div>
               <div class="queue-list" id="queue-list"></div>
             </section>
@@ -174,7 +173,7 @@
 
         <section class="panel table-panel" aria-labelledby="transactions-title">
           <div class="panel-heading">
-            <div><p class="eyebrow">Latest evidence</p><h2 id="transactions-title">Recent verifications</h2></div>
+            <h2 id="transactions-title">Recent verifications</h2>
             <span class="panel-count">Latest 50</span>
           </div>
           <div class="table-wrap">
@@ -188,7 +187,7 @@
         <div class="split-grid wide-left">
           <section class="panel table-panel" aria-labelledby="customers-title">
             <div class="panel-heading">
-              <div><p class="eyebrow">Identity</p><h2 id="customers-title">Customers</h2></div>
+              <h2 id="customers-title">Customers</h2>
               <div class="panel-actions"><span class="panel-count">First 200</span><button class="secondary-button compact-button" id="open-customer" type="button">Add customer</button></div>
             </div>
             <div class="table-wrap">
@@ -201,7 +200,7 @@
 
           <section class="panel table-panel" aria-labelledby="webhooks-title">
             <div class="panel-heading">
-              <div><p class="eyebrow">Outbound</p><h2 id="webhooks-title">Notification delivery</h2></div>
+              <h2 id="webhooks-title">Notification delivery</h2>
               <span class="panel-count">Latest 50</span>
             </div>
             <div class="table-wrap">
@@ -218,7 +217,7 @@
     <dialog id="setup-dialog" class="setup-dialog">
       <form id="setup-form" method="dialog">
         <div class="dialog-heading">
-          <div><p class="eyebrow">Quick start</p><h2>Store catalog setup</h2></div>
+          <div><h2>Store catalog setup</h2></div>
           <button class="icon-button" id="close-setup" value="cancel" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
         </div>
         <p class="dialog-copy">Create the project, application, entitlement, product, and store mapping in one guided flow. Then finish the secure connections from the application card.</p>
@@ -245,7 +244,7 @@
     <dialog id="application-dialog" class="setup-dialog commissioning-dialog">
       <div class="commissioning-shell">
         <div class="dialog-heading">
-          <div><p class="eyebrow">Application commissioning</p><h2 id="application-dialog-title">Application connections</h2><code id="application-dialog-meta"></code></div>
+          <div><h2 id="application-dialog-title">Application connections</h2><code id="application-dialog-meta"></code></div>
           <button class="icon-button" id="close-application" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
         </div>
 
@@ -258,7 +257,7 @@
 
         <div class="commissioning-sections">
           <section class="management-section" aria-labelledby="credential-title">
-            <div class="management-heading"><div><p class="eyebrow">Store authority</p><h3 id="credential-title">Provider server connection</h3></div><span id="credential-revision" class="revision-badge">New</span></div>
+            <div class="management-heading"><div><h3 id="credential-title">Provider server connection</h3></div><span id="credential-revision" class="revision-badge">New</span></div>
             <p id="credential-description">Saved provider credentials are protected and never shown again.</p>
             <form id="credential-form" class="management-form">
               <div class="form-grid" id="huawei-credential-fields" hidden>
@@ -300,7 +299,7 @@
           </section>
 
           <section class="management-section" aria-labelledby="webhook-config-title">
-            <div class="management-heading"><div><p class="eyebrow">Application delivery</p><h3 id="webhook-config-title">Backend notifications</h3></div><span id="webhook-revision" class="revision-badge">New</span></div>
+            <div class="management-heading"><div><h3 id="webhook-config-title">Backend notifications</h3></div><span id="webhook-revision" class="revision-badge">New</span></div>
             <p>Sends entitlement changes to your application backend with an HMAC-SHA-256 signature. The signing secret is never shown again.</p>
             <form id="webhook-form" class="management-form">
               <div class="form-grid">
@@ -313,7 +312,7 @@
           </section>
 
           <section class="management-section key-section" aria-labelledby="application-key-title">
-            <div class="management-heading"><div><p class="eyebrow">Client access</p><h3 id="application-key-title">Application key</h3></div></div>
+            <div class="management-heading"><div><h3 id="application-key-title">Application key</h3></div></div>
             <p>The bearer that connects the Flutter SDK to this application scope is shown only when created. New keys do not automatically revoke existing keys.</p>
             <form id="application-key-form" class="management-form">
               <p class="form-message" id="application-key-message" role="status"></p>
@@ -327,7 +326,7 @@
     <dialog id="api-key-dialog" class="setup-dialog api-key-dialog">
       <div class="api-key-shell">
         <div class="dialog-heading">
-          <div><p class="eyebrow">Credential rotation</p><h2>Access keys</h2></div>
+          <div><h2>Access keys</h2></div>
           <button class="icon-button" id="close-api-keys" type="button" aria-label="Close access keys"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
         </div>
         <div class="key-control-row">
@@ -347,7 +346,7 @@
     <dialog id="revoke-key-dialog" class="setup-dialog small-dialog revoke-key-dialog">
       <div class="key-reveal">
         <div class="dialog-heading">
-          <div><p class="eyebrow danger-eyebrow">Immediate cutoff</p><h2>Revoke access key?</h2></div>
+          <div><h2>Revoke access key?</h2><span class="dialog-flag danger">Immediate cutoff</span></div>
           <button class="icon-button" id="close-revoke-key" type="button" aria-label="Close revocation confirmation"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
         </div>
         <p class="dialog-copy">Requests using this bearer will fail immediately. This action cannot be undone.</p>
@@ -359,7 +358,7 @@
     <dialog id="customer-dialog" class="setup-dialog small-dialog">
       <form id="customer-form" method="dialog">
         <div class="dialog-heading">
-          <div><p class="eyebrow">Customer identity</p><h2>Add customer</h2></div>
+          <div><h2>Add customer</h2></div>
           <button class="icon-button" id="close-customer" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
         </div>
         <p class="dialog-copy">The internal ID is the stable record identifier. The external ID identifies the customer in Flutter SDK purchase and entitlement calls.</p>
@@ -374,7 +373,7 @@
 
     <dialog id="key-dialog" class="setup-dialog small-dialog key-dialog">
       <div class="key-reveal">
-        <div class="dialog-heading"><div><p class="eyebrow">Shown once</p><h2 id="revealed-key-title">Application key ready</h2></div><button class="icon-button" id="close-key" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        <div class="dialog-heading"><div><h2 id="revealed-key-title">Application key ready</h2><span class="dialog-flag">Shown once</span></div><button class="icon-button" id="close-key" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
         <p class="dialog-copy">This value cannot be retrieved again. Copy it to your secure secret store before closing this dialog.</p>
         <label class="revealed-key-label"><span id="revealed-key-label">Application bearer</span><textarea id="revealed-key" rows="4" readonly spellcheck="false"></textarea></label>
         <p class="form-message" id="copy-message" role="status"></p>

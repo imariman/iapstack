@@ -246,7 +246,7 @@ function renderProjectNavigation() {
 function renderEmptyWorkspace() {
   state.overview = null;
   elements.projectTitle.textContent = "Create your first project";
-  setGlobalMessage("Use the + button in the sidebar to create your first store catalog.", "info");
+  setGlobalMessage("Use New catalog to create your first store catalog.", "info");
   setText("metric-apps", "0");
   setText("metric-customers", "0");
   setText("metric-products", "0");
@@ -265,32 +265,50 @@ function renderOverview() {
   const overview = state.overview;
   const pending = sum(overview.queues, "pending");
   const failed = sum(overview.queues, "failed");
+  const verifyQueues = overview.queues.filter((queue) => queue.name !== "outbox");
+  const outbox = overview.queues.find((queue) => queue.name === "outbox") || {};
+  const failedVerifyJobs = sum(verifyQueues, "failed");
   const configured = overview.applications.filter(
     (application) => application.credential_configured && application.webhook_configured,
   ).length;
   const allowed = sum(overview.customers, "allowed_count");
-  const delivered = overview.recent_webhook_events.filter((event) => event.status === "delivered").length;
+  const delivered = Number(outbox.completed || 0);
 
   elements.projectTitle.textContent = overview.project.id;
-  setText("metric-apps", overview.project.application_count);
+  setText("metric-apps", formatNumber(overview.project.application_count));
   setText("metric-apps-note", `${configured} fully configured`);
-  setText("metric-customers", overview.project.customer_count);
+  setText("metric-customers", formatNumber(overview.project.customer_count));
   setText("metric-customers-note", countLabel(allowed, "active entitlement"));
-  setText("metric-products", overview.project.product_count);
+  setText("metric-products", formatNumber(overview.project.product_count));
   setText("metric-products-note", countLabel(sum(overview.products, "store_mapping_count"), "store mapping"));
-  setText("metric-pending", pending);
+  setText("metric-pending", formatNumber(pending));
   setText("metric-pending-note", failed ? countLabel(failed, "terminal failure") : "No terminal failures");
 
   renderAnalytics(overview.analytics);
 
-  setText("signal-store", `${configured}/${overview.applications.length} ready`);
-  setText("signal-verify", countLabel(overview.analytics.verified_count, "30-day event"));
-  setText("signal-access", `${overview.analytics.active_entitlement_count} active`);
-  setText("signal-deliver", `${delivered} delivered`);
+  const unconfigured = overview.applications.length - configured;
+  const failedDeliveries = Number(outbox.failed || 0);
+  const unresolvedAccess = Number(overview.analytics.unresolved_count || 0);
+  setText(
+    "signal-store",
+    `${configured}/${overview.applications.length} ready${unconfigured ? ` · ${unconfigured} ${unconfigured === 1 ? "needs" : "need"} setup` : ""}`,
+  );
+  setText(
+    "signal-verify",
+    `${countLabel(overview.analytics.verified_count, "verified event")}${failedVerifyJobs ? ` · ${countLabel(failedVerifyJobs, "failed job")}` : ""}`,
+  );
+  setText(
+    "signal-access",
+    `${formatNumber(overview.analytics.active_entitlement_count)} active${unresolvedAccess ? ` · ${formatNumber(unresolvedAccess)} unresolved` : ""}`,
+  );
+  setText(
+    "signal-deliver",
+    `${formatNumber(delivered)} delivered${failedDeliveries ? ` · ${formatNumber(failedDeliveries)} failed` : ""}`,
+  );
   setSignalWarning("store", configured !== overview.applications.length);
-  setSignalWarning("verify", failed > 0);
+  setSignalWarning("verify", failedVerifyJobs > 0);
   setSignalWarning("access", overview.analytics.unresolved_count > 0);
-  setSignalWarning("deliver", overview.recent_webhook_events.some((event) => event.status === "failed"));
+  setSignalWarning("deliver", failedDeliveries > 0);
 
   renderApplications(overview.applications);
   renderProducts(overview.products);
@@ -317,6 +335,8 @@ function emptyAnalytics() {
   return {
     window_days: 30,
     verified_count: 0,
+    denied_count: 0,
+    unresolved_count: 0,
     active_entitlement_count: 0,
     reversed_count: 0,
     daily_activity: dailyActivity,
@@ -340,12 +360,30 @@ function emptyAnalytics() {
 
 function renderAnalytics(analytics = emptyAnalytics()) {
   setText("analytics-window", `UTC · ${analytics.window_days || 30} days`);
-  setText("analytics-verified", formatNumber(analytics.verified_count));
-  setText("analytics-active", formatNumber(analytics.active_entitlement_count));
+  const dailyActivity = analytics.daily_activity || [];
+  const summary = summarizeActivity(dailyActivity);
+  const verifiedTotal = Number(analytics.verified_count || 0);
+  const deniedTotal = Number(analytics.denied_count || 0);
+  const peak = summary.peak;
+  setText("analytics-verified", formatNumber(verifiedTotal));
+  setText("analytics-denied-rate", verifiedTotal ? `${((deniedTotal / verifiedTotal) * 100).toFixed(1)}%` : "—");
+  setText("analytics-peak", peak ? `${formatNumber(peak)}/day` : "—");
   setText("analytics-reversed", formatNumber(analytics.reversed_count));
   renderRevenue(analytics.revenue || emptyAnalytics().revenue);
   renderSandboxValue(analytics.sandbox_value || emptyAnalytics().sandbox_value);
-  renderActivityChart(analytics.daily_activity || []);
+  renderActivityChart(dailyActivity, summary);
+}
+
+function summarizeActivity(activity) {
+  const summary = { verified: 0, denied: 0, unresolved: 0, peak: 0 };
+  for (const day of activity) {
+    const verified = Number(day.verified || 0);
+    summary.verified += verified;
+    summary.denied += Number(day.denied || 0);
+    summary.unresolved += Number(day.unresolved || 0);
+    summary.peak = Math.max(summary.peak, verified);
+  }
+  return summary;
 }
 
 function renderRevenue(revenue) {
@@ -377,7 +415,7 @@ function renderRevenue(revenue) {
     if (coveredAmounts.length === 0) {
       setText("revenue-eyebrow", "Not calculated");
       setText("revenue-value", "—");
-      setText("revenue-currency", "not calculated");
+      setText("revenue-currency", "");
       setText("revenue-note", storeReportsRequiredNote(revenue));
       return;
     }
@@ -501,27 +539,27 @@ function renderSandboxValue(sandboxValue) {
   setText("sandbox-value-note", "Provider-signed test value, not real proceeds or accounting revenue.");
 }
 
-function renderActivityChart(activity) {
+function renderActivityChart(activity, summary = summarizeActivity(activity)) {
   const chart = document.querySelector("#activity-chart");
   chart.replaceChildren();
-  const width = 760;
+  const { width, height } = chart.viewBox.baseVal;
   const top = 10;
   const right = 8;
   const bottom = 30;
   const left = 34;
   const plotWidth = width - left - right;
-  const plotHeight = 220 - top - bottom;
+  const plotHeight = height - top - bottom;
   const baseline = top + plotHeight;
-  const maximum = Math.max(1, ...activity.map((day) => Number(day.verified || 0)));
-  const verified = activity.reduce((total, day) => total + Number(day.verified || 0), 0);
-  const denied = activity.reduce((total, day) => total + Number(day.denied || 0), 0);
-  const unresolved = activity.reduce((total, day) => total + Number(day.unresolved || 0), 0);
+  const maximum = niceAxisMaximum(Math.max(1, summary.peak));
+  const { verified, denied, unresolved } = summary;
   chart.setAttribute(
     "aria-label",
     `${verified} verified events in ${activity.length || 30} days: ${denied} denied and ${unresolved} unresolved.`,
   );
+  document.querySelector("#legend-unresolved").hidden = unresolved === 0;
 
-  const ticks = [...new Set([maximum, Math.ceil(maximum / 2), 0])];
+  // Every axis maximum above 1 is even, so the middle tick is a whole number at exactly half height.
+  const ticks = maximum > 1 ? [maximum, maximum / 2, 0] : [maximum, 0];
   for (const tick of ticks) {
     const y = baseline - (tick / maximum) * plotHeight;
     chart.append(
@@ -580,6 +618,16 @@ function renderActivityChart(activity) {
   });
 }
 
+function niceAxisMaximum(value) {
+  const magnitude = 10 ** Math.floor(Math.log10(value));
+  // Prefer the tightest round ceiling whose half is still a whole number, so the midline tick stays exact.
+  for (const step of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) {
+    const candidate = Math.round(step * magnitude);
+    if (candidate >= value && (candidate % 2 === 0 || candidate === 1)) return candidate;
+  }
+  return 10 * magnitude;
+}
+
 function svgNode(tag, attributes = {}, text = "") {
   const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const [name, value] of Object.entries(attributes)) {
@@ -624,6 +672,13 @@ function formatMilliunitValue(milliunits, currency) {
 
 function formatNumber(value) {
   return new Intl.NumberFormat("en").format(Number(value || 0));
+}
+
+// formatQueueCount keeps large counts inside the fixed queue columns ("123,456" becomes "123.5K").
+function formatQueueCount(value) {
+  const number = Number(value || 0);
+  if (Math.abs(number) < 100000) return formatNumber(number);
+  return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(number);
 }
 
 function renderApplications(applications) {
@@ -1162,7 +1217,7 @@ function renderProducts(products) {
     item.append(
       identity,
       tags,
-      node("span", "mapping-count", `${product.store_mapping_count} provider mapping`),
+      node("span", "mapping-count", countLabel(product.store_mapping_count, "provider mapping")),
     );
     container.append(item);
   }
@@ -1177,7 +1232,7 @@ function renderQueues(queues) {
       node("strong", "", queueLabel(queue.name)),
       queueNumber("Pending", queue.pending),
       queueNumber("Completed", queue.completed),
-      queueNumber("Failed", queue.failed, "failed"),
+      queueNumber("Failed", queue.failed, Number(queue.failed) > 0 ? "failed" : ""),
     );
     container.append(item);
   }
@@ -1185,7 +1240,9 @@ function renderQueues(queues) {
 
 function queueNumber(label, value, extra = "") {
   const item = node("span", `queue-number ${extra}`.trim());
-  item.append(node("b", "", value), document.createTextNode(label));
+  const count = node("b", "", formatQueueCount(value));
+  count.title = formatNumber(value);
+  item.append(count, document.createTextNode(label));
   return item;
 }
 
@@ -1324,7 +1381,7 @@ function sum(items, key) {
 }
 
 function countLabel(value, singular) {
-  return `${value} ${singular}${Number(value) === 1 ? "" : "s"}`;
+  return `${formatNumber(value)} ${singular}${Number(value) === 1 ? "" : "s"}`;
 }
 
 function node(tag, className = "", text = "") {
@@ -1463,12 +1520,15 @@ elements.revokeKeyDialog.addEventListener("close", () => {
 
 elements.logout.addEventListener("click", logout);
 
-document.querySelector("#open-setup").addEventListener("click", () => {
+function openSetupDialog() {
   elements.setupMessage.textContent = "";
   syncSetupProvider();
   elements.setupDialog.showModal();
   elements.setupForm.querySelector("input[name='project_id']").focus();
-});
+}
+
+document.querySelector("#open-setup").addEventListener("click", openSetupDialog);
+document.querySelector("#open-setup-primary").addEventListener("click", openSetupDialog);
 
 document.querySelector("#close-setup").addEventListener("click", () => elements.setupDialog.close());
 document.querySelector("#cancel-setup").addEventListener("click", () => elements.setupDialog.close());
