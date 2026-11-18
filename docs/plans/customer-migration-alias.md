@@ -76,7 +76,7 @@ Two mechanisms:
 
 No chains. A customer with `merged_into_customer_id` set is not a merge target. A customer that already has aliases, or that already has other rows merged into it, is not a merge source. Attach those identities to the final canonical customer first, in separate calls. Lookup follows at most one hop and fails closed if it finds a second.
 
-Conflicting active entitlements are not combined. Active means `customer_entitlements.access_status = 'allowed'` for the same `entitlement_id` on both customers. That includes `grace_period` and `canceled_at_period_end`, because those reasons are still `allowed` in the check constraint. `denied` and `unresolved` do not conflict with `allowed` or with each other. Different entitlement ids do not conflict; the canonical owner exposes the union. There is no force flag.
+Conflicting active entitlements are not combined. Active means `customer_entitlements.access_status = 'allowed'` for the same `entitlement_id` on both customers, unless both rows have passed their effective end (`effective_ends_at` is set and not after the merge instant, which `AccessAt` reads as `denied` / `expired`). Two lapsed rows merge. One lapsed and one current row still conflict: `DefaultProjector` ranks a store observation above an import before it compares ends, so merging a lapsed stored-`allowed` store row into a customer with a current import would replace the current access. `effective_starts_at` is not part of the check, because reads grant an `allowed` row before its start. That includes `grace_period` and `canceled_at_period_end`, because those reasons are still `allowed` in the check constraint. `denied` and `unresolved` do not conflict with `allowed` or with each other. Different entitlement ids do not conflict; the canonical owner exposes the union. There is no force flag.
 
 `DefaultProjector` already prefers one allowed source inside a single customer. Do not use it as the conflict check.
 
@@ -97,7 +97,7 @@ Shared error cases:
 | Bootstrap admin (`Principal.KeyID` empty; `Authenticate` in `internal/auth/service.go` returns role admin and no key id), or dashboard cookie mutation that fails the existing origin check | 403 | `forbidden` or `csrf_rejected` |
 | Project, application, customer, or external id not in the authenticated scope, including a row that exists only in another project | 404 | `not_found` |
 | Alias or merge would retarget an id, source is already an owner, target is already merged, idempotency key reused with a different body | 409 | `conflict` |
-| Both customers have `allowed` for the same entitlement id | 409 | `entitlement_conflict` |
+| Both customers have `allowed` for the same entitlement id and at least one of the two rows has not passed its effective end | 409 | `entitlement_conflict` |
 | Existing size and media-type failures | 413, 415 | unchanged |
 | Storage or authentication capacity | 503 | `storage_unavailable` or `authentication_unavailable` |
 
@@ -184,7 +184,7 @@ Replay rules, all inside one serializable transaction:
 - A new key that asks to merge an already merged source into a different canonical customer: `409 conflict`.
 - Either id missing in the path project: `404`.
 - Target `merged_into_customer_id` is not null, or source is already an alias owner or a merge owner: `409 conflict`.
-- Dual `allowed` entitlement: `409 entitlement_conflict`, and no audit row.
+- Dual `allowed` entitlement with at least one row not past its effective end: `409 entitlement_conflict`, and no audit row. Both rows past their effective end: the merge proceeds.
 
 Lock order is lexicographic `customers.id`, using the existing `LockCustomer` statement on both rows, then on every customer already merged into the target if the projection update needs them. Re-read after the locks. Dashboard session mutations use the existing CSRF check because the route goes through `requireAdmin`.
 
@@ -311,7 +311,7 @@ The dashboard may keep using the admin read model only. It must not query Postgr
 - `merged_into_customer_id`, nullable, omitted or null when the row is canonical
 - `alias_count`, integer, count of `customer_aliases` rows for that customer id
 
-`adminCustomers` in `internal/persistence/postgres/admin.go` keeps listing up to 200 `customers` rows and keeps `entitlement_count`, `allowed_count`, and `last_observed_at` as direct aggregates of that row. Do not redefine `customer_count` on the project summary. Merged sources remain rows.
+`adminCustomers` in `internal/persistence/postgres/admin.go` keeps listing up to 200 `customers` rows and keeps `entitlement_count` and `last_observed_at` as direct aggregates of that row. `allowed_count` counts the row's entitlements that are stored `allowed`, have started, and have not passed their effective end at query time, the same definition as `analytics.active_entitlement_count`. Do not redefine `customer_count` on the project summary. Merged sources remain rows.
 
 `renderCustomers` in `dashboard/app.js` already prints `external_id` and internal `id`. When `merged_into_customer_id` is set, show that id in the existing cell. When `alias_count` is non-zero, show the count in that same cell. Leave the add-customer dialog as one internal id and one external id (`dashboard/index.html`).
 
@@ -331,7 +331,7 @@ Each slice is one engineer's change, with tests, and is safe to land only after 
 
 4. **Closure writes and projection reads.** Evidence and observation idempotency from the previous section, `CustomerEntitlementSources` over the closure, and `source_customer_id` allowed to differ from the projection owner. Tests create `merged_into_customer_id` in SQL. Cover: unchanged snapshot replay does not move `customer_id` and does not return `ErrConflict`; a new fingerprint is stored on the canonical id; an observation outside the closure still conflicts; entitlement GET for the canonical id includes the source observation's allowed access; the source projection row is unchanged. Include a verification race where the customer resolves to canonical between the provider result and `persist`, and assert the job error is not a permanent conflict.
 
-5. **Merge HTTP.** Audit row, lock order, conflict check before `DefaultProjector`, idempotency rules, outbox only when the canonical snapshot changes, no writes to the evidence tables listed above. Tests for dual `allowed` (`entitlement_conflict`, zero audit rows), allowed plus denied (one audit row, canonical projection cites the source observation, source projection untouched), idempotent replay, reused key with a different body, source that already has an alias (`409`), and application bearer (`401`). Integration test that a later Huawei or Google token lookup still builds the binding from the source `external_id` and completes.
+5. **Merge HTTP.** Audit row, lock order, conflict check before `DefaultProjector`, idempotency rules, outbox only when the canonical snapshot changes, no writes to the evidence tables listed above. Tests for dual `allowed` with at least one row not past its end (`entitlement_conflict`, zero audit rows), dual lapsed `allowed` (one audit row), allowed plus denied (one audit row, canonical projection cites the source observation, source projection untouched), idempotent replay, reused key with a different body, source that already has an alias (`409`), and application bearer (`401`). Integration test that a later Huawei or Google token lookup still builds the binding from the source `external_id` and completes.
 
 6. **Dashboard read model.** The two `AdminCustomer` fields and the cell text. No new controls. Contract test for the overview document.
 
@@ -342,7 +342,7 @@ Do not start slice 5 before slice 4. Slice 3 can follow slice 2 directly. Slice 
 - An external id that is not a `customers.external_id` can be attached to one canonical customer in the same project, and repeating the request does not create a second row.
 - Resolve reports `primary`, `alias`, or `merged`, and the canonical id, or `404` when the id is unknown in that project.
 - Entitlement GET and new purchases for an alias use the canonical `customers.id` as `customer_id` in the API response.
-- Merge of two customers with `allowed` on the same entitlement id writes nothing and returns `409 entitlement_conflict`.
+- Merge of two customers with `allowed` on the same entitlement id, where at least one row has not passed its effective end, writes nothing and returns `409 entitlement_conflict`. Two lapsed `allowed` rows merge.
 - Merge of a non-conflicting pair writes one `customer_merges` row, sets `merged_into_customer_id`, leaves source and canonical `external_id` values in place, and does not change `customer_id` or ciphertext on `purchase_evidence`, `purchase_observations`, `inbox_messages`, or existing `outbox_events`.
 - After that merge, entitlement GET for either external id returns the canonical id and one projection. The cited observation id is one that already existed or a newer observation appended under the closure rule.
 - A repeated store snapshot after the merge is idempotent and does not fail the worker with permanent `ErrConflict`.

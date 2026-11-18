@@ -728,6 +728,88 @@ func TestVerifyDeniesPreviousAppleEntitlementAfterUpgrade(t *testing.T) {
 	}
 }
 
+// TestVerifySkipsSupersededObservationOfUnmappedProduct keeps an upgrade from an unmapped product verifiable.
+// A legacy product sold before IAPStack, or dropped from the catalog, grants nothing, so the adapter's expired
+// observation for it is skipped rather than failing the paid upgrade, its notification, and every replay.
+// A primary observation of an unmapped product, and a superseded observation of a mapped one, are unchanged.
+func TestVerifySkipsSupersededObservationOfUnmappedProduct(t *testing.T) {
+	t.Parallel()
+
+	fixture := newVerificationFixture(t)
+	fixture.application.Store.Provider = core.ProviderAppleAppStore
+	fixture.application.Store.ID = "com.example.iapstack"
+	now := fixture.result.VerifiedAt
+	upgradeAt := now.Add(-time.Minute)
+	annualEnd := now.Add(365 * 24 * time.Hour)
+	premium := core.Entitlement{ID: "entitlement-premium", ProjectID: verificationProjectID, Key: "premium"}
+	basic := core.Entitlement{ID: "entitlement-basic", ProjectID: verificationProjectID, Key: "basic"}
+	annualActive := appleSubscriptionObservation(
+		fixture.application, "observation-annual-active", "annual",
+		core.LifecycleActive, core.AccessAllowed, core.AccessReasonPurchaseValid, "active",
+		upgradeAt, now, &annualEnd,
+	)
+	legacyClosed := appleSubscriptionObservation(
+		fixture.application, "observation-legacy-upgraded", "legacy",
+		core.LifecycleExpired, core.AccessDenied, core.AccessReasonExpired, "upgraded",
+		now.Add(-24*time.Hour), now, &upgradeAt,
+	)
+	upgrade := fixture.result
+	upgrade.Observations = []core.PurchaseObservation{annualActive, legacyClosed}
+	upgrade.NamedProducts = []core.ProviderProductID{"annual", "legacy"}
+	upgrade.SupersededObservations = []core.ObservationID{legacyClosed.ID}
+	fixture.command.ClaimedProducts = []core.ProviderProductID{"annual"}
+
+	newService := func(
+		catalog map[core.ProviderProductID]persistence.CatalogProduct,
+		result stores.VerificationResult,
+	) (*verification.Service, *fakeStore) {
+		store := newFakeStore(fixture)
+		store.repository.application = fixture.application
+		store.repository.catalog = catalog
+		adapter := &fakeAdapter{provider: core.ProviderAppleAppStore, result: result}
+		return newVerificationService(t, store, adapter, &fakeProtector{}, fixture.clock), store
+	}
+
+	service, store := newService(map[core.ProviderProductID]persistence.CatalogProduct{
+		"annual": appleSubscriptionCatalog("product-annual", "annual", premium),
+	}, upgrade)
+	verified, err := service.Verify(context.Background(), fixture.command)
+	if err != nil {
+		t.Fatalf("Verify(unmapped superseded product) error = %v", err)
+	}
+	if len(verified.Observations) != 1 || verified.Observations[0].ID != annualActive.ID {
+		t.Fatalf("Verify() observations = %#v, want only the mapped current product", verified.Observations)
+	}
+	if _, stored := store.repository.observations[legacyClosed.ID]; stored || len(store.repository.observations) != 1 {
+		t.Fatalf("stored observations = %#v, want the unmapped superseded observation skipped", store.repository.observations)
+	}
+	if len(verified.Entitlements) != 1 || verified.Entitlements[0].Key != "premium" ||
+		verified.Entitlements[0].Projection.Access != core.AccessAllowed {
+		t.Fatalf("entitlements = %#v, want allowed premium", verified.Entitlements)
+	}
+
+	service, store = newService(map[core.ProviderProductID]persistence.CatalogProduct{
+		"annual": appleSubscriptionCatalog("product-annual", "annual", premium),
+		"legacy": appleSubscriptionCatalog("product-legacy", "legacy", basic),
+	}, upgrade)
+	if _, err := service.Verify(context.Background(), fixture.command); err != nil {
+		t.Fatalf("Verify(mapped superseded product) error = %v", err)
+	}
+	if _, stored := store.repository.observations[legacyClosed.ID]; !stored {
+		t.Fatal("mapped superseded observation was not stored")
+	}
+
+	unmarked := upgrade
+	unmarked.SupersededObservations = nil
+	service, store = newService(map[core.ProviderProductID]persistence.CatalogProduct{
+		"annual": appleSubscriptionCatalog("product-annual", "annual", premium),
+	}, unmarked)
+	if _, err := service.Verify(context.Background(), fixture.command); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("Verify(unmapped primary observation) error = %v, want not found", err)
+	}
+	assertNoDurableWrites(t, store.repository)
+}
+
 // appleSubscriptionCatalog maps one App Store product onto one entitlement key.
 func appleSubscriptionCatalog(
 	productID core.ProductID,

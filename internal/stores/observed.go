@@ -14,6 +14,16 @@ type ObservedAdapter struct {
 	metrics *metrics.Registry
 }
 
+// ProviderCallObserver receives the outcome of one optional provider call by its bounded operation name.
+type ProviderCallObserver func(operation string, err error)
+
+// ProviderCallReporter is an adapter that makes optional provider calls whose failure does not fail its result,
+// such as an enrichment lookup. Without a report, such a failure would leave no trace in metrics.
+type ProviderCallReporter interface {
+	// ReportProviderCalls registers the observer for optional provider call outcomes before the adapter is used.
+	ReportProviderCalls(ProviderCallObserver)
+}
+
 // ObservedAdapter forwards every optional adapter contract that the services discover by type assertion.
 var (
 	_ PostCommitter          = (*ObservedAdapter)(nil)
@@ -24,6 +34,12 @@ var (
 func NewObservedAdapter(adapter Adapter, registry *metrics.Registry) (*ObservedAdapter, error) {
 	if adapter == nil || registry == nil {
 		return nil, errors.New("observed adapter and metrics registry are required")
+	}
+	if reporter, ok := adapter.(ProviderCallReporter); ok {
+		provider := string(adapter.Provider())
+		reporter.ReportProviderCalls(func(operation string, err error) {
+			registry.ObserveProvider(provider, operation, providerOutcome(err))
+		})
 	}
 	return &ObservedAdapter{adapter: adapter, metrics: registry}, nil
 }

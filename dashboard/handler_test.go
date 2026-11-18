@@ -285,6 +285,91 @@ func TestDashboardRevenueCardDistinguishesImportedReports(t *testing.T) {
 	}
 }
 
+// TestDashboardRendersHonestSubscriptionMetrics keeps the subscription panel to counts, definitions, and stated gaps.
+func TestDashboardRendersHonestSubscriptionMetrics(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	styles, err := fs.ReadFile(assets, "app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	for _, required := range []string{
+		`aria-labelledby="subscriptions-title"`, `id="subscription-chart"`, `id="subscription-environment"`,
+		`data-window-days="30" aria-pressed="true"`, `id="subscription-rows"`, `id="subscription-trials"`,
+		"Churn rate is churned subscriptions divided by subscriptions active at any time in the window",
+		"Plan changes and pauses are not churn", "No money figure is shown here",
+	} {
+		if !strings.Contains(string(document), required) {
+			t.Fatalf("dashboard subscription panel does not contain %q", required)
+		}
+	}
+	source := string(script)
+	start := strings.Index(source, "function subscriptionEnvironments")
+	end := strings.Index(source, "function formatPercent")
+	if start < 0 || end < start {
+		t.Fatal("subscription renderers are missing")
+	}
+	renderers := source[start:end]
+	for _, required := range []string{
+		"loadSubscriptionMetrics", "renderSubscriptionChart", "renderSubscriptionTrials", "Not available for ",
+		`trial.availability !== "available"`, "Reason not recorded", "Not counted as churn", "trial state not recorded",
+		"ended trials converted", "carry a recorded offer phase",
+	} {
+		if !strings.Contains(renderers, required) {
+			t.Fatalf("subscription renderers do not contain %q", required)
+		}
+	}
+	panelStart := strings.Index(string(document), `class="panel subscription-panel"`)
+	panelEnd := strings.Index(string(document), `<div class="dashboard-grid">`)
+	panel := string(document)[panelStart:panelEnd] + renderers
+	for _, forbidden := range []string{
+		"MRR", "ARR", "estimated", "projected", "forecast", "revenue", "Revenue", "price", "currency", "formatRevenue",
+		"formatMilliunitValue",
+	} {
+		if strings.Contains(panel, forbidden) {
+			t.Fatalf("subscription panel contains %q", forbidden)
+		}
+	}
+	for _, required := range []string{".subscription-panel", ".subscription-vitals", ".segmented-control button[aria-pressed=\"true\"]", ".subscription-side"} {
+		if !strings.Contains(string(styles), required) {
+			t.Fatalf("dashboard styles do not contain %q", required)
+		}
+	}
+}
+
+// TestHandlerRedirectsAndDelegates verifies the canonical entrypoint and API fallthrough.
+func TestHandlerRedirectsAndDelegates(t *testing.T) {
+	t.Parallel()
+
+	fallback := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusTeapot)
+	})
+	handler, err := New(fallback)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	redirect := httptest.NewRecorder()
+	handler.ServeHTTP(redirect, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
+	if redirect.Code != http.StatusPermanentRedirect || redirect.Header().Get("Location") != "/dashboard/" {
+		t.Fatalf("dashboard redirect = (%d, %q), want 308 and canonical path", redirect.Code, redirect.Header().Get("Location"))
+	}
+
+	delegated := httptest.NewRecorder()
+	handler.ServeHTTP(delegated, httptest.NewRequest(http.MethodGet, "/v1/admin/projects", nil))
+	if delegated.Code != http.StatusTeapot {
+		t.Fatalf("delegated status = %d, want %d", delegated.Code, http.StatusTeapot)
+	}
+}
+
 // TestDashboardCustomerSupportWorkflow keeps customer search, detail, and audited manual grants wired.
 func TestDashboardCustomerSupportWorkflow(t *testing.T) {
 	t.Parallel()
@@ -334,30 +419,5 @@ func TestDashboardCustomerSupportWorkflow(t *testing.T) {
 		if !strings.Contains(string(styles), required) {
 			t.Fatalf("dashboard customer support styles do not contain %q", required)
 		}
-	}
-}
-
-// TestHandlerRedirectsAndDelegates verifies the canonical entrypoint and API fallthrough.
-func TestHandlerRedirectsAndDelegates(t *testing.T) {
-	t.Parallel()
-
-	fallback := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusTeapot)
-	})
-	handler, err := New(fallback)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	redirect := httptest.NewRecorder()
-	handler.ServeHTTP(redirect, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
-	if redirect.Code != http.StatusPermanentRedirect || redirect.Header().Get("Location") != "/dashboard/" {
-		t.Fatalf("dashboard redirect = (%d, %q), want 308 and canonical path", redirect.Code, redirect.Header().Get("Location"))
-	}
-
-	delegated := httptest.NewRecorder()
-	handler.ServeHTTP(delegated, httptest.NewRequest(http.MethodGet, "/v1/admin/projects", nil))
-	if delegated.Code != http.StatusTeapot {
-		t.Fatalf("delegated status = %d, want %d", delegated.Code, http.StatusTeapot)
 	}
 }

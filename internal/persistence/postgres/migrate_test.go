@@ -77,6 +77,7 @@ func TestMigrationLifecycle(t *testing.T) {
 		"financial_report_imports",
 		"import_grants",
 		"reconciliation_schedule_retries",
+		"purchase_observations_subscription_metrics_idx",
 		"manual_grants",
 	}
 	if got, want := len(relations), int(postgres.LatestVersion); got != want {
@@ -261,6 +262,55 @@ func TestPurchasePriceMigrationConstraints(t *testing.T) {
 		UPDATE purchase_observations
 		SET price_milliunits = 4990, price_currency = 'usd'
 		WHERE id = $1
+	`, purchase.observationID)
+}
+
+// TestSubscriptionOfferPhaseMigrationConstraints verifies the offer phase vocabulary and subscription scope.
+func TestSubscriptionOfferPhaseMigrationConstraints(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	purchase := seedPurchase(t, database)
+
+	expectConstraint(t, database, "purchase_observations_offer_phase_kind_valid", `
+		UPDATE purchase_observations SET offer_phase = 'free_trial' WHERE id = $1
+	`, purchase.observationID)
+
+	catalog := purchase.catalog
+	mustExec(t, database, `INSERT INTO products (id, project_id, kind) VALUES ('product-sub', $1, 'subscription')`, catalog.projectID)
+	mustExec(t, database, `
+		INSERT INTO store_products (project_id, application_id, product_id, provider_product_id)
+		VALUES ($1, $2, 'product-sub', 'provider-sub')
+	`, catalog.projectID, catalog.applicationID)
+	insertSubscription := `
+		INSERT INTO purchase_observations (
+			id, evidence_id, project_id, application_id, customer_id, product_id,
+			provider_product_id, product_kind, lifecycle_state, provider_state,
+			access_status, access_reason, ownership, quantity, occurred_at, observed_at,
+			effective_starts_at, effective_ends_at, renewal_mode, renewal_status, offer_phase
+		) VALUES (
+			$1, $2, $3, $4, $5, 'product-sub',
+			'provider-sub', 'subscription', 'active', 'active',
+			'allowed', 'purchase_valid', 'purchased', 1, now() - interval '1 hour', now(),
+			now() - interval '1 hour', now() + interval '1 day', 'auto', 'enabled', $6
+		)
+	`
+	mustExec(t, database, insertSubscription, "observation-trial", purchase.evidenceID, catalog.projectID,
+		catalog.applicationID, catalog.customerID, "free_trial")
+	expectConstraint(t, database, "purchase_observations_offer_phase_valid", insertSubscription,
+		"observation-intro", purchase.evidenceID, catalog.projectID, catalog.applicationID, catalog.customerID, "intro")
+	mustExec(t, database, `
+		UPDATE purchase_observations
+		SET transaction_reason = 'renewal', lineage_started_at = now() - interval '1 year',
+			cancellation_reason = 'replacement'
+		WHERE id = 'observation-trial'
+	`)
+	expectConstraint(t, database, "purchase_observations_transaction_reason_valid", `
+		UPDATE purchase_observations SET transaction_reason = 'upgrade' WHERE id = 'observation-trial'
+	`)
+	expectConstraint(t, database, "purchase_observations_cancellation_reason_valid", `
+		UPDATE purchase_observations SET cancellation_reason = 'refund' WHERE id = 'observation-trial'
+	`)
+	expectConstraint(t, database, "purchase_observations_offer_phase_kind_valid", `
+		UPDATE purchase_observations SET lineage_started_at = now() WHERE id = $1
 	`, purchase.observationID)
 }
 

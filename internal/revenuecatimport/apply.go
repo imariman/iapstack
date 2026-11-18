@@ -88,6 +88,7 @@ func Apply(ctx context.Context, store Transactor, input Input, webhooks bool) (R
 		result.Report.DryRun = false
 		result.Report.Counts.CustomersCreated = 0
 		result.Report.Counts.GrantsUpserted = 0
+		result.Report.Counts.IgnoredEarlierRefunds = 0
 		result.Report.Failures = append(result.Report.Failures, Failure{Code: CodeBatchConflict})
 		return result.Report, ErrBatchConflict
 	}
@@ -247,6 +248,7 @@ func finalizeReport(result Result, dryRun bool) Report {
 	report.Counts.CustomersReused = 0
 	report.Counts.GrantsUpserted = 0
 	report.Counts.GrantsUnchanged = 0
+	report.Counts.IgnoredEarlierRefunds = 0
 	report.Counts.ProjectionsChanged = 0
 	report.Counts.WebhooksEnqueued = 0
 	report.Counts.AliasRefused = 0
@@ -277,6 +279,7 @@ func finalizeReport(result Result, dryRun bool) Report {
 		}
 		report.Counts.GrantsUpserted += subscriber.GrantsUpserted
 		report.Counts.GrantsUnchanged += subscriber.GrantsUnchanged
+		report.Counts.IgnoredEarlierRefunds += subscriber.IgnoredEarlierRefunds
 		report.Counts.ProjectionsChanged += subscriber.ProjectionsChanged
 		report.Counts.WebhooksEnqueued += subscriber.WebhooksEnqueued
 	}
