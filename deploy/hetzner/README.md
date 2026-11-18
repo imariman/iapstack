@@ -98,8 +98,9 @@ run `sh /opt/iapstack/deploy/vps/install.sh` to start the tunnel.
 
 ## Upgrades
 
-Re-run the installer with the target ref. It takes a backup first, keeps the existing
-`.env`, and stays on the installed ref when `IAPSTACK_REF` is omitted:
+Re-run the installer with the target ref. It takes a backup before changing commits,
+keeps the existing `.env`, and stays on the deployed commit when `IAPSTACK_REF` is
+omitted:
 
 ```sh
 IAPSTACK_REF=<tag-or-commit> sh /opt/iapstack/deploy/vps/install.sh

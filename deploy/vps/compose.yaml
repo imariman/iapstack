@@ -3,7 +3,8 @@
 # on a public interface; the API port is bound to loopback for local checks only.
 #
 # Create the environment file first:  ./init-env.sh
-# Then start the stack:               docker compose up --build -d --wait
+# Set CLOUDFLARE_TUNNEL_TOKEN and COMPOSE_PROFILES=tunnel in .env, then start the
+# stack:                              docker compose up --build -d --wait
 
 # Only the migrate service builds the image; the server reuses the same local tag so
 # the build runs once.
@@ -89,10 +90,12 @@ services:
     restart: unless-stopped
 
   # Remotely managed tunnel: route the public hostname to http://iapstack:8080 in the
-  # Cloudflare dashboard. The connector only makes outbound connections.
-  # The token is optional at interpolation time so the other services can be managed
-  # before a tunnel exists; start this service only after setting it.
+  # Cloudflare dashboard. The connector only makes outbound connections. It runs only
+  # with the "tunnel" profile (COMPOSE_PROFILES=tunnel in .env, which install.sh sets
+  # once CLOUDFLARE_TUNNEL_TOKEN is present), so a stack without a token never
+  # crash-loops the connector.
   cloudflared:
+    profiles: ["tunnel"]
     image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
     command: ["tunnel", "--no-autoupdate", "run"]
     environment:

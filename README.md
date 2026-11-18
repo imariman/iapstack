@@ -215,7 +215,8 @@ There are four automated ways to install it:
   ```sh
   curl -fsSLO https://raw.githubusercontent.com/imariman/iapstack/main/deploy/vps/install.sh
   less install.sh   # review before running as root
-  sudo IAPSTACK_REF=main CLOUDFLARE_TUNNEL_TOKEN='<token>' sh install.sh
+  read -rs CLOUDFLARE_TUNNEL_TOKEN && export CLOUDFLARE_TUNNEL_TOKEN   # paste, then Enter
+  sudo --preserve-env=CLOUDFLARE_TUNNEL_TOKEN IAPSTACK_REF=main sh install.sh
   ```
 
 In the Cloudflare tunnel, route your hostname to `http://iapstack:8080`. Then create

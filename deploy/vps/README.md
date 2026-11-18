@@ -84,14 +84,17 @@ daily backup cron entry. Download and review it, then run it as root:
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/imariman/iapstack/main/deploy/vps/install.sh
 less install.sh
-sudo IAPSTACK_REF=main CLOUDFLARE_TUNNEL_TOKEN='<token>' sh install.sh
+read -rs CLOUDFLARE_TUNNEL_TOKEN && export CLOUDFLARE_TUNNEL_TOKEN   # paste, then Enter
+sudo --preserve-env=CLOUDFLARE_TUNNEL_TOKEN IAPSTACK_REF=main sh install.sh
 ```
+
+Reading the token with `read -s` keeps it out of shell history and the process list.
 
 Set `IAPSTACK_REF` to a release tag or the commit you have tested. Without
 `CLOUDFLARE_TUNNEL_TOKEN`, the stack starts without the tunnel; add the token to `.env`
-later and run the script again. Re-running it is also the upgrade path: it takes a
-backup, moves to the requested ref (or stays on the installed one), keeps the existing
-`.env`, and restarts the stack. Create the tunnel as in step 4 before running it, and
+later and run the script again. Re-running it is also the upgrade path: with
+`IAPSTACK_REF` it backs up the database and moves to that ref; without it, it stays on
+the deployed commit. Either way it keeps the existing `.env` and restarts the stack. Create the tunnel as in step 4 before running it, and
 continue with steps 6–8 afterwards.
 
 ## Manual deploy
@@ -128,8 +131,9 @@ continue with steps 6–8 afterwards.
    and protection keys must stay the same for the lifetime of the database volume.
 
 4. **Create the tunnel.** In Cloudflare Zero Trust, open **Networks → Tunnels**,
-   create a `cloudflared` tunnel, and copy its connector token into
-   `CLOUDFLARE_TUNNEL_TOKEN` in `.env`. Add a public hostname such as
+   create a `cloudflared` tunnel, copy its connector token into
+   `CLOUDFLARE_TUNNEL_TOKEN` in `.env`, and set `COMPOSE_PROFILES=tunnel` so Compose
+   starts the connector. Add a public hostname such as
    `iapstack.example.com` with service type `HTTP` and URL `iapstack:8080`.
 
 5. **Start the stack.** The first build compiles IAPStack on the VM and takes a few
@@ -196,12 +200,20 @@ before relying on the backups.
 
 ## Upgrades
 
-Take a backup, review the release notes, then build and restart from the new tag:
+Review the release notes, then re-run the installer with the new tag. It backs up the
+database before changing commits, uses the installer from the new commit, keeps
+`.env`, and restarts the stack:
+
+```sh
+sudo IAPSTACK_REF=<tag> sh /opt/iapstack/deploy/vps/install.sh
+```
+
+To upgrade by hand instead, take a backup, check out the tag, and rebuild:
 
 ```sh
 cd /opt/iapstack
 ./deploy/vps/backup.sh
-git fetch --tags && git checkout <tag>
+git fetch --depth 1 origin tag <tag> && git checkout --detach <tag>
 cd deploy/vps && docker compose up --build -d --wait
 docker image prune -f
 ```

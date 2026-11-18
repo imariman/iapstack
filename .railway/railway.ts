@@ -12,7 +12,8 @@ import {
 // services that can be sized independently. The API service keeps its name in both
 // topologies: renaming it would recreate the service and regenerate its sealed
 // protection keys, which makes stored credentials unreadable.
-const topology: "compact" | "split" = "compact";
+// The cast keeps both values type-checkable when you switch this constant.
+const topology = "compact" as "compact" | "split";
 
 const source = github("imariman/iapstack", { branch: "main" });
 const region = "europe-west4";

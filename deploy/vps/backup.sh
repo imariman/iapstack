@@ -23,6 +23,8 @@ mkdir -p "$backup_dir"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 file="$backup_dir/iapstack-$timestamp.dump"
+# Never leave a partial dump behind: it holds database data and retention ignores it.
+trap 'rm -f "$file.partial"' EXIT
 
 docker compose exec -T postgres \
   pg_dump -U iapstack -d iapstack --format=custom --compress=6 > "$file.partial"

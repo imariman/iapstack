@@ -79,8 +79,8 @@ Without SSH, you can run the commands in steps 6 and 7 from the instance's
 
 The stack only creates infrastructure; it does not track IAPStack releases. To
 upgrade, connect to the VM and re-run the installer with the target ref. It takes a
-backup first and keeps the existing `.env`. Without `IAPSTACK_REF`, it stays on the
-ref it installed last:
+backup before changing commits and keeps the existing `.env`. Without
+`IAPSTACK_REF`, it stays on the deployed commit:
 
 ```sh
 sudo IAPSTACK_REF=<tag-or-commit> sh /opt/iapstack/deploy/vps/install.sh

@@ -123,6 +123,10 @@ resource "oci_core_instance" "iapstack" {
   )
 
   lifecycle {
+    precondition {
+      condition     = var.instance_memory_gbs >= var.instance_ocpus
+      error_message = "Ampere A1 needs at least 1 GB of memory per OCPU; raise instance_memory_gbs or lower instance_ocpus."
+    }
     # The newest image changes over time; do not replace a running VM because of it.
     ignore_changes = [source_details[0].source_id, metadata]
   }

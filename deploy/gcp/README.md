@@ -71,8 +71,8 @@ register the store notification URLs as described in the
 ## Upgrades
 
 Connect over IAP SSH and re-run the installer with the target ref. It takes a backup
-first, keeps the existing `.env`, and stays on the installed ref when `IAPSTACK_REF` is
-omitted:
+before changing commits, keeps the existing `.env`, and stays on the deployed commit
+when `IAPSTACK_REF` is omitted:
 
 ```sh
 sudo IAPSTACK_REF=<tag-or-commit> sh /opt/iapstack/deploy/vps/install.sh

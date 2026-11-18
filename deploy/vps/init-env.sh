@@ -28,8 +28,10 @@ IAPSTACK_METRICS_BEARER_TOKEN=$(openssl rand -base64 48 | tr -d '\n')
 # Used once to create the first durable administrator key, then emptied.
 IAPSTACK_BOOTSTRAP_ADMIN_KEY=$(openssl rand -base64 48 | tr -d '\n')
 
-# Paste the connector token from Cloudflare Zero Trust → Networks → Tunnels.
+# Paste the connector token from Cloudflare Zero Trust → Networks → Tunnels, and set
+# COMPOSE_PROFILES=tunnel so `docker compose up` also starts the connector.
 CLOUDFLARE_TUNNEL_TOKEN=
+COMPOSE_PROFILES=
 
 IAPSTACK_ENVIRONMENT=production
 
@@ -47,4 +49,4 @@ IAPSTACK_ENVIRONMENT=production
 # IAPSTACK_BACKUP_KEEP_DAYS=14
 EOF
 
-echo "Wrote $(pwd)/.env (mode 600). Set CLOUDFLARE_TUNNEL_TOKEN before starting the stack."
+echo "Wrote $(pwd)/.env (mode 600). Set CLOUDFLARE_TUNNEL_TOKEN and COMPOSE_PROFILES=tunnel to enable the tunnel."
