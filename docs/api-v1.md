@@ -186,11 +186,14 @@ metadata only: no report body and no order id.
   reconciliation jobs, and identity audit rows.
 - `POST /v1/admin/projects/{project_id}/customers/{customer_id}/manual-grants` grants an
   entitlement through one product and application for `duration_days` or until `ends_at`,
-  with a required `reason` and `idempotency_key`.
+  with a required `reason` and `idempotency_key`. The application must map the product to
+  a store product; otherwise the grant is refused with `422 product_not_mapped`.
   `POST .../manual-grants/{grant_id}:revoke` ends it early with a required reason. Both
   require a stored administrator key; the bootstrap credential gets `403 forbidden`.
 
-A manual grant is an audited access source of kind `manual`. It is never stored as purchase
+A manual grant is an audited access source of kind `manual`. While it allows access, the
+public entitlement and the webhook report `reason` `manual_grant`; after revocation they report
+`revoked`. Imports keep their own reasons. It is never stored as purchase
 evidence or a store observation and never appears in recent verifications or the
 verification series. It feeds the normal projection and a changed projection enqueues the
 normal webhook.
@@ -409,7 +412,7 @@ v2
 
 The event ID is authenticated. Reject `v1` signatures, timestamps outside the application's replay window, and any delivery whose `IAPStack-Event-ID` does not match the MAC. Deduplicate by that authenticated event ID.
 
-The body is the `entitlement.changed` payload modeled by `EntitlementChange` in the Go and TypeScript SDKs. It has no `event_type` field, and no header names the event type. `entitlement.changed` is the only event IAPStack delivers. `schema_version` 1 cites `source_observation_id`, version 2 has `source` `import` and `source_import_id`, and version 3 has `source` `manual` and `source_manual_grant_id`. Versions 2 and 3 are not store verification and carry no observation id. `application_id` follows the shared identifier rules: it can contain inner spaces and non-ASCII text and has no length cap.
+The body is the `entitlement.changed` payload modeled by `EntitlementChange` in the Go and TypeScript SDKs. It has no `event_type` field, and no header names the event type. `entitlement.changed` is the only event IAPStack delivers. `schema_version` 1 cites `source_observation_id`, version 2 has `source` `import` and `source_import_id`, and version 3 has `source` `manual` and `source_manual_grant_id`. Only manual-grant events use version 3; store events stay on version 1 and import events on version 2, so older SDK verifiers keep accepting them. Versions 2 and 3 are not store verification and carry no observation id. An allowed manual grant reports `access_reason` `manual_grant`. `application_id` follows the shared identifier rules: it can contain inner spaces and non-ASCII text and has no length cap.
 
 ## Shared SDK behavior
 

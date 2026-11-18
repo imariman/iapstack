@@ -1521,8 +1521,8 @@ function detailVital(label, value, identifier = false) {
 function customerAccessSection(detail) {
   const grant = node("button", "secondary-button compact-button", "Grant access");
   grant.type = "button";
-  grant.disabled = !detail.grant_options.length || !(state.overview?.applications || []).length;
-  if (grant.disabled) grant.title = "Add an application and a product that grants an entitlement first.";
+  grant.disabled = !detail.grant_options.some((option) => option.application_ids.length);
+  if (grant.disabled) grant.title = "Map a product that grants an entitlement to an application first.";
   grant.addEventListener("click", openGrantDialog);
   const section = detailSection("Access", countLabel(detail.entitlements.length, "entitlement"), grant);
   if (!detail.entitlements.length) {
@@ -1710,6 +1710,7 @@ function openGrantDialog() {
   state.grantIdempotencyKey = newIdempotencyKey();
   elements.grantOption.replaceChildren();
   detail.grant_options.forEach((option, index) => {
+    if (!option.application_ids.length) return;
     const label = `${option.entitlement_key} · via ${option.product_id} (${productKindLabel(option.product_kind)})`;
     const item = node("option", "", label);
     item.value = String(index);
@@ -1723,17 +1724,15 @@ function openGrantDialog() {
   elements.grantOption.focus();
 }
 
-// syncGrantApplications lists every application and preselects one that maps the chosen product.
+// syncGrantApplications lists only the applications that map the chosen product; the server refuses others.
 function syncGrantApplications() {
   const option = state.customerDetail?.grant_options[Number(elements.grantOption.value || 0)];
-  const mapped = new Set(option?.application_ids || []);
+  const providers = new Map((state.overview?.applications || []).map((application) => [application.id, application.provider]));
   elements.grantApplication.replaceChildren();
-  const applications = [...(state.overview?.applications || [])].sort(
-    (left, right) => Number(mapped.has(right.id)) - Number(mapped.has(left.id)),
-  );
-  for (const application of applications) {
-    const item = node("option", "", `${application.id} · ${providerLabel(application.provider)}${mapped.has(application.id) ? "" : " · product not mapped"}`);
-    item.value = application.id;
+  for (const applicationID of option?.application_ids || []) {
+    const provider = providers.get(applicationID);
+    const item = node("option", "", provider ? `${applicationID} · ${providerLabel(provider)}` : applicationID);
+    item.value = applicationID;
     elements.grantApplication.append(item);
   }
 }
