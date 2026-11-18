@@ -173,7 +173,10 @@ reexec_checked_out_installer() {
   [ "$(cksum < "$checked_out")" = "$self_sum" ] && return 0
   log "continuing with the installer from the deployed commit"
   trap - EXIT
-  IAPSTACK_INSTALL_REEXEC=1 IAPSTACK_REF="" exec sh "$checked_out"
+  # Pin the full SHA rather than an empty ref: older installers treat an empty
+  # IAPSTACK_REF as "main" and would move the checkout again.
+  IAPSTACK_INSTALL_REEXEC=1 IAPSTACK_REF="$(git -C "$IAPSTACK_DIR" rev-parse HEAD)" \
+    exec sh "$checked_out"
 }
 
 # set_env KEY VALUE replaces or appends KEY=VALUE in .env without shell or sed escaping.
