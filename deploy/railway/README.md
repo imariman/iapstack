@@ -5,14 +5,45 @@ the deprecated per-service `railway.toml` and `railway.json` format. The
 [`railway.ts`](../../.railway/railway.ts) graph defines:
 
 - one managed PostgreSQL database on Railway's private network;
-- one API service with a readiness check and pre-deploy migration;
-- one private background worker; and
-- generated sealed protection and metrics secrets that are referenced by both processes.
+- one `IAPStack API` service with a readiness check and pre-deploy migration, which
+  also runs the durable worker in the default compact topology;
+- optionally, one private `IAPStack Worker` service in the split topology; and
+- generated sealed protection and metrics secrets.
 
-Railway offers a new-account trial for up to 30 days with a one-time credit. It then
-falls back to the Free plan's small monthly credit. IAPStack's continuously running
-API, worker, and PostgreSQL database are usage-billed and are not guaranteed to fit
-inside those credits. Configure a spend limit before testing.
+## Topology and cost
+
+Railway bills the CPU and memory that services actually use: about USD 10 per GB of
+RAM and USD 20 per vCPU each month, plus USD 0.15 per GB-month of volume storage. The
+[Hobby plan](https://docs.railway.com/pricing/plans) costs USD 5 per month and includes
+USD 5 of that usage. New accounts get a 30-day trial with a one-time credit; the Free
+plan that follows has too little monthly credit for an always-on stack.
+
+Measured idle on a local Docker host, the compact `server` process used about 20 MiB
+of RAM and under 1% of one CPU, and PostgreSQL about 55 MiB and 1% of one CPU. At
+Railway's rates that is roughly USD 1–2 per month, so a small compact installation
+normally stays within the Hobby plan's included usage, for USD 5 per month in total.
+Traffic, Railway's own PostgreSQL image settings, and image builds change these
+numbers, so set a usage limit and check the usage page after the first days.
+
+The topology is chosen by one constant at the top of
+[`railway.ts`](../../.railway/railway.ts):
+
+| `topology` | Services | Use when |
+| --- | --- | --- |
+| `"compact"` (default) | PostgreSQL and `IAPStack API` running `iapstack server` (API and worker) | Lowest cost; most installations |
+| `"split"` | PostgreSQL, `IAPStack API` running `iapstack api`, and `IAPStack Worker` | API and worker need independent sizing or restarts |
+
+Both topologies keep the API service's name. Renaming it would make Railway recreate
+the service and regenerate its sealed protection keys, which makes stored store
+credentials and webhook secrets unreadable.
+
+Switching an existing project from split to compact changes the API start command
+and deletes `IAPStack Worker`. `railway config apply` asks you to confirm the
+destructive change. PostgreSQL, the API's variables, and its domain are kept. Switching
+back recreates the worker, which references the API's existing keys.
+
+Keep Railway's **Serverless** (app sleeping) setting off for the IAPStack services.
+A sleeping service stops the durable worker until the next HTTP request.
 
 ## Apply the infrastructure
 
@@ -27,10 +58,11 @@ railway config plan
 railway config apply
 ```
 
-Review the plan carefully before applying it. The first apply creates `IAPStack API`,
-`IAPStack Worker`, and `IAPStack Postgres` in `europe-west4`. The API's pre-deploy
-command applies the schema before the API goes live. The worker has an always-restart
-policy, so an initial start that races the first migration recovers automatically.
+Review the plan carefully before applying it. With the default compact topology, the
+first apply creates `IAPStack API` and `IAPStack Postgres` in `europe-west4`; the split
+topology also creates `IAPStack Worker`. The API's pre-deploy command applies the
+schema before the API goes live. A split worker has an always-restart policy, so an
+initial start that races the first migration recovers automatically.
 
 The file targets the upstream `main` branch. Change the `github(...)` branch in
 `.railway/railway.ts` when testing an unmerged branch or a fork.
@@ -64,13 +96,16 @@ Publishing requires a Railway account because template IDs belong to a Railway
 workspace. After the IaC deployment is healthy:
 
 1. Open the project settings and choose **Generate Template from Project**.
-2. Confirm that only the API receives an HTTP domain and that the worker/database have
-   no public networking.
+2. Confirm that only the API receives an HTTP domain and that the database (and the
+   worker, in the split topology) has no public networking. Publish the compact
+   topology as the default template so new installations start within the Hobby
+   plan's included usage.
 3. Keep each root-key generator as
    `secret(64, "abcdef0123456789")`; keep the bootstrap generator alphanumeric with
    length 48.
-4. Confirm the worker variables reference the corresponding API variables and both
-   services reference the database's private `DATABASE_URL`.
+4. Confirm the API references the database's private `DATABASE_URL`. In the split
+   topology, also confirm the worker variables reference the corresponding API
+   variables and the same database URL.
 5. Create the template, copy its deployment URL, and add that URL to the main README.
 
 Until that account-owned template URL exists, the checked-in IaC file is the

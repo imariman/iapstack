@@ -50,6 +50,15 @@ jobs:
           git check-ignore -q sdk/flutter/iapstack_huawei/example/android/key.properties
           node --check dashboard/app.js
           test -x deploy/e2e/run.sh
+          for script in deploy/vps/install.sh deploy/vps/init-env.sh deploy/vps/backup.sh; do
+            test -x "$script"
+            sh -n "$script"
+          done
+          git check-ignore -q deploy/vps/.env
+          test -x deploy/gcp/deploy.sh
+          bash -n deploy/gcp/deploy.sh
+          ruby -ryaml -e 'YAML.load_file("deploy/vps/cloud-init.yaml")'
+          GOOGLE_CLOUD_PROJECT=ci IAPSTACK_DRY_RUN=1 bash deploy/gcp/deploy.sh >/dev/null
 
   go:
     name: Go checks
@@ -371,6 +380,25 @@ jobs:
         run: |
           flutter pub get
           flutter build ios --simulator --debug
+
+  oracle-stack:
+    name: Oracle Resource Manager stack
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Check formatting and validate
+        shell: bash
+        run: |
+          terraform() {
+            docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+              -v "$PWD/deploy/oracle:/stack" -w /stack hashicorp/terraform:1.9.8 "$@"
+          }
+          terraform fmt -check -diff
+          terraform init -backend=false -input=false
+          terraform validate
 
   container:
     name: Container build

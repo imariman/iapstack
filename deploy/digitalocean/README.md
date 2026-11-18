@@ -22,6 +22,9 @@ development database. It cannot provision IAPStack's required persistent worker 
 pre-deploy job, so this repository intentionally does not present a misleading
 Deploy-to-DO button. The full topology is still created with one `doctl` command.
 
+For a lower monthly cost, the [Droplet guide](droplet.md) runs the self-operated
+single-VM stack on a USD 6–12/month Droplet instead of managed App Platform services.
+
 ## Deploy
 
 1. Create a DigitalOcean account, add a payment method, install `doctl`, and run
