@@ -272,21 +272,33 @@ function renderOverview() {
   const delivered = overview.recent_webhook_events.filter((event) => event.status === "delivered").length;
 
   elements.projectTitle.textContent = overview.project.id;
-  setText("metric-apps", overview.project.application_count);
+  setText("metric-apps", formatNumber(overview.project.application_count));
   setText("metric-apps-note", `${configured} fully configured`);
-  setText("metric-customers", overview.project.customer_count);
+  setText("metric-customers", formatNumber(overview.project.customer_count));
   setText("metric-customers-note", countLabel(allowed, "active entitlement"));
-  setText("metric-products", overview.project.product_count);
+  setText("metric-products", formatNumber(overview.project.product_count));
   setText("metric-products-note", countLabel(sum(overview.products, "store_mapping_count"), "store mapping"));
-  setText("metric-pending", pending);
+  setText("metric-pending", formatNumber(pending));
   setText("metric-pending-note", failed ? countLabel(failed, "terminal failure") : "No terminal failures");
 
   renderAnalytics(overview.analytics);
 
-  setText("signal-store", `${configured}/${overview.applications.length} ready`);
-  setText("signal-verify", countLabel(overview.analytics.verified_count, "30-day event"));
-  setText("signal-access", `${overview.analytics.active_entitlement_count} active`);
-  setText("signal-deliver", `${delivered} delivered`);
+  const unconfigured = overview.applications.length - configured;
+  const failedDeliveries = overview.recent_webhook_events.filter((event) => event.status === "failed").length;
+  const unresolvedAccess = Number(overview.analytics.unresolved_count || 0);
+  setText(
+    "signal-store",
+    `${configured}/${overview.applications.length} ready${unconfigured ? ` · ${unconfigured} ${unconfigured === 1 ? "needs" : "need"} setup` : ""}`,
+  );
+  setText(
+    "signal-verify",
+    `${countLabel(overview.analytics.verified_count, "verified event")}${failed ? ` · ${countLabel(failed, "failed job")}` : ""}`,
+  );
+  setText(
+    "signal-access",
+    `${formatNumber(overview.analytics.active_entitlement_count)} active${unresolvedAccess ? ` · ${formatNumber(unresolvedAccess)} unresolved` : ""}`,
+  );
+  setText("signal-deliver", `${delivered} delivered${failedDeliveries ? ` · ${failedDeliveries} failed` : ""}`);
   setSignalWarning("store", configured !== overview.applications.length);
   setSignalWarning("verify", failed > 0);
   setSignalWarning("access", overview.analytics.unresolved_count > 0);
@@ -340,8 +352,13 @@ function emptyAnalytics() {
 
 function renderAnalytics(analytics = emptyAnalytics()) {
   setText("analytics-window", `UTC · ${analytics.window_days || 30} days`);
-  setText("analytics-verified", formatNumber(analytics.verified_count));
-  setText("analytics-active", formatNumber(analytics.active_entitlement_count));
+  const dailyActivity = analytics.daily_activity || [];
+  const verifiedTotal = Number(analytics.verified_count || 0);
+  const deniedTotal = dailyActivity.reduce((total, day) => total + Number(day.denied || 0), 0);
+  const peak = Math.max(0, ...dailyActivity.map((day) => Number(day.verified || 0)));
+  setText("analytics-verified", formatNumber(verifiedTotal));
+  setText("analytics-denied-rate", verifiedTotal ? `${((deniedTotal / verifiedTotal) * 100).toFixed(1)}%` : "—");
+  setText("analytics-peak", peak ? `${formatNumber(peak)}/day` : "—");
   setText("analytics-reversed", formatNumber(analytics.reversed_count));
   renderRevenue(analytics.revenue || emptyAnalytics().revenue);
   renderSandboxValue(analytics.sandbox_value || emptyAnalytics().sandbox_value);
@@ -377,7 +394,7 @@ function renderRevenue(revenue) {
     if (coveredAmounts.length === 0) {
       setText("revenue-eyebrow", "Not calculated");
       setText("revenue-value", "—");
-      setText("revenue-currency", "not calculated");
+      setText("revenue-currency", "");
       setText("revenue-note", storeReportsRequiredNote(revenue));
       return;
     }
@@ -510,9 +527,9 @@ function renderActivityChart(activity) {
   const bottom = 30;
   const left = 34;
   const plotWidth = width - left - right;
-  const plotHeight = 220 - top - bottom;
+  const plotHeight = 260 - top - bottom;
   const baseline = top + plotHeight;
-  const maximum = Math.max(1, ...activity.map((day) => Number(day.verified || 0)));
+  const maximum = niceAxisMaximum(Math.max(1, ...activity.map((day) => Number(day.verified || 0))));
   const verified = activity.reduce((total, day) => total + Number(day.verified || 0), 0);
   const denied = activity.reduce((total, day) => total + Number(day.denied || 0), 0);
   const unresolved = activity.reduce((total, day) => total + Number(day.unresolved || 0), 0);
@@ -520,6 +537,7 @@ function renderActivityChart(activity) {
     "aria-label",
     `${verified} verified events in ${activity.length || 30} days: ${denied} denied and ${unresolved} unresolved.`,
   );
+  document.querySelector("#legend-unresolved").hidden = unresolved === 0;
 
   const ticks = [...new Set([maximum, Math.ceil(maximum / 2), 0])];
   for (const tick of ticks) {
@@ -578,6 +596,14 @@ function renderActivityChart(activity) {
       ));
     }
   });
+}
+
+function niceAxisMaximum(value) {
+  const magnitude = 10 ** Math.floor(Math.log10(value));
+  for (const step of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) {
+    if (step * magnitude >= value) return step * magnitude;
+  }
+  return 10 * magnitude;
 }
 
 function svgNode(tag, attributes = {}, text = "") {
@@ -1162,7 +1188,7 @@ function renderProducts(products) {
     item.append(
       identity,
       tags,
-      node("span", "mapping-count", `${product.store_mapping_count} provider mapping`),
+      node("span", "mapping-count", countLabel(product.store_mapping_count, "provider mapping")),
     );
     container.append(item);
   }
@@ -1177,7 +1203,7 @@ function renderQueues(queues) {
       node("strong", "", queueLabel(queue.name)),
       queueNumber("Pending", queue.pending),
       queueNumber("Completed", queue.completed),
-      queueNumber("Failed", queue.failed, "failed"),
+      queueNumber("Failed", queue.failed, Number(queue.failed) > 0 ? "failed" : ""),
     );
     container.append(item);
   }
@@ -1185,7 +1211,7 @@ function renderQueues(queues) {
 
 function queueNumber(label, value, extra = "") {
   const item = node("span", `queue-number ${extra}`.trim());
-  item.append(node("b", "", value), document.createTextNode(label));
+  item.append(node("b", "", formatNumber(value)), document.createTextNode(label));
   return item;
 }
 
@@ -1324,7 +1350,7 @@ function sum(items, key) {
 }
 
 function countLabel(value, singular) {
-  return `${value} ${singular}${Number(value) === 1 ? "" : "s"}`;
+  return `${formatNumber(value)} ${singular}${Number(value) === 1 ? "" : "s"}`;
 }
 
 function node(tag, className = "", text = "") {
@@ -1463,12 +1489,15 @@ elements.revokeKeyDialog.addEventListener("close", () => {
 
 elements.logout.addEventListener("click", logout);
 
-document.querySelector("#open-setup").addEventListener("click", () => {
+function openSetupDialog() {
   elements.setupMessage.textContent = "";
   syncSetupProvider();
   elements.setupDialog.showModal();
   elements.setupForm.querySelector("input[name='project_id']").focus();
-});
+}
+
+document.querySelector("#open-setup").addEventListener("click", openSetupDialog);
+document.querySelector("#open-setup-primary").addEventListener("click", openSetupDialog);
 
 document.querySelector("#close-setup").addEventListener("click", () => elements.setupDialog.close());
 document.querySelector("#cancel-setup").addEventListener("click", () => elements.setupDialog.close());
