@@ -1,4 +1,5 @@
 import 'package:iapstack/iapstack.dart';
+import 'package:iapstack_huawei/src/customer_id.dart';
 import 'package:iapstack_huawei/src/errors.dart';
 import 'package:iapstack_huawei/src/evidence.dart';
 import 'package:iapstack_huawei/src/platform.dart';
@@ -125,16 +126,7 @@ final class HuaweiIapStack {
     required HuaweiProduct product,
     String? requestId,
   }) async {
-    // The same rule as core verification. A padded id would be charged as
-    // developerPayload and then rejected before an entitlement is written.
-    if (externalCustomerId.isEmpty ||
-        externalCustomerId.trim() != externalCustomerId) {
-      throw ArgumentError.value(
-        externalCustomerId,
-        'externalCustomerId',
-        'must be non-empty without surrounding whitespace',
-      );
-    }
+    validateExternalCustomerId(externalCustomerId);
     if (_queriedProducts[product.id] != product) {
       throw const HuaweiIapStackException(
         code: 'product_not_queried',
@@ -179,10 +171,7 @@ final class HuaweiIapStack {
     },
     String? requestId,
   }) async {
-    if (externalCustomerId.trim().isEmpty) {
-      throw ArgumentError.value(
-          externalCustomerId, 'externalCustomerId', 'must not be empty');
-    }
+    validateExternalCustomerId(externalCustomerId);
     if (productKinds.isEmpty) {
       return RestoreResult(results: const <VerificationResult>[]);
     }

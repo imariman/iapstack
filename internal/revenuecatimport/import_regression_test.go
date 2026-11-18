@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -276,6 +278,261 @@ func TestPlanReportWarnsToReimportNotYetStartedGrants(t *testing.T) {
 	if startedResult.Report.Counts.NotYetStarted != 0 || startedResult.Report.NotYetStartedEarliestAt != nil || startedResult.Report.Warning != "" {
 		t.Fatalf("started report = %#v, want no not-yet-started warning", startedResult.Report)
 	}
+}
+
+// TestPlanEarlierRefundDoesNotOverrideLaterRenewal verifies the current period
+// is chosen before a refund denies one lineage.
+func TestPlanEarlierRefundDoesNotOverrideLaterRenewal(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.October, 26, 0, 0, 0, 0, time.UTC)
+	catalog := testCatalog(t)
+	header := "rc_original_app_user_id,rc_last_seen_app_user_id_alias,product_identifier,entitlement_identifiers,start_time,effective_end_time,store,is_auto_renewable,is_sandbox,updated_at,refunded_at,original_store_transaction_id,store_transaction_id"
+	olderRefunded := "user-1,user-1,com.example.annual,\"[\"\"premium\"\"]\",2026-09-01 00:00:00,2026-10-01 00:00:00,app_store,true,false,2026-10-25 00:00:00,2026-10-25 00:00:00,orig-1,txn-old"
+	newerValid := "user-1,user-1,com.example.annual,\"[\"\"premium\"\"]\",2026-10-01 00:00:00,2026-11-01 00:00:00,app_store,true,false,2026-10-02 00:00:00,,orig-1,txn-new"
+	renewalStart := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	renewalEnd := time.Date(2026, time.November, 1, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name        string
+		rows        []string
+		wantAccess  core.AccessStatus
+		wantReason  core.AccessReason
+		wantStart   time.Time
+		wantEnd     time.Time
+		wantIgnored int
+	}{
+		{
+			name:        "older refund updated later than valid renewal",
+			rows:        []string{olderRefunded, newerValid},
+			wantAccess:  core.AccessAllowed,
+			wantReason:  core.AccessReasonPurchaseValid,
+			wantStart:   renewalStart,
+			wantEnd:     renewalEnd,
+			wantIgnored: 1,
+		},
+		{
+			name:        "older refund listed after valid renewal",
+			rows:        []string{newerValid, olderRefunded},
+			wantAccess:  core.AccessAllowed,
+			wantReason:  core.AccessReasonPurchaseValid,
+			wantStart:   renewalStart,
+			wantEnd:     renewalEnd,
+			wantIgnored: 1,
+		},
+		{
+			name: "refund on the current renewal denies",
+			rows: []string{
+				"user-1,user-1,com.example.annual,\"[\"\"premium\"\"]\",2026-09-01 00:00:00,2026-10-01 00:00:00,app_store,true,false,2026-09-02 00:00:00,,orig-1,txn-old",
+				"user-1,user-1,com.example.annual,\"[\"\"premium\"\"]\",2026-10-01 00:00:00,2026-11-01 00:00:00,app_store,true,false,2026-10-02 00:00:00,2026-10-20 00:00:00,orig-1,txn-new",
+			},
+			wantAccess: core.AccessDenied,
+			wantReason: core.AccessReasonRefunded,
+			wantStart:  renewalStart,
+			wantEnd:    renewalEnd,
+		},
+		{
+			name:       "single refunded row still denies",
+			rows:       []string{"user-1,user-1,com.example.annual,\"[\"\"premium\"\"]\",2026-10-01 00:00:00,2026-11-01 00:00:00,app_store,true,false,2026-10-02 00:00:00,2026-10-20 00:00:00,orig-1,txn-only"},
+			wantAccess: core.AccessDenied,
+			wantReason: core.AccessReasonRefunded,
+			wantStart:  renewalStart,
+			wantEnd:    renewalEnd,
+		},
+		{
+			name: "later snapshot of the same transaction still wins",
+			rows: []string{
+				newerValid,
+				"user-1,user-1,com.example.annual,\"[\"\"premium\"\"]\",2026-10-01 00:00:00,2026-11-01 00:00:00,app_store,true,false,2026-10-25 00:00:00,2026-10-25 00:00:00,orig-1,txn-new",
+			},
+			wantAccess: core.AccessDenied,
+			wantReason: core.AccessReasonRefunded,
+			wantStart:  renewalStart,
+			wantEnd:    renewalEnd,
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			input := testInput(t, now, false, catalog)
+			input.Export = []byte(transactionsCSV(header, test.rows...))
+			result, err := Plan(input)
+			if err != nil {
+				t.Fatalf("Plan() error = %v", err)
+			}
+			subscriber := result.Subscribers[0]
+			if subscriber.Fatal || len(subscriber.Grants) != 1 {
+				t.Fatalf("subscriber = %#v, want one grant", subscriber)
+			}
+			grant := subscriber.Grants[0]
+			if grant.Access != test.wantAccess || grant.Reason != test.wantReason || !grant.StartsAt.Equal(test.wantStart) {
+				t.Fatalf("grant = %#v", grant)
+			}
+			if grant.EndsAt == nil || !grant.EndsAt.Equal(test.wantEnd) {
+				t.Fatalf("grant end = %v, want %s", grant.EndsAt, test.wantEnd)
+			}
+			if result.Report.Counts.IgnoredEarlierRefunds != test.wantIgnored {
+				t.Fatalf("ignored earlier refunds = %d, want %d", result.Report.Counts.IgnoredEarlierRefunds, test.wantIgnored)
+			}
+			payload, err := json.Marshal(result.Report)
+			if err != nil {
+				t.Fatalf("marshal report: %v", err)
+			}
+			fragment := `"ignored_earlier_refunds":` + strconv.Itoa(test.wantIgnored)
+			if !bytes.Contains(payload, []byte(fragment)) {
+				t.Fatalf("report JSON missing %s: %s", fragment, payload)
+			}
+		})
+	}
+}
+
+// TestPlanLineageSelectionIgnoresRowOrder verifies every export order picks the
+// same row of one period, including snapshots without a store transaction id.
+func TestPlanLineageSelectionIgnoresRowOrder(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.October, 26, 0, 0, 0, 0, time.UTC)
+	catalog := testCatalog(t)
+	cases := []struct {
+		name    string
+		rows    []string
+		wantEnd time.Time
+	}{
+		{
+			name: "later refunded snapshot without store transaction id",
+			rows: []string{
+				lineageRow(`["premium"]`, "2026-10-01", "2026-11-01", "2026-10-02", "", ""),
+				lineageRow(`["premium"]`, "2026-10-01", "2026-10-20", "2026-10-25", "2026-10-20", ""),
+			},
+			wantEnd: time.Date(2026, time.October, 20, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "one period across store transactions",
+			rows: []string{
+				lineageRow(`["premium"]`, "2026-10-01", "2026-11-01", "2026-10-10", "", "txn-1"),
+				lineageRow(`["premium"]`, "2026-10-01", "2026-10-15", "2026-10-20", "2026-10-15", "txn-1"),
+				lineageRow(`["premium"]`, "2026-10-01", "2026-10-30", "2026-10-15", "", "txn-2"),
+			},
+			wantEnd: time.Date(2026, time.October, 15, 0, 0, 0, 0, time.UTC),
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			for _, rows := range rowOrders(test.rows) {
+				input := testInput(t, now, false, catalog)
+				input.Export = []byte(transactionsCSV(lineageHeader(), rows...))
+				result, err := Plan(input)
+				if err != nil {
+					t.Fatalf("Plan() error = %v", err)
+				}
+				grants := result.Subscribers[0].Grants
+				if len(grants) != 1 || grants[0].Access != core.AccessDenied || grants[0].Reason != core.AccessReasonRefunded ||
+					grants[0].EndsAt == nil || !grants[0].EndsAt.Equal(test.wantEnd) {
+					t.Fatalf("rows %q grants = %#v, want the latest refunded snapshot ending %s", rows, grants, test.wantEnd)
+				}
+			}
+		})
+	}
+}
+
+// TestPlanCountsEachIgnoredRefundOnce verifies a refunded row that names two
+// RevenueCat entitlements mapped to one key is one ignored refund.
+func TestPlanCountsEachIgnoredRefundOnce(t *testing.T) {
+	t.Parallel()
+
+	input := testInput(t, time.Date(2026, time.October, 26, 0, 0, 0, 0, time.UTC), false, testCatalog(t))
+	input.Mapping.Entitlements = map[string]string{"premium": "premium", "premium_legacy": "premium"}
+	input.Export = []byte(transactionsCSV(lineageHeader(),
+		lineageRow(`["premium","premium_legacy"]`, "2026-09-01", "2026-10-01", "2026-10-25", "2026-10-25", "txn-old"),
+		lineageRow(`["premium","premium_legacy"]`, "2026-10-01", "2026-11-01", "2026-10-02", "", "txn-new"),
+	))
+	result, err := Plan(input)
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	subscriber := result.Subscribers[0]
+	if len(subscriber.Grants) != 1 || subscriber.Grants[0].Access != core.AccessAllowed {
+		t.Fatalf("grants = %#v, want one allowed renewal", subscriber.Grants)
+	}
+	if subscriber.IgnoredEarlierRefunds != 1 || result.Report.Counts.IgnoredEarlierRefunds != 1 {
+		t.Fatalf("ignored earlier refunds = %d (report %d), want 1", subscriber.IgnoredEarlierRefunds, result.Report.Counts.IgnoredEarlierRefunds)
+	}
+}
+
+// TestPlanWithoutCatalogKeepsEachEntitlementKey verifies a dry-run without a
+// catalog plans one grant per mapped entitlement key, as apply writes them.
+func TestPlanWithoutCatalogKeepsEachEntitlementKey(t *testing.T) {
+	t.Parallel()
+
+	input := testInput(t, time.Date(2026, time.October, 26, 0, 0, 0, 0, time.UTC), false, nil)
+	input.Mapping.Entitlements = map[string]string{"premium": "premium", "pro": "pro"}
+	input.Export = []byte(transactionsCSV(lineageHeader(),
+		lineageRow(`["premium","pro"]`, "2026-10-01", "2026-11-01", "2026-10-02", "", "txn-1"),
+	))
+	result, err := Plan(input)
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	grants := result.Subscribers[0].Grants
+	if len(grants) != 2 || grants[0].EntitlementKey != "premium" || grants[1].EntitlementKey != "pro" {
+		t.Fatalf("grants = %#v, want premium and pro", grants)
+	}
+	if result.Report.Counts.GrantsUpserted != 2 {
+		t.Fatalf("grants upserted = %d, want 2", result.Report.Counts.GrantsUpserted)
+	}
+}
+
+// TestFinalizeReportCountsIgnoredRefundsOfCommittedSubscribers verifies apply
+// reports superseded refunds only for subscribers whose grants were written.
+func TestFinalizeReportCountsIgnoredRefundsOfCommittedSubscribers(t *testing.T) {
+	t.Parallel()
+
+	report := finalizeReport(Result{
+		Report: Report{Counts: Counts{IgnoredEarlierRefunds: 3}},
+		Subscribers: []Subscriber{
+			{ExternalID: "committed", Created: true, GrantsUpserted: 1, IgnoredEarlierRefunds: 1},
+			{ExternalID: "refused", Fatal: true, IgnoredEarlierRefunds: 2, Failures: []Failure{{Code: CodeConflictingSubscriber}}},
+		},
+	}, false)
+	if report.Counts.IgnoredEarlierRefunds != 1 || report.Counts.Failed != 1 || report.Counts.GrantsUpserted != 1 {
+		t.Fatalf("counts = %#v, want one ignored refund from the committed subscriber", report.Counts)
+	}
+}
+
+// lineageHeader is the transactions feed header used by lineage selection tests.
+func lineageHeader() string {
+	return "rc_original_app_user_id,rc_last_seen_app_user_id_alias,product_identifier,entitlement_identifiers,start_time,effective_end_time,store,is_auto_renewable,is_sandbox,updated_at,refunded_at,original_store_transaction_id,store_transaction_id"
+}
+
+// lineageRow is one annual renewal of lineage orig-1. Dates are midnight UTC and
+// an empty refund date or store transaction id leaves that cell blank.
+func lineageRow(entitlements, start, end, updated, refunded, storeTransaction string) string {
+	stamp := func(date string) string {
+		if date == "" {
+			return ""
+		}
+		return date + " 00:00:00"
+	}
+	quoted := `"` + strings.ReplaceAll(entitlements, `"`, `""`) + `"`
+	return strings.Join([]string{
+		"user-1", "user-1", "com.example.annual", quoted, stamp(start), stamp(end), "app_store", "true", "false",
+		stamp(updated), stamp(refunded), "orig-1", storeTransaction,
+	}, ",")
+}
+
+// rowOrders returns every ordering of the export rows.
+func rowOrders(rows []string) [][]string {
+	if len(rows) <= 1 {
+		return [][]string{append([]string(nil), rows...)}
+	}
+	var orders [][]string
+	for index := range rows {
+		rest := append(append([]string(nil), rows[:index]...), rows[index+1:]...)
+		for _, order := range rowOrders(rest) {
+			orders = append(orders, append([]string{rows[index]}, order...))
+		}
+	}
+	return orders
 }
 
 // jsonlInput builds one subscriber JSONL dry-run around the shared catalog fixture.

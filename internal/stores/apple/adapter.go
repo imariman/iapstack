@@ -58,12 +58,14 @@ const (
 )
 
 // Adapter verifies Apple evidence with application-scoped credentials and authoritative server APIs.
+// reportProviderCall, when set, receives the outcome of the optional transaction-history lookup.
 type Adapter struct {
-	credentials   stores.CredentialSource
-	client        *http.Client
-	clock         func() time.Time
-	productionURL string
-	sandboxURL    string
+	credentials        stores.CredentialSource
+	client             *http.Client
+	clock              func() time.Time
+	productionURL      string
+	sandboxURL         string
+	reportProviderCall stores.ProviderCallObserver
 }
 
 // credentialPayload is the versioned private App Store Server API configuration.
@@ -117,6 +119,7 @@ type transactionPayload struct {
 	RevocationDate        int64  `json:"revocationDate"`
 	IsUpgraded            bool   `json:"isUpgraded"`
 	Environment           string `json:"environment"`
+	TransactionReason     string `json:"transactionReason,omitempty"`
 }
 
 // New constructs a bounded Apple App Store server adapter.
@@ -189,10 +192,14 @@ func (adapter *Adapter) Verify(
 		if err := validateRenewalScope(request.Application, transaction, renewal); err != nil {
 			return stores.VerificationResult{}, invalid("verify", err)
 		}
-		return adapter.subscriptionResult(
+		result, err := adapter.subscriptionResult(
 			request.Application, evidence.ProductKind, submitted, transaction, artifact,
 			&subscriptionSnapshot{Status: status, Renewal: renewal},
 		)
+		if err != nil || submitted.ProductID != transaction.ProductID {
+			return result, err
+		}
+		return adapter.closeUpgradedPredecessors(ctx, request, configuration, evidence.ProductKind, transaction, result), nil
 	}
 	authoritativeJWS, artifact, err := adapter.query(ctx, request.Application, configuration, submitted.TransactionID)
 	if err != nil {
@@ -324,6 +331,11 @@ func (adapter *Adapter) configuration(ctx context.Context, application core.Appl
 	}, nil
 }
 
+// ReportProviderCalls registers the observer for the optional transaction-history lookup outcome.
+func (adapter *Adapter) ReportProviderCalls(observer stores.ProviderCallObserver) {
+	adapter.reportProviderCall = observer
+}
+
 // query requests one authoritative signed transaction by transaction identifier.
 func (adapter *Adapter) query(
 	ctx context.Context,
@@ -334,39 +346,11 @@ func (adapter *Adapter) query(
 	if strings.TrimSpace(transactionID) == "" {
 		return "", stores.Evidence{}, invalid("query", errors.New("apple transaction ID is required"))
 	}
-	token, err := adapter.authorizationToken(configuration)
-	if err != nil {
-		return "", stores.Evidence{}, stores.NewFailure(adapter.Provider(), "token", stores.FailurePermanent, 0, err)
-	}
-	baseURL := adapter.productionURL
-	if application.Store.Environment == core.EnvironmentSandbox {
-		baseURL = adapter.sandboxURL
-	}
-	endpoint := strings.TrimRight(baseURL, "/") + "/inApps/v1/transactions/" + url.PathEscape(transactionID)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return "", stores.Evidence{}, stores.NewFailure(adapter.Provider(), "query", stores.FailurePermanent, 0, err)
-	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Accept", "application/json")
-	body, status, responseHeader, err := adapter.do(request)
+	body, err := adapter.get(
+		ctx, application, configuration, "query", "/inApps/v1/transactions/"+url.PathEscape(transactionID), nil,
+	)
 	if err != nil {
 		return "", stores.Evidence{}, err
-	}
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		return "", stores.Evidence{}, stores.NewFailure(adapter.Provider(), "query", stores.FailureUnauthorized, 0, nil)
-	}
-	if status == http.StatusNotFound {
-		return "", stores.Evidence{}, stores.NewFailure(adapter.Provider(), "query", stores.FailureNotFound, 0, nil)
-	}
-	if status == http.StatusTooManyRequests {
-		return "", stores.Evidence{}, stores.NewFailure(adapter.Provider(), "query", stores.FailureRateLimited, retryAfter(responseHeader, adapter.clock()), nil)
-	}
-	if status >= 500 {
-		return "", stores.Evidence{}, stores.NewFailure(adapter.Provider(), "query", stores.FailureTemporary, 0, nil)
-	}
-	if status < 200 || status >= 300 {
-		return "", stores.Evidence{}, stores.NewFailure(adapter.Provider(), "query", stores.FailurePermanent, 0, nil)
 	}
 	var response transactionInfoResponse
 	if err := json.Unmarshal(body, &response); err != nil || response.SignedTransactionInfo == "" {
@@ -377,6 +361,44 @@ func (adapter *Adapter) query(
 		return "", stores.Evidence{}, invalid("query", err)
 	}
 	return response.SignedTransactionInfo, artifact, nil
+}
+
+// get sends one authenticated App Store Server API GET for the application's environment.
+// It returns the body of a 2xx response; any other status becomes a classified failure of operation.
+func (adapter *Adapter) get(
+	ctx context.Context,
+	application core.Application,
+	configuration configuration,
+	operation string,
+	path string,
+	query url.Values,
+) ([]byte, error) {
+	token, err := adapter.authorizationToken(configuration)
+	if err != nil {
+		return nil, stores.NewFailure(adapter.Provider(), "token", stores.FailurePermanent, 0, err)
+	}
+	baseURL := adapter.productionURL
+	if application.Store.Environment == core.EnvironmentSandbox {
+		baseURL = adapter.sandboxURL
+	}
+	endpoint := strings.TrimRight(baseURL, "/") + path
+	if len(query) > 0 {
+		endpoint += "?" + query.Encode()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, stores.NewFailure(adapter.Provider(), operation, stores.FailurePermanent, 0, err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Accept", "application/json")
+	body, status, responseHeader, err := adapter.do(request)
+	if err != nil {
+		return nil, err
+	}
+	if err := adapter.classifyProviderStatus(operation, status, responseHeader); err != nil {
+		return nil, err
+	}
+	return body, nil
 }
 
 // authorizationToken signs one short-lived ES256 App Store Server API bearer token.
@@ -431,6 +453,10 @@ func (adapter *Adapter) do(request *http.Request) ([]byte, int, http.Header, err
 // The signed transaction they already hold is often the pre-upgrade JWS: isUpgraded is still
 // false and expiresDate is still the original period end. Subscription status replaces that
 // transaction with the current product and would otherwise leave the old entitlement in place.
+// When the evidence is already the new product (the StoreKit upgrade purchase, or an UPGRADE
+// notification whose signed transaction is the new one), status names no replaced product, and
+// Verify closes it through closeUpgradedPredecessors instead.
+// The closing observation is superseded: it is stored only while the catalog maps that product.
 func (adapter *Adapter) subscriptionResult(
 	application core.Application,
 	kind core.ProductKind,
@@ -451,6 +477,7 @@ func (adapter *Adapter) subscriptionResult(
 		return stores.VerificationResult{}, err
 	}
 	result.Observations = append(result.Observations, closed)
+	result.SupersededObservations = []core.ObservationID{closed.ID}
 	result.NamedProducts = []core.ProviderProductID{
 		core.ProviderProductID(current.ProductID),
 		core.ProviderProductID(previous.ProductID),

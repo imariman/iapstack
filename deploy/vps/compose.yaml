@@ -1,0 +1,110 @@
+# Single-VM IAPStack: PostgreSQL, one-shot migrations, one compact API+worker
+# process, and an outbound-only Cloudflare Tunnel for public HTTPS. Nothing listens
+# on a public interface; the API port is bound to loopback for local checks only.
+#
+# Create the environment file first:  ./init-env.sh
+# Set CLOUDFLARE_TUNNEL_TOKEN and COMPOSE_PROFILES=tunnel in .env, then start the
+# stack:                              docker compose up --build -d --wait
+
+# Only the migrate service builds the image; the server reuses the same local tag so
+# the build runs once.
+x-iapstack-image: &iapstack-image
+  image: iapstack-vps:local
+  read_only: true
+  tmpfs:
+    - /tmp
+
+x-database-url: &database-url
+  IAPSTACK_DATABASE_URL: host=postgres port=5432 user=iapstack password=${IAPSTACK_POSTGRES_PASSWORD:?run ./init-env.sh} dbname=iapstack sslmode=disable
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: iapstack
+      POSTGRES_USER: iapstack
+      POSTGRES_PASSWORD: ${IAPSTACK_POSTGRES_PASSWORD:?run ./init-env.sh}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${IAPSTACK_POSTGRES_SHARED_BUFFERS:-128MB}
+      - -c
+      - max_connections=${IAPSTACK_POSTGRES_MAX_CONNECTIONS:-50}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iapstack -d iapstack"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - iapstack-postgres:/var/lib/postgresql
+    restart: unless-stopped
+
+  migrate:
+    <<: *iapstack-image
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["migrate"]
+    environment:
+      <<: *database-url
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # "server" runs the API and the durable worker in one process. Split it into the
+  # api and worker commands (see ../compose.yaml) only when measured load requires it.
+  iapstack:
+    <<: *iapstack-image
+    pull_policy: never
+    command: ["server"]
+    environment:
+      <<: *database-url
+      IAPSTACK_PROTECTION_ACTIVE_KEY_ID: ${IAPSTACK_PROTECTION_ACTIVE_KEY_ID:?run ./init-env.sh}
+      IAPSTACK_PROTECTION_KEYS: ${IAPSTACK_PROTECTION_KEYS:?run ./init-env.sh}
+      IAPSTACK_PROTECTION_FINGERPRINT_KEY: ${IAPSTACK_PROTECTION_FINGERPRINT_KEY:?run ./init-env.sh}
+      IAPSTACK_BOOTSTRAP_ADMIN_KEY: ${IAPSTACK_BOOTSTRAP_ADMIN_KEY:-}
+      IAPSTACK_METRICS_BEARER_TOKEN: ${IAPSTACK_METRICS_BEARER_TOKEN:?run ./init-env.sh}
+      IAPSTACK_ENVIRONMENT: ${IAPSTACK_ENVIRONMENT:-production}
+      IAPSTACK_LOG_LEVEL: ${IAPSTACK_LOG_LEVEL:-info}
+      IAPSTACK_WORKER_CONCURRENCY: ${IAPSTACK_WORKER_CONCURRENCY:-2}
+      IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS: ${IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS:-2}
+      IAPSTACK_GRAFANA_OTLP_ENDPOINT: ${IAPSTACK_GRAFANA_OTLP_ENDPOINT:-}
+      IAPSTACK_GRAFANA_OTLP_USERNAME: ${IAPSTACK_GRAFANA_OTLP_USERNAME:-}
+      IAPSTACK_GRAFANA_OTLP_TOKEN: ${IAPSTACK_GRAFANA_OTLP_TOKEN:-}
+      IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS: "false"
+      IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS: "false"
+      IAPSTACK_HTTP_ADDRESS: ":8080"
+      IAPSTACK_WORKER_HTTP_ADDRESS: ":8081"
+    ports:
+      - "127.0.0.1:${IAPSTACK_HTTP_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # Remotely managed tunnel: route the public hostname to http://iapstack:8080 in the
+  # Cloudflare dashboard. The connector only makes outbound connections. It runs only
+  # with the "tunnel" profile (COMPOSE_PROFILES=tunnel in .env, which install.sh sets
+  # once CLOUDFLARE_TUNNEL_TOKEN is present), so a stack without a token never
+  # crash-loops the connector.
+  cloudflared:
+    profiles: ["tunnel"]
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      iapstack:
+        condition: service_healthy
+    read_only: true
+    restart: unless-stopped
+
+volumes:
+  iapstack-postgres:

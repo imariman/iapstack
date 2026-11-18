@@ -6,6 +6,7 @@ on:
     paths:
       - 'docs/**'
       - 'assets/iapstack-gopher.png'
+      - 'deploy/oracle/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -35,6 +36,13 @@ jobs:
       - run: npm run build
         env:
           GITHUB_ACTIONS: "true"
+      - name: Package Oracle Resource Manager stack
+        working-directory: deploy/oracle
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/docs/dist/deploy"
+          zip -X -q "$GITHUB_WORKSPACE/docs/dist/deploy/iapstack-oracle-stack.zip" \
+            versions.tf variables.tf main.tf outputs.tf schema.yaml cloud-init.yaml.tftpl
+          unzip -l "$GITHUB_WORKSPACE/docs/dist/deploy/iapstack-oracle-stack.zip"
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - name: Archive Pages artifact
         run: tar --dereference --hard-dereference --directory "$GITHUB_WORKSPACE/docs/dist" -cvf "$RUNNER_TEMP/artifact.tar" --exclude=.git --exclude=.github .

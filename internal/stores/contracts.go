@@ -63,12 +63,17 @@ type LinkedPurchase struct {
 // NamedProducts is set only when the provider purchase names more than one product, such as an App Store
 // subscription upgrade or a Google Play deferred replacement. It lists every product the purchase names,
 // including each observed product. A claim on one of them is checked against the observed products, see ProductsForClaim.
+// SupersededObservations lists denied observations that only close a product this purchase replaced, such as
+// the product an App Store upgrade left or a Google Play itemReplacement. The verification service stores one
+// only when the application catalog maps its product: an unmapped product grants nothing, so a replaced product
+// outside the catalog must not fail verification of the purchase that replaced it.
 type VerificationResult struct {
-	VerifiedAt        time.Time
-	Artifacts         []VerifiedArtifact
-	Observations      []core.PurchaseObservation
-	PostCommitActions []PostCommitAction
-	NamedProducts     []core.ProviderProductID
+	VerifiedAt             time.Time
+	Artifacts              []VerifiedArtifact
+	Observations           []core.PurchaseObservation
+	PostCommitActions      []PostCommitAction
+	NamedProducts          []core.ProviderProductID
+	SupersededObservations []core.ObservationID
 }
 
 type Verifier interface {
@@ -298,6 +303,9 @@ func (result VerificationResult) validate(
 			return fmt.Errorf("observation %d does not match a reconciliation query reference", i)
 		}
 	}
+	if err := result.validateSuperseded(); err != nil {
+		return err
+	}
 	for index, product := range result.NamedProducts {
 		if err := product.Validate(); err != nil {
 			return fmt.Errorf("named product %d: %w", index, err)
@@ -343,6 +351,34 @@ func (result VerificationResult) validate(
 		if _, observed := observedProducts[expectedProduct]; !observed {
 			return fmt.Errorf("expected product %q was not observed", expectedProduct)
 		}
+	}
+	return nil
+}
+
+// Superseded reports whether one observation only closes a product this purchase replaced.
+func (result VerificationResult) Superseded(id core.ObservationID) bool {
+	return slices.Contains(result.SupersededObservations, id)
+}
+
+// validateSuperseded requires each superseded ID to name one distinct denied observation of the result,
+// and at least one observation that is not superseded, so a result can never shrink to nothing.
+func (result VerificationResult) validateSuperseded() error {
+	for index, id := range result.SupersededObservations {
+		if slices.Contains(result.SupersededObservations[:index], id) {
+			return fmt.Errorf("duplicate superseded observation ID %q", id)
+		}
+		position := slices.IndexFunc(result.Observations, func(observation core.PurchaseObservation) bool {
+			return observation.ID == id
+		})
+		if position < 0 {
+			return fmt.Errorf("superseded observation %d does not match an observation", index)
+		}
+		if result.Observations[position].Access != core.AccessDenied {
+			return fmt.Errorf("superseded observation %d must deny access", index)
+		}
+	}
+	if len(result.SupersededObservations) > 0 && len(result.SupersededObservations) >= len(result.Observations) {
+		return errors.New("verification result requires an observation that is not superseded")
 	}
 	return nil
 }

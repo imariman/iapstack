@@ -1,0 +1,150 @@
+# Oracle Resource Manager form definition for the IAPStack single-VM stack.
+title: IAPStack on an Always Free Ampere A1 VM
+description: >-
+  Creates a private-by-default network and one Ampere A1 VM that runs PostgreSQL, the
+  IAPStack API and worker, and a Cloudflare Tunnel. IAPStack is early-development
+  software; use isolated store-sandbox credentials first.
+schemaVersion: 1.1.0
+version: "20190304"
+locale: en
+
+variableGroups:
+  - title: Placement
+    variables:
+      - compartment_ocid
+      - availability_domain
+  - title: Cloudflare Tunnel
+    variables:
+      - cloudflare_tunnel_token
+      - public_hostname
+  - title: Virtual machine
+    variables:
+      - instance_ocpus
+      - instance_memory_gbs
+      - boot_volume_size_gbs
+  - title: SSH access (optional)
+    variables:
+      - ssh_public_key
+      - ssh_source_cidr
+  - title: Advanced
+    variables:
+      - iapstack_ref
+      - iapstack_repo
+      - name_prefix
+  - title: Hidden
+    visible: false
+    variables:
+      - tenancy_ocid
+      - region
+
+variables:
+  compartment_ocid:
+    type: oci:identity:compartment:id
+    title: Compartment
+    required: true
+
+  availability_domain:
+    type: oci:identity:availabilitydomain:name
+    title: Availability domain
+    description: If creation reports "Out of host capacity", destroy the stack and retry with another domain.
+    required: true
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+
+  cloudflare_tunnel_token:
+    type: password
+    title: Cloudflare Tunnel token
+    description: >-
+      Cloudflare Zero Trust → Networks → Tunnels → create a cloudflared tunnel and copy
+      its token. Leave empty to add it later on the VM.
+    required: false
+
+  public_hostname:
+    type: string
+    title: Public hostname
+    description: The tunnel hostname routed to http://iapstack:8080, for example iapstack.example.com.
+    required: false
+
+  instance_ocpus:
+    type: number
+    title: OCPUs
+    description: Always Free covers 4 Ampere A1 OCPUs across the tenancy.
+    minimum: 1
+    maximum: 4
+    default: 2
+    required: true
+
+  instance_memory_gbs:
+    type: number
+    title: Memory (GB)
+    description: Always Free covers 24 GB across the tenancy.
+    minimum: 2
+    maximum: 24
+    default: 12
+    required: true
+
+  boot_volume_size_gbs:
+    type: number
+    title: Boot volume (GB)
+    description: Always Free covers 200 GB of block storage across the tenancy.
+    minimum: 47
+    maximum: 200
+    default: 50
+    required: true
+
+  ssh_public_key:
+    type: oci:core:ssh:publickey
+    title: SSH public key
+    required: false
+
+  ssh_source_cidr:
+    type: string
+    title: SSH source CIDR
+    description: For example 203.0.113.10/32. Leave empty to keep every inbound port closed.
+    required: false
+
+  iapstack_ref:
+    type: string
+    title: IAPStack Git ref
+    description: Tag, branch, or full 40-character commit SHA to deploy.
+    default: main
+    required: true
+
+  iapstack_repo:
+    type: string
+    title: IAPStack repository
+    default: https://github.com/imariman/iapstack
+    required: true
+
+  name_prefix:
+    type: string
+    title: Resource name prefix
+    default: iapstack
+    required: true
+
+outputGroups:
+  - title: IAPStack
+    outputs:
+      - dashboard_url
+      - bootstrap_admin_key
+      - installation_log
+      - ssh_command
+      - instance_public_ip
+
+outputs:
+  dashboard_url:
+    type: copyableString
+    title: Dashboard
+  bootstrap_admin_key:
+    type: copyableString
+    title: Bootstrap administrator key
+    sensitive: true
+  installation_log:
+    type: copyableString
+    title: Follow the first-boot installation
+  ssh_command:
+    type: copyableString
+    title: SSH
+  instance_public_ip:
+    type: copyableString
+    title: Public IP
