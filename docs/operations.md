@@ -196,6 +196,30 @@ application. A `502` indicates invalid protected Apple credential configuration,
 `503` means durable storage is temporarily unavailable. Apple retries unsuccessful
 deliveries; IAPStack acknowledges only after protected inbox persistence.
 
+### Refund consumption answers
+
+When a customer asks Apple for a refund, Apple sends `CONSUMPTION_REQUEST` and accepts
+an answer for 12 hours. IAPStack records every such request. It answers only when the
+operator enabled **Refund consumption answers** in the application's connections dialog,
+the customer's consent is established, and IAPStack verified that transaction with
+allowed access. Everything else is recorded as `skipped` with a reason, such as
+`disabled`, `no_consent`, `consent_withdrawn`, `no_delivery_evidence`, or `family_shared`.
+
+Before you turn it on, decide how consent reaches the server:
+
+- **Recorded per customer** (`customer_opt_in`): your backend calls the consent route
+  after the customer agrees in the app. Customers without a recorded yes are skipped.
+- **Collected by the app from every customer** (`application_attested`): choose this only
+  if the app obtains consent from every customer before purchase. A recorded no still
+  blocks that customer.
+
+Apple's consent and privacy-label rules are on the Send Consumption Information page. You
+are responsible for obtaining valid consent. Rate-limited and `5xx` answers are retried
+with a doubling delay that starts at one minute, stops growing at one hour, and never
+passes the deadline. A request still open at the deadline is `expired`. An HTTP `400`,
+`401`, or `404` answer is `failed` at once; the dialog shows the reason and the last HTTP
+status is in the API response.
+
 ## Google Play RTDN push setup
 
 Configure one authenticated Pub/Sub push subscription per Google Play application.
