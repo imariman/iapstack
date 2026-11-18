@@ -14,7 +14,7 @@ checked in August 2026; always review the provider's live estimate before approv
 | Fly.io | Short trial only: two Machine-hours or seven days | Managed PostgreSQL starts around USD 40.80/month with default storage, before API and worker Machines | [`fly.toml`](../fly.toml) |
 | Koyeb | Card required, USD 29 temporary authorization hold, and prorated selected plan charge | Short default uses free API + free 5-hour database + USD 2.68/month worker; persistent shape starts around USD 35.12/month plus DB storage | [Koyeb bootstrap](koyeb/README.md) |
 | Coolify | Self-hosted software is free; Cloud starts at USD 5/month | You still provide an always-on Linux server; best when suitable infrastructure already exists | [Coolify Compose](coolify/compose.yaml) |
-| Single VM + Cloudflare Tunnel | Oracle Cloud Always Free or Google Cloud e2-micro: USD 0; Hetzner: about EUR 4–5/month; Cloudflare Tunnel is free but needs a domain on Cloudflare DNS | Complete always-on stack (PostgreSQL, compact API+worker, HTTPS) with no open inbound ports; you own updates and off-server backups | [Single-VM guide](vps/README.md), [`install.sh`](vps/install.sh), the [Oracle Resource Manager stack](oracle/README.md), and the [Hetzner cloud-init file](hetzner/README.md) |
+| Single VM + Cloudflare Tunnel | Oracle Cloud Always Free: USD 0; Google Cloud e2-micro: USD 0–4/month (external IPv4); Hetzner: about EUR 4–5/month; Cloudflare Tunnel is free but needs a domain on Cloudflare DNS | Complete always-on stack (PostgreSQL, compact API+worker, HTTPS) with no open inbound ports; you own updates and off-server backups | [Single-VM guide](vps/README.md), [`install.sh`](vps/install.sh), the [Oracle Resource Manager stack](oracle/README.md), the [Google Cloud script](gcp/README.md), and the [Hetzner cloud-init guide](hetzner/README.md) |
 
 For the first provider-sandbox exercise, Render is the least complicated compact
 deployment: its Blueprint creates all resources together and returns an HTTPS domain.
@@ -32,11 +32,12 @@ volume, and separately billed resource before moving to the next target.
 ## Deliberate exclusions
 
 Vercel is not included because IAPStack requires background work to remain available
-inside a persistent process; a request-driven function deployment would be incomplete. AWS, Google Cloud,
-and Azure can run the Docker image, but a responsible one-click definition there needs
+inside a persistent process; a request-driven function deployment would be incomplete. AWS, Azure,
+and managed Google Cloud services can run the Docker image, but a responsible one-click definition there needs
 provider-specific networking, managed database, secret management, identity, logging,
 backup, and budget policy. Those enterprise IaC modules should be designed separately
-instead of being represented by a deceptively small manifest.
+instead of being represented by a deceptively small manifest. The Google Cloud
+[`e2-micro` script](gcp/README.md) is limited to the self-operated single-VM topology.
 
 Official pricing and limit references:
 

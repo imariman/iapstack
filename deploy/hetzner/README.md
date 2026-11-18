@@ -1,7 +1,7 @@
 # Deploy IAPStack to Hetzner Cloud
 
 Hetzner Cloud has no deploy button, but a server can run a cloud-init file on first
-boot. [`cloud-init.yaml`](cloud-init.yaml) runs [`deploy/vps/install.sh`](../vps/install.sh),
+boot. [`cloud-init.yaml`](../vps/cloud-init.yaml) runs [`deploy/vps/install.sh`](../vps/install.sh),
 which installs Docker and starts the [single-VM stack](../vps/README.md): PostgreSQL,
 migrations, the compact API and worker process, and the Cloudflare Tunnel connector.
 Creating the server and pasting one file is the whole deployment.
@@ -27,7 +27,7 @@ is not reachable over IPv6 only.
    In Zero Trust, open **Networks → Tunnels**, create a `cloudflared` tunnel, and copy
    its token. Add a public hostname such as `iapstack.example.com` with service type
    `HTTP` and URL `iapstack:8080`.
-2. **Cloud config.** Download [`cloud-init.yaml`](cloud-init.yaml) and paste the token
+2. **Cloud config.** Download [`cloud-init.yaml`](../vps/cloud-init.yaml) and paste the token
    between the quotes of `CLOUDFLARE_TUNNEL_TOKEN`. Set `IAPSTACK_REF` to a release tag
    or a commit you have tested. You can leave the token empty and add it later over
    SSH.

@@ -166,7 +166,7 @@ A small always-on VM fits this workload better.
 | Host | Typical cost | Fit |
 | --- | --- | --- |
 | Oracle Cloud Always Free, Ampere A1 | USD 0 | Up to 4 Arm OCPUs and 24 GB RAM. Upgrade the account to Pay As You Go, which still costs nothing within Always Free limits, so idle instances are not reclaimed. |
-| Google Cloud e2-micro (Always Free, US regions) | USD 0 | 1 GB RAM; workable for low traffic with the documented memory tuning. |
+| Google Cloud e2-micro (Free Tier, US regions) | USD 0–4/month | 1 GB RAM for low traffic; the installer tunes PostgreSQL and the worker automatically. The in-use external IPv4 address may be billed. |
 | Hetzner Cloud CAX11 / CX22 | About EUR 4–5/month | Predictable billing and the fewest provider surprises; installed from one cloud-init file. |
 | A server you already operate | USD 0 | The tunnel works behind NAT, but store notifications need continuous uptime. |
 
@@ -174,7 +174,7 @@ You also need a domain whose DNS is on Cloudflare's free plan, because store
 notification URLs must be stable HTTPS endpoints. Confirm each provider's live terms
 before creating resources.
 
-There are three automated ways to install it:
+There are four automated ways to install it:
 
 - **Oracle Cloud, one click.** The **Deploy to Oracle Cloud** button opens an Oracle
   Resource Manager stack. The stack creates an outbound-only network and an Always
@@ -184,8 +184,15 @@ There are three automated ways to install it:
 
   [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://imariman.github.io/iapstack/deploy/iapstack-oracle-stack.zip)
 
+- **Google Cloud, Cloud Shell walkthrough.** **Open in Cloud Shell** starts a guided
+  walkthrough that runs [`deploy/gcp/deploy.sh`](deploy/gcp/deploy.sh). The script
+  creates an IAP-only SSH network and a Free Tier `e2-micro`, then waits for the
+  installation. See the [Google Cloud guide](deploy/gcp/README.md).
+
+  [![Open in Cloud Shell](https://www.gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/imariman/iapstack&cloudshell_git_branch=main&cloudshell_tutorial=deploy/gcp/tutorial.md&show=terminal)
+
 - **Hetzner Cloud, one pasted file.** Fill in the tunnel token in
-  [`deploy/hetzner/cloud-init.yaml`](deploy/hetzner/cloud-init.yaml) and paste it into
+  [`deploy/vps/cloud-init.yaml`](deploy/vps/cloud-init.yaml) and paste it into
   **Cloud config** when creating the server, or pass it to the `hcloud` CLI. It runs
   the installer below on first boot. See the [Hetzner guide](deploy/hetzner/README.md).
 

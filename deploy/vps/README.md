@@ -33,7 +33,7 @@ Confirm the live terms before creating resources.
 | --- | --- | --- |
 | [Oracle Cloud Always Free](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm) Ampere A1 | USD 0 | Up to 4 Arm OCPUs and 24 GB RAM in total, plus 200 GB block storage. Signup needs a card for identity checks. Popular regions can report "Out of capacity" for A1 shapes. Idle Always Free instances can be reclaimed; upgrading the account to Pay As You Go removes that risk, and you are still not charged while you stay within Always Free limits. |
 | [Hetzner Cloud](https://www.hetzner.com/cloud/) CAX11 / CX22 | About EUR 4–5/month | 2 vCPU, 4 GB RAM. Predictable billing and fast provisioning. |
-| [Google Cloud](https://cloud.google.com/free/docs/free-cloud-features#compute) e2-micro | USD 0 | One instance in `us-west1`, `us-central1`, or `us-east1` with 1 GB RAM and 30 GB standard disk. Usable for low traffic with the 1 GB tuning in `.env`. |
+| [Google Cloud](https://cloud.google.com/free/docs/free-cloud-features#compute) e2-micro | USD 0–4/month | One Free Tier instance in `us-west1`, `us-central1`, or `us-east1` with 1 GB RAM and 30 GB standard disk. The in-use external IPv4 address may be billed (about USD 3–4/month). The installer applies 1 GB tuning automatically. |
 | A server you already run | USD 0 | The tunnel works behind NAT, but store notifications need continuous uptime. |
 
 You also need a domain whose DNS is managed by Cloudflare (free plan). Store
@@ -52,9 +52,19 @@ The button creates the network and an Always Free Ampere A1 VM through Oracle
 Resource Manager, then runs the installer below on first boot. See the
 [Oracle guide](../oracle/README.md) for the form fields, outputs, and troubleshooting.
 
+### Google Cloud: Cloud Shell walkthrough
+
+[![Open in Cloud Shell](https://www.gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/imariman/iapstack&cloudshell_git_branch=main&cloudshell_tutorial=deploy/gcp/tutorial.md&show=terminal)
+
+The button opens a walkthrough in Cloud Shell that runs
+[`deploy/gcp/deploy.sh`](../gcp/deploy.sh). The script creates a dedicated VPC with
+SSH only through Identity-Aware Proxy and a Free Tier `e2-micro`, boots it with the
+cloud-init file below, and waits for the installation. See the
+[Google Cloud guide](../gcp/README.md).
+
 ### Hetzner Cloud: one pasted file
 
-Paste [`deploy/hetzner/cloud-init.yaml`](../hetzner/cloud-init.yaml), with your
+Paste [`deploy/vps/cloud-init.yaml`](cloud-init.yaml), with your
 tunnel token filled in, into **Cloud config** when creating the server, or pass it to
 `hcloud server create --user-data-from-file`. It runs the installer below on first
 boot. See the [Hetzner guide](../hetzner/README.md) for the firewall, CLI commands, and

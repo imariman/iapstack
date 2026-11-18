@@ -55,6 +55,10 @@ jobs:
             sh -n "$script"
           done
           git check-ignore -q deploy/vps/.env
+          test -x deploy/gcp/deploy.sh
+          bash -n deploy/gcp/deploy.sh
+          ruby -ryaml -e 'YAML.load_file("deploy/vps/cloud-init.yaml")'
+          GOOGLE_CLOUD_PROJECT=ci IAPSTACK_DRY_RUN=1 bash deploy/gcp/deploy.sh >/dev/null
 
   go:
     name: Go checks

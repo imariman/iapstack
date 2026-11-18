@@ -99,6 +99,12 @@ env_value() { sed -n "s/^$1=//p" .env | tail -n 1; }
 configure_env() {
   if [ ! -e .env ]; then
     ./init-env.sh
+    if [ "$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)" -lt 2000000 ]; then
+      log "small host: applying 1 GB PostgreSQL and worker settings"
+      set_env IAPSTACK_POSTGRES_SHARED_BUFFERS 64MB
+      set_env IAPSTACK_POSTGRES_MAX_CONNECTIONS 30
+      set_env IAPSTACK_WORKER_CONCURRENCY 1
+    fi
     if [ -n "${IAPSTACK_BOOTSTRAP_ADMIN_KEY:-}" ]; then
       set_env IAPSTACK_BOOTSTRAP_ADMIN_KEY "$IAPSTACK_BOOTSTRAP_ADMIN_KEY"
     fi
