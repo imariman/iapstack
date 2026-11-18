@@ -143,11 +143,57 @@ migrations, HTTPS API routing, and a private worker. Self-hosted Coolify is free
 you provide an always-on Linux server; Coolify Cloud and the deployment server are
 separately billed.
 
-For the lowest running cost, the [single-VM deployment](deploy/vps/README.md) runs
-PostgreSQL, migrations, a compact API+worker process, and a Cloudflare Tunnel on one
-machine with no open inbound ports. On an always-free VM such as Oracle Cloud Ampere A1
-it costs nothing beyond a domain; a small Hetzner VPS costs a few euros per month. You
-operate the host, including updates and off-server backups.
+### Lowest-cost option: a single VM
+
+The [single-VM deployment](deploy/vps/README.md) is the cheapest way to run the
+complete stack continuously. One Linux machine runs everything from
+[`deploy/vps/compose.yaml`](deploy/vps/compose.yaml):
+
+- PostgreSQL 18 on a private Docker network, never published to the host
+- a one-shot `migrate` container that applies schema changes before each start
+- one compact `server` process containing both the API and the durable worker
+- a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+  connector that publishes the API over HTTPS through outbound connections only, so
+  the VM needs no open inbound ports
+
+The worker needs a process that stays running. It ingests store notifications,
+delivers signed webhooks, and retries due reconciliation every minute. Scale-to-zero
+platforms throttle or suspend that work between requests, and the same per-minute
+queries keep scale-to-zero databases awake until their free compute allowance runs out.
+A small always-on VM fits this workload better.
+
+| Host | Typical cost | Fit |
+| --- | --- | --- |
+| Oracle Cloud Always Free, Ampere A1 | USD 0 | Up to 4 Arm OCPUs and 24 GB RAM. Upgrade the account to Pay As You Go, which still costs nothing within Always Free limits, so idle instances are not reclaimed. |
+| Google Cloud e2-micro (Always Free, US regions) | USD 0 | 1 GB RAM; workable for low traffic with the documented memory tuning. |
+| Hetzner Cloud CAX11 / CX22 | About EUR 4–5/month | Predictable billing and the fewest provider surprises. |
+| A server you already operate | USD 0 | The tunnel works behind NAT, but store notifications need continuous uptime. |
+
+You also need a domain whose DNS is on Cloudflare's free plan, because store
+notification URLs must be stable HTTPS endpoints. Confirm each provider's live terms
+before creating resources.
+
+The setup on a fresh Ubuntu host with Docker installed:
+
+```sh
+git clone https://github.com/imariman/iapstack.git /opt/iapstack
+cd /opt/iapstack/deploy/vps
+./init-env.sh                       # writes .env with generated secrets (mode 600)
+# add CLOUDFLARE_TUNNEL_TOKEN to .env and route your hostname to http://iapstack:8080
+docker compose up --build -d --wait
+curl --fail https://iapstack.example.com/readyz
+```
+
+Then create a durable administrator in the dashboard with the bootstrap key, remove
+the bootstrap key from `.env`, and register the store notification URLs on your
+hostname. [`backup.sh`](deploy/vps/backup.sh) takes verified `pg_dump` backups and can
+upload them to an encrypted rclone remote such as Cloudflare R2. Schedule it with cron
+and rehearse a restore before you rely on it.
+
+With this option you operate the host yourself: operating-system updates, off-server
+backups, uptime monitoring, and edge rate limiting for the public notification
+endpoints. The [single-VM guide](deploy/vps/README.md) covers each step, plus upgrades
+and how to split the API and worker or move to managed PostgreSQL later.
 
 ## Design principles
 
