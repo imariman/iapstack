@@ -239,6 +239,7 @@ func ComputeSubscriptionMetrics(
 		Breakdown: make([]SubscriptionBreakdown, 0), Daily: make([]SubscriptionDailyActive, 0, query.WindowDays),
 	}
 	start, measuredAt := window.Start, window.MeasuredAt
+	lineages = append([]SubscriptionLineage(nil), lineages...)
 	for index := range lineages {
 		lineages[index].Intervals = nonEmptyIntervals(lineages[index].Intervals)
 	}
@@ -411,9 +412,9 @@ func ComputeSubscriptionMetrics(
 	return metrics
 }
 
-// nonEmptyIntervals drops periods whose end is not after their start.
+// nonEmptyIntervals returns a copy without periods whose end is not after their start.
 func nonEmptyIntervals(intervals []SubscriptionInterval) []SubscriptionInterval {
-	kept := intervals[:0]
+	kept := make([]SubscriptionInterval, 0, len(intervals))
 	for _, interval := range intervals {
 		if interval.EndsAt.After(interval.StartsAt) {
 			kept = append(kept, interval)
