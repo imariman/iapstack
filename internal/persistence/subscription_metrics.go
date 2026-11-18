@@ -254,7 +254,10 @@ func ComputeSubscriptionMetrics(
 ) SubscriptionMetrics {
 	// The query is validated before it reaches here; clamp again so the allocation stays bounded
 	// even for a caller that skips validation.
-	dailyCapacity := min(max(query.WindowDays, 0), SubscriptionMetricsMaximumWindowDays)
+	dailyCapacity := 0
+	if query.WindowDays > 0 && query.WindowDays <= SubscriptionMetricsMaximumWindowDays {
+		dailyCapacity = query.WindowDays
+	}
 	metrics := SubscriptionMetrics{
 		Environment: query.Environment, WindowDays: query.WindowDays, Window: window,
 		Breakdown: make([]SubscriptionBreakdown, 0), Daily: make([]SubscriptionDailyActive, 0, dailyCapacity),
