@@ -276,9 +276,13 @@ class IAPStackModule(private val context: ReactApplicationContext) :
     }
     val partial = error as? IapStackException
     if (partial != null && partial.committedRestoreResults.isNotEmpty()) {
-      fields["committedResults"] = partial.committedRestoreResults.map(::verification)
-      fields["skipped"] = skipCounts(partial.restoreSkips)
-      fields["pageLimitReached"] = partial.restorePageLimitReached
+      // Same serializer as a resolved restore, with `results` renamed.
+      val progress = restoreResult(RestoreResult(
+        partial.committedRestoreResults, partial.restoreSkips, partial.restorePageLimitReached,
+      ))
+      fields["committedResults"] = progress["results"]
+      fields["skipped"] = progress["skipped"]
+      fields["pageLimitReached"] = progress["pageLimitReached"]
     }
     promise.reject(event["code"] as String, event["message"] as String, Arguments.makeNativeMap(fields))
   }

@@ -2,7 +2,7 @@ import {NativeEventEmitter, NativeModules, Platform} from 'react-native';
 import {IapStackConfig} from './config';
 import {IapStackIncompleteRestoreError, IapStackProtocolError} from './errors';
 import {
-  decodeEntitlementSnapshot, decodeRestoreResult, decodeRestoreSkipCounts, decodeVerificationResult,
+  decodeEntitlementSnapshot, decodeRestoreResult, decodeVerificationResult,
   type EntitlementSnapshot, type ProductKind, type RestoreResult, type VerificationResult,
 } from './models';
 
@@ -140,10 +140,13 @@ export const IapStackStore = {
   },
   /**
    * Resolves with results plus `skipped` counts and `pageLimitReached`
-   * (Huawei page cap). When a later batch fails after earlier batches
-   * committed, rejects with {@link IapStackIncompleteRestoreError} carrying the
-   * committed `committedResults`, `skipped`, and `pageLimitReached`; failures
-   * before any batch committed keep the plain native code+message rejection.
+   * (Huawei page cap). When restore stops after the server accepted at least
+   * one batch (a later batch failed, or on iOS StoreKit could not finish a
+   * transaction from an accepted batch), rejects with
+   * {@link IapStackIncompleteRestoreError} carrying `committedResults`,
+   * `skipped`, `pageLimitReached`, and the API failure fields when there was
+   * one. Failures before any batch was accepted keep the plain native
+   * code+message rejection.
    */
   async restore(requestId?: string): Promise<RestoreResult> {
     let result: Record<string, unknown>;
@@ -208,31 +211,41 @@ export const IapStackStore = {
  */
 function incompleteRestoreError(error: unknown): IapStackIncompleteRestoreError | null {
   if (!error || typeof error !== 'object') return null;
-  const failure = error as {code?: unknown; message?: unknown; userInfo?: unknown;
-    committedResults?: unknown; skipped?: unknown; pageLimitReached?: unknown};
+  const failure = error as Record<string, unknown>;
   const info = (failure.userInfo && typeof failure.userInfo === 'object' && !Array.isArray(failure.userInfo))
-    ? failure.userInfo as {committedResults?: unknown; skipped?: unknown; pageLimitReached?: unknown}
+    ? failure.userInfo as Record<string, unknown>
     : failure;
   const committed = info.committedResults;
   if (!Array.isArray(committed) || committed.length === 0) return null;
+  let progress: RestoreResult;
   try {
-    const committedResults = committed.map((entry) => {
-      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new TypeError('invalid committed result');
-      return decodeVerificationResult(entry as Record<string, unknown>);
-    });
-    return new IapStackIncompleteRestoreError(
-      typeof failure.message === 'string' && failure.message ? failure.message : 'Restore committed earlier batches and then failed',
-      typeof failure.code === 'string' && failure.code ? failure.code : undefined,
-      committedResults,
-      decodeRestoreSkipCounts(info.skipped),
-      info.pageLimitReached === true,
-      error,
-    );
+    // Same decoder and rules as a resolved restore.
+    progress = decodeRestoreResult({results: committed, skipped: info.skipped,
+      pageLimitReached: info.pageLimitReached});
   } catch {
-    // Malformed committed payload: keep the original rejection rather than
+    // Malformed progress payload: keep the original rejection rather than
     // inventing results the caller might unlock on.
     return null;
   }
+  const statusCode = info.statusCode;
+  const api = typeof statusCode === 'number' && Number.isInteger(statusCode) && statusCode > 0
+    ? {
+      statusCode,
+      retryable: info.retryable === true,
+      requestId: typeof info.requestId === 'string' && info.requestId ? info.requestId : undefined,
+      retryAfterMs: typeof info.retryAfterMs === 'number' && Number.isFinite(info.retryAfterMs) &&
+        info.retryAfterMs >= 0 ? info.retryAfterMs : undefined,
+    }
+    : {};
+  return new IapStackIncompleteRestoreError(
+    typeof failure.message === 'string' && failure.message ? failure.message : 'Restore stopped after the server accepted a batch',
+    typeof failure.code === 'string' && failure.code ? failure.code : undefined,
+    progress.results,
+    progress.skipped,
+    progress.pageLimitReached,
+    error,
+    api,
+  );
 }
 
 function pendingProductIds(value: unknown): string[] | undefined {

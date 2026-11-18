@@ -151,6 +151,25 @@ public struct Entitlement: Sendable {
   }
 }
 
+/// Event name for a purchase update after the server has answered. Mirrors
+/// `purchaseListenerEventType` in the Android Google Play companion:
+/// `verified` means the result granted access or the server returned a
+/// definitive denial; `pending` means payment is still unresolved, including an
+/// empty snapshot. Another entitlement that already grants access does not
+/// rename an unresolved purchase to `verified`. Callers must read
+/// `grantsAccess`, never the event name, before unlocking. The React Native
+/// bridge compiles these sources and is the caller.
+func purchaseListenerEventType(_ entitlements: [Entitlement]) -> String {
+  if entitlements.isEmpty {
+    return "pending"
+  }
+  let unresolved = entitlements.filter { $0.access == "unresolved" || $0.reason == "pending_payment" }
+  if !unresolved.isEmpty && !unresolved.contains(where: { $0.grantsAccess() }) {
+    return "pending"
+  }
+  return "verified"
+}
+
 /// Result after a single verification request.
 public struct VerificationResult: Sendable {
   /// Creates one verification response.

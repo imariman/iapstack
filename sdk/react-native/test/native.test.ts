@@ -153,8 +153,8 @@ test('restore rejects on malformed skip metadata instead of guessing counts', as
 });
 test('a later restore batch failure rejects with the committed first batch attached', async () => {
   const nativeError = {code: 'service_unavailable', message: 'IAPStack operation failed (service_unavailable)',
-    userInfo: {statusCode: 503, committedResults: [wire], pageLimitReached: true,
-      skipped: {differentCustomer: 1}}};
+    userInfo: {statusCode: 503, retryable: true, retryAfterMs: 30000, requestId: 'req-2',
+      committedResults: [wire], pageLimitReached: true, skipped: {differentCustomer: 1}}};
   restoreImpl = async () => { throw nativeError; };
   let thrown: unknown;
   try { await IapStackStore.restore(); } catch (error) { thrown = error; }
@@ -166,11 +166,35 @@ test('a later restore batch failure rejects with the committed first batch attac
   expect(incomplete.skipped.differentCustomer).toBe(1);
   expect(incomplete.pageLimitReached).toBe(true);
   expect(incomplete.cause).toBe(nativeError);
+  // The API failure's retry metadata stays readable on the typed error.
+  expect(incomplete.statusCode).toBe(503);
+  expect(incomplete.retryable).toBe(true);
+  expect(incomplete.retryAfterMs).toBe(30000);
+  expect(incomplete.requestId).toBe('req-2');
+});
+test('an incomplete restore without an API failure leaves the API fields unset', async () => {
+  // iOS: every batch was accepted, then StoreKit could not finish a transaction.
+  restoreImpl = async () => { throw {code: 'apple_complete_failed', message: 'IAPStack operation failed (apple_complete_failed)',
+    userInfo: {committedResults: [wire], skipped: {}, pageLimitReached: false}}; };
+  let thrown: unknown;
+  try { await IapStackStore.restore(); } catch (error) { thrown = error; }
+  const incomplete = thrown as InstanceType<typeof IapStackIncompleteRestoreError>;
+  expect(incomplete).toBeInstanceOf(IapStackIncompleteRestoreError);
+  expect(incomplete.code).toBe('apple_complete_failed');
+  expect(incomplete.statusCode).toBeUndefined();
+  expect(incomplete.retryable).toBeUndefined();
+  expect(incomplete.retryAfterMs).toBeUndefined();
+  expect(incomplete.requestId).toBeUndefined();
 });
 test('restore failures without committed batches keep the plain native rejection', async () => {
   for (const nativeError of [{code: 'transport_error', message: 'IAPStack operation failed (transport_error)'},
     {code: 'transport_error', message: 'offline', userInfo: {committedResults: []}},
-    {code: 'transport_error', message: 'offline', userInfo: {committedResults: [{entitlements: 'invalid'}]}}]) {
+    {code: 'transport_error', message: 'offline', userInfo: {committedResults: [{entitlements: 'invalid'}]}},
+    // Restore progress decodes with the success-path rules: malformed metadata
+    // is a contract violation there, so it never becomes a typed error here.
+    {code: 'transport_error', message: 'offline', userInfo: {committedResults: [wire], pageLimitReached: 'yes'}},
+    {code: 'transport_error', message: 'offline', userInfo: {committedResults: [wire], pageLimitReached: 1}},
+    {code: 'transport_error', message: 'offline', userInfo: {committedResults: [wire], skipped: {unbound: 1.5}}}]) {
     restoreImpl = async () => { throw nativeError; };
     let thrown: unknown;
     try { await IapStackStore.restore(); } catch (error) { thrown = error; }
