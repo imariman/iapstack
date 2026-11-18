@@ -252,9 +252,12 @@ func ComputeSubscriptionMetrics(
 	providers []core.Provider,
 	lineages []SubscriptionLineage,
 ) SubscriptionMetrics {
+	// The query is validated before it reaches here; clamp again so the allocation stays bounded
+	// even for a caller that skips validation.
+	dailyCapacity := min(max(query.WindowDays, 0), SubscriptionMetricsMaximumWindowDays)
 	metrics := SubscriptionMetrics{
 		Environment: query.Environment, WindowDays: query.WindowDays, Window: window,
-		Breakdown: make([]SubscriptionBreakdown, 0), Daily: make([]SubscriptionDailyActive, 0, query.WindowDays),
+		Breakdown: make([]SubscriptionBreakdown, 0), Daily: make([]SubscriptionDailyActive, 0, dailyCapacity),
 	}
 	start, measuredAt := window.Start, window.MeasuredAt
 	lineages = append([]SubscriptionLineage(nil), lineages...)
@@ -398,7 +401,7 @@ func ComputeSubscriptionMetrics(
 		}
 	}
 
-	for day := 0; day < query.WindowDays; day++ {
+	for day := 0; day < dailyCapacity; day++ {
 		dayStart := start.Add(time.Duration(day) * subscriptionDay)
 		if dayStart.After(measuredAt) {
 			break
