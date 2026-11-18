@@ -118,6 +118,9 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 		"ApiKey":                       {"id", "role", "created_at", "current"},
 		"CustomerResolution":           {"project_id", "external_id", "canonical_customer_id", "match"},
 		"CustomerMerge":                {"id", "project_id", "canonical_customer_id", "source_customer_id", "idempotency_key", "created_at"},
+		"AppleConsumptionStatus":       {"settings", "recent_requests"},
+		"AppleConsumptionSettings":     {"project_id", "application_id", "enabled", "consent_mode", "refund_preference", "sample_content_provided", "revision"},
+		"AppleConsumptionConsent":      {"application_id", "customer_id", "external_customer_id", "consented", "updated_at"},
 	} {
 		schemaReference, exists := document.Components.Schemas[name]
 		if !exists || schemaReference.Value == nil {
@@ -249,6 +252,36 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 			ProjectID: "project-1", ApplicationID: "application-3", Kind: "google_play_android_publisher",
 			ContentType: "application/vnd.iapstack.google-play-credentials+json", SchemaVersion: 1,
 			Revision: 1, CreatedAt: now, UpdatedAt: now,
+		}},
+		{name: "default Apple consumption status", schema: "AppleConsumptionStatus", value: appleConsumptionStatusResponse{
+			Settings:       consumptionSettingsResponse(persistence.DefaultAppleConsumptionSettings("project-1", "application-2")),
+			RecentRequests: []appleConsumptionRequestResponse{},
+		}},
+		{name: "Apple consumption status", schema: "AppleConsumptionStatus", value: appleConsumptionStatusResponse{
+			Settings: consumptionSettingsResponse(persistence.AppleConsumptionSettings{
+				ProjectID: "project-1", ApplicationID: "application-2", Enabled: true,
+				ConsentMode: persistence.ConsumptionConsentCustomerOptIn, RefundPreference: persistence.ConsumptionRefundPreferenceDecline,
+				SampleContentProvided: true, Revision: 2, CreatedAt: now, UpdatedAt: now,
+			}),
+			RecentRequests: []appleConsumptionRequestResponse{
+				consumptionRequestResponse(persistence.AppleConsumptionRequestSummary{
+					ID: "consumption-1", ApplicationID: "application-2", CustomerID: "customer-1",
+					ProviderProductID: "iapstack.pro", ProductType: "auto_renewable_subscription",
+					CustomerReason: "unintended_purchase", Status: persistence.ConsumptionStatusSent,
+					StatusReason: "accepted", AttemptCount: 1, SignedAt: now, ReceivedAt: now,
+					DeadlineAt: now.Add(12 * time.Hour), CompletedAt: &now, LastHTTPStatus: http.StatusAccepted,
+				}),
+				consumptionRequestResponse(persistence.AppleConsumptionRequestSummary{
+					ID: "consumption-2", ApplicationID: "application-2", ProviderProductID: "iapstack.coins",
+					ProductType: "consumable", Status: persistence.ConsumptionStatusPending,
+					StatusReason: "provider_temporary", AttemptCount: 2, SignedAt: now, ReceivedAt: now,
+					DeadlineAt: now.Add(12 * time.Hour), LastHTTPStatus: http.StatusBadRequest, LastAppleErrorCode: 4000006,
+				}),
+			},
+		}},
+		{name: "Apple consumption consent", schema: "AppleConsumptionConsent", value: appleConsumptionConsentResponse{
+			ApplicationID: "application-2", CustomerID: "customer-1",
+			ExternalCustomerID: "4f753b4a-32c1-4fe4-a8e6-06efb0b35db7", Consented: true, UpdatedAt: now,
 		}},
 		{name: "webhook metadata", schema: "WebhookConfiguration", value: map[string]any{
 			"url": "https://example.com/iapstack/events", "revision": int64(1),

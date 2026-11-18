@@ -783,6 +783,83 @@ paths:
           $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/applications/{application_id}/apple-consumption:
+    get:
+      tags: [Administration]
+      operationId: getAdminAppleConsumption
+      summary: Read App Store consumption-answer settings and recent consumption requests
+      description: >-
+        Returns the operator settings for answering App Store CONSUMPTION_REQUEST
+        notifications and the newest requests with their outcome. An application
+        that never saved settings reports disabled defaults with revision 0.
+        Requests carry no transaction identifier or app account token.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ApplicationId'
+      responses:
+        '200':
+          description: Settings and up to 20 recent requests, newest first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppleConsumptionStatus'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    put:
+      tags: [Administration]
+      operationId: putAdminAppleConsumption
+      summary: Enable or change App Store consumption answers for one application
+      description: >-
+        Off by default. Revision 0 creates the settings; a matching positive
+        revision updates them. Only App Store applications accept this operation.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ApplicationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppleConsumptionSettingsRequest'
+      responses:
+        '200':
+          description: Saved settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppleConsumptionSettings'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /v1/applications/{application_id}/customer-sessions:
     post:
       tags: [Customer sessions]
@@ -926,6 +1003,53 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/applications/{application_id}/customers/{external_customer_id}/apple-consumption-consent:
+    put:
+      tags: [Customers]
+      operationId: putApplicationAppleConsumptionConsent
+      summary: Record whether one customer consents to sharing consumption data with Apple
+      description: >-
+        The trusted host backend calls this after the customer answers the app's
+        consent prompt. The newest decision wins. In customer_opt_in mode IAPStack
+        answers a consumption request only after consented is true; in
+        application_attested mode consented false withdraws consent. The customer
+        must already exist. Only App Store applications accept this operation.
+      security:
+        - applicationBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ApplicationId'
+        - $ref: '#/components/parameters/ExternalCustomerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppleConsumptionConsentRequest'
+      responses:
+        '200':
+          description: Stored consent decision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppleConsumptionConsent'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -2572,6 +2696,152 @@ components:
           type: string
           format: date-time
           nullable: true
+    AppleConsumptionSettingsRequest:
+      type: object
+      additionalProperties: false
+      required: [enabled, consent_mode, refund_preference, sample_content_provided, expected_revision]
+      properties:
+        enabled:
+          type: boolean
+        consent_mode:
+          $ref: '#/components/schemas/AppleConsumptionConsentMode'
+        refund_preference:
+          $ref: '#/components/schemas/AppleConsumptionRefundPreference'
+        sample_content_provided:
+          type: boolean
+          description: >-
+            Operator declaration sent as sampleContentProvided: true when the app
+            offered a free sample or trial, or described how the content works,
+            before purchase.
+        expected_revision:
+          type: integer
+          format: int64
+          minimum: 0
+    AppleConsumptionSettings:
+      type: object
+      additionalProperties: false
+      required: [project_id, application_id, enabled, consent_mode, refund_preference, sample_content_provided, revision]
+      properties:
+        project_id:
+          $ref: '#/components/schemas/Identifier'
+        application_id:
+          $ref: '#/components/schemas/Identifier'
+        enabled:
+          type: boolean
+        consent_mode:
+          $ref: '#/components/schemas/AppleConsumptionConsentMode'
+        refund_preference:
+          $ref: '#/components/schemas/AppleConsumptionRefundPreference'
+        sample_content_provided:
+          type: boolean
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Zero means the operator never saved settings.
+        updated_at:
+          type: string
+          format: date-time
+    AppleConsumptionConsentMode:
+      type: string
+      enum: [customer_opt_in, application_attested]
+      description: >-
+        customer_opt_in answers only for customers with a recorded consented true.
+        application_attested is the operator's declaration that the app collects
+        consent from every customer before purchase; a recorded consented false
+        still blocks that customer.
+    AppleConsumptionRefundPreference:
+      type: string
+      enum: [none, decline, grant_full, grant_prorated]
+      description: >-
+        none omits refundPreference. grant_prorated is sent only for
+        auto-renewable subscriptions; other product types omit the preference
+        because Apple then needs a consumption percentage that IAPStack does not know.
+    AppleConsumptionStatus:
+      type: object
+      additionalProperties: false
+      required: [settings, recent_requests]
+      properties:
+        settings:
+          $ref: '#/components/schemas/AppleConsumptionSettings'
+        recent_requests:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/AppleConsumptionRequest'
+    AppleConsumptionRequest:
+      type: object
+      additionalProperties: false
+      required: [id, provider_product_id, product_type, status, attempt_count, signed_at, received_at, deadline_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        customer_id:
+          $ref: '#/components/schemas/Identifier'
+        provider_product_id:
+          type: string
+        product_type:
+          type: string
+          enum: [consumable, non_consumable, auto_renewable_subscription, non_renewing_subscription]
+        customer_reason:
+          type: string
+          enum: [unintended_purchase, fulfillment_issue, unsatisfied_with_purchase, legal, other]
+        status:
+          type: string
+          enum: [pending, sent, skipped, expired, failed]
+        status_reason:
+          type: string
+          pattern: '^[a-z0-9_]{1,64}$'
+          description: >-
+            Why the request is in its status, for example accepted, disabled,
+            no_consent, consent_withdrawn, no_delivery_evidence, family_shared,
+            deadline_passed, apple_rejected, or provider_temporary while retrying.
+        attempt_count:
+          type: integer
+          minimum: 0
+        signed_at:
+          type: string
+          format: date-time
+        received_at:
+          type: string
+          format: date-time
+        deadline_at:
+          type: string
+          format: date-time
+          description: Twelve hours after Apple signed the notification.
+        completed_at:
+          type: string
+          format: date-time
+        last_http_status:
+          type: integer
+          minimum: 100
+          maximum: 599
+        last_apple_error_code:
+          type: integer
+          format: int64
+    AppleConsumptionConsentRequest:
+      type: object
+      additionalProperties: false
+      required: [consented]
+      properties:
+        consented:
+          type: boolean
+    AppleConsumptionConsent:
+      type: object
+      additionalProperties: false
+      required: [application_id, customer_id, external_customer_id, consented, updated_at]
+      properties:
+        application_id:
+          $ref: '#/components/schemas/Identifier'
+        customer_id:
+          $ref: '#/components/schemas/Identifier'
+        external_customer_id:
+          type: string
+        consented:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
     AdminQueue:
       type: object
       additionalProperties: false
