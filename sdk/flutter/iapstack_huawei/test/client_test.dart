@@ -120,6 +120,7 @@ void main() {
         'customer-1 ',
         ' customer-1 ',
         ' ',
+        ..._controlCharacterIds,
       ]) {
         await expectLater(
           huawei.purchaseAndVerify(
@@ -162,6 +163,7 @@ void main() {
         ' customer-1 ',
         '',
         ' ',
+        ..._controlCharacterIds,
       ]) {
         await expectLater(
           huawei.restorePurchases(externalCustomerId: customerId),
@@ -169,7 +171,7 @@ void main() {
             isA<ArgumentError>().having(
               (error) => error.message,
               'message',
-              'must be non-empty without surrounding whitespace',
+              _customerIdMessage,
             ),
           ),
         );
@@ -232,22 +234,50 @@ void main() {
         productKind: HuaweiProductKind.subscription,
       );
 
-      expect(
-        () => evidence.toSubmission(externalCustomerId: ' customer-1 '),
-        throwsA(
-          isA<ArgumentError>().having(
-            (error) => error.message,
-            'message',
-            'must be non-empty without surrounding whitespace',
+      for (final customerId in <String>[
+        ' customer-1 ',
+        ..._controlCharacterIds,
+      ]) {
+        expect(
+          () => evidence.toSubmission(externalCustomerId: customerId),
+          throwsA(
+            isA<ArgumentError>().having(
+              (error) => error.message,
+              'message',
+              _customerIdMessage,
+            ),
           ),
-        ),
-      );
+        );
+      }
       expect(
         evidence
             .toSubmission(externalCustomerId: 'customer-1')
             .externalCustomerId,
         'customer-1',
       );
+    });
+
+    test('accepts ids the server accepts, inner spaces and non-ASCII included',
+        () {
+      for (final customerId in <String>[
+        'customer 1',
+        'müşteri-1',
+        'user@example.com',
+        '顧客-1',
+      ]) {
+        final evidence = HuaweiPurchaseEvidence(
+          purchaseData:
+              _purchaseData('premium_monthly', customerId: customerId),
+          signature: 'signature-premium_monthly',
+          productKind: HuaweiProductKind.subscription,
+        );
+        expect(
+          evidence
+              .toSubmission(externalCustomerId: customerId)
+              .externalCustomerId,
+          customerId,
+        );
+      }
     });
 
     test('evicts requested products when a re-query fails part-way', () async {
@@ -738,6 +768,21 @@ const Map<String, HuaweiProductKind> _productKinds =
   'premium_lifetime': HuaweiProductKind.nonConsumable,
   'premium_monthly': HuaweiProductKind.subscription,
 };
+
+const String _customerIdMessage =
+    'must be non-empty, without surrounding whitespace or control characters';
+
+/// Ids the server's `validateIdentifier` rejects for a control character:
+/// C0 (U+0000-U+001F), DEL, or C1 (U+0080-U+009F) anywhere in the id.
+const List<String> _controlCharacterIds = <String>[
+  'customer\u00001',
+  'customer\t1',
+  'customer\n1',
+  'customer\u001f1',
+  'customer\u007f1',
+  'customer\u00851',
+  'customer\u009f1',
+];
 
 HuaweiProduct _product(String id, {int status = 0}) => HuaweiProduct(
       id: id,

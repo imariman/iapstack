@@ -8,16 +8,21 @@ import com.iapstack.core.PurchaseSubmission
 private val huaweiGson = Gson()
 
 /**
- * Requires one non-empty customer identity without surrounding whitespace.
+ * Requires one non-empty customer identity without surrounding whitespace or
+ * control characters.
  *
- * The same rule as core verification. A padded id would be charged as
- * `developerPayload` and then rejected before an entitlement is written, or
- * on restore would never match the bound payload and silently skip rows.
+ * This mirrors the server's identifier rule (`validateIdentifier` in
+ * `internal/core/identifiers.go`), whose control characters are C0
+ * (U+0000-U+001F), DEL, and C1 (U+0080-U+009F), the same set as
+ * [Char.isISOControl]. It runs before the Huawei purchase UI opens: an id the
+ * server rejects would be charged as `developerPayload` and then never produce
+ * an entitlement, and a padded id on restore would never match the bound
+ * payload and silently skip rows.
  */
 internal fun requireExternalCustomerId(value: String) {
-  if (value.isEmpty() || value.trim() != value) {
+  if (value.isEmpty() || value.trim() != value || value.any { it.isISOControl() }) {
     throw IllegalArgumentException(
-      "externalCustomerId must be non-empty without surrounding whitespace",
+      "externalCustomerId must be non-empty, without surrounding whitespace or control characters",
     )
   }
 }
