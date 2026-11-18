@@ -64,10 +64,13 @@ type EntitlementChange struct {
 	AccessReason string `json:"access_reason"`
 	// SourceObservationID is the observation that produced a schema version 1 projection.
 	SourceObservationID string `json:"source_observation_id,omitempty"`
-	// Source is import for schema version 2 and empty for schema version 1.
+	// Source is import for schema version 2, manual for schema version 3, and empty for schema version 1.
 	Source string `json:"source,omitempty"`
 	// SourceImportID is the import grant that produced a schema version 2 projection.
 	SourceImportID string `json:"source_import_id,omitempty"`
+	// SourceManualGrantID is the audited operator grant that produced a schema version 3 projection.
+	// A manual grant is not store evidence.
+	SourceManualGrantID string `json:"source_manual_grant_id,omitempty"`
 	// SourceApplicationID is the application that sourced the projection.
 	SourceApplicationID string `json:"source_application_id"`
 	// SourceProductID is the product that sourced the observation.
@@ -152,11 +155,17 @@ func (change EntitlementChange) validate() error {
 	}
 	switch change.SchemaVersion {
 	case 1:
-		if change.SourceObservationID == "" {
+		if change.SourceObservationID == "" || change.SourceManualGrantID != "" {
 			return errors.New("webhook event metadata is invalid")
 		}
 	case 2:
-		if change.Source != "import" || change.SourceImportID == "" || change.SourceObservationID != "" {
+		if change.Source != "import" || change.SourceImportID == "" || change.SourceObservationID != "" ||
+			change.SourceManualGrantID != "" {
+			return errors.New("webhook event metadata is invalid")
+		}
+	case 3:
+		if change.Source != "manual" || change.SourceManualGrantID == "" || change.SourceObservationID != "" ||
+			change.SourceImportID != "" {
 			return errors.New("webhook event metadata is invalid")
 		}
 	default:

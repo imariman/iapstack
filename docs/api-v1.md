@@ -196,6 +196,34 @@ Observations stored before migration 014 carry no phase, and `with_offer_phase`
 shows that coverage. The response has no money figure. The definitions are in
 [docs/plans/subscription-metrics.md](plans/subscription-metrics.md).
 
+### Customer support
+
+- `GET /v1/admin/projects/{project_id}/customers?query=&limit=&page_token=` searches one
+  project. The query matches exactly an external customer id, an internal customer id, an
+  alias, or a stored provider transaction or original transaction id, and as a
+  case-sensitive prefix of the external or internal id. Each result carries `match`. Store
+  references are compared by keyed fingerprint; purchase tokens and customer bindings are
+  not searchable. An empty query lists customers newest first. Pages hold at most 100
+  results and `next_page_token` is valid only with the same query.
+- `GET /v1/admin/projects/{project_id}/customers/{customer_id}` returns identity, aliases
+  and merges, every current entitlement with its `source` (`store_observation`, `import`,
+  or `manual`), manual grants, and a bounded newest-first timeline built from stored
+  observations, import grants, manual grants, entitlement changes, webhook outcomes,
+  reconciliation jobs, and identity audit rows.
+- `POST /v1/admin/projects/{project_id}/customers/{customer_id}/manual-grants` grants an
+  entitlement through one product and application for `duration_days` or until `ends_at`,
+  with a required `reason` and `idempotency_key`. The application must map the product to
+  a store product; otherwise the grant is refused with `422 product_not_mapped`.
+  `POST .../manual-grants/{grant_id}:revoke` ends it early with a required reason. Both
+  require a stored administrator key; the bootstrap credential gets `403 forbidden`.
+
+A manual grant is an audited access source of kind `manual`. While it allows access, the
+public entitlement and the webhook report `reason` `manual_grant`; after revocation they report
+`revoked`. Imports keep their own reasons. It is never stored as purchase
+evidence or a store observation and never appears in recent verifications or the
+verification series. It feeds the normal projection and a changed projection enqueues the
+normal webhook.
+
 Application summaries expose only `credential_revision` and `webhook_revision` for
 optimistic dashboard updates. A zero revision means the corresponding configuration
 is absent. Revision values are not secrets; endpoint URLs, signing secrets, provider
@@ -406,7 +434,10 @@ transaction, the Google Play purchase token, or the Huawei purchase token. Obser
 times are compared only inside one lineage. A customer who lets a subscription expire
 and buys the same product again keeps access from the new lineage when the old one is
 refreshed. When several sources allow access, a store observation is projected before
-an import, then the source whose access ends last. The daily reconciliation of a
+an import, then the source whose access ends last. An administrator's manual grant is its
+own source: store evidence never supersedes it, it never supersedes store evidence, and
+among allowed sources the one whose access ends last is projected, with store evidence
+first on equal ends. The daily reconciliation of a
 lineage stops once the provider reports every line item expired with automatic renewal
 off. A lineage the provider can still renew, such as one in billing retry, keeps its
 daily refresh. Refunded and revoked lineages keep their daily refresh too. A later resubscription is scheduled again when the
@@ -425,7 +456,7 @@ v2
 
 The event ID is authenticated. Reject `v1` signatures, timestamps outside the application's replay window, and any delivery whose `IAPStack-Event-ID` does not match the MAC. Deduplicate by that authenticated event ID.
 
-The body is the `entitlement.changed` payload modeled by `EntitlementChange` in the Go and TypeScript SDKs. It has no `event_type` field, and no header names the event type. `entitlement.changed` is the only event IAPStack delivers. `application_id` follows the shared identifier rules: it can contain inner spaces and non-ASCII text and has no length cap.
+The body is the `entitlement.changed` payload modeled by `EntitlementChange` in the Go and TypeScript SDKs. It has no `event_type` field, and no header names the event type. `entitlement.changed` is the only event IAPStack delivers. `schema_version` 1 cites `source_observation_id`, version 2 has `source` `import` and `source_import_id`, and version 3 has `source` `manual` and `source_manual_grant_id`. Only manual-grant events use version 3; store events stay on version 1 and import events on version 2, so older SDK verifiers keep accepting them. Versions 2 and 3 are not store verification and carry no observation id. An allowed manual grant reports `access_reason` `manual_grant`. `application_id` follows the shared identifier rules: it can contain inner spaces and non-ASCII text and has no length cap.
 
 ## Shared SDK behavior
 

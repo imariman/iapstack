@@ -1,5 +1,22 @@
 # SDK changelog
 
+## Unreleased
+
+### Added
+
+- Go and TypeScript host webhook verifiers accept `entitlement.changed`
+  schema version 3. The server emits it when an administrator's manual grant
+  is the projection source. Version 3 requires `source` `manual` and
+  `source_manual_grant_id`, and rejects `source_observation_id` and
+  `source_import_id`. A manual grant is not store evidence. Version 1 and 2
+  decoding is unchanged, except that a `source_manual_grant_id` on either is
+  rejected. Earlier SDK releases reject version 3 events. Only manual-grant
+  events use version 3; store events stay on version 1 and import events on
+  version 2.
+- Entitlement `reason` can be `manual_grant`: an administrator's audited grant,
+  not a store purchase. Every SDK decodes it as a forward-compatible string and
+  `grantsAccess` still checks only `access` and `effective_ends_at`.
+
 ## 0.1.0-sdk.3
 
 ### Breaking

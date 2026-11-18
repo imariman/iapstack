@@ -40,6 +40,9 @@ func ClearIdentityMigrationGuards(ctx context.Context, connection *pgx.Conn) err
 					OR source_import_id IS NOT NULL
 					OR source_observation_id IS NULL;
 			END IF;
+			IF to_regclass('public.manual_grants') IS NOT NULL THEN
+				DELETE FROM manual_grants;
+			END IF;
 			IF to_regclass('public.import_grants') IS NOT NULL THEN
 				DELETE FROM import_grants;
 			END IF;

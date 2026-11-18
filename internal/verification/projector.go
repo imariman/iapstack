@@ -51,6 +51,8 @@ func NewDefaultProjector() *DefaultProjector {
 // Project selects one candidate per entitlement without revoking an independent allowed source.
 // Each purchase lineage is its own source, so an expired lineage cannot revoke a later purchase
 // of the same product. A store observation still supersedes every import of its application product.
+// A manual grant is its own source too: store evidence never supersedes it, and it never supersedes
+// store evidence. Among allowed sources the one whose access lasts longest is projected.
 func (projector *DefaultProjector) Project(
 	current []persistence.CustomerEntitlement,
 	candidates []ProjectionCandidate,
@@ -220,18 +222,23 @@ func newerSourceCandidate(candidate, existing ProjectionCandidate) bool {
 }
 
 // candidatePreferred deterministically ranks competing new sources for one entitlement.
-// Among allowed sources of the same kind, the one whose access lasts longest wins, so a lapsed
-// lineage that has not been refreshed yet cannot hide a newer purchase.
+// A store observation outranks an import before end times are compared. Otherwise the allowed
+// source whose access lasts longest wins, so a lapsed lineage that has not been refreshed yet
+// cannot hide a newer purchase, and a manual grant that outlasts store access stays projected
+// until its own end. Equal ends prefer store evidence, then a manual grant, then an import.
 func candidatePreferred(candidate, existing ProjectionCandidate) bool {
 	candidateStrength := accessStrength(candidate.Projection.Access)
 	existingStrength := accessStrength(existing.Projection.Access)
 	if candidateStrength != existingStrength {
 		return candidateStrength > existingStrength
 	}
-	if rank := compareSourceKind(candidate.Projection, existing.Projection); rank != 0 {
-		return rank > 0
+	if storeAgainstImport(candidate.Projection, existing.Projection) {
+		return compareSourceKind(candidate.Projection, existing.Projection) > 0
 	}
 	if rank := compareAllowedEnd(candidate.Projection, existing.Projection); rank != 0 {
+		return rank > 0
+	}
+	if rank := compareSourceKind(candidate.Projection, existing.Projection); rank != 0 {
 		return rank > 0
 	}
 	if !candidate.ObservedAt.Equal(existing.ObservedAt) {
@@ -264,25 +271,41 @@ func compareAllowedEnd(candidate, existing persistence.EntitlementProjection) in
 	}
 }
 
-// compareSourceKind ranks a store observation above an import grant.
+// compareSourceKind ranks a store observation above a manual grant, and a manual grant above an import.
 func compareSourceKind(candidate, existing persistence.EntitlementProjection) int {
 	return sourceKindRank(candidate) - sourceKindRank(existing)
 }
 
-// sourceKindRank scores store observations above import grants.
+// sourceKindRank scores store observations above manual grants and manual grants above import grants.
 func sourceKindRank(projection persistence.EntitlementProjection) int {
-	if projection.Normalized().SourceKind == persistence.SourceKindImport {
+	switch projection.Normalized().SourceKind {
+	case persistence.SourceKindImport:
 		return 1
+	case persistence.SourceKindManual:
+		return 2
+	default:
+		return 3
 	}
-	return 2
+}
+
+// storeAgainstImport reports whether one projection is store evidence and the other an import grant.
+func storeAgainstImport(left, right persistence.EntitlementProjection) bool {
+	leftKind := left.Normalized().SourceKind
+	rightKind := right.Normalized().SourceKind
+	return (leftKind == persistence.SourceKindStoreObservation && rightKind == persistence.SourceKindImport) ||
+		(leftKind == persistence.SourceKindImport && rightKind == persistence.SourceKindStoreObservation)
 }
 
 // projectionSourceIdentity returns the stable id used to break equal observation times.
 func projectionSourceIdentity(projection persistence.EntitlementProjection) string {
-	if projection.Normalized().SourceKind == persistence.SourceKindImport {
+	switch projection.Normalized().SourceKind {
+	case persistence.SourceKindImport:
 		return projection.SourceImportID
+	case persistence.SourceKindManual:
+		return projection.SourceManualGrantID
+	default:
+		return string(projection.SourceObservationID)
 	}
-	return string(projection.SourceObservationID)
 }
 
 // importLosesToStore reports that an equal-strength shortcut must not keep an import over a store observation.

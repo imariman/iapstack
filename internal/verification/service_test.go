@@ -1287,6 +1287,22 @@ func (repository *fakeTransaction) MergeCustomers(
 	return persistence.CustomerMergeResult{}, persistence.ErrNotFound
 }
 
+// CreateManualGrant is unused by verification orchestration tests.
+func (repository *fakeTransaction) CreateManualGrant(
+	context.Context,
+	persistence.ManualGrantWrite,
+) (persistence.ManualGrantResult, error) {
+	return persistence.ManualGrantResult{}, persistence.ErrNotFound
+}
+
+// RevokeManualGrant is unused by verification orchestration tests.
+func (repository *fakeTransaction) RevokeManualGrant(
+	context.Context,
+	persistence.ManualGrantRevocation,
+) (persistence.ManualGrantResult, error) {
+	return persistence.ManualGrantResult{}, persistence.ErrNotFound
+}
+
 // CatalogProducts returns requested mappings in request order.
 func (repository *fakeTransaction) CatalogProducts(
 	_ context.Context,

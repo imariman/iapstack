@@ -476,7 +476,99 @@ paths:
           $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/customers:
+    get:
+      tags: [Administration]
+      operationId: searchAdminCustomers
+      summary: Search project customers by identifier or store transaction id
+      description: >-
+        Matches the query exactly against the external customer id, the internal customer id,
+        an alias external id, and stored provider transaction and original transaction ids, and
+        as a case-sensitive prefix of the external or internal customer id. Provider references
+        are compared by their keyed fingerprint, so search never decrypts stored references.
+        Purchase tokens and customer bindings are not searchable. An empty query lists
+        customers newest first. Results are ordered by match rank, then newest first.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - name: query
+          in: query
+          required: false
+          description: Untrusted search text. Surrounding whitespace is ignored. At most 512 bytes after trimming, with no control characters.
+          schema:
+            type: string
+            maxLength: 1024
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+        - name: page_token
+          in: query
+          required: false
+          description: Opaque cursor from next_page_token. It is only valid with the same query.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 1024
+      responses:
+        '200':
+          description: One page of matching customers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCustomerSearchPage'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /v1/admin/projects/{project_id}/customers/{customer_id}:
+    get:
+      tags: [Administration]
+      operationId: getAdminCustomer
+      summary: Load one customer's identity, access sources, manual grants, and timeline
+      description: >-
+        Returns the canonical customer closure: identity, aliases and merges, every current
+        entitlement with the access source it cites (store observation, import, or manual),
+        manual grants, and a reverse-chronological timeline built only from stored records.
+        Each timeline source is bounded to 100 rows and the merged timeline to 200 events.
+        When the path names a merged customer, access and timeline describe its canonical customer.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/CustomerId'
+      responses:
+        '200':
+          description: Customer support detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCustomerDetail'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     put:
       tags: [Administration]
       operationId: putAdminCustomer
@@ -547,6 +639,111 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/customers/{customer_id}/manual-grants:
+    post:
+      tags: [Administration]
+      operationId: createAdminManualGrant
+      summary: Grant an entitlement to a customer for a duration or until a date
+      description: >-
+        Records an audited operator grant with a required reason. The grant is an access source
+        of kind manual. It is never stored as purchase evidence or a store observation. It feeds
+        the normal entitlement projection, and a changed projection enqueues the normal signed
+        entitlement.changed webhook with schema_version 3 and source manual. Requires a stored
+        administrator key; the bootstrap credential is refused. Replaying the same
+        idempotency_key with the same customer, entitlement, product, application, and reason
+        returns the stored grant without another projection change.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/CustomerId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManualGrantRequest'
+      responses:
+        '200':
+          description: Stored grant and the projection changes it caused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManualGrantResult'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Same-origin verification failed, or the principal has no stored administrator key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/customers/{customer_id}/manual-grants/{grant_id}:revoke:
+    post:
+      tags: [Administration]
+      operationId: revokeAdminManualGrant
+      summary: End one manual grant early
+      description: >-
+        Records the revoking administrator and a required reason, then refreshes the projection.
+        Access falls back to any other source; a changed projection enqueues the normal webhook.
+        Revoking an already revoked grant returns the stored revocation.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/CustomerId'
+        - $ref: '#/components/parameters/GrantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManualGrantRevocationRequest'
+      responses:
+        '200':
+          description: Revoked grant and the projection changes it caused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManualGrantResult'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Same-origin verification failed, or the principal has no stored administrator key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -1293,6 +1490,13 @@ components:
       required: true
       schema:
         $ref: '#/components/schemas/Identifier'
+    GrantId:
+      name: grant_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^mgr-[0-9a-f]{32}$'
     CredentialKind:
       name: kind
       in: path
@@ -1858,6 +2062,10 @@ components:
           enum: [allowed, denied, unresolved]
         reason:
           type: string
+          description: >-
+            Normalized access reason. manual_grant means an administrator's audited manual
+            grant allows access; it is not store verification. Clients should treat unknown
+            values as forward-compatible strings.
           enum:
             - purchase_valid
             - grace_period
@@ -1870,6 +2078,7 @@ components:
             - revoked
             - provider_decision
             - unresolved
+            - manual_grant
         effective_starts_at:
           type: string
           format: date-time
@@ -2854,6 +3063,400 @@ components:
         created_at:
           type: string
           format: date-time
+    AdminCustomerSearchPage:
+      type: object
+      additionalProperties: false
+      required: [customers]
+      properties:
+        customers:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/AdminCustomerMatch'
+        next_page_token:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          description: Present when more matches exist. Pass it as page_token with the same query.
+    AdminCustomerMatch:
+      type: object
+      additionalProperties: false
+      required: [id, external_id, entitlement_count, allowed_count, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        external_id:
+          $ref: '#/components/schemas/Identifier'
+        merged_into_customer_id:
+          type: string
+          minLength: 1
+          nullable: true
+        alias_count:
+          type: integer
+          format: int64
+          minimum: 0
+        entitlement_count:
+          type: integer
+          format: int64
+          minimum: 0
+        allowed_count:
+          type: integer
+          format: int64
+          minimum: 0
+        last_observed_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        match:
+          type: string
+          description: Why the customer matched. Absent when the query is empty.
+          enum:
+            - external_id
+            - customer_id
+            - alias
+            - transaction_id
+            - original_transaction_id
+            - external_id_prefix
+            - customer_id_prefix
+    AdminCustomerIdentity:
+      type: object
+      additionalProperties: false
+      required: [id, external_id, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        external_id:
+          $ref: '#/components/schemas/Identifier'
+        merged_into_customer_id:
+          $ref: '#/components/schemas/Identifier'
+        created_at:
+          type: string
+          format: date-time
+    AdminCustomerAlias:
+      type: object
+      additionalProperties: false
+      required: [external_id, canonical_customer_id, actor_role, actor_key_id, created_at]
+      properties:
+        external_id:
+          $ref: '#/components/schemas/Identifier'
+        canonical_customer_id:
+          $ref: '#/components/schemas/Identifier'
+        actor_role:
+          type: string
+          enum: [admin, application]
+        actor_key_id:
+          $ref: '#/components/schemas/Identifier'
+        created_at:
+          type: string
+          format: date-time
+    AdminCustomerMergeRecord:
+      type: object
+      additionalProperties: false
+      required: [id, canonical_customer_id, source_customer_id, source_external_id, actor_key_id, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Identifier'
+        canonical_customer_id:
+          $ref: '#/components/schemas/Identifier'
+        source_customer_id:
+          $ref: '#/components/schemas/Identifier'
+        source_external_id:
+          $ref: '#/components/schemas/Identifier'
+        actor_key_id:
+          $ref: '#/components/schemas/Identifier'
+        created_at:
+          type: string
+          format: date-time
+    AdminCustomerEntitlement:
+      type: object
+      additionalProperties: false
+      required: [entitlement_id, key, source, source_id, source_application_id, source_product_id, access, reason, version, updated_at]
+      description: Access and reason are evaluated at generated_at, like the public entitlement read.
+      properties:
+        entitlement_id:
+          $ref: '#/components/schemas/Identifier'
+        key:
+          $ref: '#/components/schemas/Identifier'
+        source:
+          type: string
+          description: store_observation is verified store evidence. import and manual are not.
+          enum: [store_observation, import, manual]
+        source_id:
+          $ref: '#/components/schemas/Identifier'
+        source_application_id:
+          $ref: '#/components/schemas/Identifier'
+        source_product_id:
+          $ref: '#/components/schemas/Identifier'
+        access:
+          type: string
+          enum: [allowed, denied, unresolved]
+        reason:
+          type: string
+        effective_starts_at:
+          type: string
+          format: date-time
+        effective_ends_at:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        updated_at:
+          type: string
+          format: date-time
+    ManualGrant:
+      type: object
+      additionalProperties: false
+      required: [id, project_id, customer_id, application_id, product_id, entitlement_id, entitlement_key, reason, actor_key_id, status, effective_starts_at, effective_ends_at, created_at]
+      properties:
+        id:
+          type: string
+          pattern: '^mgr-[0-9a-f]{32}$'
+        project_id:
+          $ref: '#/components/schemas/Identifier'
+        customer_id:
+          $ref: '#/components/schemas/Identifier'
+        application_id:
+          $ref: '#/components/schemas/Identifier'
+        product_id:
+          $ref: '#/components/schemas/Identifier'
+        entitlement_id:
+          $ref: '#/components/schemas/Identifier'
+        entitlement_key:
+          $ref: '#/components/schemas/Identifier'
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+        actor_key_id:
+          $ref: '#/components/schemas/Identifier'
+        status:
+          type: string
+          enum: [active, expired, revoked]
+        effective_starts_at:
+          type: string
+          format: date-time
+        effective_ends_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+        revoked_by_key_id:
+          $ref: '#/components/schemas/Identifier'
+        revocation_reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+        created_at:
+          type: string
+          format: date-time
+    AdminGrantOption:
+      type: object
+      additionalProperties: false
+      required: [entitlement_id, entitlement_key, product_id, product_kind, application_ids]
+      properties:
+        entitlement_id:
+          $ref: '#/components/schemas/Identifier'
+        entitlement_key:
+          $ref: '#/components/schemas/Identifier'
+        product_id:
+          $ref: '#/components/schemas/Identifier'
+        product_kind:
+          type: string
+        application_ids:
+          type: array
+          description: Applications that map the product to a store product.
+          items:
+            $ref: '#/components/schemas/Identifier'
+    AdminTimelineEvent:
+      type: object
+      additionalProperties: false
+      required: [kind, occurred_at, customer_id]
+      description: One stored record. Fields that do not apply to the kind are absent.
+      properties:
+        kind:
+          type: string
+          enum:
+            - customer_created
+            - alias_added
+            - customer_merged
+            - purchase_observed
+            - import_grant_recorded
+            - manual_grant_created
+            - manual_grant_revoked
+            - entitlement_changed
+            - webhook_delivered
+            - webhook_failed
+            - reconciliation
+        occurred_at:
+          type: string
+          format: date-time
+        customer_id:
+          $ref: '#/components/schemas/Identifier'
+        source_id:
+          $ref: '#/components/schemas/Identifier'
+        source:
+          type: string
+          enum: [store_observation, import, manual]
+        application_id:
+          $ref: '#/components/schemas/Identifier'
+        product_id:
+          $ref: '#/components/schemas/Identifier'
+        provider_product_id:
+          $ref: '#/components/schemas/Identifier'
+        entitlement_id:
+          $ref: '#/components/schemas/Identifier'
+        entitlement_key:
+          $ref: '#/components/schemas/Identifier'
+        lifecycle_state:
+          type: string
+        previous_lifecycle_state:
+          type: string
+        access:
+          type: string
+          enum: [allowed, denied, unresolved]
+        access_reason:
+          type: string
+        effective_ends_at:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        status:
+          type: string
+          description: Delivery status for entitlement and webhook events, or the reconciliation job outcome.
+        error_code:
+          type: string
+        actor_role:
+          type: string
+          enum: [admin, application]
+        actor_key_id:
+          $ref: '#/components/schemas/Identifier'
+        external_id:
+          $ref: '#/components/schemas/Identifier'
+        related_customer_id:
+          $ref: '#/components/schemas/Identifier'
+        reason:
+          type: string
+        origin_store:
+          type: string
+    AdminCustomerDetail:
+      type: object
+      additionalProperties: false
+      required: [generated_at, customer, canonical_customer_id, members, aliases, merges, entitlements, manual_grants, grant_options, timeline, timeline_truncated]
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+        customer:
+          $ref: '#/components/schemas/AdminCustomerIdentity'
+        canonical_customer_id:
+          $ref: '#/components/schemas/Identifier'
+        members:
+          type: array
+          description: The canonical customer first, then customers merged into it.
+          items:
+            $ref: '#/components/schemas/AdminCustomerIdentity'
+        aliases:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/AdminCustomerAlias'
+        merges:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/AdminCustomerMergeRecord'
+        entitlements:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminCustomerEntitlement'
+        manual_grants:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/ManualGrant'
+        grant_options:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/AdminGrantOption'
+        timeline:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/AdminTimelineEvent'
+        timeline_truncated:
+          type: boolean
+          description: True when older records exist beyond the bounded timeline.
+    ManualGrantRequest:
+      type: object
+      additionalProperties: false
+      required: [idempotency_key, entitlement_id, product_id, application_id, reason]
+      description: Set exactly one of duration_days and ends_at. The grant starts when it is stored.
+      properties:
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: '^[^[:cntrl:]]+$'
+        entitlement_id:
+          $ref: '#/components/schemas/Identifier'
+        product_id:
+          description: A non-consumable product that grants the entitlement.
+          allOf:
+            - $ref: '#/components/schemas/Identifier'
+        application_id:
+          description: The application whose webhook endpoint receives the change.
+          allOf:
+            - $ref: '#/components/schemas/Identifier'
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Required audit reason. Single line, no surrounding whitespace.
+        duration_days:
+          type: integer
+          minimum: 1
+          maximum: 3660
+        ends_at:
+          type: string
+          format: date-time
+          description: Absolute end in the future, at most about ten years ahead.
+    ManualGrantRevocationRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Required audit reason. Single line, no surrounding whitespace.
+    ManualGrantResult:
+      type: object
+      additionalProperties: false
+      required: [grant, replay, projections_changed, webhooks_enqueued]
+      properties:
+        grant:
+          $ref: '#/components/schemas/ManualGrant'
+        replay:
+          type: boolean
+          description: True when the request repeated a stored grant or revocation and changed nothing.
+        projections_changed:
+          type: integer
+          minimum: 0
+          description: Zero when another source already provides equal or longer access.
+        webhooks_enqueued:
+          type: integer
+          minimum: 0
     AdminTransaction:
       type: object
       additionalProperties: false

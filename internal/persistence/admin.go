@@ -28,6 +28,7 @@ type AdminQueryStore interface {
 	AdminProjects(context.Context) ([]AdminProject, error)
 	// AdminProjectOverview returns one bounded operational snapshot in project scope.
 	AdminProjectOverview(context.Context, core.ProjectID, AdminRevenueQuery) (AdminProjectOverview, error)
+	AdminCustomerStore
 	// AdminSubscriptionMetrics returns subscription health for one project environment and UTC window.
 	AdminSubscriptionMetrics(context.Context, core.ProjectID, SubscriptionMetricsQuery) (SubscriptionMetrics, error)
 }

@@ -307,6 +307,47 @@ test('webhook verifier accepts an import schema version 2 payload', async () => 
   verifier.close();
 });
 
+test('webhook verifier accepts a manual grant schema version 3 payload', async () => {
+  const now = new Date('2026-11-18T10:00:00.000Z');
+  const verifier = newTestVerifier(now);
+  const body =
+    '{' +
+    '"schema_version":3,' +
+    '"project_id":"project-1",' +
+    '"application_id":"ios-sandbox",' +
+    '"customer_id":"customer-internal",' +
+    '"entitlement_id":"entitlement-1",' +
+    '"entitlement_key":"premium",' +
+    '"access":"allowed",' +
+    '"access_reason":"purchase_valid",' +
+    '"source":"manual",' +
+    '"source_manual_grant_id":"mgr-0123456789abcdef0123456789abcdef",' +
+    '"source_application_id":"ios-sandbox",' +
+    '"source_product_id":"premium_annual",' +
+    '"effective_starts_at":"2026-11-18T10:00:00Z",' +
+    '"effective_ends_at":"2026-12-18T10:00:00Z",' +
+    '"version":3' +
+    '}';
+  const event = await verifier.verifyRequest(signedWebhookRequest(now, body, 'event-manual'));
+  assert.equal(event.change.schemaVersion, 3);
+  assert.equal(event.change.source, 'manual');
+  assert.equal(event.change.sourceManualGrantId, 'mgr-0123456789abcdef0123456789abcdef');
+  assert.equal(event.change.sourceObservationId, '');
+  const invalidBodies: Array<[string, string]> = [
+    ['store-labeled', body.replace('"source":"manual"', '"source":"store"')],
+    ['import-labeled', body.replace('"source":"manual"', '"source":"import"')],
+    ['missing-grant', body.replace('"source_manual_grant_id":"mgr-0123456789abcdef0123456789abcdef",', '')],
+    ['observation-present', body.replace('"source":"manual",', '"source":"manual","source_observation_id":"observation-1",')],
+  ];
+  for (const [name, invalid] of invalidBodies) {
+    await assert.rejects(
+      () => verifier.verifyRequest(signedWebhookRequest(now, invalid, `event-manual-${name}`)),
+      (error) => webhookCode(error, 'invalid_event'),
+    );
+  }
+  verifier.close();
+});
+
 test('webhook verifier rejects invalid event IDs and payloads', async () => {
   const now = new Date('2026-08-31T10:00:00.000Z');
   const verifier = newTestVerifier(now);

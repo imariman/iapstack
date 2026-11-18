@@ -275,11 +275,16 @@ func New(dependencies Dependencies) (*API, error) {
 	return api, nil
 }
 
-// serveMuxPath rewrites the public supersede custom method into a segment Go's router can match.
+// serveMuxPath rewrites a public custom method on a wildcard segment into a segment Go's router can match.
+// The handler then requires and strips the custom method suffix itself.
 func serveMuxPath(path string) string {
-	const marker = "{import_id}:supersede"
-	if strings.HasSuffix(path, marker) {
-		return strings.TrimSuffix(path, marker) + "{import_id}"
+	for _, marker := range []struct{ suffix, wildcard string }{
+		{suffix: "{import_id}:supersede", wildcard: "{import_id}"},
+		{suffix: "{grant_id}" + manualGrantRevokeMarker, wildcard: "{grant_id}"},
+	} {
+		if strings.HasSuffix(path, marker.suffix) {
+			return strings.TrimSuffix(path, marker.suffix) + marker.wildcard
+		}
 	}
 	return path
 }
@@ -301,7 +306,11 @@ func (api *API) v1Routes() []v1Route {
 		{Method: http.MethodPost, Path: "/v1/admin/projects/{project_id}/financial-reports:pull", OperationID: "pullFinancialReport", Handler: api.pullFinancialReport},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}", OperationID: "putAdminProject", Handler: api.putProject},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/applications/{application_id}", OperationID: "putAdminApplication", Handler: api.putApplication},
+		{Method: http.MethodGet, Path: "/v1/admin/projects/{project_id}/customers", OperationID: "searchAdminCustomers", Handler: api.searchAdminCustomers},
+		{Method: http.MethodGet, Path: "/v1/admin/projects/{project_id}/customers/{customer_id}", OperationID: "getAdminCustomer", Handler: api.getAdminCustomer},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/customers/{customer_id}", OperationID: "putAdminCustomer", Handler: api.putCustomer},
+		{Method: http.MethodPost, Path: "/v1/admin/projects/{project_id}/customers/{customer_id}/manual-grants", OperationID: "createAdminManualGrant", Handler: api.createAdminManualGrant},
+		{Method: http.MethodPost, Path: "/v1/admin/projects/{project_id}/customers/{customer_id}/manual-grants/{grant_id}:revoke", OperationID: "revokeAdminManualGrant", Handler: api.revokeAdminManualGrant},
 		{Method: http.MethodPut, Path: "/v1/admin/projects/{project_id}/customers/{customer_id}/aliases/{external_id}", OperationID: "putAdminCustomerAlias", Handler: api.putAdminCustomerAlias},
 		{Method: http.MethodGet, Path: "/v1/admin/projects/{project_id}/customer-resolutions/{external_id}", OperationID: "getAdminCustomerResolution", Handler: api.getAdminCustomerResolution},
 		{Method: http.MethodPost, Path: "/v1/admin/projects/{project_id}/customer-merges", OperationID: "postAdminCustomerMerge", Handler: api.postAdminCustomerMerge},
@@ -1146,6 +1155,8 @@ func (api *API) writeError(writer http.ResponseWriter, request *http.Request, er
 		status, code, message = http.StatusBadRequest, "invalid_notification", "notification payload is invalid"
 	} else if errors.Is(err, persistence.ErrNotFound) {
 		status, code, message = http.StatusNotFound, "not_found", "the requested resource was not found"
+	} else if errors.Is(err, persistence.ErrManualGrantProductNotMapped) {
+		status, code, message = http.StatusUnprocessableEntity, "product_not_mapped", persistence.ErrManualGrantProductNotMapped.Error()
 	} else if errors.Is(err, persistence.ErrEntitlementConflict) {
 		status, code, message = http.StatusConflict, "entitlement_conflict", entitlementConflictMessage
 	} else if errors.Is(err, persistence.ErrConflict) {

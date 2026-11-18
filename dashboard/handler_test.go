@@ -369,3 +369,55 @@ func TestHandlerRedirectsAndDelegates(t *testing.T) {
 		t.Fatalf("delegated status = %d, want %d", delegated.Code, http.StatusTeapot)
 	}
 }
+
+// TestDashboardCustomerSupportWorkflow keeps customer search, detail, and audited manual grants wired.
+func TestDashboardCustomerSupportWorkflow(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	styles, err := fs.ReadFile(assets, "app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	if strings.Contains(string(document), "First 200") {
+		t.Fatal("customers panel still advertises the fixed first-200 listing")
+	}
+	for _, required := range []string{
+		`id="customer-search-form" role="search"`, `id="customer-search"`, `type="search"`, `maxlength="512"`,
+		`id="customers-count" aria-live="polite"`, `id="customer-load-more"`, `id="customer-rows"`, `id="open-customer"`,
+		`id="customer-detail-dialog" class="setup-dialog customer-detail-dialog"`,
+		`id="grant-dialog" class="setup-dialog small-dialog"`, `id="grant-reason" required maxlength="500"`,
+		`id="revoke-grant-dialog" class="setup-dialog small-dialog"`, `id="revoke-grant-reason" required maxlength="500"`,
+		"never as store evidence",
+	} {
+		if !strings.Contains(string(document), required) {
+			t.Fatalf("dashboard customer support markup does not contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		"loadCustomerPage", "openCustomerDetail", "renderCustomerDetail", "timelineEntry", "submitManualGrant",
+		"customerSearchMaxBytes", "state.customerSearch.sequence", "newIdempotencyKey",
+		`store_observation: "Store verification"`, `manual: "Manual grant"`, `import: "Import"`,
+		"No customers yet.", "No customer matches", "Imported history, not store verification.",
+		"Manual grants need a stored admin key",
+	} {
+		if !strings.Contains(string(script), required) {
+			t.Fatalf("dashboard customer support script does not contain %q", required)
+		}
+	}
+	if strings.Contains(string(script), "innerHTML") {
+		t.Fatal("dashboard must render untrusted customer data through text nodes only")
+	}
+	for _, required := range []string{".customer-search", ".detail-section", ".timeline-item", ".source-badge.manual", "border-style: dashed"} {
+		if !strings.Contains(string(styles), required) {
+			t.Fatalf("dashboard customer support styles do not contain %q", required)
+		}
+	}
+}

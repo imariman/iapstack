@@ -202,6 +202,20 @@ func TestTerminalStateAccessRules(t *testing.T) {
 	}
 }
 
+// TestObservationRejectsManualGrantReason verifies store evidence can never report an operator grant.
+func TestObservationRejectsManualGrantReason(t *testing.T) {
+	t.Parallel()
+
+	if err := core.AccessReasonManualGrant.Validate(); err != nil {
+		t.Fatalf("manual_grant Validate() error = %v", err)
+	}
+	observation := deniedObservation(t, core.LifecycleExpired)
+	observation.AccessReason = core.AccessReasonManualGrant
+	if err := observation.Validate(); err == nil {
+		t.Fatal("observation with the manual grant reason validated")
+	}
+}
+
 // TestPurchasePriceValidationRejectsUnsafeAmounts verifies signed price metadata stays bounded and canonical.
 func TestPurchasePriceValidationRejectsUnsafeAmounts(t *testing.T) {
 	t.Parallel()

@@ -68,6 +68,70 @@ func fakeAdminAnalytics() persistence.AdminAnalytics {
 	}
 }
 
+// fakeAdminCustomerEntitlement returns one allowed manual-grant projection that starts at now.
+func fakeAdminCustomerEntitlement(now time.Time) persistence.CustomerEntitlement {
+	endsAt := now.AddDate(0, 0, 30)
+	return persistence.CustomerEntitlement{
+		Projection: persistence.EntitlementProjection{
+			ProjectID: "project-1", CustomerID: "customer-1", EntitlementID: "entitlement-1",
+			SourceKind: persistence.SourceKindManual, SourceManualGrantID: "mgr-0123456789abcdef0123456789abcdef",
+			SourceProductID: "product-1", Access: core.AccessAllowed, AccessReason: core.AccessReasonManualGrant,
+			EffectivePeriod: core.EffectivePeriod{StartsAt: now, EndsAt: &endsAt},
+		},
+		SourceApplicationID: "application-1", Key: "premium", Version: 1,
+	}
+}
+
+// fakeAdminCustomerDetail returns one customer whose access comes from an active manual grant.
+func fakeAdminCustomerDetail(projectID core.ProjectID) persistence.AdminCustomerDetail {
+	createdAt := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	endsAt := createdAt.AddDate(0, 0, 30)
+	grant := persistence.ManualGrant{
+		ID: "mgr-0123456789abcdef0123456789abcdef", ProjectID: projectID, CustomerID: "customer-1",
+		ApplicationID: "application-1", ProductID: "product-1", EntitlementID: "entitlement-1",
+		EntitlementKey: "premium", Reason: "Support ticket 42", ActorKeyID: "0123456789abcdef01234567",
+		IdempotencyKey: "grant-1", StartsAt: createdAt, EndsAt: endsAt, CreatedAt: createdAt,
+	}
+	return persistence.AdminCustomerDetail{
+		GeneratedAt:         createdAt,
+		Customer:            persistence.AdminCustomerIdentity{ID: "customer-1", ExternalID: "user-1", CreatedAt: createdAt},
+		CanonicalCustomerID: "customer-1",
+		Members: []persistence.AdminCustomerIdentity{
+			{ID: "customer-1", ExternalID: "user-1", CreatedAt: createdAt},
+		},
+		Aliases: []persistence.AdminCustomerAlias{{
+			ExternalID: "legacy-1", CanonicalCustomerID: "customer-1", ActorRole: persistence.APIKeyRoleAdmin,
+			ActorKeyID: "0123456789abcdef01234567", CreatedAt: createdAt,
+		}},
+		Merges: []persistence.AdminCustomerMergeRecord{},
+		Entitlements: []persistence.AdminCustomerEntitlement{{
+			EntitlementID: "entitlement-1", Key: "premium", SourceKind: persistence.SourceKindManual,
+			SourceID: grant.ID, SourceApplicationID: "application-1", SourceProductID: "product-1",
+			SourceCustomerID: "customer-1", Access: core.AccessAllowed, AccessReason: core.AccessReasonManualGrant,
+			EffectivePeriod: core.EffectivePeriod{StartsAt: createdAt, EndsAt: &endsAt},
+			Version:         1, UpdatedAt: createdAt,
+		}},
+		ManualGrants: []persistence.ManualGrant{grant},
+		GrantOptions: []persistence.AdminGrantOption{{
+			EntitlementID: "entitlement-1", EntitlementKey: "premium", ProductID: "product-1",
+			ProductKind: core.ProductKindSubscription, ApplicationIDs: []core.ApplicationID{"application-1"},
+		}},
+		Timeline: []persistence.AdminTimelineEvent{{
+			Kind: persistence.AdminTimelineManualGrantCreated, OccurredAt: createdAt, CustomerID: "customer-1",
+			SourceID: grant.ID, SourceKind: persistence.SourceKindManual, ApplicationID: "application-1",
+			ProductID: "product-1", EntitlementID: "entitlement-1", EntitlementKey: "premium",
+			Access: core.AccessAllowed, AccessReason: core.AccessReasonManualGrant, EffectiveEndsAt: &endsAt,
+			ActorKeyID: grant.ActorKeyID, Reason: grant.Reason,
+		}, {
+			Kind: persistence.AdminTimelinePurchaseObserved, OccurredAt: createdAt.Add(-time.Hour),
+			CustomerID: "customer-1", SourceID: "observation-1", SourceKind: persistence.SourceKindStoreObservation,
+			ApplicationID: "application-1", ProductID: "product-1", ProviderProductID: "premium_monthly",
+			LifecycleState: core.LifecycleExpired, PreviousLifecycleState: core.LifecycleActive,
+			Access: core.AccessDenied, AccessReason: core.AccessReasonExpired,
+		}},
+	}
+}
+
 // AdminProjects returns one deterministic dashboard project.
 func (fakeAdminQueryStore) AdminProjects(context.Context) ([]persistence.AdminProject, error) {
 	return []persistence.AdminProject{{
@@ -89,6 +153,39 @@ func (fakeAdminQueryStore) AdminProjectOverview(
 		Customers: []persistence.AdminCustomer{}, RecentTransactions: []persistence.AdminTransaction{},
 		Queues: []persistence.AdminQueue{}, RecentWebhookEvents: []persistence.AdminWebhookEvent{},
 	}, nil
+}
+
+// AdminSearchCustomers returns one deterministic external-id match for any non-empty query.
+func (fakeAdminQueryStore) AdminSearchCustomers(
+	_ context.Context,
+	search persistence.AdminCustomerSearch,
+) (persistence.AdminCustomerSearchPage, error) {
+	if search.Query == "missing" {
+		return persistence.AdminCustomerSearchPage{Results: []persistence.AdminCustomerSearchResult{}}, nil
+	}
+	createdAt := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	result := persistence.AdminCustomerSearchResult{
+		Customer: persistence.AdminCustomer{ID: "customer-1", ExternalID: "user-1", CreatedAt: createdAt},
+	}
+	if search.Query != "" {
+		result.Match, result.Rank = persistence.AdminCustomerMatchExternalID, 1
+	}
+	return persistence.AdminCustomerSearchPage{
+		Results: []persistence.AdminCustomerSearchResult{result},
+		Next:    &persistence.AdminCustomerSearchCursor{Rank: result.Rank, CreatedAt: createdAt, CustomerID: "customer-1"},
+	}, nil
+}
+
+// AdminCustomerDetail returns one deterministic customer with a manual grant on the timeline.
+func (fakeAdminQueryStore) AdminCustomerDetail(
+	_ context.Context,
+	projectID core.ProjectID,
+	customerID core.CustomerID,
+) (persistence.AdminCustomerDetail, error) {
+	if customerID != "customer-1" {
+		return persistence.AdminCustomerDetail{}, persistence.ErrNotFound
+	}
+	return fakeAdminCustomerDetail(projectID), nil
 }
 
 // AdminSubscriptionMetrics returns deterministic subscription metrics for the requested window.
