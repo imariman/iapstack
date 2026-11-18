@@ -17,6 +17,9 @@ const (
 	adminActivityLimit = 50
 	// adminAnalyticsWindowDays bounds dashboard activity to a fixed UTC window.
 	adminAnalyticsWindowDays = 30
+	// utcTodayStartSQL is the UTC midnight that starts the current day. Every admin window (overview
+	// activity, sandbox value, daily series, subscription metrics) is built from it so they agree.
+	utcTodayStartSQL = "(date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')"
 )
 
 var (
@@ -170,9 +173,9 @@ func (repository *transaction) adminAnalytics(
 	err := repository.tx.QueryRow(ctx, `
 		WITH bounds AS (
 			SELECT CURRENT_TIMESTAMP AS generated_at,
-				(date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+				`+utcTodayStartSQL+`
 					- ($2::integer - 1) * INTERVAL '1 day' AS window_start,
-				(date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+				`+utcTodayStartSQL+`
 					+ INTERVAL '1 day' AS window_end
 		), application_counts AS (
 			SELECT count(*) FILTER (WHERE environment = 'production') AS production_count,
@@ -256,9 +259,9 @@ func (repository *transaction) adminSandboxValue(
 ) (persistence.AdminSandboxValue, error) {
 	rows, err := repository.tx.Query(ctx, `
 		WITH bounds AS (
-			SELECT (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+			SELECT `+utcTodayStartSQL+`
 					- ($2::integer - 1) * INTERVAL '1 day' AS window_start,
-				(date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+				`+utcTodayStartSQL+`
 					+ INTERVAL '1 day' AS window_end
 		), latest_transactions AS (
 			SELECT DISTINCT ON (observation.application_id, reference.value_fingerprint)
@@ -334,9 +337,9 @@ func (repository *transaction) adminDailyActivity(
 ) ([]persistence.AdminDailyActivity, error) {
 	rows, err := repository.tx.Query(ctx, `
 		WITH bounds AS (
-			SELECT (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+			SELECT `+utcTodayStartSQL+`
 					- ($2::integer - 1) * INTERVAL '1 day' AS window_start,
-				(date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') AS window_end
+				`+utcTodayStartSQL+` AS window_end
 		), days AS (
 			SELECT generate_series(bounds.window_start, bounds.window_end, INTERVAL '1 day') AS day
 			FROM bounds
