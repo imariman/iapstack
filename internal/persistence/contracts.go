@@ -32,6 +32,8 @@ const (
 	SourceKindStoreObservation SourceKind = "store_observation"
 	// SourceKindImport identifies a projection selected from an imported historical grant.
 	SourceKindImport SourceKind = "import"
+	// SourceKindManual identifies a projection selected from an audited operator grant.
+	SourceKindManual SourceKind = "manual"
 	// ImportOriginRevenueCat identifies a one-way RevenueCat historical grant.
 	ImportOriginRevenueCat = "revenuecat"
 )
@@ -54,6 +56,7 @@ type Transaction interface {
 	EntitlementRepository
 	OutboxRepository
 	IdentityRepository
+	ManualGrantRepository
 }
 
 // OperationsStore executes control-plane and durable queue work in atomic units.
@@ -279,7 +282,7 @@ type ObservationWrite struct {
 	References  []ProtectedReference
 }
 
-// SourceKind identifies whether a projection cites a store observation or an import grant.
+// SourceKind identifies whether a projection cites a store observation, an import grant, or a manual grant.
 type SourceKind string
 
 // EntitlementProjection describes the current access decision derived from one source.
@@ -290,6 +293,7 @@ type EntitlementProjection struct {
 	SourceKind          SourceKind
 	SourceObservationID core.ObservationID
 	SourceImportID      string
+	SourceManualGrantID string
 	SourceProductID     core.ProductID
 	SourceCustomerID    core.CustomerID
 	Access              core.AccessStatus
@@ -841,15 +845,20 @@ func (projection EntitlementProjection) validateSource() error {
 	}
 	switch kind {
 	case SourceKindStoreObservation:
-		if projection.SourceImportID != "" {
-			return errors.New("store observation projection cannot cite an import grant")
+		if projection.SourceImportID != "" || projection.SourceManualGrantID != "" {
+			return errors.New("store observation projection cannot cite an import or manual grant")
 		}
 		return projection.SourceObservationID.Validate()
 	case SourceKindImport:
-		if projection.SourceObservationID != "" {
-			return errors.New("import projection cannot cite a purchase observation")
+		if projection.SourceObservationID != "" || projection.SourceManualGrantID != "" {
+			return errors.New("import projection cannot cite a purchase observation or manual grant")
 		}
 		return core.ValidateOpaqueIdentifier("import grant ID", projection.SourceImportID)
+	case SourceKindManual:
+		if projection.SourceObservationID != "" || projection.SourceImportID != "" {
+			return errors.New("manual projection cannot cite a purchase observation or import grant")
+		}
+		return core.ValidateOpaqueIdentifier("manual grant ID", projection.SourceManualGrantID)
 	default:
 		return fmt.Errorf("unsupported entitlement source kind %q", projection.SourceKind)
 	}

@@ -77,6 +77,7 @@ func TestMigrationLifecycle(t *testing.T) {
 		"financial_report_imports",
 		"import_grants",
 		"reconciliation_schedule_retries",
+		"manual_grants",
 	}
 	if got, want := len(relations), int(postgres.LatestVersion); got != want {
 		t.Fatalf("migration relation count = %d, want %d", got, want)
@@ -580,6 +581,64 @@ func TestReconciliationScheduleRetryMigrationRefusesDirtyDown(t *testing.T) {
 			'ciphertext', $4, 'test-key', now(), now()
 		)
 	`, fixture.projectID, fixture.applicationID, fixture.customerID, fingerprint)
+}
+
+// TestManualGrantMigrationConstraintsAndDirtyDown verifies version 15 keeps manual sources exclusive and stored.
+func TestManualGrantMigrationConstraintsAndDirtyDown(t *testing.T) {
+	const manualGrantSchemaVersion int32 = 15
+	database := openTestDatabase(t, manualGrantSchemaVersion)
+	purchase := seedPurchase(t, database)
+	fixture := purchase.catalog
+	grantInsert := `
+		INSERT INTO manual_grants (
+			id, project_id, customer_id, application_id, product_id, entitlement_id,
+			reason, actor_key_id, idempotency_key, effective_starts_at, effective_ends_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, 'admin-key', $8, now(), now() + interval '30 days')
+	`
+	expectConstraint(t, database, "manual_grants_id_valid", grantInsert,
+		"imp-0123456789abcdef0123456789abcdef", fixture.projectID, fixture.customerID, fixture.applicationID,
+		fixture.productID, fixture.entitlementID, "Support", "grant-id")
+	expectConstraint(t, database, "manual_grants_reason_valid", grantInsert,
+		"mgr-0123456789abcdef0123456789abcdef", fixture.projectID, fixture.customerID, fixture.applicationID,
+		fixture.productID, fixture.entitlementID, "line one\nline two", "grant-reason")
+	mustExec(t, database, grantInsert,
+		"mgr-0123456789abcdef0123456789abcdef", fixture.projectID, fixture.customerID, fixture.applicationID,
+		fixture.productID, fixture.entitlementID, "Support ticket 1", "grant-1")
+	expectConstraint(t, database, "manual_grants_idempotency_unique", grantInsert,
+		"mgr-1123456789abcdef0123456789abcdef", fixture.projectID, fixture.customerID, fixture.applicationID,
+		fixture.productID, fixture.entitlementID, "Support ticket 1", "grant-1")
+	expectConstraint(t, database, "manual_grants_revocation_valid", `
+		UPDATE manual_grants SET revoked_at = now() WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
+	`)
+	expectConstraint(t, database, "customer_entitlements_source_exclusive", `
+		INSERT INTO customer_entitlements (
+			project_id, customer_id, entitlement_id, source_kind, source_observation_id, source_manual_grant_id,
+			source_product_id, source_customer_id, access_status, access_reason, effective_starts_at
+		) VALUES ($1, $2, $3, 'manual', $4, 'mgr-0123456789abcdef0123456789abcdef', $5, $2, 'allowed', 'purchase_valid', now())
+	`, fixture.projectID, fixture.customerID, fixture.entitlementID, purchase.observationID, fixture.productID)
+	mustExec(t, database, `
+		INSERT INTO customer_entitlements (
+			project_id, customer_id, entitlement_id, source_kind, source_manual_grant_id,
+			source_product_id, source_customer_id, access_status, access_reason, effective_starts_at
+		) VALUES ($1, $2, $3, 'manual', 'mgr-0123456789abcdef0123456789abcdef', $4, $2, 'allowed', 'purchase_valid', now())
+	`, fixture.projectID, fixture.customerID, fixture.entitlementID, fixture.productID)
+	expectConstraint(t, database, "customer_entitlements_source_manual_fk", `
+		UPDATE customer_entitlements SET source_manual_grant_id = 'mgr-ffffffffffffffffffffffffffffffff'
+		WHERE customer_id = $1
+	`, fixture.customerID)
+
+	if err := database.migrator.MigrateTo(database.ctx, manualGrantSchemaVersion-1); err == nil {
+		t.Fatal("MigrateTo(previous) error = nil, want refusal while manual grants exist")
+	}
+	assertVersion(t, database, manualGrantSchemaVersion)
+	mustExec(t, database, `DELETE FROM customer_entitlements`)
+	if err := database.migrator.MigrateTo(database.ctx, manualGrantSchemaVersion-1); err == nil {
+		t.Fatal("MigrateTo(previous) error = nil, want refusal while a manual grant row exists")
+	}
+	mustExec(t, database, `DELETE FROM manual_grants`)
+	mustMigrateTo(t, database, manualGrantSchemaVersion-1)
+	assertRelationExists(t, database, "manual_grants", false)
+	mustMigrateTo(t, database, manualGrantSchemaVersion)
 }
 
 // openTestDatabase opens the configured integration database at one schema version.

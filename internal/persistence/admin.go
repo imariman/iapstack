@@ -28,6 +28,7 @@ type AdminQueryStore interface {
 	AdminProjects(context.Context) ([]AdminProject, error)
 	// AdminProjectOverview returns one bounded operational snapshot in project scope.
 	AdminProjectOverview(context.Context, core.ProjectID, AdminRevenueQuery) (AdminProjectOverview, error)
+	AdminCustomerStore
 }
 
 // AdminProject summarizes one project without exposing protected configuration.

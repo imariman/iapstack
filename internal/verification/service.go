@@ -39,6 +39,8 @@ const (
 	entitlementEventSchemaVersion = 1
 	// entitlementEventSchemaVersionImport identifies an import-backed outbox payload.
 	entitlementEventSchemaVersionImport = 2
+	// entitlementEventSchemaVersionManual identifies a manual-grant-backed outbox payload.
+	entitlementEventSchemaVersionManual = 3
 	// outboxIDPrefix distinguishes deterministic outbox identities from other records.
 	outboxIDPrefix = "outbox-"
 )
@@ -129,6 +131,7 @@ type entitlementEventPayload struct {
 	SourceObservationID core.ObservationID `json:"source_observation_id,omitempty"`
 	Source              string             `json:"source,omitempty"`
 	SourceImportID      string             `json:"source_import_id,omitempty"`
+	SourceManualGrantID string             `json:"source_manual_grant_id,omitempty"`
 	SourceApplicationID core.ApplicationID `json:"source_application_id"`
 	SourceProductID     core.ProductID     `json:"source_product_id"`
 	EffectiveStartsAt   *time.Time         `json:"effective_starts_at,omitempty"`
@@ -792,11 +795,16 @@ func newEntitlementEvent(
 		SourceProductID:     projection.SourceProductID,
 		Version:             entitlement.Version,
 	}
-	if projection.SourceKind == persistence.SourceKindImport {
+	switch projection.SourceKind {
+	case persistence.SourceKindImport:
 		payloadContract.SchemaVersion = entitlementEventSchemaVersionImport
 		payloadContract.Source = string(persistence.SourceKindImport)
 		payloadContract.SourceImportID = projection.SourceImportID
-	} else {
+	case persistence.SourceKindManual:
+		payloadContract.SchemaVersion = entitlementEventSchemaVersionManual
+		payloadContract.Source = string(persistence.SourceKindManual)
+		payloadContract.SourceManualGrantID = projection.SourceManualGrantID
+	default:
 		payloadContract.SourceObservationID = projection.SourceObservationID
 	}
 	if !projection.EffectivePeriod.StartsAt.IsZero() {
