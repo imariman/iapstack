@@ -185,17 +185,26 @@
         </section>
 
         <div class="split-grid wide-left">
-          <section class="panel table-panel" aria-labelledby="customers-title">
+          <section class="panel table-panel customers-panel" aria-labelledby="customers-title">
             <div class="panel-heading">
               <h2 id="customers-title">Customers</h2>
-              <div class="panel-actions"><span class="panel-count">First 200</span><button class="secondary-button compact-button" id="open-customer" type="button">Add customer</button></div>
+              <div class="panel-actions"><span class="panel-count" id="customers-count" aria-live="polite">Newest first</span><button class="secondary-button compact-button" id="open-customer" type="button">Add customer</button></div>
             </div>
+            <form class="customer-search" id="customer-search-form" role="search" aria-label="Customers">
+              <div class="search-field">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                <input id="customer-search" name="query" type="search" maxlength="512" autocomplete="off" spellcheck="false" aria-label="Search customers" aria-describedby="customer-search-hint" placeholder="External ID, customer ID, alias, or transaction ID">
+              </div>
+              <button type="submit" class="secondary-button compact-button">Search</button>
+              <p class="field-note" id="customer-search-hint">Exact match on any identifier, or the start of an external or customer ID.</p>
+            </form>
             <div class="table-wrap">
               <table>
                 <thead><tr><th>Customer</th><th>Access</th><th>Last observed</th></tr></thead>
                 <tbody id="customer-rows"></tbody>
               </table>
             </div>
+            <div class="table-footer" id="customer-more" hidden><button class="text-button" id="customer-load-more" type="button">Load more</button></div>
           </section>
 
           <section class="panel table-panel" aria-labelledby="webhooks-title">
@@ -368,6 +377,51 @@
         </div>
         <p class="form-message" id="customer-message" role="status"></p>
         <div class="dialog-actions"><button type="button" class="text-button" id="cancel-customer">Cancel</button><button type="submit" class="primary-button">Add customer</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="customer-detail-dialog" class="setup-dialog customer-detail-dialog" aria-labelledby="customer-detail-title">
+      <div class="customer-detail-shell">
+        <div class="dialog-heading">
+          <div><h2 id="customer-detail-title">Customer</h2><code id="customer-detail-meta"></code></div>
+          <button class="icon-button" id="close-customer-detail" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <p class="form-message" id="customer-detail-message" role="status"></p>
+        <div class="customer-detail-body" id="customer-detail-body" aria-live="polite"></div>
+      </div>
+    </dialog>
+
+    <dialog id="grant-dialog" class="setup-dialog small-dialog" aria-labelledby="grant-title">
+      <form id="grant-form" method="dialog">
+        <div class="dialog-heading">
+          <div><h2 id="grant-title">Grant access</h2><span class="dialog-flag">Manual source</span></div>
+          <button class="icon-button" id="close-grant" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <p class="dialog-copy">Gives this customer an entitlement without a store purchase. It is recorded as a manual source with your key and reason, never as store evidence, and sends the normal entitlement webhook when access changes.</p>
+        <div class="form-grid">
+          <label class="full-row">Entitlement<select name="option" id="grant-option" required></select></label>
+          <label>Application<select name="application_id" id="grant-application" required></select></label>
+          <label>Duration<select name="duration" id="grant-duration"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="365">365 days</option><option value="date">Until a date</option></select></label>
+          <label class="full-row" id="grant-until-label" hidden>Until the end of<input name="ends_on" id="grant-ends-on" type="date"></label>
+          <label class="full-row">Reason<input name="reason" id="grant-reason" required maxlength="500" autocomplete="off" placeholder="Support ticket, incident, or goodwill reason"></label>
+        </div>
+        <p class="field-note" id="grant-application-note">The application receives the webhook for this change.</p>
+        <p class="form-message" id="grant-message" role="alert"></p>
+        <div class="dialog-actions"><button type="button" class="text-button" id="cancel-grant">Cancel</button><button type="submit" class="primary-button">Grant access</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="revoke-grant-dialog" class="setup-dialog small-dialog" aria-labelledby="revoke-grant-title">
+      <form id="revoke-grant-form" method="dialog">
+        <div class="dialog-heading">
+          <div><h2 id="revoke-grant-title">Revoke manual grant?</h2><span class="dialog-flag danger">Ends this grant now</span></div>
+          <button class="icon-button" id="close-revoke-grant" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <p class="dialog-copy">Access from this grant ends immediately. Other sources, such as a verified store purchase, still apply. The grant and its revocation stay in the audit trail.</p>
+        <code class="revoke-key-identity" id="revoke-grant-identity"></code>
+        <label>Reason<input name="reason" id="revoke-grant-reason" required maxlength="500" autocomplete="off" placeholder="Why the grant ends early"></label>
+        <p class="form-message" id="revoke-grant-message" role="alert"></p>
+        <div class="dialog-actions"><button type="button" class="text-button" id="cancel-revoke-grant">Keep grant</button><button type="submit" class="danger-button">Revoke grant</button></div>
       </form>
     </dialog>
 

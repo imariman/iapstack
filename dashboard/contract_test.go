@@ -43,6 +43,10 @@ func TestDashboardUsesDocumentedAdminOperations(t *testing.T) {
 		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}", operationID: "putAdminProject"},
 		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}/applications/{application_id}", operationID: "putAdminApplication"},
 		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}/customers/{customer_id}", operationID: "putAdminCustomer"},
+		{method: http.MethodGet, path: "/v1/admin/projects/{project_id}/customers", operationID: "searchAdminCustomers"},
+		{method: http.MethodGet, path: "/v1/admin/projects/{project_id}/customers/{customer_id}", operationID: "getAdminCustomer"},
+		{method: http.MethodPost, path: "/v1/admin/projects/{project_id}/customers/{customer_id}/manual-grants", operationID: "createAdminManualGrant"},
+		{method: http.MethodPost, path: "/v1/admin/projects/{project_id}/customers/{customer_id}/manual-grants/{grant_id}:revoke", operationID: "revokeAdminManualGrant"},
 		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}/entitlements/{entitlement_id}", operationID: "putAdminEntitlement"},
 		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}/products/{product_id}", operationID: "putAdminProduct"},
 		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}/applications/{application_id}/store-products/{provider_product_id}", operationID: "putAdminStoreProduct"},
@@ -74,11 +78,36 @@ func TestDashboardUsesDocumentedAdminOperations(t *testing.T) {
 			t.Errorf("overview AdminCustomer is missing %q", field)
 		}
 	}
+	for schema, fields := range map[string][]string{
+		"AdminCustomerSearchPage":  {"customers", "next_page_token"},
+		"AdminCustomerMatch":       {"match", "external_id", "allowed_count", "entitlement_count"},
+		"AdminCustomerDetail":      {"customer", "canonical_customer_id", "aliases", "merges", "entitlements", "manual_grants", "grant_options", "timeline", "timeline_truncated"},
+		"AdminCustomerEntitlement": {"source", "source_id", "access", "reason", "effective_ends_at"},
+		"ManualGrant":              {"status", "reason", "actor_key_id", "revoked_at", "revocation_reason"},
+		"ManualGrantResult":        {"replay", "projections_changed", "webhooks_enqueued"},
+		"AdminTimelineEvent":       {"kind", "occurred_at", "status", "previous_lifecycle_state", "source"},
+	} {
+		reference := document.Components.Schemas[schema]
+		if reference == nil || reference.Value == nil {
+			t.Errorf("schema %s used by the customer dialog is missing", schema)
+			continue
+		}
+		for _, field := range fields {
+			if _, exists := reference.Value.Properties[field]; !exists {
+				t.Errorf("schema %s is missing %q", schema, field)
+			}
+			if !strings.Contains(string(script), field) {
+				t.Errorf("dashboard script does not read %s.%s", schema, field)
+			}
+		}
+	}
 	for _, fragment := range []string{
 		"merged_into_customer_id",
 		"alias_count",
 		"/v1/admin/dashboard-session", "/v1/admin/api-keys", "/v1/admin/projects", "/overview", "/applications/",
 		"/customers/", "/entitlements/", "/products/", "/store-products/", "/credentials/", "/webhook",
+		"/customers?", "/manual-grants", ":revoke", "page_token", "next_page_token",
+		"grant_options", "canonical_customer_id", "idempotency_key", "duration_days", "ends_at",
 	} {
 		if !strings.Contains(string(script), fragment) {
 			t.Errorf("dashboard script is missing documented route fragment %q", fragment)
