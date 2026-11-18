@@ -8,5 +8,6 @@ These documents are the designs for work that is now in the tree. They do not ch
 | RevenueCat one-way import | [revenuecat-import.md](revenuecat-import.md) | `cmd/iapstack-revenuecat-import`, migration 012. Apple re-verify is not included |
 | Financial reports | [financial-reports.md](financial-reports.md) | Migration 011 and the Apple consolidated parser. Google and Huawei stay `fixture_required` |
 | Remote paywall, hosted SaaS, Kubernetes | [paywall-saas-kubernetes.md](paywall-saas-kubernetes.md) | File-based offering route and `deploy/k8s`. Hosted SaaS is not in this server |
+| Subscription metrics | [subscription-metrics.md](subscription-metrics.md) | Migration 014 offer phase, `GET .../subscription-metrics`, dashboard Subscriptions panel. Huawei trials are not available. No money figure |
 
 The RevenueCat importer calls the alias HTTP route and never calls customer merge. Historical RevenueCat access is an `import` projection, not a store verification.
