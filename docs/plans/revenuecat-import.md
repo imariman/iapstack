@@ -55,7 +55,7 @@ RevenueCat's Scheduled Data Exports transactions feed, plain CSV or gzip CSV. Co
 | `billing_issues_detected_at` | Billing-issue reason |
 | `ownership_type` | `PURCHASED` or `FAMILY_SHARED`. Not a second customer |
 | `auto_resume_time` | Play pause hint |
-| `updated_at` | Recency when several rows share one lineage |
+| `updated_at` | Recency between snapshots of one period when several rows share one lineage and one `start_time` |
 | `is_trial_period` | Kept only as a report count. Not a separate product kind |
 
 There is no `app_user_id` column on this feed. The mapping file must set `canonical_id_column` to exactly one of `rc_original_app_user_id` or `rc_last_seen_app_user_id_alias`. That column is the IAPStack external id. The other column, when different and non-empty, is an alias identity.
@@ -139,7 +139,7 @@ ADR-0002 keeps store payloads behind adapters. ADR-0005 says a normalized observ
 
 ### Access decision
 
-Evaluate each grouped lineage at the command clock. Group key is canonical external id, mapped application, mapped product, mapped entitlement, and lineage fingerprint. The fingerprint is SHA-256 of the original store transaction id when that column or field is present, otherwise the store transaction id, otherwise the subscriber non-subscription `id`, otherwise `product_identifier` plus purchase date. Never persist the raw id. Among rows in one group, the greatest `updated_at` wins, then the greatest `effective_end_time`, then the greatest `start_time`.
+Evaluate each grouped lineage at the command clock. Group key is canonical external id, mapped application, mapped product, mapped entitlement, and lineage fingerprint. The fingerprint is SHA-256 of the original store transaction id when that column or field is present, otherwise the store transaction id, otherwise the subscriber non-subscription `id`, otherwise `product_identifier` plus purchase date. Never persist the raw id. Among rows in one group, the greatest `start_time` wins, then the greatest `updated_at`, then the greatest `effective_end_time`, then a row with `refunded_at` over one without. The keys are compared in that fixed order for every pair, so the chosen row does not depend on export row order. Start comes first so a refund recorded later against an earlier period cannot replace a still-valid renewal: the current period is chosen before `refunded_at` applies, and a refund on that current row still denies. `updated_at` then picks the latest snapshot of one period, with or without a `store_transaction_id`. Each refunded row from an earlier period that an unrefunded winner supersedes adds one to `ignored_earlier_refunds`, once per row even when two RevenueCat entitlement ids map to one key.
 
 Transactions feed:
 
@@ -305,7 +305,7 @@ JSON object, `additionalProperties` false. The file contains no secrets and no e
 
 One JSON object, stdout or `--report`. Secret-free means no API key, no authorization header, no receipt, no purchase token, no raw store transaction id, no subscriber attribute, no price, and no IP.
 
-Include `dry_run`, `project_id`, `batch_id` when set, `export_sha256`, `format`, and counts: `customers_created`, `customers_reused`, `grants_upserted`, `grants_unchanged`, `projections_changed`, `webhooks_enqueued`, `alias_refused`, `anonymous_customers`, `family_shared`, `skipped_anonymous`, `failed`, `not_yet_started`. When `not_yet_started` is greater than zero, also include `not_yet_started_earliest_at` and `warning` (`re-import at or after` that instant).
+Include `dry_run`, `project_id`, `batch_id` when set, `export_sha256`, `format`, and counts: `customers_created`, `customers_reused`, `grants_upserted`, `grants_unchanged`, `projections_changed`, `webhooks_enqueued`, `alias_refused`, `anonymous_customers`, `family_shared`, `skipped_anonymous`, `failed`, `refund_end_disagreement`, `ignored_earlier_refunds`, `trial_periods`, `not_yet_started`. On apply, `ignored_earlier_refunds` counts only subscribers whose grants were committed, and a batch conflict reports zero. When `not_yet_started` is greater than zero, also include `not_yet_started_earliest_at` and `warning` (`re-import at or after` that instant).
 
 Failures are `{line, code, external_id, entitlement_key}`. `external_id` is the operator's own id, so they can fix the mapping. The report is still personal data. Do not commit it. Lineage appears only as `lineage_fingerprint`, hex SHA-256.
 

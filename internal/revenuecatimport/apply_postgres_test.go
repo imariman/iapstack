@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -116,6 +117,20 @@ func TestApplyIsIdempotentAndLosesToAStoreObservation(t *testing.T) {
 	}
 	if second.Counts.CustomersReused != 1 || second.Counts.GrantsUnchanged != 1 || second.Counts.ProjectionsChanged != 0 || second.Counts.WebhooksEnqueued != 0 || importProjectionVersion(t, ctx, connection) != version || importCount(t, ctx, connection, "outbox_events") != 0 {
 		t.Fatalf("second counts = %#v version=%d", second.Counts, importProjectionVersion(t, ctx, connection))
+	}
+	reused := importInput(now, "rc_original_app_user_id,rc_last_seen_app_user_id_alias,product_identifier,entitlement_identifiers,start_time,effective_end_time,store,is_auto_renewable,is_sandbox,updated_at,refunded_at,original_store_transaction_id\n"+
+		"user-rc,user-rc,com.example.annual,\"[\"\"premium\"\"]\",2026-08-01 00:00:00,2026-09-01 00:00:00,app_store,true,false,2026-09-20 00:00:00,2026-09-20 00:00:00,original-rc\n"+
+		"user-rc,user-rc,com.example.annual,\"[\"\"premium\"\"]\",2026-09-01 00:00:00,2026-10-15 00:00:00,app_store,true,false,2026-09-02 00:00:00,,original-rc\n")
+	reused.BatchID = input.BatchID
+	if planned, planErr := Plan(reused); planErr != nil || planned.Report.Counts.IgnoredEarlierRefunds != 1 {
+		t.Fatalf("reused batch plan = %#v, %v; want one ignored earlier refund", planned.Report.Counts, planErr)
+	}
+	refused, err := Apply(ctx, store, reused, false)
+	if !errors.Is(err, ErrBatchConflict) {
+		t.Fatalf("reused batch Apply() error = %v, want ErrBatchConflict", err)
+	}
+	if refused.Counts.GrantsUpserted != 0 || refused.Counts.IgnoredEarlierRefunds != 0 {
+		t.Fatalf("refused batch counts = %#v, want nothing reported as applied", refused.Counts)
 	}
 
 	moved := importInput(now, importCSV("2026-12-01 00:00:00", "2026-10-21 00:00:00"))
