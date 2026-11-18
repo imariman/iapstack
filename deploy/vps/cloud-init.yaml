@@ -5,8 +5,10 @@
 # 1. Paste your Cloudflare Tunnel token between the quotes below, or leave it empty
 #    and add it later over SSH.
 # 2. Optionally pin IAPSTACK_REF to a release tag or a tested commit.
-# 3. Pass this file as user data, for example Hetzner's "Cloud config" field or
-#    `hcloud server create --user-data-from-file cloud-init.yaml`.
+# 3. Pass this file as user data, for example Hetzner's "Cloud config" field, a
+#    DigitalOcean Droplet's initialization script, `hcloud server create
+#    --user-data-from-file cloud-init.yaml`, or `doctl compute droplet create
+#    --user-data-file cloud-init.yaml`.
 #    deploy/gcp/deploy.sh fills in both values for Google Cloud.
 #
 # Installation takes about 5-10 minutes after boot. Follow it with:

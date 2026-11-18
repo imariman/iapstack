@@ -126,7 +126,8 @@ the live total before creating the app.
 DigitalOcean App Platform is available through the complete [App Spec deployment
 guide](deploy/digitalocean/README.md). Its official Deploy Button cannot express the
 required worker and migration job, so the full topology uses one `doctl apps create`
-command instead.
+command instead. For a lower monthly cost, a [Droplet](deploy/digitalocean/droplet.md)
+can run the single-VM stack described below.
 
 Fly.io process groups are configured in [`fly.toml`](fly.toml); the [Fly.io deployment
 guide](deploy/fly/README.md) covers app creation, private Managed Postgres attachment,
@@ -168,6 +169,7 @@ A small always-on VM fits this workload better.
 | Oracle Cloud Always Free, Ampere A1 | USD 0 | Up to 4 Arm OCPUs and 24 GB RAM. Upgrade the account to Pay As You Go, which still costs nothing within Always Free limits, so idle instances are not reclaimed. |
 | Google Cloud e2-micro (Free Tier, US regions) | USD 0–4/month | 1 GB RAM for low traffic; the installer tunes PostgreSQL and the worker automatically. The in-use external IPv4 address may be billed. |
 | Hetzner Cloud CAX11 / CX22 | About EUR 4–5/month | Predictable billing and the fewest provider surprises; installed from one cloud-init file. |
+| DigitalOcean Droplet `s-1vcpu-1gb` / `s-1vcpu-2gb` | USD 6 / 12 per month | Public IPv4 included; installed from the same cloud-init file as Hetzner. |
 | A server you already operate | USD 0 | The tunnel works behind NAT, but store notifications need continuous uptime. |
 
 You also need a domain whose DNS is on Cloudflare's free plan, because store
@@ -191,10 +193,12 @@ There are four automated ways to install it:
 
   [![Open in Cloud Shell](https://www.gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/imariman/iapstack&cloudshell_git_branch=main&cloudshell_tutorial=deploy/gcp/tutorial.md&show=terminal)
 
-- **Hetzner Cloud, one pasted file.** Fill in the tunnel token in
+- **Hetzner Cloud or DigitalOcean, one pasted file.** Fill in the tunnel token in
   [`deploy/vps/cloud-init.yaml`](deploy/vps/cloud-init.yaml) and paste it into
-  **Cloud config** when creating the server, or pass it to the `hcloud` CLI. It runs
-  the installer below on first boot. See the [Hetzner guide](deploy/hetzner/README.md).
+  Hetzner's **Cloud config** or a Droplet's **initialization script** field, or pass it
+  to `hcloud` or `doctl`. It runs the installer below on first boot. See the
+  [Hetzner guide](deploy/hetzner/README.md) and the
+  [DigitalOcean Droplet guide](deploy/digitalocean/droplet.md).
 
 - **Any Ubuntu or Debian host, one command.** [`install.sh`](deploy/vps/install.sh)
   installs Docker, checks out the requested ref into `/opt/iapstack`, generates
