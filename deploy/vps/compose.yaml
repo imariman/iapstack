@@ -90,11 +90,13 @@ services:
 
   # Remotely managed tunnel: route the public hostname to http://iapstack:8080 in the
   # Cloudflare dashboard. The connector only makes outbound connections.
+  # The token is optional at interpolation time so the other services can be managed
+  # before a tunnel exists; start this service only after setting it.
   cloudflared:
     image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
     command: ["tunnel", "--no-autoupdate", "run"]
     environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
     depends_on:
       iapstack:
         condition: service_healthy
