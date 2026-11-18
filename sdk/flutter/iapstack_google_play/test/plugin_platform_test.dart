@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iapstack_google_play/iapstack_google_play.dart';
+import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:in_app_purchase_android/billing_client_wrappers.dart';
 import 'package:in_app_purchase_android/in_app_purchase_android.dart';
 import 'package:in_app_purchase_platform_interface/in_app_purchase_platform_interface.dart';
@@ -88,9 +90,9 @@ void main() {
     () async {
       final updates = bridge.purchaseUpdates.take(2).toList();
       officialPlatform.emitPurchases(<PurchaseDetails>[
-        _pluginSentinel(
+        _plainPurchase(
           status: PurchaseStatus.canceled,
-          errorCode: 'purchase_error',
+          response: BillingResponse.userCanceled,
         ),
       ]);
       officialPlatform.emitPurchase(_nativePurchase);
@@ -99,7 +101,7 @@ void main() {
 
       expect(purchases, hasLength(2));
       expect(purchases.first.status, GooglePlayPurchaseStatus.cancelled);
-      expect(purchases.first.errorCode, 'purchase_error');
+      expect(purchases.first.errorCode, 'purchase_cancelled');
       expect(purchases.first.purchaseToken, isEmpty);
       expect(purchases.first.productIds, isEmpty);
       expect(purchases.first.isAcknowledged, isFalse);
@@ -110,48 +112,132 @@ void main() {
   );
 
   test(
-    'maps a plain error purchase sentinel and preserves its billing code',
+    'maps plain error purchase sentinels to the Android SDK billing codes',
     () async {
-      final updates = bridge.purchaseUpdates.take(2).toList();
+      final updates = bridge.purchaseUpdates.take(4).toList();
       officialPlatform.emitPurchases(<PurchaseDetails>[
-        _pluginSentinel(
+        _plainPurchase(
           status: PurchaseStatus.error,
-          errorCode: 'billing_service_unavailable',
+          response: BillingResponse.serviceUnavailable,
+        ),
+        _plainPurchase(
+          status: PurchaseStatus.error,
+          response: BillingResponse.itemAlreadyOwned,
+        ),
+        _plainPurchase(
+          status: PurchaseStatus.error,
+          response: BillingResponse.serviceDisconnected,
         ),
       ]);
       officialPlatform.emitPurchase(_nativePurchase);
 
       final purchases = await updates;
 
-      expect(purchases, hasLength(2));
-      expect(purchases.first.status, GooglePlayPurchaseStatus.failed);
-      expect(purchases.first.errorCode, 'billing_service_unavailable');
+      expect(
+        purchases.map((purchase) => purchase.status),
+        <GooglePlayPurchaseStatus>[
+          GooglePlayPurchaseStatus.failed,
+          GooglePlayPurchaseStatus.failed,
+          GooglePlayPurchaseStatus.failed,
+          GooglePlayPurchaseStatus.purchased,
+        ],
+      );
+      expect(purchases.map((purchase) => purchase.errorCode), <String?>[
+        'billing_error_2',
+        'billing_error_7',
+        'billing_service_disconnected',
+        null,
+      ]);
       expect(purchases.first.purchaseToken, isEmpty);
       expect(purchases.first.productIds, isEmpty);
       expect(purchases.first.canVerify, isFalse);
-      expect(purchases.last.status, GooglePlayPurchaseStatus.purchased);
-      expect(purchases.last.purchaseToken, 'opaque-purchase-token');
     },
   );
 
   test(
-    'still rejects a plain purchase that is not a cancel or error sentinel',
+    'maps billing codes on purchase rows and keeps other plugin codes',
     () async {
-      final update = bridge.purchaseUpdates.first;
+      final updates = bridge.purchaseUpdates.take(3).toList();
+      final failedRow = GooglePlayPurchaseDetails.fromPurchase(
+        _nativePurchase,
+      ).single;
+      failedRow
+        ..status = PurchaseStatus.error
+        ..error = _pluginPurchaseError(BillingResponse.error.toString());
+      final consumeFailure = GooglePlayPurchaseDetails.fromPurchase(
+        _nativePurchase,
+      ).single;
+      consumeFailure
+        ..status = PurchaseStatus.error
+        ..error = IAPError(
+          source: kIAPSource,
+          code: kConsumptionFailedErrorCode,
+          message: BillingResponse.error.toString(),
+        );
+      final unknownResponse = _plainPurchase(status: PurchaseStatus.error)
+        ..error = _pluginPurchaseError('BillingResponse.somethingNew');
       officialPlatform.emitPurchases(<PurchaseDetails>[
-        _pluginSentinel(status: PurchaseStatus.purchased),
+        failedRow,
+        consumeFailure,
+        unknownResponse,
       ]);
 
-      await expectLater(
-        update,
-        throwsA(
-          isA<GooglePlayIapStackException>().having(
-            (error) => error.code,
-            'code',
-            'invalid_plugin_response',
-          ),
+      final purchases = await updates;
+
+      expect(purchases.map((purchase) => purchase.errorCode), <String>[
+        'billing_error_6',
+        kConsumptionFailedErrorCode,
+        kPurchaseErrorCode,
+      ]);
+      expect(purchases.first.purchaseToken, 'opaque-purchase-token');
+      expect(purchases.first.status, GooglePlayPurchaseStatus.failed);
+    },
+  );
+
+  test('skips the OK sentinel Play sends without purchase rows', () async {
+    final updates = bridge.purchaseUpdates.take(1).toList();
+    officialPlatform.emitPurchases(<PurchaseDetails>[
+      _plainPurchase(status: PurchaseStatus.purchased),
+    ]);
+    officialPlatform.emitPurchase(_nativePurchase);
+
+    final purchases = await updates;
+
+    expect(purchases.single.status, GooglePlayPurchaseStatus.purchased);
+    expect(purchases.single.purchaseToken, 'opaque-purchase-token');
+  });
+
+  test(
+    'still rejects plain purchases that are not the plugin sentinel',
+    () async {
+      final foreignPurchases = <PurchaseDetails>[
+        _plainPurchase(
+          status: PurchaseStatus.purchased,
+          productId: 'premium_monthly',
+          token: 'foreign-token',
         ),
-      );
+        _plainPurchase(
+          status: PurchaseStatus.canceled,
+          productId: 'premium_monthly',
+          token: 'foreign-token',
+        ),
+        _plainPurchase(status: PurchaseStatus.error, source: 'app_store'),
+      ];
+      for (final details in foreignPurchases) {
+        final update = bridge.purchaseUpdates.first;
+        officialPlatform.emitPurchases(<PurchaseDetails>[details]);
+
+        await expectLater(
+          update,
+          throwsA(
+            isA<GooglePlayIapStackException>().having(
+              (error) => error.code,
+              'code',
+              'invalid_plugin_response',
+            ),
+          ),
+        );
+      }
     },
   );
 
@@ -224,96 +310,131 @@ void main() {
     );
   });
 
-  test('fails a product query when Billing returns a non-OK code', () async {
-    final rawBridge = GooglePlayPluginPlatform.withRawProductQuery(
-      rawProductQuery: (productIds) async =>
-          const <ProductDetailsResponseWrapper>[
-            ProductDetailsResponseWrapper(
-              billingResult: BillingResultWrapper(
-                responseCode: BillingResponse.serviceUnavailable,
-              ),
-              productDetailsList: <ProductDetailsWrapper>[],
-            ),
-            ProductDetailsResponseWrapper(
-              billingResult: BillingResultWrapper(
-                responseCode: BillingResponse.serviceUnavailable,
-              ),
-              productDetailsList: <ProductDetailsWrapper>[],
-            ),
-          ],
-    );
+  group('product queries through the Android plugin', () {
+    late _FakeBillingClient billingClient;
 
-    await expectLater(
-      rawBridge.queryProducts(const <String>{'premium_monthly'}),
-      throwsA(
-        isA<GooglePlayIapStackException>()
-            .having(
-              (error) => error.code,
-              'code',
-              'google_play_product_query_failed',
-            )
-            .having(
-              (error) => error.message,
-              'message',
-              contains('serviceUnavailable'),
-            ),
-      ),
-    );
-  });
-
-  test('returns not-found ids when Billing reports OK', () async {
-    final rawBridge = GooglePlayPluginPlatform.withRawProductQuery(
-      rawProductQuery: (productIds) async =>
-          const <ProductDetailsResponseWrapper>[
-            ProductDetailsResponseWrapper(
-              billingResult: BillingResultWrapper(
-                responseCode: BillingResponse.ok,
-              ),
-              productDetailsList: <ProductDetailsWrapper>[_oneTimeDetails],
-            ),
-            ProductDetailsResponseWrapper(
-              billingResult: BillingResultWrapper(
-                responseCode: BillingResponse.ok,
-              ),
-              productDetailsList: <ProductDetailsWrapper>[],
-            ),
-          ],
-    );
-
-    final result = await rawBridge.queryProducts(const <String>{
-      'premium_lifetime',
-      'missing_product',
+    setUp(() {
+      billingClient = _FakeBillingClient();
+      InAppPurchasePlatform.instance = InAppPurchaseAndroidPlatform(
+        manager: BillingClientManager(
+          billingClientFactory: (_, _) => billingClient,
+        ),
+      );
     });
 
-    expect(result.products.single.id, 'premium_lifetime');
-    expect(result.notFoundProductIds, <String>{'missing_product'});
-  });
+    test('queries both product types and reports missing ids', () async {
+      billingClient.productDetails[ProductType.inapp] = <ProductDetailsWrapper>[
+        _oneTimeDetails,
+      ];
+      billingClient.productDetails[ProductType.subs] = <ProductDetailsWrapper>[
+        _subscriptionDetails,
+      ];
+      const productIds = <String>{
+        'premium_lifetime',
+        'premium_monthly',
+        'missing_product',
+      };
 
-  test('treats ITEM_UNAVAILABLE as per-product not found', () async {
-    final rawBridge = GooglePlayPluginPlatform.withRawProductQuery(
-      rawProductQuery: (productIds) async =>
-          const <ProductDetailsResponseWrapper>[
-            ProductDetailsResponseWrapper(
-              billingResult: BillingResultWrapper(
-                responseCode: BillingResponse.itemUnavailable,
-              ),
-              productDetailsList: <ProductDetailsWrapper>[],
-            ),
-            ProductDetailsResponseWrapper(
-              billingResult: BillingResultWrapper(
-                responseCode: BillingResponse.itemUnavailable,
-              ),
-              productDetailsList: <ProductDetailsWrapper>[],
-            ),
-          ],
-    );
+      final result = await GooglePlayPluginPlatform().queryProducts(productIds);
 
-    final result = await rawBridge.queryProducts(const <String>{
-      'premium_lifetime',
+      expect(billingClient.queries, hasLength(2));
+      expect(
+        billingClient.queries.map((query) => query.productType),
+        unorderedEquals(<ProductType>[ProductType.inapp, ProductType.subs]),
+      );
+      for (final query in billingClient.queries) {
+        expect(query.productIds, productIds);
+      }
+      expect(
+        result.products.map((product) => product.id),
+        unorderedEquals(<String>['premium_lifetime', 'premium_monthly']),
+      );
+      expect(result.notFoundProductIds, <String>{'missing_product'});
     });
 
-    expect(result.products, isEmpty);
-    expect(result.notFoundProductIds, <String>{'premium_lifetime'});
+    test('fails with the Billing code when Play returns non-OK', () async {
+      billingClient.responseCodes[ProductType.subs] =
+          BillingResponse.serviceUnavailable;
+
+      await expectLater(
+        GooglePlayPluginPlatform().queryProducts(const <String>{
+          'premium_monthly',
+        }),
+        throwsA(
+          isA<GooglePlayIapStackException>()
+              .having((error) => error.code, 'code', 'billing_error_2')
+              .having(
+                (error) => error.message,
+                'message',
+                contains('serviceUnavailable'),
+              ),
+        ),
+      );
+    });
+
+    test('fails ITEM_UNAVAILABLE like the Android SDK', () async {
+      billingClient.responseCodes[ProductType.inapp] =
+          BillingResponse.itemUnavailable;
+      billingClient.productDetails[ProductType.subs] = <ProductDetailsWrapper>[
+        _subscriptionDetails,
+      ];
+
+      await expectLater(
+        GooglePlayPluginPlatform().queryProducts(const <String>{
+          'premium_lifetime',
+          'premium_monthly',
+        }),
+        throwsA(
+          isA<GooglePlayIapStackException>().having(
+            (error) => error.code,
+            'code',
+            'billing_error_4',
+          ),
+        ),
+      );
+    });
+
+    test('keeps the native code of a channel failure', () async {
+      billingClient.queryError = PlatformException(
+        code: 'some_native_code',
+        message: 'sensitive native message',
+      );
+
+      await expectLater(
+        GooglePlayPluginPlatform().queryProducts(const <String>{
+          'premium_lifetime',
+        }),
+        throwsA(
+          isA<GooglePlayIapStackException>()
+              .having((error) => error.code, 'code', 'some_native_code')
+              .having(
+                (error) => error.message,
+                'message',
+                isNot(contains('sensitive')),
+              ),
+        ),
+      );
+    });
+
+    test('an injected plugin answers product queries itself', () async {
+      billingClient.responseCodes[ProductType.inapp] =
+          BillingResponse.serviceUnavailable;
+      final plugin = _FakeInAppPurchase(
+        ProductDetailsResponse(
+          productDetails: GooglePlayProductDetails.fromProductDetails(
+            _oneTimeDetails,
+          ),
+          notFoundIDs: const <String>[],
+        ),
+      );
+
+      final result = await GooglePlayPluginPlatform(
+        plugin: plugin,
+      ).queryProducts(const <String>{'premium_lifetime'});
+
+      expect(result.products.single.id, 'premium_lifetime');
+      expect(billingClient.queries, isEmpty);
+    });
   });
 
   test('failed refresh invalidates cached native choices', () async {
@@ -550,31 +671,92 @@ final class _FakeOfficialPlatform extends Fake
   Future<void> close() => _purchases.close();
 }
 
-/// Builds the plain sentinel the plugin emits for an empty purchase list.
-PurchaseDetails _pluginSentinel({
+/// Billing client fake behind a real [BillingClientManager].
+final class _FakeBillingClient extends Fake implements BillingClient {
+  final List<({ProductType productType, Set<String> productIds})> queries =
+      <({ProductType productType, Set<String> productIds})>[];
+  final Map<ProductType, BillingResponse> responseCodes =
+      <ProductType, BillingResponse>{};
+  final Map<ProductType, List<ProductDetailsWrapper>> productDetails =
+      <ProductType, List<ProductDetailsWrapper>>{};
+  Object? queryError;
+
+  @override
+  Future<BillingResultWrapper> startConnection({
+    required OnBillingServiceDisconnected onBillingServiceDisconnected,
+    BillingChoiceMode billingChoiceMode = BillingChoiceMode.playBillingOnly,
+    // The plugin does not export PendingPurchasesParamsWrapper.
+    Object? pendingPurchasesParams,
+  }) async => const BillingResultWrapper(responseCode: BillingResponse.ok);
+
+  @override
+  Future<ProductDetailsResponseWrapper> queryProductDetails({
+    required List<ProductWrapper> productList,
+  }) async {
+    final productType = productList.first.productType;
+    queries.add((
+      productType: productType,
+      productIds: productList.map((product) => product.productId).toSet(),
+    ));
+    final error = queryError;
+    if (error != null) {
+      throw error;
+    }
+    return ProductDetailsResponseWrapper(
+      billingResult: BillingResultWrapper(
+        responseCode: responseCodes[productType] ?? BillingResponse.ok,
+      ),
+      productDetailsList:
+          productDetails[productType] ?? const <ProductDetailsWrapper>[],
+    );
+  }
+}
+
+/// Host-injected plugin that answers product queries itself.
+final class _FakeInAppPurchase extends Fake implements InAppPurchase {
+  _FakeInAppPurchase(this.productResponse);
+
+  final ProductDetailsResponse productResponse;
+
+  @override
+  Future<ProductDetailsResponse> queryProductDetails(
+    Set<String> identifiers,
+  ) async => productResponse;
+}
+
+/// Builds a plain purchase. The defaults match the row the plugin emits when
+/// Play returns no purchases (`_getPurchaseDetailsFromResult`).
+PurchaseDetails _plainPurchase({
   required PurchaseStatus status,
-  String? errorCode,
+  BillingResponse? response,
+  String productId = '',
+  String token = '',
+  String source = kIAPSource,
 }) {
   final details = PurchaseDetails(
     purchaseID: '',
-    productID: '',
+    productID: productId,
     status: status,
     transactionDate: null,
     verificationData: PurchaseVerificationData(
       localVerificationData: '',
-      serverVerificationData: '',
-      source: 'google_play',
+      serverVerificationData: token,
+      source: source,
     ),
   );
-  if (errorCode != null) {
-    details.error = IAPError(
-      source: 'google_play',
-      code: errorCode,
-      message: 'plugin billing failure',
-    );
+  if (response != null) {
+    details.error = _pluginPurchaseError(response.toString());
   }
   return details;
 }
+
+/// The error the plugin attaches to every non-OK purchase update.
+IAPError _pluginPurchaseError(String message) => IAPError(
+  source: kIAPSource,
+  code: kPurchaseErrorCode,
+  message: message,
+  details: 'Billing debug message',
+);
 
 const ProductDetailsWrapper _subscriptionDetails = ProductDetailsWrapper(
   description: 'Premium access',

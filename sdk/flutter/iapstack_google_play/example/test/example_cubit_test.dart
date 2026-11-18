@@ -151,7 +151,6 @@ void main() {
       await _flushAsync();
       expect(cubit.state.message, 'Purchase cancelled.');
       expect(cubit.state.status, ExampleStatus.ready);
-      expect(cubit.state.message, isNot(contains('Restart')));
 
       updates.addError(StateError('native secret'));
       await _flushAsync();

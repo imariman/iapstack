@@ -14,7 +14,9 @@ dependencies:
   iapstack:
     path: ../iapstack
   in_app_purchase: ^3.3.0
-  in_app_purchase_android: ^0.5.2
+  # lib/ reads InAppPurchaseAndroidPlatform.billingClientManager, a
+  # @visibleForTesting member outside semver. Widen only after checking it.
+  in_app_purchase_android: ">=0.5.2 <0.5.6"
   in_app_purchase_platform_interface: ^1.4.1
 
 dev_dependencies:

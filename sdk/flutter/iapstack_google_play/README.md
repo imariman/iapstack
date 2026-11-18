@@ -56,6 +56,14 @@ final googlePlay = GooglePlayIapStack(
 );
 
 final purchaseSubscription = googlePlay.purchaseUpdates.listen((purchase) async {
+  if (purchase.status == GooglePlayPurchaseStatus.cancelled ||
+      purchase.status == GooglePlayPurchaseStatus.failed) {
+    // Play may report these without a purchase row, so purchaseToken and
+    // productIds can be empty. errorCode names the Billing result, for
+    // example purchase_cancelled or billing_error_7 (ITEM_ALREADY_OWNED).
+    renderCheckoutProblem(purchase.status, purchase.errorCode);
+    return;
+  }
   if (!purchase.canVerify) {
     // Pending payments are not access. Wait for purchased.
     return;
@@ -78,7 +86,8 @@ when the owning application service is disposed. Do not log a
 Product kinds are checked against the values returned by Play Billing before
 checkout can open. Every requested ID must be returned as an offer or explicitly
 reported missing, and checkout accepts only an immutable offer from that successful
-query. Subscription base plans and offers are returned as separate
+query. A non-OK Billing result fails the query with the same code as the Android
+SDK, for example `billing_error_2` for SERVICE_UNAVAILABLE. Subscription base plans and offers are returned as separate
 `GooglePlayProduct` rows with distinct in-memory selection keys.
 
 ```dart
