@@ -494,7 +494,11 @@ func (repository *transaction) customerOwnsMerge(
 	return exists, nil
 }
 
-// customersHaveEntitlementConflict reports dual currently-allowed access for one entitlement id.
+// customersHaveEntitlementConflict reports dual allowed access for one entitlement id.
+// Two stored-allowed rows conflict unless both have passed their effective end. A
+// merge of one current and one lapsed row stays refused: the projector ranks a store
+// observation above an import before it compares ends, so the lapsed row could
+// replace the current access.
 func (repository *transaction) customersHaveEntitlementConflict(
 	ctx context.Context,
 	projectID core.ProjectID,
@@ -513,11 +517,8 @@ func (repository *transaction) customersHaveEntitlementConflict(
 				AND canonical.customer_id = $2
 				AND source.customer_id = $3
 				AND canonical.access_status = 'allowed'
-				AND canonical.effective_starts_at <= CURRENT_TIMESTAMP
-				AND (canonical.effective_ends_at IS NULL OR canonical.effective_ends_at > CURRENT_TIMESTAMP)
 				AND source.access_status = 'allowed'
-				AND source.effective_starts_at <= CURRENT_TIMESTAMP
-				AND (source.effective_ends_at IS NULL OR source.effective_ends_at > CURRENT_TIMESTAMP)
+				AND (`+unexpiredAllowedSQL("canonical")+` OR `+unexpiredAllowedSQL("source")+`)
 		)
 	`, projectID, canonicalID, sourceID).Scan(&conflict)
 	if err != nil {

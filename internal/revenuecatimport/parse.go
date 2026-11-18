@@ -33,7 +33,6 @@ type sourceRow struct {
 	autoResume             *time.Time
 	ownership              string
 	trial                  bool
-	storeTransactionID     string
 	lineageMaterial        string
 	observedAt             time.Time
 	nonSubscription        bool
@@ -212,7 +211,6 @@ func transactionRow(record []string, columns map[string]int, canonicalColumn, al
 		autoRenewable:          autoRenewable,
 		ownership:              cell("ownership_type"),
 		trial:                  false,
-		storeTransactionID:     storeTransaction,
 		lineageMaterial:        material,
 		observedAt:             observed,
 	}
@@ -430,7 +428,6 @@ func subscriberGrantRow(
 		if material == "" {
 			material = productIdentifier + "\x00" + subscription.PurchaseDate
 		}
-		row.storeTransactionID = subscription.StoreTransactionID
 		row.lineageMaterial = material
 		shared := 0
 		if strings.EqualFold(subscription.OwnershipType, "FAMILY_SHARED") {
@@ -487,7 +484,6 @@ func subscriberGrantRow(
 	if material == "" {
 		material = productIdentifier + "\x00" + selected.PurchaseDate
 	}
-	row.storeTransactionID = selected.ID
 	row.lineageMaterial = material
 	row.nonSubscription = true
 	row.autoRenewable = false

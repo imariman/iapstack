@@ -389,20 +389,7 @@ func TestMergeCustomersEnforcesConflictIdempotencyAndAliasOwnership(t *testing.T
 	canonicalWrites.observation.Observation.State = core.LifecycleExpired
 	persistPurchaseWrites(t, database.ctx, store, canonicalWrites)
 
-	mustExec(t, database, `
-		INSERT INTO customers (id, project_id, external_id)
-		VALUES ('customer-source', $1, 'source-external')
-	`, fixture.projectID)
-	sourceWrites := newPurchaseWrites(t, fixture)
-	sourceWrites.evidence.CustomerID = "customer-source"
-	sourceWrites.evidence.Payload = repositoryProtectedValue("source-evidence")
-	sourceWrites.observation.CustomerID = "customer-source"
-	sourceWrites.observation.Observation.ID = "observation-source"
-	sourceWrites.projection.CustomerID = "customer-source"
-	sourceWrites.projection.SourceObservationID = "observation-source"
-	sourceWrites.outbox.ID = "outbox-source"
-	sourceWrites.outbox.AggregateID = "customer-source"
-	persistPurchaseWrites(t, database.ctx, store, sourceWrites)
+	persistAllowedCustomer(t, database, store, fixture, "customer-source")
 
 	conflictWrite := persistence.CustomerMergeWrite{
 		ProjectID: projectID, CanonicalCustomerID: core.CustomerID(fixture.customerID),
@@ -462,8 +449,8 @@ func TestMergeCustomersEnforcesConflictIdempotencyAndAliasOwnership(t *testing.T
 	`, fixture.customerID).Scan(&canonicalObservation); err != nil {
 		t.Fatalf("read canonical projection: %v", err)
 	}
-	if canonicalObservation != "observation-source" {
-		t.Fatalf("canonical source observation = %q, want observation-source", canonicalObservation)
+	if canonicalObservation != "observation-customer-source" {
+		t.Fatalf("canonical source observation = %q, want observation-customer-source", canonicalObservation)
 	}
 	if err := database.conn.QueryRow(database.ctx, `
 		SELECT access_status FROM customer_entitlements WHERE customer_id = 'customer-source'
@@ -530,64 +517,164 @@ func TestMergeCustomersEnforcesConflictIdempotencyAndAliasOwnership(t *testing.T
 	assertTableCount(t, database, "customer_merges", 1)
 }
 
-// TestMergeCustomersIgnoresExpiredAllowedRows verifies lapsed stored-allowed
+// TestMergeCustomersIgnoresExpiredAllowedRows verifies two lapsed stored-allowed
 // rows do not block a merge while a real current overlap still conflicts.
 func TestMergeCustomersIgnoresExpiredAllowedRows(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)
 	fixture := seedCatalog(t, database)
 	store := openRepositoryStore(t, database.ctx)
-	projectID := core.ProjectID(fixture.projectID)
 	persistAllowedCustomer(t, database, store, fixture, fixture.customerID)
 	persistAllowedCustomer(t, database, store, fixture, "customer-source")
 
-	merge := func(key string) error {
-		return store.Transact(database.ctx, func(repository persistence.Transaction) error {
-			_, mergeErr := repository.MergeCustomers(database.ctx, persistence.CustomerMergeWrite{
-				ProjectID: projectID, CanonicalCustomerID: core.CustomerID(fixture.customerID),
-				SourceCustomerID: "customer-source", IdempotencyKey: key, ActorKeyID: "admin-key",
-			})
-			return mergeErr
-		})
-	}
-
 	setStoredProjectionPeriod(t, database, fixture.customerID, "-2 hours", "1 hour")
 	setStoredProjectionPeriod(t, database, "customer-source", "-2 hours", "1 hour")
-	if err := merge("merge-current-overlap"); !errors.Is(err, persistence.ErrEntitlementConflict) {
+	if err := mergeIntoFixtureCustomer(t, database, store, fixture, "merge-current-overlap"); !errors.Is(err, persistence.ErrEntitlementConflict) {
 		t.Fatalf("current overlap merge error = %v, want ErrEntitlementConflict", err)
 	}
 	assertTableCount(t, database, "customer_merges", 0)
 
 	setStoredProjectionPeriod(t, database, fixture.customerID, "-2 hours", "-1 hour")
 	setStoredProjectionPeriod(t, database, "customer-source", "-2 hours", "-1 hour")
-	if err := merge("merge-expired-overlap"); err != nil {
+	if err := mergeIntoFixtureCustomer(t, database, store, fixture, "merge-expired-overlap"); err != nil {
 		t.Fatalf("expired overlap merge error = %v, want success", err)
 	}
 	assertTableCount(t, database, "customer_merges", 1)
+
+	var entitlements []persistence.CustomerEntitlement
+	err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		var readErr error
+		entitlements, readErr = repository.CustomerEntitlements(
+			database.ctx, core.ProjectID(fixture.projectID), core.CustomerID(fixture.customerID),
+		)
+		return readErr
+	})
+	if err != nil || len(entitlements) != 1 {
+		t.Fatalf("canonical entitlements = %#v, %v; want one", entitlements, err)
+	}
+	projection := entitlements[0].Projection
+	access, reason := core.AccessAt(projection.Access, projection.AccessReason, projection.EffectivePeriod.EndsAt, time.Now().UTC())
+	if access != core.AccessDenied || reason != core.AccessReasonExpired {
+		t.Fatalf("canonical access after merge = %s/%s, want denied/expired", access, reason)
+	}
 }
 
-// TestMergeCustomersAllowsOneExpiredOneCurrentAllowed verifies conflict needs
-// current access on both sides, matching the period applied to reads.
-func TestMergeCustomersAllowsOneExpiredOneCurrentAllowed(t *testing.T) {
+// TestMergeCustomersRefusesWhileEitherAllowedRowIsCurrent verifies a merge still
+// conflicts when only one stored-allowed side has lapsed. The projector ranks a
+// store observation above an import before it compares ends, so that merge could
+// replace current access with the lapsed row. A not-yet-started allowed row is
+// current here because reads ignore its start.
+func TestMergeCustomersRefusesWhileEitherAllowedRowIsCurrent(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	persistAllowedCustomer(t, database, store, fixture, fixture.customerID)
+	persistAllowedCustomer(t, database, store, fixture, "customer-source")
+
+	cases := []struct {
+		key            string
+		canonicalStart string
+		canonicalEnd   string
+		sourceStart    string
+		sourceEnd      string
+	}{
+		{key: "merge-canonical-lapsed", canonicalStart: "-2 hours", canonicalEnd: "-1 hour", sourceStart: "-2 hours", sourceEnd: "1 hour"},
+		{key: "merge-source-lapsed", canonicalStart: "-2 hours", canonicalEnd: "1 hour", sourceStart: "-2 hours", sourceEnd: "-1 hour"},
+		{key: "merge-canonical-not-started", canonicalStart: "1 hour", canonicalEnd: "2 hours", sourceStart: "-2 hours", sourceEnd: "-1 hour"},
+		{key: "merge-canonical-durable", canonicalStart: "-2 hours", canonicalEnd: "", sourceStart: "-2 hours", sourceEnd: "-1 hour"},
+	}
+	for _, test := range cases {
+		setStoredProjectionPeriod(t, database, fixture.customerID, test.canonicalStart, test.canonicalEnd)
+		setStoredProjectionPeriod(t, database, "customer-source", test.sourceStart, test.sourceEnd)
+		if err := mergeIntoFixtureCustomer(t, database, store, fixture, test.key); !errors.Is(err, persistence.ErrEntitlementConflict) {
+			t.Fatalf("%s error = %v, want ErrEntitlementConflict", test.key, err)
+		}
+	}
+	assertTableCount(t, database, "customer_merges", 0)
+}
+
+// TestMergeCustomersKeepsCurrentImportOverLapsedStoreRow verifies a customer with
+// current imported access cannot merge in a lapsed stored-allowed store row, which
+// the projector would select over the import and so revoke current access.
+func TestMergeCustomersKeepsCurrentImportOverLapsedStoreRow(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)
 	fixture := seedCatalog(t, database)
 	store := openRepositoryStore(t, database.ctx)
 	projectID := core.ProjectID(fixture.projectID)
-	persistAllowedCustomer(t, database, store, fixture, fixture.customerID)
-	persistAllowedCustomer(t, database, store, fixture, "customer-source")
-
-	setStoredProjectionPeriod(t, database, fixture.customerID, "-2 hours", "-1 hour")
-	setStoredProjectionPeriod(t, database, "customer-source", "-2 hours", "1 hour")
+	canonicalID := core.CustomerID(fixture.customerID)
+	now := time.Now().UTC()
+	importEnd := now.AddDate(0, 0, 13)
+	grant := persistence.ImportGrant{
+		ID: "imp-22222222222222222222222222222222", ProjectID: projectID,
+		CustomerID: canonicalID, ApplicationID: core.ApplicationID(fixture.applicationID),
+		ProductID: core.ProductID(fixture.productID), EntitlementID: core.EntitlementID(fixture.entitlementID),
+		Origin: persistence.ImportOriginRevenueCat, OriginStore: "app_store", Environment: core.EnvironmentSandbox,
+		Access: core.AccessAllowed, AccessReason: core.AccessReasonPurchaseValid,
+		EffectivePeriod: core.EffectivePeriod{StartsAt: now.AddDate(0, 0, -17), EndsAt: &importEnd}, ObservedAt: now,
+		ExportSHA256: [32]byte{3}, LineageFingerprint: [32]byte{4},
+	}
 	err := store.Transact(database.ctx, func(repository persistence.Transaction) error {
-		_, mergeErr := repository.MergeCustomers(database.ctx, persistence.CustomerMergeWrite{
-			ProjectID: projectID, CanonicalCustomerID: core.CustomerID(fixture.customerID),
-			SourceCustomerID: "customer-source", IdempotencyKey: "merge-one-expired", ActorKeyID: "admin-key",
+		writer, ok := repository.(interface {
+			UpsertImportGrant(context.Context, persistence.ImportGrant) (persistence.ImportGrantResult, error)
 		})
-		return mergeErr
+		if !ok {
+			return errors.New("import grant writer is unavailable")
+		}
+		if _, err := writer.UpsertImportGrant(database.ctx, grant); err != nil {
+			return err
+		}
+		return verification.RefreshCustomerProjection(
+			database.ctx, repository, verification.NewDefaultProjector(), projectID, canonicalID, now,
+		)
 	})
 	if err != nil {
-		t.Fatalf("one expired merge error = %v, want success", err)
+		t.Fatalf("project current import error = %v", err)
 	}
-	assertTableCount(t, database, "customer_merges", 1)
+	persistAllowedCustomer(t, database, store, fixture, "customer-source")
+	setStoredProjectionPeriod(t, database, "customer-source", "-2 days", "-1 day")
+
+	if err := mergeIntoFixtureCustomer(t, database, store, fixture, "merge-lapsed-store"); !errors.Is(err, persistence.ErrEntitlementConflict) {
+		t.Fatalf("merge error = %v, want ErrEntitlementConflict", err)
+	}
+	assertTableCount(t, database, "customer_merges", 0)
+	var entitlements []persistence.CustomerEntitlement
+	err = store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		var readErr error
+		entitlements, readErr = repository.CustomerEntitlements(database.ctx, projectID, canonicalID)
+		return readErr
+	})
+	if err != nil || len(entitlements) != 1 || entitlements[0].Projection.SourceImportID != grant.ID {
+		t.Fatalf("canonical entitlements = %#v, %v; want the import", entitlements, err)
+	}
+	projection := entitlements[0].Projection
+	if access, _ := core.AccessAt(projection.Access, projection.AccessReason, projection.EffectivePeriod.EndsAt, now); access != core.AccessAllowed {
+		t.Fatalf("canonical access = %s, want allowed", access)
+	}
+}
+
+// mergeIntoFixtureCustomer merges customer-source into the fixture customer and
+// refreshes the canonical projection in the same transaction, as the merge route does.
+func mergeIntoFixtureCustomer(
+	t *testing.T,
+	database *testDatabase,
+	store *postgres.Store,
+	fixture catalogFixture,
+	idempotencyKey string,
+) error {
+	t.Helper()
+	projectID := core.ProjectID(fixture.projectID)
+	canonicalID := core.CustomerID(fixture.customerID)
+	return store.Transact(database.ctx, func(repository persistence.Transaction) error {
+		result, err := repository.MergeCustomers(database.ctx, persistence.CustomerMergeWrite{
+			ProjectID: projectID, CanonicalCustomerID: canonicalID, SourceCustomerID: "customer-source",
+			IdempotencyKey: idempotencyKey, ActorKeyID: "admin-key",
+		})
+		if err != nil || result.Replay {
+			return err
+		}
+		return verification.RefreshCustomerProjection(
+			database.ctx, repository, verification.NewDefaultProjector(), projectID, canonicalID, time.Now().UTC(),
+		)
+	})
 }
 
 // persistAllowedCustomer stores one allowed projection for a catalog customer.
@@ -617,8 +704,9 @@ func persistAllowedCustomer(
 	persistPurchaseWrites(t, database.ctx, store, writes)
 }
 
-// setStoredProjectionPeriod rewrites one stored projection period relative to
-// the database clock; an empty end interval stores a durable open end.
+// setStoredProjectionPeriod rewrites one customer's stored projection period, and
+// the period of the observation it cites, relative to the database clock. An
+// empty end interval stores a durable open end.
 func setStoredProjectionPeriod(
 	t *testing.T,
 	database *testDatabase,
@@ -628,9 +716,16 @@ func setStoredProjectionPeriod(
 ) {
 	t.Helper()
 	mustExec(t, database, `
-		UPDATE customer_entitlements
+		WITH projection AS (
+			UPDATE customer_entitlements
+			SET effective_starts_at = now() + $2::interval,
+				effective_ends_at = CASE WHEN $3 = '' THEN NULL ELSE now() + $3::interval END
+			WHERE customer_id = $1
+			RETURNING source_observation_id
+		)
+		UPDATE purchase_observations
 		SET effective_starts_at = now() + $2::interval,
 			effective_ends_at = CASE WHEN $3 = '' THEN NULL ELSE now() + $3::interval END
-		WHERE customer_id = $1
+		WHERE id IN (SELECT source_observation_id FROM projection)
 	`, customerID, startInterval, endInterval)
 }

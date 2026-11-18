@@ -152,9 +152,11 @@ func planSubscriber(input Input, draft subscriberDraft) Subscriber {
 		grant Grant
 	}
 	grouped := map[string]candidate{}
-	groupedRows := map[string][]sourceRow{}
+	// refundedStarts keeps the period start of each refunded row per group, keyed
+	// by row index so a row that maps twice into one group is counted once.
+	refundedStarts := map[string]map[int]time.Time{}
 	var failures []Failure
-	for _, row := range draft.rows {
+	for rowIndex, row := range draft.rows {
 		if row.ambiguousProduct {
 			failures = append(failures, Failure{Line: row.line, Code: CodeConflictingSubscriber, ExternalID: draft.externalID, EntitlementKey: firstEntitlement(row)})
 			continue
@@ -172,8 +174,15 @@ func planSubscriber(input Input, draft subscriberDraft) Subscriber {
 				failures = append(failures, failure)
 				continue
 			}
-			key := string(grant.ApplicationID) + "\x00" + string(grant.ProductID) + "\x00" + string(grant.EntitlementID) + "\x00" + hex.EncodeToString(grant.LineageFingerprint[:])
-			groupedRows[key] = append(groupedRows[key], row)
+			// The mapped key, not the catalog id, separates entitlements: a dry-run
+			// without a catalog has no entitlement ids, and with one the two match 1:1.
+			key := string(grant.ApplicationID) + "\x00" + string(grant.ProductID) + "\x00" + grant.EntitlementKey + "\x00" + hex.EncodeToString(grant.LineageFingerprint[:])
+			if row.refunded != nil {
+				if refundedStarts[key] == nil {
+					refundedStarts[key] = map[int]time.Time{}
+				}
+				refundedStarts[key][rowIndex] = timeOrZero(row.start)
+			}
 			existing, exists := grouped[key]
 			if !exists || row.after(existing.row) {
 				grouped[key] = candidate{row: row, grant: grant}
@@ -188,7 +197,7 @@ func planSubscriber(input Input, draft subscriberDraft) Subscriber {
 	}
 	for key, candidate := range grouped {
 		subscriber.Grants = append(subscriber.Grants, candidate.grant)
-		subscriber.IgnoredEarlierRefunds += ignoredEarlierRefunds(candidate.row, groupedRows[key])
+		subscriber.IgnoredEarlierRefunds += ignoredEarlierRefunds(candidate.row, refundedStarts[key])
 	}
 	sort.Slice(subscriber.Grants, func(left, right int) bool {
 		if subscriber.Grants[left].EntitlementKey != subscriber.Grants[right].EntitlementKey {
@@ -374,21 +383,21 @@ func firstEntitlement(row sourceRow) string {
 	return row.entitlementIDs[0]
 }
 
-// after reports whether row is the current lineage record over other. The row
-// with the latest period start wins, so a refund recorded later against an
-// earlier period cannot replace a still-valid renewal. The export update time
-// only breaks ties between snapshots of the same store transaction, after
-// which the later effective end decides.
+// after reports whether row is the current lineage record over other. Keys are
+// compared in one fixed order, so the winner does not depend on export row
+// order. The latest period start wins, so a refund recorded later against an
+// earlier period cannot replace a still-valid renewal. Within one period the
+// latest export update wins, so a later refunded snapshot replaces a stale one
+// whether or not the export carries a store transaction id. Then the later
+// effective end wins, and on a full tie a refunded snapshot wins.
 func (row sourceRow) after(other sourceRow) bool {
 	leftStart, rightStart := timeOrZero(row.start), timeOrZero(other.start)
 	if !leftStart.Equal(rightStart) {
 		return leftStart.After(rightStart)
 	}
-	if sameStoreTransaction(row, other) {
-		leftUpdated, rightUpdated := timeOrZero(row.updated), timeOrZero(other.updated)
-		if !leftUpdated.Equal(rightUpdated) {
-			return leftUpdated.After(rightUpdated)
-		}
+	leftUpdated, rightUpdated := timeOrZero(row.updated), timeOrZero(other.updated)
+	if !leftUpdated.Equal(rightUpdated) {
+		return leftUpdated.After(rightUpdated)
 	}
 	leftHas, rightHas := row.effectiveEnd != nil, other.effectiveEnd != nil
 	if leftHas != rightHas {
@@ -397,29 +406,23 @@ func (row sourceRow) after(other sourceRow) bool {
 	if leftHas && !row.effectiveEnd.Equal(*other.effectiveEnd) {
 		return row.effectiveEnd.After(*other.effectiveEnd)
 	}
-	leftUpdated, rightUpdated := timeOrZero(row.updated), timeOrZero(other.updated)
-	return leftUpdated.After(rightUpdated)
+	return row.refunded != nil && other.refunded == nil
 }
 
 // ignoredEarlierRefunds counts refunded rows from an earlier period that the
 // winning unrefunded row superseded within one lineage.
-func ignoredEarlierRefunds(winner sourceRow, rows []sourceRow) int {
+func ignoredEarlierRefunds(winner sourceRow, refundedStarts map[int]time.Time) int {
 	if winner.refunded != nil {
 		return 0
 	}
 	winnerStart := timeOrZero(winner.start)
 	count := 0
-	for _, row := range rows {
-		if row.refunded != nil && timeOrZero(row.start).Before(winnerStart) {
+	for _, start := range refundedStarts {
+		if start.Before(winnerStart) {
 			count++
 		}
 	}
 	return count
-}
-
-// sameStoreTransaction reports whether two rows name the same store transaction.
-func sameStoreTransaction(left, right sourceRow) bool {
-	return left.storeTransactionID != "" && left.storeTransactionID == right.storeTransactionID
 }
 
 // timeOrZero dereferences an optional export timestamp.
