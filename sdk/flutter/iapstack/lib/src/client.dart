@@ -33,6 +33,13 @@ final class IapStackClient {
   /// Last successful offering response body. It is not an application bearer.
   OfferingDocument? _lastOfferingBody;
 
+  /// Monotonic generation of the latest started [getOffering] call.
+  int _offeringGeneration = 0;
+
+  /// Generation of the newest [getOffering] 200 or 404 applied to
+  /// [_lastOfferingBody].
+  int _appliedOfferingGeneration = 0;
+
   /// Verifies one signed store purchase and returns current projections.
   Future<VerificationResult> verifyPurchase(
     PurchaseSubmission purchase, {
@@ -162,12 +169,24 @@ final class IapStackClient {
   /// application bearer and it is not written to disk. A transport failure or
   /// timeout returns that body when one exists, then [fallback]. HTTP 404
   /// means the offering is gone: the cached body is cleared and [fallback] is
-  /// returned, so a withdrawn document is not shown again. The failure does
-  /// not change later purchase or entitlement calls.
+  /// returned, so a withdrawn document is not shown again. When calls
+  /// overlap, a 200 or 404 changes that memory only if no call started after
+  /// it has already done so; each caller still gets its own response. An
+  /// offering failure does not change later purchase or entitlement calls.
   Future<OfferingDocument> getOffering(
     OfferingDocument fallback, {
     String? requestId,
   }) async {
+    // Cache-write rule: each call claims the next generation at start. A 200
+    // sets and a 404 clears _lastOfferingBody only when its generation is
+    // newer than the last applied one, and then becomes the applied one. So
+    // a late 200 cannot resurrect an offering a newer 404 withdrew, and a
+    // late 404 cannot clear a newer 200. A call that fails, times out, or is
+    // still in flight applies nothing, so it never blocks an older 200 or
+    // 404 from updating the cache. The rule gates only the shared cache;
+    // every caller still returns its own request's document, fallback,
+    // cached body, or error as before.
+    final generation = ++_offeringGeneration;
     try {
       final json = await _request(
         method: 'GET',
@@ -181,7 +200,10 @@ final class IapStackClient {
         authorize: false,
       );
       final document = _decode(() => OfferingDocument.fromJson(json));
-      _lastOfferingBody = document;
+      if (generation > _appliedOfferingGeneration) {
+        _appliedOfferingGeneration = generation;
+        _lastOfferingBody = document;
+      }
       return document;
     } on IapStackTransportException {
       return _lastOfferingBody ?? fallback;
@@ -189,7 +211,10 @@ final class IapStackClient {
       return _lastOfferingBody ?? fallback;
     } on IapStackApiException catch (error) {
       if (error.statusCode == 404) {
-        _lastOfferingBody = null;
+        if (generation > _appliedOfferingGeneration) {
+          _appliedOfferingGeneration = generation;
+          _lastOfferingBody = null;
+        }
         return fallback;
       }
       rethrow;
