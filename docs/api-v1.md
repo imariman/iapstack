@@ -311,14 +311,13 @@ identity and downstream projection/outbox writes remain idempotent.
 A `CONSUMPTION_REQUEST` also schedules a refund consumption answer. It is off by default.
 An operator turns it on per App Store application with
 `PUT /v1/admin/projects/{project_id}/applications/{application_id}/apple-consumption`
-(`enabled`, `consent_mode`, `refund_preference`, `sample_content_provided`,
-`expected_revision`). `GET` on the same path returns those settings and the 20 newest
+(`enabled`, `refund_preference`, `sample_content_provided`, `expected_revision`). `GET` on the same path returns those settings and the 20 newest
 requests with their status: `pending`, `sent`, `skipped`, `expired`, or `failed`, plus a
-reason code. The host backend records each customer's consent with the application
-bearer:
+reason code. Consent is opt-in. Only the host backend records it, with the durable
+application bearer; a customer session token gets `401`:
 `PUT /v1/applications/{application_id}/customers/{external_customer_id}/apple-consumption-consent`
 with `{"consented": true}` or `false`. The worker sends Apple's version 2 Send
-Consumption Information body only when consent is established and IAPStack holds an
+Consumption Information body only when the customer's latest decision is `true` and IAPStack holds an
 allowed observation for that transaction. It never sends `consumptionPercentage`.
 See `docs/plans/apple-consumption-response.md`.
 

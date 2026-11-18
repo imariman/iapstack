@@ -205,13 +205,11 @@ the customer's consent is established, and IAPStack verified that transaction wi
 allowed access. Everything else is recorded as `skipped` with a reason, such as
 `disabled`, `no_consent`, `consent_withdrawn`, `no_delivery_evidence`, or `family_shared`.
 
-Before you turn it on, decide how consent reaches the server:
-
-- **Recorded per customer** (`customer_opt_in`): your backend calls the consent route
-  after the customer agrees in the app. Customers without a recorded yes are skipped.
-- **Collected by the app from every customer** (`application_attested`): choose this only
-  if the app obtains consent from every customer before purchase. A recorded no still
-  blocks that customer.
+Consent is opt-in. Before you turn it on, make your host backend call
+`PUT /v1/applications/{application_id}/customers/{external_customer_id}/apple-consumption-consent`
+with the application key after the customer answers your consent prompt. Customer session
+tokens cannot write consent. Customers without a recorded yes are skipped, and recording
+`{"consented": false}` withdraws consent.
 
 Apple's consent and privacy-label rules are on the Send Consumption Information page. You
 are responsible for obtaining valid consent. Rate-limited and `5xx` answers are retried

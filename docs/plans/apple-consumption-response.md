@@ -85,7 +85,7 @@ The task asked for account tenure and lifetime purchased and refunded amounts. T
 | Settings never saved or `enabled` false | `skipped` / `disabled`. The protected payload is not opened. |
 | Family Sharing transaction | `skipped` / `family_shared` (Apple rejects these) |
 | Other ownership, such as an assigned seat | `skipped` / `unsupported_ownership` |
-| Consent not established (see below) | `skipped` / `no_consent` or `consent_withdrawn` |
+| No recorded yes for the customer (see below) | `skipped` / `no_consent` or `consent_withdrawn` |
 | No allowed observation for this transaction and customer | `skipped` / `no_delivery_evidence` |
 | Apple answers 2xx | `sent` / `accepted` |
 | Apple answers 429, 5xx, or the network fails | attempt `transient_error`; River retries |
@@ -102,7 +102,7 @@ Every handler run that reaches a decision writes one `apple_consumption_attempts
 
 ### Tables (migration 016)
 
-- `apple_consumption_settings`: one row per application. `enabled`, `consent_mode`, `refund_preference`, `sample_content_provided`, revision, and the admin key that last saved it. No row means disabled.
+- `apple_consumption_settings`: one row per application. `enabled`, `refund_preference`, `sample_content_provided`, revision, and the admin key that last saved it. No row means disabled.
 - `apple_consumption_consents`: `(application_id, customer_id)` with the latest `consented` value and the application key that recorded it.
 - `apple_consumption_requests`: the durable job and its terminal state. Clear columns are catalog and state only (product id, product type, the customer's reason code, times, status, reason, attempt count). The transaction id, app account token, and ownership are in the protected payload.
 - `apple_consumption_attempts`: the audit rows.
@@ -111,14 +111,13 @@ The down migration refuses to run while a request is `pending`.
 
 ## Consent model
 
-Apple puts consent entirely on the developer. IAPStack never assumes it.
+Apple puts consent entirely on the developer. IAPStack never assumes it. Consent is opt-in only (maintainer decision, 2026-11-18).
 
-- **Operator declaration.** The settings choose a consent mode, and saving it records who saved it.
-  - `customer_opt_in` (default): send only for customers with a recorded `consented: true`.
-  - `application_attested`: the operator states that the app collects consent from every customer before purchase. Send unless the customer has a recorded `consented: false`.
-- **Per-customer flag.** The host backend calls `PUT /v1/applications/{application_id}/customers/{external_customer_id}/apple-consumption-consent` with the application bearer. The newest decision wins. A recorded no always blocks, in both modes, which is how a customer withdraws.
+- **A recorded yes is required.** The worker answers only when the customer's latest recorded decision is `consented: true`. No record, an unknown customer, or a recorded no means the request is `skipped` with `no_consent` or `consent_withdrawn`. Apple's guidance is to not respond, and IAPStack does not.
+- **Only the host backend records consent.** It calls `PUT /v1/applications/{application_id}/customers/{external_customer_id}/apple-consumption-consent` with the durable application bearer, after the customer answers the app's consent prompt. The route uses `requireApplication`, which accepts stored application API keys only. A short-lived customer session token, the bearer the mobile app holds, is rejected with `401`, and so are admin bearers and dashboard sessions. `TestAppleConsumptionConsentRejectsCustomerSessions` and the HTTP integration test cover this.
+- The newest decision wins. Recording `consented: false` is how a customer withdraws.
+- There is no operator-level consent declaration. The settings hold only the switch, the refund preference, and the sample declaration.
 - Consent is per application, because Apple asks per app. Both the consent route and the worker resolve the app account token through the canonical customer, so an alias or merge does not lose consent.
-- Without consent the request is `skipped` with `no_consent` or `consent_withdrawn`. Apple's guidance is to not respond, and IAPStack does not.
 
 ## Privacy notes
 
@@ -132,8 +131,8 @@ Apple puts consent entirely on the developer. IAPStack never assumes it.
 ## API and dashboard
 
 - `GET` and `PUT /v1/admin/projects/{project_id}/applications/{application_id}/apple-consumption`: settings with revision control, and the 20 newest requests. App Store applications only; others get `400`.
-- `PUT /v1/applications/{application_id}/customers/{external_customer_id}/apple-consumption-consent`: application bearer only, `404` for an unknown customer.
-- The connections dialog of an App Store application has a **Refund consumption answers** section: on or off, consent mode, refund preference, and the sample declaration, then a list of recent requests. Each status is a labelled badge with its reason under it.
+- `PUT /v1/applications/{application_id}/customers/{external_customer_id}/apple-consumption-consent`: durable application bearer only; customer sessions get `401`; `404` for an unknown customer.
+- The connections dialog of an App Store application has a **Refund consumption answers** section: on or off, refund preference, the sample declaration, and a note that consent is opt-in and recorded by the backend, then a list of recent requests. Each status is a labelled badge with its reason under it.
 
 ## Known limits
 
@@ -144,15 +143,20 @@ Apple puts consent entirely on the developer. IAPStack never assumes it.
 - There is no consent history table; the latest decision and its timestamps are kept.
 - The branch only migrates after migrations 014 and 015 land, because tern needs consecutive numbers.
 
+## Decisions
+
+Recorded 2026-11-18 from the maintainer:
+
+1. Consent is opt-in only. The `application_attested` mode was removed from the code, migration 016, OpenAPI, the dashboard, tests, and docs.
+2. Only the host backend records consent, with the durable application bearer. Customer sessions are rejected.
+3. There is no "delivered by default" declaration. `DELIVERED` stays tied to a stored allowed observation for that exact transaction; anything else is skipped with its reason recorded.
+
 ## Open questions
 
-1. Should `application_attested` exist at all? It matches the brief, but Apple calls opt-in the higher standard. Removing it leaves only per-customer opt-in.
-2. Should operators get an explicit "delivered by default" declaration for consumables and unverified renewals, instead of skipping them? That would send `DELIVERED` without stored evidence, so it is not built.
-3. Should the customer's refund reason be shown in the dashboard, or only kept in the API?
-4. Do we need a consent history for audits, rather than the latest value?
-5. Should a customer session (the mobile app itself) be allowed to record consent, or only the trusted host backend?
-6. Should requests skipped as `disabled` be stored at all? They show the operator what Apple is asking, but they are records about a customer's refund request.
-7. Which product owns the refund policy wording in the dialog? Apple's wording for `DECLINE` and `GRANT_FULL` is used as is.
+1. Should the customer's refund reason be shown in the dashboard, or only kept in the API?
+2. Do we need a consent history for audits, rather than the latest value?
+3. Should requests skipped as `disabled` be stored at all? They show the operator what Apple is asking, but they are records about a customer's refund request.
+4. Which product owns the refund policy wording in the dialog? Apple's wording for `DECLINE` and `GRANT_FULL` is used as is.
 
 ## Tests
 
