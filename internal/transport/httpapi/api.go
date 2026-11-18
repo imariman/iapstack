@@ -294,6 +294,7 @@ func (api *API) v1Routes() []v1Route {
 		{Method: http.MethodDelete, Path: "/v1/admin/api-keys/{key_id}", OperationID: "revokeApiKey", Handler: api.revokeAPIKey},
 		{Method: http.MethodGet, Path: "/v1/admin/projects", OperationID: "listAdminProjects", Handler: api.adminProjects},
 		{Method: http.MethodGet, Path: "/v1/admin/projects/{project_id}/overview", OperationID: "getAdminProjectOverview", Handler: api.adminProjectOverview},
+		{Method: http.MethodGet, Path: "/v1/admin/projects/{project_id}/subscription-metrics", OperationID: "getAdminSubscriptionMetrics", Handler: api.adminSubscriptionMetrics},
 		{Method: http.MethodGet, Path: "/v1/admin/projects/{project_id}/financial-reports", OperationID: "listFinancialReports", Handler: api.listFinancialReports},
 		{Method: http.MethodPost, Path: "/v1/admin/projects/{project_id}/financial-reports", OperationID: "uploadFinancialReport", Handler: api.uploadFinancialReport},
 		{Method: http.MethodPost, Path: "/v1/admin/projects/{project_id}/financial-reports/{import_id}:supersede", OperationID: "supersedeFinancialReport", Handler: api.supersedeFinancialReport},

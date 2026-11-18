@@ -324,6 +324,107 @@ func TestAdapterNormalizesSandboxGraceSubscription(t *testing.T) {
 	}
 }
 
+// TestAdapterRecordsSignedOfferPhase verifies Google's offerPhase union reaches the normalized observation.
+func TestAdapterRecordsSignedOfferPhase(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentSandbox)
+	payload := map[string]any{
+		"kind": "androidpublisher#subscriptionPurchaseV2",
+		"lineItems": []map[string]any{{
+			"productId": fixtureProductID, "expiryTime": fixture.now.Add(7 * 24 * time.Hour).Format(time.RFC3339Nano),
+			"latestSuccessfulOrderId": "GPA.3234-5678-9012-34567",
+			"autoRenewingPlan":        map[string]any{"autoRenewEnabled": true},
+			"offerDetails":            map[string]any{"basePlanId": "monthly", "offerId": "trial-7d", "offerTags": []string{}},
+			"offerPhase":              map[string]any{"freeTrial": map[string]any{}},
+		}},
+		"startTime": fixture.now.Add(-time.Hour).Format(time.RFC3339Nano), "subscriptionState": subscriptionStateActive,
+		"latestOrderId": "GPA.3234-5678-9012-34567", "testPurchase": map[string]any{},
+		"acknowledgementState":       acknowledgementStateAcknowledged,
+		"externalAccountIdentifiers": map[string]any{"obfuscatedExternalAccountId": fixtureAccountID},
+	}
+	fixture.adapter.client.Transport = providerTransport(t, fixture, payload)
+	result, err := fixture.adapter.Verify(context.Background(), verificationRequest(t, core.EnvironmentSandbox, core.ProductKindSubscription))
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if phase := result.Observations[0].OfferPhase; phase != core.OfferPhaseFreeTrial {
+		t.Fatalf("Verify() offer phase = %q, want free_trial", phase)
+	}
+}
+
+// TestCancellationReasonMapsGoogleUnion verifies every documented CanceledStateContext member and the absent case.
+func TestCancellationReasonMapsGoogleUnion(t *testing.T) {
+	t.Parallel()
+
+	for body, want := range map[string]core.CancellationReason{
+		`{}`: core.CancellationReasonNotRecorded,
+		`{"canceledStateContext":{"userInitiatedCancellation":{"cancelSurveyResult":{"reason":"CANCEL_SURVEY_REASON_NOT_ENOUGH_USAGE"}}}}`: core.CancellationReasonCustomer,
+		`{"canceledStateContext":{"systemInitiatedCancellation":{}}}`:                                                                      core.CancellationReasonSystem,
+		`{"canceledStateContext":{"developerInitiatedCancellation":{}}}`:                                                                   core.CancellationReasonDeveloper,
+		`{"canceledStateContext":{"replacementCancellation":{}}}`:                                                                          core.CancellationReasonReplacement,
+		`{"canceledStateContext":{"futureCancellation":{}}}`:                                                                               core.CancellationReasonNotRecorded,
+	} {
+		var purchase subscriptionPurchase
+		if err := json.Unmarshal([]byte(body), &purchase); err != nil {
+			t.Fatalf("Unmarshal(%s) error = %v", body, err)
+		}
+		if got := cancellationReason(purchase.CanceledStateContext); got != want {
+			t.Errorf("cancellationReason(%s) = %q, want %q", body, got, want)
+		}
+	}
+}
+
+// TestAdapterRecordsReplacementCancellation verifies an expired replaced token carries its signed cancellation context.
+func TestAdapterRecordsReplacementCancellation(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentSandbox)
+	payload := map[string]any{
+		"kind": "androidpublisher#subscriptionPurchaseV2",
+		"lineItems": []map[string]any{{
+			"productId": fixtureProductID, "expiryTime": fixture.now.Add(-time.Hour).Format(time.RFC3339Nano),
+			"latestSuccessfulOrderId": "GPA.4234-5678-9012-34567",
+			"autoRenewingPlan":        map[string]any{"autoRenewEnabled": false},
+		}},
+		"startTime": fixture.now.Add(-30 * 24 * time.Hour).Format(time.RFC3339Nano), "subscriptionState": subscriptionStateExpired,
+		"latestOrderId": "GPA.4234-5678-9012-34567", "testPurchase": map[string]any{},
+		"acknowledgementState":       acknowledgementStateAcknowledged,
+		"externalAccountIdentifiers": map[string]any{"obfuscatedExternalAccountId": fixtureAccountID},
+		"canceledStateContext":       map[string]any{"replacementCancellation": map[string]any{}},
+	}
+	fixture.adapter.client.Transport = providerTransport(t, fixture, payload)
+	result, err := fixture.adapter.Verify(context.Background(), verificationRequest(t, core.EnvironmentSandbox, core.ProductKindSubscription))
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if reason := result.Observations[0].CancellationReason; reason != core.CancellationReasonReplacement {
+		t.Fatalf("Verify() cancellation reason = %q, want replacement", reason)
+	}
+}
+
+// TestOfferPhaseMapsGoogleUnion verifies every documented OfferPhase member and the absent case.
+func TestOfferPhaseMapsGoogleUnion(t *testing.T) {
+	t.Parallel()
+
+	for body, want := range map[string]core.OfferPhase{
+		`{}`:                              core.OfferPhaseNotRecorded,
+		`{"offerPhase":{"basePrice":{}}}`: core.OfferPhaseBase,
+		`{"offerPhase":{"freeTrial":{}}}`: core.OfferPhaseFreeTrial,
+		`{"offerPhase":{"introductoryPrice":{}}}`:                                    core.OfferPhaseDiscounted,
+		`{"offerPhase":{"prorationPeriod":{"originalOfferPhaseType":"FREE_TRIAL"}}}`: core.OfferPhaseProration,
+		`{"offerPhase":{"futurePhase":{}}}`:                                          core.OfferPhaseUnknown,
+	} {
+		var item subscriptionLineItem
+		if err := json.Unmarshal([]byte(body), &item); err != nil {
+			t.Fatalf("Unmarshal(%s) error = %v", body, err)
+		}
+		if got := offerPhase(item.OfferPhase); got != want {
+			t.Errorf("offerPhase(%s) = %q, want %q", body, got, want)
+		}
+	}
+}
+
 // TestAdapterReconcilesAuthoritativeAccountHold verifies missed RTDN delivery converges through Android Publisher.
 func TestAdapterReconcilesAuthoritativeAccountHold(t *testing.T) {
 	t.Parallel()

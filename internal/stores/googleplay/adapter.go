@@ -161,6 +161,16 @@ type subscriptionPurchase struct {
 	TestPurchase               *struct{}                  `json:"testPurchase"`
 	AcknowledgementState       string                     `json:"acknowledgementState"`
 	ExternalAccountIdentifiers externalAccountIdentifiers `json:"externalAccountIdentifiers"`
+	// CanceledStateContext is Google's cancellation initiator, present for canceled and expired subscriptions.
+	CanceledStateContext *canceledStateContext `json:"canceledStateContext"`
+}
+
+// canceledStateContext is Google's CanceledStateContext union. Exactly one member is set.
+type canceledStateContext struct {
+	UserInitiatedCancellation      *struct{} `json:"userInitiatedCancellation"`
+	SystemInitiatedCancellation    *struct{} `json:"systemInitiatedCancellation"`
+	DeveloperInitiatedCancellation *struct{} `json:"developerInitiatedCancellation"`
+	ReplacementCancellation        *struct{} `json:"replacementCancellation"`
 }
 
 // subscriptionLineItem contains one Google Play subscription product, its plan, and any replacement details.
@@ -172,6 +182,16 @@ type subscriptionLineItem struct {
 	PrepaidPlan             *struct{}         `json:"prepaidPlan"`
 	DeferredItemReplacement *itemProduct      `json:"deferredItemReplacement"`
 	ItemReplacement         *itemProduct      `json:"itemReplacement"`
+	// OfferPhase is Google's current offer phase union. A response without it records no phase.
+	OfferPhase *subscriptionOfferPhase `json:"offerPhase"`
+}
+
+// subscriptionOfferPhase is Google's OfferPhase union. Exactly one member is set for a known phase.
+type subscriptionOfferPhase struct {
+	BasePrice         *struct{} `json:"basePrice"`
+	FreeTrial         *struct{} `json:"freeTrial"`
+	IntroductoryPrice *struct{} `json:"introductoryPrice"`
+	ProrationPeriod   *struct{} `json:"prorationPeriod"`
 }
 
 // itemProduct names the product in a deferred item replacement or in the item an item replaced.
@@ -702,6 +722,7 @@ func (adapter *Adapter) subscriptionObservations(
 		ProductID: core.ProviderProductID(lineItem.ProductID), ProductKind: core.ProductKindSubscription,
 		State: state, ProviderState: purchase.SubscriptionState,
 		Access: access, AccessReason: reason, Ownership: core.OwnershipPurchased, Quantity: 1,
+		OfferPhase: offerPhase(lineItem.OfferPhase), CancellationReason: cancellationReason(purchase.CanceledStateContext),
 		OccurredAt: purchase.StartTime, ObservedAt: now,
 		EffectivePeriod: core.EffectivePeriod{StartsAt: purchase.StartTime, EndsAt: timePointer(lineItem.ExpiryTime)},
 		Renewal:         renewal, References: references,
@@ -759,6 +780,7 @@ func replacedItemObservation(
 		ProductID: core.ProviderProductID(item.ProductID), ProductKind: core.ProductKindSubscription,
 		State: state, ProviderState: subscriptionStateExpired,
 		Access: access, AccessReason: reason, Ownership: core.OwnershipPurchased, Quantity: 1,
+		OfferPhase: offerPhase(item.OfferPhase),
 		OccurredAt: purchase.StartTime, ObservedAt: current.ObservedAt.Add(-time.Microsecond),
 		EffectivePeriod: period, Renewal: renewal, References: references,
 	}
@@ -902,6 +924,44 @@ func (result queryResult) verificationResult(
 		verificationResult.NamedProducts = append([]core.ProviderProductID(nil), result.products...)
 	}
 	return verificationResult
+}
+
+// offerPhase maps Google's OfferPhase union onto the shared subscription offer phase.
+// An absent union records no phase. A union with no known member is unknown, never guessed.
+func offerPhase(phase *subscriptionOfferPhase) core.OfferPhase {
+	switch {
+	case phase == nil:
+		return core.OfferPhaseNotRecorded
+	case phase.FreeTrial != nil:
+		return core.OfferPhaseFreeTrial
+	case phase.IntroductoryPrice != nil:
+		return core.OfferPhaseDiscounted
+	case phase.BasePrice != nil:
+		return core.OfferPhaseBase
+	case phase.ProrationPeriod != nil:
+		return core.OfferPhaseProration
+	default:
+		return core.OfferPhaseUnknown
+	}
+}
+
+// cancellationReason maps Google's CanceledStateContext union onto the shared cancellation reason.
+// An absent union, or one with no known member, records no reason.
+func cancellationReason(context *canceledStateContext) core.CancellationReason {
+	switch {
+	case context == nil:
+		return core.CancellationReasonNotRecorded
+	case context.ReplacementCancellation != nil:
+		return core.CancellationReasonReplacement
+	case context.UserInitiatedCancellation != nil:
+		return core.CancellationReasonCustomer
+	case context.SystemInitiatedCancellation != nil:
+		return core.CancellationReasonSystem
+	case context.DeveloperInitiatedCancellation != nil:
+		return core.CancellationReasonDeveloper
+	default:
+		return core.CancellationReasonNotRecorded
+	}
 }
 
 // googleReferences creates protected transaction, lineage, query, and customer references.

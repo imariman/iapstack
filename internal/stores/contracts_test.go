@@ -37,6 +37,23 @@ func TestEvidenceIsOpaqueCopiedAndLogSafe(t *testing.T) {
 	}
 }
 
+// TestRecordsOfferPhaseNamesMappedProvidersOnly keeps trial availability tied to adapters that map a signed phase.
+func TestRecordsOfferPhaseNamesMappedProvidersOnly(t *testing.T) {
+	t.Parallel()
+
+	for provider, want := range map[core.Provider]bool{
+		core.ProviderAppleAppStore:      true,
+		core.ProviderGooglePlay:         true,
+		core.ProviderHuaweiAppGallery:   false,
+		core.ProviderAmazonAppstore:     false,
+		core.ProviderSamsungGalaxyStore: false,
+	} {
+		if got := stores.RecordsOfferPhase(provider); got != want {
+			t.Errorf("RecordsOfferPhase(%q) = %t, want %t", provider, got, want)
+		}
+	}
+}
+
 // TestEvidenceRequiresMediaType verifies rejection of malformed evidence content types.
 func TestEvidenceRequiresMediaType(t *testing.T) {
 	t.Parallel()

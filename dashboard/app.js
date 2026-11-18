@@ -11,7 +11,13 @@ const state = {
   overview: null,
   apiKeys: [],
   pendingRevokeKey: null,
+  subscriptionProject: "",
+  subscriptionEnvironment: "",
+  subscriptionWindowDays: 30,
+  subscriptionRequest: 0,
 };
+
+const subscriptionEnvironmentOrder = ["production", "sandbox", "test"];
 
 const elements = {
   authStage: document.querySelector("#auth-stage"),
@@ -210,6 +216,8 @@ async function loadOverview(projectID, focusWorkspace = false) {
     renderProjectNavigation();
     renderOverview();
     elements.updatedAt.textContent = `Updated ${formatTime(new Date().toISOString())}`;
+    // Not awaited: the subscription query is slower, and it must not hold the overview or the refresh button.
+    loadSubscriptionMetrics(projectID);
     if (focusWorkspace) elements.appShell.querySelector("#workspace").focus({ preventScroll: true });
   } catch (error) {
     if (error.status === 401) {
@@ -252,6 +260,8 @@ function renderEmptyWorkspace() {
   setText("metric-products", "0");
   setText("metric-pending", "0");
   renderAnalytics(emptyAnalytics());
+  syncSubscriptionControls([]);
+  renderEmptySubscriptions("Subscription health appears after you create a project.");
   for (const id of ["application-grid", "product-list", "queue-list"]) {
     const container = document.querySelector(`#${id}`);
     container.replaceChildren(node("p", "empty-state", "This section will populate after you create a project."));
@@ -645,6 +655,283 @@ function formatChartDate(value) {
     month: "short",
     timeZone: "UTC",
   }).format(date);
+}
+
+function subscriptionEnvironments(applications) {
+  const present = new Set(applications.map((application) => application.environment));
+  return subscriptionEnvironmentOrder.filter((environment) => present.has(environment));
+}
+
+function environmentLabel(environment) {
+  return { production: "Production", sandbox: "Sandbox", test: "Test" }[environment] || environment;
+}
+
+function syncSubscriptionControls(environments) {
+  const select = document.querySelector("#subscription-environment");
+  select.replaceChildren();
+  for (const environment of environments) {
+    const option = node("option", "", environmentLabel(environment));
+    option.value = environment;
+    select.append(option);
+  }
+  if (!environments.length) select.append(node("option", "", "No applications"));
+  select.disabled = environments.length === 0;
+  if (environments.length) select.value = state.subscriptionEnvironment;
+  for (const button of document.querySelectorAll(".segmented-control [data-window-days]")) {
+    button.setAttribute("aria-pressed", String(Number(button.dataset.windowDays) === state.subscriptionWindowDays));
+  }
+}
+
+async function loadSubscriptionMetrics(projectID) {
+  const environments = subscriptionEnvironments(state.overview?.applications || []);
+  const projectChanged = state.subscriptionProject !== projectID;
+  if (projectChanged || !environments.includes(state.subscriptionEnvironment)) {
+    state.subscriptionProject = projectID;
+    state.subscriptionEnvironment = environments[0] || "";
+  }
+  syncSubscriptionControls(environments);
+  if (projectChanged && environments.length) {
+    renderEmptySubscriptions("Loading subscription metrics for this project…");
+  }
+  if (!environments.length) {
+    renderEmptySubscriptions("This project has no applications, so it has no subscriptions to count.");
+    return;
+  }
+  const request = ++state.subscriptionRequest;
+  const panel = document.querySelector(".subscription-panel");
+  panel.setAttribute("aria-busy", "true");
+  setText("subscription-message", "");
+  const query = new URLSearchParams({
+    environment: state.subscriptionEnvironment,
+    window_days: String(state.subscriptionWindowDays),
+  });
+  try {
+    const metrics = await apiRequest(
+      `/v1/admin/projects/${encodeURIComponent(projectID)}/subscription-metrics?${query.toString()}`,
+    );
+    if (request !== state.subscriptionRequest) return;
+    renderSubscriptionMetrics(metrics);
+  } catch (error) {
+    if (request !== state.subscriptionRequest) return;
+    if (error.status === 401) {
+      logout();
+      elements.authMessage.textContent = errorMessage(error);
+      return;
+    }
+    renderEmptySubscriptions("Subscription metrics could not be loaded.");
+    setText("subscription-message", errorMessage(error));
+  } finally {
+    if (request === state.subscriptionRequest) panel.removeAttribute("aria-busy");
+  }
+}
+
+function renderEmptySubscriptions(message) {
+  for (const id of ["subscriptions-active", "subscriptions-new", "subscriptions-renewals", "subscriptions-churned"]) {
+    setText(id, "0");
+  }
+  setText("subscriptions-active-note", "—");
+  setText("subscriptions-churn-rate", "—");
+  setText("subscriptions-renewals-note", "New store transactions in a subscription");
+  renderSubscriptionChart([], 0);
+  document.querySelector("#subscription-churn-reasons").replaceChildren();
+  const trials = document.querySelector("#subscription-trials");
+  trials.replaceChildren(node("p", "empty-state", message));
+  renderEmptyTable("subscription-rows", 6, message);
+}
+
+function renderSubscriptionMetrics(metrics) {
+  const trials = Array.isArray(metrics.trials) ? metrics.trials : [];
+  const trialsRecorded = trials.some((trial) => trial.availability === "available");
+  setText("subscriptions-active", formatNumber(metrics.active_at_end));
+  setText(
+    "subscriptions-active-note",
+    trialsRecorded
+      ? `${countLabel(metrics.in_trial_at_end, "subscription")} in a free trial · ${formatNumber(metrics.active_at_start)} at the start`
+      : `${formatNumber(metrics.active_at_start)} at the start · trial state not recorded`,
+  );
+  setText("subscriptions-new", formatNumber(metrics.new_subscriptions));
+  setText("subscriptions-renewals", formatNumber(metrics.renewals));
+  setText(
+    "subscriptions-renewals-note",
+    `Same plan · ${countLabel(metrics.plan_changes, "plan change")} and ${formatNumber(metrics.resubscriptions)} resubscribed not included`,
+  );
+  setText("subscriptions-churned", formatNumber(metrics.churn.churned));
+  setText(
+    "subscriptions-churn-rate",
+    metrics.churn.rate === null || metrics.churn.rate === undefined
+      ? "No subscription was active in this window"
+      : `${formatPercent(metrics.churn.rate)} churn rate · of ${formatNumber(metrics.active_during_window)} active in the window`,
+  );
+  setText(
+    "subscription-chart-caption",
+    `${environmentLabel(metrics.environment)} · UTC · ${metrics.window_days} days · today at ${formatTime(metrics.measured_at)}`,
+  );
+  renderSubscriptionChart(metrics.daily_active || [], metrics.window_days);
+  renderSubscriptionChurn(metrics.churn);
+  renderSubscriptionTrials(trials);
+  renderSubscriptionRows(metrics.breakdown || [], metrics.breakdown_truncated);
+}
+
+function renderSubscriptionChart(daily, windowDays) {
+  const chart = document.querySelector("#subscription-chart");
+  chart.replaceChildren();
+  const width = 760;
+  const top = 10;
+  const right = 8;
+  const bottom = 30;
+  const left = 34;
+  const plotWidth = width - left - right;
+  const plotHeight = 200 - top - bottom;
+  const baseline = top + plotHeight;
+  const peak = Math.max(0, ...daily.map((day) => Number(day.active || 0)));
+  const maximum = niceAxisMaximum(Math.max(1, peak));
+  const first = daily.length ? Number(daily[0].active || 0) : 0;
+  const last = daily.length ? Number(daily[daily.length - 1].active || 0) : 0;
+  chart.setAttribute(
+    "aria-label",
+    daily.length
+      ? `Active subscriptions over ${windowDays} days: ${first} at the end of the first day, ${last} now, peak ${peak}.`
+      : "No subscription activity in this window",
+  );
+
+  for (const tick of [...new Set([maximum, Math.ceil(maximum / 2), 0])]) {
+    const y = baseline - (tick / maximum) * plotHeight;
+    chart.append(
+      svgNode("line", { class: "chart-grid-line", x1: left, x2: width - right, y1: y, y2: y }),
+      svgNode("text", { class: "chart-axis-label", x: left - 7, y: y + 3, "text-anchor": "end" }, tick),
+    );
+  }
+  if (!peak) {
+    chart.append(svgNode(
+      "text",
+      { class: "chart-empty-label", x: left + plotWidth / 2, y: top + plotHeight / 2, "text-anchor": "middle" },
+      "No active subscriptions in this window",
+    ));
+  }
+
+  const slotWidth = daily.length ? plotWidth / daily.length : plotWidth;
+  const barWidth = Math.max(2, Math.min(14, slotWidth * 0.62));
+  const labelEvery = daily.length > 45 ? 14 : 7;
+  daily.forEach((day, index) => {
+    const x = left + index * slotWidth + (slotWidth - barWidth) / 2;
+    const value = Number(day.active || 0);
+    if (value) {
+      const height = (value / maximum) * plotHeight;
+      const bar = svgNode("rect", {
+        class: "chart-bar chart-bar-allowed", x, y: baseline - height, width: barWidth, height, rx: 2,
+      });
+      bar.append(svgNode("title", {}, `${formatChartDate(day.date)}: ${formatNumber(value)} active`));
+      chart.append(bar);
+    }
+    const finalDay = index === daily.length - 1;
+    const clearOfFinalLabel = index <= daily.length - 1 - Math.ceil(labelEvery / 2);
+    const periodicTick = daily.length <= 10 || (index % labelEvery === 0 && clearOfFinalLabel);
+    if (index === 0 || finalDay || periodicTick) {
+      chart.append(svgNode(
+        "text",
+        { class: "chart-axis-label", x: x + barWidth / 2, y: baseline + 19, "text-anchor": "middle" },
+        formatChartDate(day.date),
+      ));
+    }
+  });
+}
+
+function renderSubscriptionChurn(churn) {
+  const list = document.querySelector("#subscription-churn-reasons");
+  list.replaceChildren();
+  const rows = [
+    ["Renewal turned off", churn.voluntary],
+    ["Payment problem", churn.billing],
+    ["Refunded or revoked", churn.reversed],
+    ["Reason not recorded", churn.unclassified],
+  ];
+  for (const [label, value] of rows) {
+    list.append(subscriptionListRow(label, value));
+  }
+  const excluded = node("div", "subscription-list-note");
+  excluded.append(node("dt", "", "Not counted as churn"));
+  excluded.append(node(
+    "dd",
+    "",
+    `${formatNumber(churn.replaced)} replaced · ${formatNumber(churn.paused)} paused · ${formatNumber(churn.awaiting_evidence)} awaiting store evidence`,
+  ));
+  list.append(excluded);
+}
+
+function subscriptionListRow(label, value) {
+  const row = node("div");
+  row.append(node("dt", "", label), node("dd", "", formatNumber(value)));
+  return row;
+}
+
+function renderSubscriptionTrials(trials) {
+  const container = document.querySelector("#subscription-trials");
+  container.replaceChildren();
+  if (!trials.length) {
+    container.append(node("p", "empty-state", "No applications in this environment."));
+    return;
+  }
+  for (const trial of trials) {
+    const item = node("article", "subscription-trial");
+    item.append(node("strong", "", providerLabel(trial.provider)));
+    if (trial.availability !== "available") {
+      item.classList.add("not-available");
+      item.append(
+        node("span", "", `Not available for ${providerLabel(trial.provider)}`),
+        node("small", "", "Its stored purchase evidence does not mark a free trial, so no trial is counted."),
+      );
+      container.append(item);
+      continue;
+    }
+    const decided = Number(trial.converted || 0) + Number(trial.not_converted || 0);
+    const conversion = trial.conversion_rate === null || trial.conversion_rate === undefined
+      ? "no ended trial to convert yet"
+      : `${formatNumber(trial.converted)} of ${formatNumber(decided)} ended trials converted (${formatPercent(trial.conversion_rate)})`;
+    const outcome = Number(trial.outcome_not_recorded || 0)
+      ? ` · ${countLabel(trial.outcome_not_recorded, "outcome")} not recorded`
+      : "";
+    item.append(
+      node("span", "", `${countLabel(trial.started, "trial")} started · ${conversion}${outcome}`),
+      node(
+        "small",
+        "",
+        `${formatNumber(trial.with_offer_phase)} of ${countLabel(trial.active_during_window, "subscription")} carry a recorded offer phase.`,
+      ),
+    );
+    container.append(item);
+  }
+}
+
+function renderSubscriptionRows(breakdown, truncated) {
+  const body = document.querySelector("#subscription-rows");
+  body.replaceChildren();
+  if (!breakdown.length) {
+    renderEmptyTable("subscription-rows", 6, "No subscription was active in this window.");
+    return;
+  }
+  for (const row of breakdown) {
+    const tableRow = document.createElement("tr");
+    tableRow.append(
+      compoundCell(row.product_id, row.application_id),
+      textCell(providerLabel(row.provider)),
+      textCell(formatNumber(row.active_at_end)),
+      textCell(formatNumber(row.new_subscriptions)),
+      textCell(formatNumber(row.renewals)),
+      textCell(formatNumber(row.churned)),
+    );
+    body.append(tableRow);
+  }
+  if (truncated) {
+    const note = document.createElement("tr");
+    const cell = node("td", "empty-cell", "Showing the first 200 products. Totals above include every product.");
+    cell.colSpan = 6;
+    note.append(cell);
+    body.append(note);
+  }
+}
+
+function formatPercent(ratio) {
+  return `${(Number(ratio) * 100).toFixed(1)}%`;
 }
 
 function formatRevenue(minorUnits, currency) {
@@ -1700,6 +1987,22 @@ elements.keyDialog.addEventListener("close", () => {
   elements.revealedKey.value = "";
   elements.copyMessage.textContent = "";
 });
+
+document.querySelector("#subscription-environment").addEventListener("change", (event) => {
+  state.subscriptionEnvironment = event.currentTarget.value;
+  if (state.selectedProject) loadSubscriptionMetrics(state.selectedProject);
+});
+
+for (const button of document.querySelectorAll(".segmented-control [data-window-days]")) {
+  button.addEventListener("click", () => {
+    state.subscriptionWindowDays = Number(button.dataset.windowDays);
+    if (state.selectedProject) {
+      loadSubscriptionMetrics(state.selectedProject);
+    } else {
+      syncSubscriptionControls([]);
+    }
+  });
+}
 
 clearLegacyBearerStorage();
 syncSetupProvider();

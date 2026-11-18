@@ -113,6 +113,19 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 		"AdminSandboxValue":            {"amounts", "transaction_count", "missing_price_count"},
 		"AdminMoney":                   {"milliunits", "currency"},
 		"AdminDailyActivity":           {"date", "verified", "allowed", "denied", "unresolved", "reversed"},
+		"AdminSubscriptionMetrics": {
+			"environment", "window_days", "window_start", "window_end", "measured_at", "active_at_start",
+			"active_at_end", "in_trial_at_end", "active_during_window", "new_subscriptions", "renewals",
+			"plan_changes", "resubscriptions", "churn",
+			"trials", "breakdown", "breakdown_truncated", "daily_active",
+		},
+		"AdminSubscriptionChurn": {"churned", "voluntary", "billing", "reversed", "unclassified", "replaced", "paused", "awaiting_evidence", "rate"},
+		"AdminSubscriptionTrials": {
+			"provider", "availability", "active_during_window", "with_offer_phase", "started", "ended",
+			"converted", "not_converted", "outcome_not_recorded", "conversion_rate",
+		},
+		"AdminSubscriptionBreakdown":   {"application_id", "provider", "product_id", "active_at_end", "new_subscriptions", "renewals", "churned"},
+		"AdminSubscriptionDailyActive": {"date", "active"},
 		"CredentialMetadata":           {"project_id", "application_id", "kind", "content_type", "schema_version", "revision", "created_at", "updated_at"},
 		"ApiKeyCollection":             {"api_keys"},
 		"ApiKey":                       {"id", "role", "created_at", "current"},
@@ -235,6 +248,16 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 			Customers: []adminCustomerResponse{}, RecentTransactions: []adminTransactionResponse{},
 			Queues: []adminQueueResponse{}, RecentWebhookEvents: []adminWebhookEventResponse{},
 		}},
+		{name: "subscription metrics", schema: "AdminSubscriptionMetrics", value: subscriptionMetricsFromRecord(
+			fakeSubscriptionMetrics(persistence.SubscriptionMetricsQuery{Environment: core.EnvironmentProduction, WindowDays: 30}),
+		)},
+		{name: "empty subscription metrics", schema: "AdminSubscriptionMetrics", value: subscriptionMetricsFromRecord(
+			persistence.ComputeSubscriptionMetrics(
+				persistence.SubscriptionMetricsQuery{Environment: core.EnvironmentSandbox, WindowDays: 1},
+				persistence.SubscriptionWindow{Start: now.Truncate(24 * time.Hour), End: now.Truncate(24 * time.Hour).Add(24 * time.Hour), MeasuredAt: now},
+				[]core.Provider{core.ProviderHuaweiAppGallery}, nil,
+			),
+		)},
 		{name: "credential metadata", schema: "CredentialMetadata", value: credentials.Metadata{
 			ProjectID: "project-1", ApplicationID: "application-1", Kind: "huawei_server_api",
 			ContentType: "application/vnd.iapstack.huawei-credentials+json", SchemaVersion: 1,
