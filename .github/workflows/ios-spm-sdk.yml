@@ -7,6 +7,11 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'sdk/ios/**'
+      - '.github/workflows/ios-spm-sdk.yml'
 
 permissions:
   contents: read
