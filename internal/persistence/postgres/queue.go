@@ -251,6 +251,8 @@ func (repository *transaction) QueueMessage(
 		return repository.outboxMessage(ctx, id)
 	case persistence.QueueReconciliation:
 		return repository.reconciliationMessage(ctx, id)
+	case persistence.QueueAppleConsumption:
+		return repository.appleConsumptionMessage(ctx, id)
 	default:
 		return persistence.QueueMessage{}, fmt.Errorf("load queue message: unsupported queue %q", queue)
 	}
@@ -278,6 +280,9 @@ func (repository *transaction) FailQueue(ctx context.Context, failure persistenc
 	if err := failure.Validate(); err != nil {
 		return err
 	}
+	if failure.Queue == persistence.QueueAppleConsumption {
+		return repository.failAppleConsumption(ctx, failure)
+	}
 	table, completedColumn, err := queueCompletion(failure.Queue)
 	if err != nil {
 		return err
@@ -293,6 +298,7 @@ func (repository *transaction) FailQueue(ctx context.Context, failure persistenc
 // PurgeTerminalQueueRecords removes expired queue records after their River jobs become terminal or disappear.
 // Completed and dead reconciliation schedule retries have no River job of their own. Their protected
 // payload is removed on the same retention cutoff. Pending retries are left in place.
+// Closed Apple consumption requests are removed on the same cutoff, and their attempts cascade.
 func (repository *transaction) PurgeTerminalQueueRecords(
 	ctx context.Context,
 	before time.Time,
@@ -351,6 +357,21 @@ func (repository *transaction) PurgeTerminalQueueRecords(
 			DELETE FROM outbox_events AS record USING expired_outbox AS expired
 			WHERE record.id = expired.id
 			RETURNING 1
+		), expired_consumption AS (
+			SELECT record.id FROM apple_consumption_requests AS record
+			WHERE (record.processed_at < $1 OR record.failed_at < $1)
+				AND NOT EXISTS (
+					SELECT 1 FROM river_job AS job
+					WHERE job.id = record.river_job_id
+						AND job.state NOT IN ('cancelled', 'completed', 'discarded')
+				)
+			ORDER BY COALESCE(record.processed_at, record.failed_at), record.id
+			LIMIT $2
+			FOR UPDATE OF record SKIP LOCKED
+		), deleted_consumption AS (
+			DELETE FROM apple_consumption_requests AS record USING expired_consumption AS expired
+			WHERE record.id = expired.id
+			RETURNING 1
 		), expired_schedule_retries AS (
 			SELECT record.id FROM reconciliation_schedule_retries AS record
 			WHERE record.scheduled_at < $1 OR record.dead_at < $1
@@ -367,6 +388,7 @@ func (repository *transaction) PurgeTerminalQueueRecords(
 			+ (SELECT count(*) FROM deleted_reconciliation)
 			+ (SELECT count(*) FROM deleted_outbox)
 			+ (SELECT count(*) FROM deleted_schedule_retries)
+			+ (SELECT count(*) FROM deleted_consumption)
 	`, before.UTC(), batchSize).Scan(&deleted)
 	if err != nil {
 		return 0, classifyError("purge terminal queue records", err)
@@ -551,6 +573,8 @@ func queueTable(queue persistence.QueueName) (string, error) {
 		return "outbox_events", nil
 	case persistence.QueueReconciliation:
 		return "reconciliation_jobs", nil
+	case persistence.QueueAppleConsumption:
+		return "apple_consumption_requests", nil
 	default:
 		return "", fmt.Errorf("unsupported queue %q", queue)
 	}
@@ -577,6 +601,8 @@ func riverQueue(queue persistence.QueueName) string {
 		return jobs.QueueOutbox
 	case persistence.QueueReconciliation:
 		return jobs.QueueReconciliation
+	case persistence.QueueAppleConsumption:
+		return jobs.QueueAppleConsumption
 	default:
 		return ""
 	}

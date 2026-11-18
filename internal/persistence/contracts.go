@@ -69,6 +69,7 @@ type OperationsTransaction interface {
 	OperationsRepository
 	ProviderReferenceRepository
 	QueueRepository
+	AppleConsumptionRepository
 }
 
 // OperationsFunc performs retry-safe durable work that must commit or roll back together without external side effects.
@@ -415,7 +416,7 @@ type ReconciliationJob struct {
 	AvailableAt   time.Time
 }
 
-// QueueMessage is one durable inbox, outbox, or reconciliation payload.
+// QueueMessage is one durable inbox, outbox, reconciliation, or consumption payload.
 type QueueMessage struct {
 	Queue            QueueName
 	ID               string
@@ -653,7 +654,7 @@ func (job ReconciliationJob) Validate() error {
 // Validate checks one fixed durable queue name.
 func (name QueueName) Validate() error {
 	switch name {
-	case QueueInbox, QueueOutbox, QueueReconciliation:
+	case QueueInbox, QueueOutbox, QueueReconciliation, QueueAppleConsumption:
 		return nil
 	default:
 		return fmt.Errorf("unsupported queue %q", name)

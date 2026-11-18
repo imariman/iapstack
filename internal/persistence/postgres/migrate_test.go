@@ -77,6 +77,7 @@ func TestMigrationLifecycle(t *testing.T) {
 		"financial_report_imports",
 		"import_grants",
 		"reconciliation_schedule_retries",
+		"apple_consumption_requests",
 	}
 	if got, want := len(relations), int(postgres.LatestVersion); got != want {
 		t.Fatalf("migration relation count = %d, want %d", got, want)

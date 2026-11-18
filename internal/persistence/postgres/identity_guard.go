@@ -7,6 +7,7 @@ import (
 )
 
 // ClearIdentityMigrationGuards removes rows that block reversing the customer identity migration.
+// It also removes Apple consumption requests, whose pending rows block reversing migration 16.
 // Tests use it before migrating to version 0. Production reversal still refuses while those rows exist.
 func ClearIdentityMigrationGuards(ctx context.Context, connection *pgx.Conn) error {
 	_, err := connection.Exec(ctx, `
@@ -45,6 +46,9 @@ func ClearIdentityMigrationGuards(ctx context.Context, connection *pgx.Conn) err
 			END IF;
 			IF to_regclass('public.import_batches') IS NOT NULL THEN
 				DELETE FROM import_batches;
+			END IF;
+			IF to_regclass('public.apple_consumption_requests') IS NOT NULL THEN
+				DELETE FROM apple_consumption_requests;
 			END IF;
 		END $$
 	`)
