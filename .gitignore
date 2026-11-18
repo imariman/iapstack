@@ -63,3 +63,8 @@ sdk/android/**/__pycache__/
 scripts/__pycache__/
 scripts/tests/__pycache__/
 sdk/flutter/**/coverage/
+
+# Single-VM deployment secrets and local backups
+deploy/vps/.env
+deploy/vps/backups/
+deploy/vps/backup.log

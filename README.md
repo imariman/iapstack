@@ -143,6 +143,12 @@ migrations, HTTPS API routing, and a private worker. Self-hosted Coolify is free
 you provide an always-on Linux server; Coolify Cloud and the deployment server are
 separately billed.
 
+For the lowest running cost, the [single-VM deployment](deploy/vps/README.md) runs
+PostgreSQL, migrations, a compact API+worker process, and a Cloudflare Tunnel on one
+machine with no open inbound ports. On an always-free VM such as Oracle Cloud Ampere A1
+it costs nothing beyond a domain; a small Hetzner VPS costs a few euros per month. You
+operate the host, including updates and off-server backups.
+
 ## Design principles
 
 **Self-hosted by default.** You own the infrastructure, credentials, purchase data, and access decisions.
