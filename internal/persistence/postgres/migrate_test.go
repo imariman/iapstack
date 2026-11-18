@@ -77,6 +77,8 @@ func TestMigrationLifecycle(t *testing.T) {
 		"financial_report_imports",
 		"import_grants",
 		"reconciliation_schedule_retries",
+		"purchase_observations_subscription_metrics_idx",
+		"manual_grants",
 		"apple_consumption_requests",
 	}
 	if got, want := len(relations), int(postgres.LatestVersion); got != want {
@@ -261,6 +263,55 @@ func TestPurchasePriceMigrationConstraints(t *testing.T) {
 		UPDATE purchase_observations
 		SET price_milliunits = 4990, price_currency = 'usd'
 		WHERE id = $1
+	`, purchase.observationID)
+}
+
+// TestSubscriptionOfferPhaseMigrationConstraints verifies the offer phase vocabulary and subscription scope.
+func TestSubscriptionOfferPhaseMigrationConstraints(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	purchase := seedPurchase(t, database)
+
+	expectConstraint(t, database, "purchase_observations_offer_phase_kind_valid", `
+		UPDATE purchase_observations SET offer_phase = 'free_trial' WHERE id = $1
+	`, purchase.observationID)
+
+	catalog := purchase.catalog
+	mustExec(t, database, `INSERT INTO products (id, project_id, kind) VALUES ('product-sub', $1, 'subscription')`, catalog.projectID)
+	mustExec(t, database, `
+		INSERT INTO store_products (project_id, application_id, product_id, provider_product_id)
+		VALUES ($1, $2, 'product-sub', 'provider-sub')
+	`, catalog.projectID, catalog.applicationID)
+	insertSubscription := `
+		INSERT INTO purchase_observations (
+			id, evidence_id, project_id, application_id, customer_id, product_id,
+			provider_product_id, product_kind, lifecycle_state, provider_state,
+			access_status, access_reason, ownership, quantity, occurred_at, observed_at,
+			effective_starts_at, effective_ends_at, renewal_mode, renewal_status, offer_phase
+		) VALUES (
+			$1, $2, $3, $4, $5, 'product-sub',
+			'provider-sub', 'subscription', 'active', 'active',
+			'allowed', 'purchase_valid', 'purchased', 1, now() - interval '1 hour', now(),
+			now() - interval '1 hour', now() + interval '1 day', 'auto', 'enabled', $6
+		)
+	`
+	mustExec(t, database, insertSubscription, "observation-trial", purchase.evidenceID, catalog.projectID,
+		catalog.applicationID, catalog.customerID, "free_trial")
+	expectConstraint(t, database, "purchase_observations_offer_phase_valid", insertSubscription,
+		"observation-intro", purchase.evidenceID, catalog.projectID, catalog.applicationID, catalog.customerID, "intro")
+	mustExec(t, database, `
+		UPDATE purchase_observations
+		SET transaction_reason = 'renewal', lineage_started_at = now() - interval '1 year',
+			cancellation_reason = 'replacement'
+		WHERE id = 'observation-trial'
+	`)
+	expectConstraint(t, database, "purchase_observations_transaction_reason_valid", `
+		UPDATE purchase_observations SET transaction_reason = 'upgrade' WHERE id = 'observation-trial'
+	`)
+	expectConstraint(t, database, "purchase_observations_cancellation_reason_valid", `
+		UPDATE purchase_observations SET cancellation_reason = 'refund' WHERE id = 'observation-trial'
+	`)
+	expectConstraint(t, database, "purchase_observations_offer_phase_kind_valid", `
+		UPDATE purchase_observations SET lineage_started_at = now() WHERE id = $1
 	`, purchase.observationID)
 }
 
@@ -581,6 +632,76 @@ func TestReconciliationScheduleRetryMigrationRefusesDirtyDown(t *testing.T) {
 			'ciphertext', $4, 'test-key', now(), now()
 		)
 	`, fixture.projectID, fixture.applicationID, fixture.customerID, fingerprint)
+}
+
+// TestManualGrantMigrationConstraintsAndDirtyDown verifies version 15 keeps manual sources exclusive and stored.
+func TestManualGrantMigrationConstraintsAndDirtyDown(t *testing.T) {
+	const manualGrantSchemaVersion int32 = 15
+	database := openTestDatabase(t, manualGrantSchemaVersion)
+	purchase := seedPurchase(t, database)
+	fixture := purchase.catalog
+	grantInsert := `
+		INSERT INTO manual_grants (
+			id, project_id, customer_id, application_id, product_id, entitlement_id,
+			reason, actor_key_id, idempotency_key, effective_starts_at, effective_ends_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, 'admin-key', $8, now(), now() + interval '30 days')
+	`
+	expectConstraint(t, database, "manual_grants_id_valid", grantInsert,
+		"imp-0123456789abcdef0123456789abcdef", fixture.projectID, fixture.customerID, fixture.applicationID,
+		fixture.productID, fixture.entitlementID, "Support", "grant-id")
+	expectConstraint(t, database, "manual_grants_reason_valid", grantInsert,
+		"mgr-0123456789abcdef0123456789abcdef", fixture.projectID, fixture.customerID, fixture.applicationID,
+		fixture.productID, fixture.entitlementID, "line one\nline two", "grant-reason")
+	mustExec(t, database, grantInsert,
+		"mgr-0123456789abcdef0123456789abcdef", fixture.projectID, fixture.customerID, fixture.applicationID,
+		fixture.productID, fixture.entitlementID, "Support ticket 1", "grant-1")
+	expectConstraint(t, database, "manual_grants_idempotency_unique", grantInsert,
+		"mgr-1123456789abcdef0123456789abcdef", fixture.projectID, fixture.customerID, fixture.applicationID,
+		fixture.productID, fixture.entitlementID, "Support ticket 1", "grant-1")
+	expectConstraint(t, database, "manual_grants_revocation_valid", `
+		UPDATE manual_grants SET revoked_at = now() WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
+	`)
+	expectConstraint(t, database, "customer_entitlements_source_exclusive", `
+		INSERT INTO customer_entitlements (
+			project_id, customer_id, entitlement_id, source_kind, source_observation_id, source_manual_grant_id,
+			source_product_id, source_customer_id, access_status, access_reason, effective_starts_at
+		) VALUES ($1, $2, $3, 'manual', $4, 'mgr-0123456789abcdef0123456789abcdef', $5, $2, 'allowed', 'manual_grant', now())
+	`, fixture.projectID, fixture.customerID, fixture.entitlementID, purchase.observationID, fixture.productID)
+	mustExec(t, database, `
+		INSERT INTO customer_entitlements (
+			project_id, customer_id, entitlement_id, source_kind, source_manual_grant_id,
+			source_product_id, source_customer_id, access_status, access_reason, effective_starts_at
+		) VALUES ($1, $2, $3, 'manual', 'mgr-0123456789abcdef0123456789abcdef', $4, $2, 'allowed', 'manual_grant', now())
+	`, fixture.projectID, fixture.customerID, fixture.entitlementID, fixture.productID)
+	expectConstraint(t, database, "customer_entitlements_manual_reason_valid", `
+		UPDATE customer_entitlements SET access_reason = 'purchase_valid' WHERE customer_id = $1
+	`, fixture.customerID)
+	expectConstraint(t, database, "customer_entitlements_manual_reason_valid", `
+		INSERT INTO customer_entitlements (
+			project_id, customer_id, entitlement_id, source_observation_id,
+			source_product_id, source_customer_id, access_status, access_reason, effective_starts_at
+		) VALUES ($1, 'customer-store', $2, $3, $4, 'customer-store', 'allowed', 'manual_grant', now())
+	`, fixture.projectID, fixture.entitlementID, purchase.observationID, fixture.productID)
+	expectConstraint(t, database, "purchase_observations_reason_valid", `
+		UPDATE purchase_observations SET access_reason = 'manual_grant' WHERE id = $1
+	`, purchase.observationID)
+	expectConstraint(t, database, "customer_entitlements_source_manual_fk", `
+		UPDATE customer_entitlements SET source_manual_grant_id = 'mgr-ffffffffffffffffffffffffffffffff'
+		WHERE customer_id = $1
+	`, fixture.customerID)
+
+	if err := database.migrator.MigrateTo(database.ctx, manualGrantSchemaVersion-1); err == nil {
+		t.Fatal("MigrateTo(previous) error = nil, want refusal while manual grants exist")
+	}
+	assertVersion(t, database, manualGrantSchemaVersion)
+	mustExec(t, database, `DELETE FROM customer_entitlements`)
+	if err := database.migrator.MigrateTo(database.ctx, manualGrantSchemaVersion-1); err == nil {
+		t.Fatal("MigrateTo(previous) error = nil, want refusal while a manual grant row exists")
+	}
+	mustExec(t, database, `DELETE FROM manual_grants`)
+	mustMigrateTo(t, database, manualGrantSchemaVersion-1)
+	assertRelationExists(t, database, "manual_grants", false)
+	mustMigrateTo(t, database, manualGrantSchemaVersion)
 }
 
 // openTestDatabase opens the configured integration database at one schema version.

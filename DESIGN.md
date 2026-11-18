@@ -231,7 +231,7 @@ A neutral zinc-black palette with one cool indigo and three semantic state hues.
 
 **The Labelled State Rule.** Green, amber and rose never appear alone. Every state colour carries a text label, and the route's attention stage also changes its node from a circle to a diamond.
 
-**The Honest Number Rule.** Sandbox value sits below a dashed divider in its own block, in neutral ink, and is never styled like revenue. With no store reports, the revenue figure is replaced by the state line.
+**The Honest Number Rule.** Sandbox value sits below a dashed divider in its own block, in neutral ink, and is never styled like revenue. With no store reports, the revenue figure is replaced by the state line. The subscriptions panel shows counts only, never a money figure, and a provider without signed trial evidence says so instead of showing zero.
 
 ## Typography
 
@@ -260,14 +260,14 @@ A neutral zinc-black palette with one cool indigo and three semantic state hues.
 
 ## Layout
 
-The app is a two-column grid: a 248px sticky sidebar and a fluid workspace capped at 1440px, padded 22px top, 32px sides and 64px bottom. Workspace sections stack with a 16px gap in this order: top bar, purchase route strip, four-up metric row, revenue and activity panel, applications panel, then a split row of side panels (1.25fr / 1fr) and the evidence tables.
+The app is a two-column grid: a 248px sticky sidebar and a fluid workspace capped at 1440px, padded 22px top, 32px sides and 64px bottom. Workspace sections stack with a 16px gap in this order: top bar, purchase route strip, four-up metric row, revenue and activity panel, subscriptions panel, applications panel, then a split row of side panels (1.25fr / 1fr) and the evidence tables.
 
 The spacing rhythm is 4/8 based. Panels pad 20px horizontally, panel headings are at least 52px tall, table cells pad 11px × 16px (20px at the outer edges), and dialogs pad 24px.
 
 Responsive behaviour:
-- **≤1240px:** the revenue column narrows to 320px and application tiles reflow to two rows.
-- **≤1023px:** the sidebar becomes a top bar, the project list becomes a horizontal scroller, the active indicator moves to a bottom bar, the footer hides, and the revenue card stacks under the chart.
-- **≤767px / ≤479px:** grids collapse to one column, the primary top-bar action goes full width, and dialogs become bottom sheets with square bottom corners.
+- **≤1240px:** the revenue column and the subscription churn column narrow to 320px and application tiles reflow to two rows.
+- **≤1023px:** the sidebar becomes a top bar, the project list becomes a horizontal scroller, the active indicator moves to a bottom bar, the footer hides, and the revenue card and the subscription churn list stack under their charts.
+- **≤767px / ≤479px:** grids collapse to one column, the subscription vitals become two columns and the trial cells stack, the primary top-bar action goes full width, and dialogs become bottom sheets with square bottom corners.
 - **Coarse pointers:** buttons, inputs and project items grow to a 44px minimum; icon buttons become 44px square.
 
 ## Elevation & Depth
@@ -330,6 +330,12 @@ Four equal stages on a 1px Hairline Strong track. A 22%-wide indigo gradient pul
 
 ### Revenue Card
 Sits right of the activity chart (360px), separated by a hairline, with a faint top gradient. It has a 13px Muted heading, a state pill (reports required / imported) and a 34px revenue figure, or the 26px state line when no reports exist. Sandbox test value follows below a dashed divider in its own neutral block.
+
+### Subscriptions Panel
+Sits under Revenue & activity on the shared panel surface. The heading row holds the 14px title, a Subtle subtitle, the environment select and a segmented window control (7, 30, 90 days). A joined four-up vitals row (Active now, New, Renewals, Churned) uses 26px tabular values with a Subtle note under each; the churn note states the rate and its denominator. Below, a single-series daily bar chart of active subscriptions (Allowed Indigo, with its legend) sits left of a 360px churn-reason list. Plan changes and pauses sit under a dashed divider as "Not counted as churn". Free trials follow in a joined strip, one cell per provider divided by hairlines; a provider without signed trial evidence reads "Not available for" that provider in Muted, never zero. A product table and a one-paragraph definition close the panel. It shows no money figure.
+
+### Segmented Control
+Inset fill, strong hairline, 8px radius and 2px inner padding around 26px options (12.5px/500 Muted). The pressed option takes the 6% white wash, a hairline border and the top light, and carries `aria-pressed`. It never fills with indigo. On coarse pointers options grow to 44px.
 
 ### Dialogs
 720px max, 16px radius, Panel fill with a strong hairline, Dialog shadow, and a 3px-blurred scrim. They enter by rising 8px and scaling from 0.985 over 260ms. On phones they become bottom sheets.

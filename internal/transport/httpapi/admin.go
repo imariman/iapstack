@@ -248,12 +248,7 @@ func adminOverviewFromRecord(overview persistence.AdminProjectOverview) adminOve
 		})
 	}
 	for _, customer := range overview.Customers {
-		response.Customers = append(response.Customers, adminCustomerResponse{
-			ID: customer.ID, ExternalID: customer.ExternalID,
-			MergedIntoCustomerID: customer.MergedIntoCustomerID, AliasCount: customer.AliasCount,
-			EntitlementCount: customer.EntitlementCount, AllowedCount: customer.AllowedCount,
-			LastObservedAt: customer.LastObservedAt, CreatedAt: customer.CreatedAt,
-		})
+		response.Customers = append(response.Customers, adminCustomerFromRecord(customer))
 	}
 	for _, transaction := range overview.RecentTransactions {
 		response.RecentTransactions = append(response.RecentTransactions, adminTransactionResponse{

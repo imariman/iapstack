@@ -32,6 +32,8 @@ const (
 	SourceKindStoreObservation SourceKind = "store_observation"
 	// SourceKindImport identifies a projection selected from an imported historical grant.
 	SourceKindImport SourceKind = "import"
+	// SourceKindManual identifies a projection selected from an audited operator grant.
+	SourceKindManual SourceKind = "manual"
 	// ImportOriginRevenueCat identifies a one-way RevenueCat historical grant.
 	ImportOriginRevenueCat = "revenuecat"
 )
@@ -54,6 +56,7 @@ type Transaction interface {
 	EntitlementRepository
 	OutboxRepository
 	IdentityRepository
+	ManualGrantRepository
 }
 
 // OperationsStore executes control-plane and durable queue work in atomic units.
@@ -280,7 +283,7 @@ type ObservationWrite struct {
 	References  []ProtectedReference
 }
 
-// SourceKind identifies whether a projection cites a store observation or an import grant.
+// SourceKind identifies whether a projection cites a store observation, an import grant, or a manual grant.
 type SourceKind string
 
 // EntitlementProjection describes the current access decision derived from one source.
@@ -291,6 +294,7 @@ type EntitlementProjection struct {
 	SourceKind          SourceKind
 	SourceObservationID core.ObservationID
 	SourceImportID      string
+	SourceManualGrantID string
 	SourceProductID     core.ProductID
 	SourceCustomerID    core.CustomerID
 	Access              core.AccessStatus
@@ -815,6 +819,7 @@ func (projection EntitlementProjection) Validate() error {
 		projection.CustomerID.Validate(),
 		projection.EntitlementID.Validate(),
 		projection.validateSource(),
+		projection.validateManualReason(),
 		projection.SourceProductID.Validate(),
 		sourceCustomerError,
 		projection.Access.Validate(),
@@ -834,6 +839,15 @@ func (projection EntitlementProjection) Normalized() EntitlementProjection {
 	return projection
 }
 
+// validateManualReason requires the manual grant reason on, and only on, an allowed manual source.
+func (projection EntitlementProjection) validateManualReason() error {
+	manualAllowed := projection.SourceKind == SourceKindManual && projection.Access == core.AccessAllowed
+	if manualAllowed != (projection.AccessReason == core.AccessReasonManualGrant) {
+		return errors.New("an allowed manual grant projection must carry exactly the manual grant reason")
+	}
+	return nil
+}
+
 // validateSource requires the source id that matches the projection source kind.
 func (projection EntitlementProjection) validateSource() error {
 	kind := projection.SourceKind
@@ -842,15 +856,20 @@ func (projection EntitlementProjection) validateSource() error {
 	}
 	switch kind {
 	case SourceKindStoreObservation:
-		if projection.SourceImportID != "" {
-			return errors.New("store observation projection cannot cite an import grant")
+		if projection.SourceImportID != "" || projection.SourceManualGrantID != "" {
+			return errors.New("store observation projection cannot cite an import or manual grant")
 		}
 		return projection.SourceObservationID.Validate()
 	case SourceKindImport:
-		if projection.SourceObservationID != "" {
-			return errors.New("import projection cannot cite a purchase observation")
+		if projection.SourceObservationID != "" || projection.SourceManualGrantID != "" {
+			return errors.New("import projection cannot cite a purchase observation or manual grant")
 		}
 		return core.ValidateOpaqueIdentifier("import grant ID", projection.SourceImportID)
+	case SourceKindManual:
+		if projection.SourceObservationID != "" || projection.SourceImportID != "" {
+			return errors.New("manual projection cannot cite a purchase observation or import grant")
+		}
+		return core.ValidateOpaqueIdentifier("manual grant ID", projection.SourceManualGrantID)
 	default:
 		return fmt.Errorf("unsupported entitlement source kind %q", projection.SourceKind)
 	}
@@ -898,6 +917,7 @@ func (grant ImportGrant) Validate() error {
 		fingerprintError,
 		grant.Access.Validate(),
 		grant.AccessReason.Validate(),
+		importReasonIsNotManual(grant.AccessReason),
 		grant.EffectivePeriod.Validate(),
 		validateTime("import grant observation time", grant.ObservedAt),
 	)
@@ -936,6 +956,14 @@ func (event OutboxEvent) Validate() error {
 		validateTime("outbox occurrence time", event.OccurredAt),
 		validateTime("outbox availability time", event.AvailableAt),
 	)
+}
+
+// importReasonIsNotManual keeps imported history on the reasons it already uses.
+func importReasonIsNotManual(reason core.AccessReason) error {
+	if reason == core.AccessReasonManualGrant {
+		return errors.New("an import grant cannot carry the manual grant access reason")
+	}
+	return nil
 }
 
 // validateText enforces the database-safe shape shared by persistence metadata.

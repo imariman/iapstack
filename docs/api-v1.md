@@ -170,6 +170,60 @@ refuses the pull until that provider's official parameter contract is pinned. It
 does not guess provider query parameters. `GET .../financial-reports` lists
 metadata only: no report body and no order id.
 
+`GET /v1/admin/projects/{project_id}/subscription-metrics` reports subscription
+health for one application environment (`environment`, default `production`) over
+whole UTC days ending today (`window_days`, 1 to 90, default 30). A subscription is
+one purchase lineage of a subscription product. The response gives active
+subscriptions at the window start and at `measured_at`, new subscriptions, renewals,
+plan changes and resubscriptions (kept out of renewals), churn split into voluntary,
+billing, reversed, and unclassified, a churn rate of
+`churned / active_during_window`, a daily active series, and an application and
+product breakdown. Every figure is evaluated at or before `measured_at`; nothing is
+projected. Family-shared access and imported RevenueCat grants are not counted.
+
+Migration 014 also stores Apple `transactionReason` and `originalPurchaseDate` and
+Google Play `canceledStateContext`. With them, an Apple subscriber first seen at a
+renewal is not new, an Apple upgrade or downgrade is a plan change rather than a
+renewal, and a Google Play token canceled by `replacementCancellation` is replaced
+rather than churned even when the new token starts after a gap. Rows without these
+fields, including rows stored before migration 014, keep the earlier rules: earliest
+stored period for new, every later transaction a renewal, and replaced only when the
+periods meet.
+
+Trials come only from a provider-signed offer phase. Apple and Google Play record
+one; Huawei does not, so its `trials` row is `not_available` with null counts.
+Observations stored before migration 014 carry no phase, and `with_offer_phase`
+shows that coverage. The response has no money figure. The definitions are in
+[docs/plans/subscription-metrics.md](plans/subscription-metrics.md).
+
+### Customer support
+
+- `GET /v1/admin/projects/{project_id}/customers?query=&limit=&page_token=` searches one
+  project. The query matches exactly an external customer id, an internal customer id, an
+  alias, or a stored provider transaction or original transaction id, and as a
+  case-sensitive prefix of the external or internal id. Each result carries `match`. Store
+  references are compared by keyed fingerprint; purchase tokens and customer bindings are
+  not searchable. An empty query lists customers newest first. Pages hold at most 100
+  results and `next_page_token` is valid only with the same query.
+- `GET /v1/admin/projects/{project_id}/customers/{customer_id}` returns identity, aliases
+  and merges, every current entitlement with its `source` (`store_observation`, `import`,
+  or `manual`), manual grants, and a bounded newest-first timeline built from stored
+  observations, import grants, manual grants, entitlement changes, webhook outcomes,
+  reconciliation jobs, and identity audit rows.
+- `POST /v1/admin/projects/{project_id}/customers/{customer_id}/manual-grants` grants an
+  entitlement through one product and application for `duration_days` or until `ends_at`,
+  with a required `reason` and `idempotency_key`. The application must map the product to
+  a store product; otherwise the grant is refused with `422 product_not_mapped`.
+  `POST .../manual-grants/{grant_id}:revoke` ends it early with a required reason. Both
+  require a stored administrator key; the bootstrap credential gets `403 forbidden`.
+
+A manual grant is an audited access source of kind `manual`. While it allows access, the
+public entitlement and the webhook report `reason` `manual_grant`; after revocation they report
+`revoked`. Imports keep their own reasons. It is never stored as purchase
+evidence or a store observation and never appears in recent verifications or the
+verification series. It feeds the normal projection and a changed projection enqueues the
+normal webhook.
+
 Application summaries expose only `credential_revision` and `webhook_revision` for
 optimistic dashboard updates. A zero revision means the corresponding configuration
 is absent. Revision values are not secrets; endpoint URLs, signing secrets, provider
@@ -226,6 +280,22 @@ for non-consumables. Subscription verification calls
 and independently verifies the latest transaction and renewal JWS values before persistence. The API client JWT
 uses ES256, the required App Store Connect claims, and a five-minute lifetime.
 
+When subscription status has moved to another product than the submitted transaction, the previous product
+is recorded as expired at the new purchase. When the submitted transaction already is the new product (the
+StoreKit upgrade purchase, or an `UPGRADE` notification), verification also calls
+[Get Transaction History](https://developer.apple.com/documentation/appstoreserverapi/get-transaction-history)
+for that customer to find the replaced product. It does so only for a transaction purchased in the last 48
+hours that is not the first in its lineage and whose `transactionReason` is not `RENEWAL`, with
+`productType=AUTO_RENEWABLE`, newest-modified first, at most three pages, and a five-second budget. Each
+history entry is verified like submitted evidence and must share the lineage and `appAccountToken`. Every
+consecutive predecessor Apple marks `isUpgraded` inside that window is recorded as expired. The lookup uses
+the same In-App Purchase key, so plan its rate limit with the other App Store Server API calls. It is
+enrichment only: a failure leaves the verification result unchanged and is counted in
+`iapstack_provider_calls_total` with operation `transaction_history`. Daily reconciliation replays the
+submitted transaction, and Apple reconciliation by transaction reference makes no history call. A replaced
+product the catalog does not map grants nothing, so its expired record is skipped instead of failing the new
+purchase.
+
 The initial Apple server slice supports auto-renewable subscription and non-consumable
 transaction verification, restore submissions, renewal enabled/disabled status,
 billing retry, grace period, expiry, refund/revocation, ownership, and idempotent
@@ -256,9 +326,11 @@ expiry. Its renewal follows the new item's plan, and the new product is stored a
 next renewal product when that plan renews automatically. After the change, the
 replacement item is recorded together with the replaced item as expired, once the
 replaced item's expiry has passed, and later notifications for that token expect the
-new product. A one-item response whose `itemReplacement` names the stored product also
-records that product as expired for that token. Both products must stay mapped in the
-catalog. A claimed product may name either item of that replacement. A completed
+new product. Both products of that deferred replacement must stay mapped in the catalog.
+A one-item response whose `itemReplacement` names another product also records that
+product as expired for that token, whichever product the request names. When the catalog
+does not map the replaced product, that expired record is skipped and the new product is
+still stored and acknowledged. A claimed product may name either item of a replacement. A completed
 purchase whose `acknowledgementState` is pending produces a bounded provider action.
 IAPStack calls the matching Android Publisher product or subscription acknowledgement
 endpoint only after the evidence, observation, entitlement projection, and outbox
@@ -375,7 +447,10 @@ transaction, the Google Play purchase token, or the Huawei purchase token. Obser
 times are compared only inside one lineage. A customer who lets a subscription expire
 and buys the same product again keeps access from the new lineage when the old one is
 refreshed. When several sources allow access, a store observation is projected before
-an import, then the source whose access ends last. The daily reconciliation of a
+an import, then the source whose access ends last. An administrator's manual grant is its
+own source: store evidence never supersedes it, it never supersedes store evidence, and
+among allowed sources the one whose access ends last is projected, with store evidence
+first on equal ends. The daily reconciliation of a
 lineage stops once the provider reports every line item expired with automatic renewal
 off. A lineage the provider can still renew, such as one in billing retry, keeps its
 daily refresh. Refunded and revoked lineages keep their daily refresh too. A later resubscription is scheduled again when the
@@ -394,7 +469,7 @@ v2
 
 The event ID is authenticated. Reject `v1` signatures, timestamps outside the application's replay window, and any delivery whose `IAPStack-Event-ID` does not match the MAC. Deduplicate by that authenticated event ID.
 
-The body is the `entitlement.changed` payload modeled by `EntitlementChange` in the Go and TypeScript SDKs. It has no `event_type` field, and no header names the event type. `entitlement.changed` is the only event IAPStack delivers. `application_id` follows the shared identifier rules: it can contain inner spaces and non-ASCII text and has no length cap.
+The body is the `entitlement.changed` payload modeled by `EntitlementChange` in the Go and TypeScript SDKs. It has no `event_type` field, and no header names the event type. `entitlement.changed` is the only event IAPStack delivers. `schema_version` 1 cites `source_observation_id`, version 2 has `source` `import` and `source_import_id`, and version 3 has `source` `manual` and `source_manual_grant_id`. Only manual-grant events use version 3; store events stay on version 1 and import events on version 2, so older SDK verifiers keep accepting them. Versions 2 and 3 are not store verification and carry no observation id. An allowed manual grant reports `access_reason` `manual_grant`. `application_id` follows the shared identifier rules: it can contain inner spaces and non-ASCII text and has no length cap.
 
 ## Shared SDK behavior
 

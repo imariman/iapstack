@@ -302,6 +302,19 @@ func TestAPISuccessPathPersistsAndReturnsPostgreSQLState(t *testing.T) {
 		&overview,
 	)
 	assertAPIIntegrationOverview(t, overview)
+	var subscriptionMetrics adminSubscriptionMetricsResponse
+	metricsBody := fixture.requestJSON(t, http.MethodGet,
+		"/v1/admin/projects/"+apiIntegrationProjectID+"/subscription-metrics?environment=test&window_days=7",
+		adminBearer,
+		nil,
+		http.StatusOK,
+		&subscriptionMetrics,
+	)
+	if subscriptionMetrics.Environment != core.EnvironmentTest || subscriptionMetrics.WindowDays != 7 ||
+		subscriptionMetrics.ActiveAtEnd != 0 || len(subscriptionMetrics.DailyActive) != 7 ||
+		len(subscriptionMetrics.Trials) != 1 || subscriptionMetrics.Trials[0].Availability != trialAvailabilityAvailable {
+		t.Fatalf("subscription metrics = %#v, want an empty non-consumable test project with Google Play trials available", subscriptionMetrics)
+	}
 	for _, secret := range []string{
 		apiIntegrationCredentialSecret,
 		apiIntegrationWebhookSecret,
@@ -310,6 +323,9 @@ func TestAPISuccessPathPersistsAndReturnsPostgreSQLState(t *testing.T) {
 	} {
 		if bytes.Contains(overviewBody, []byte(secret)) {
 			t.Fatalf("admin overview exposed private value %q: %s", secret, overviewBody)
+		}
+		if bytes.Contains(metricsBody, []byte(secret)) {
+			t.Fatalf("subscription metrics exposed private value %q: %s", secret, metricsBody)
 		}
 	}
 

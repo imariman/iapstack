@@ -116,6 +116,95 @@ func TestAppleJWSCanonicalizesUUIDBindings(t *testing.T) {
 	}
 }
 
+// TestAppleJWSDecodesSignedOfferFields verifies Apple's offerType and offerDiscountType names reach normalization.
+func TestAppleJWSDecodesSignedOfferFields(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.November, 18, 9, 0, 0, 0, time.UTC)
+	fixture := newSigningFixture(t, now)
+	roots, err := parseTrustedRoots([]string{fixture.rootPEM})
+	if err != nil {
+		t.Fatalf("parseTrustedRoots() error = %v", err)
+	}
+	signed := signApplePayloadFixture(t, fixture, map[string]any{
+		"transactionId": "2000000023456790", "signedDate": now.UnixMilli(),
+		"offerType": 1, "offerDiscountType": "FREE_TRIAL", "offerPeriod": "P1W",
+		"transactionReason": "PURCHASE", "originalPurchaseDate": now.Add(-48 * time.Hour).UnixMilli(),
+	})
+	decoded, err := verifyTransactionJWS(signed, roots)
+	if err != nil {
+		t.Fatalf("verifyTransactionJWS() error = %v", err)
+	}
+	if reason := transactionReason(core.ProductKindSubscription, decoded); reason != core.TransactionReasonPurchase {
+		t.Fatalf("transactionReason() = %q, want purchase", reason)
+	}
+	if started := lineageStartedAt(core.ProductKindSubscription, decoded); started == nil || !started.Equal(now.Add(-48*time.Hour)) {
+		t.Fatalf("lineageStartedAt() = %v, want the signed originalPurchaseDate", started)
+	}
+	if decoded.OfferType == nil || *decoded.OfferType != 1 || decoded.OfferDiscountType != appleOfferDiscountFreeTrial {
+		t.Fatalf("decoded offer = (%v, %q)", decoded.OfferType, decoded.OfferDiscountType)
+	}
+	if phase := offerPhase(core.ProductKindSubscription, decoded); phase != core.OfferPhaseFreeTrial {
+		t.Fatalf("offerPhase() = %q, want free_trial", phase)
+	}
+}
+
+// TestOfferPhaseMapsAppleOfferTypes verifies each signed payment mode and the no-offer default.
+func TestOfferPhaseMapsAppleOfferTypes(t *testing.T) {
+	t.Parallel()
+
+	offer := func(value int) *int { return &value }
+	tests := []struct {
+		name         string
+		kind         core.ProductKind
+		offerType    *int
+		discountType string
+		want         core.OfferPhase
+	}{
+		{name: "no offer", kind: core.ProductKindSubscription, want: core.OfferPhaseBase},
+		{name: "introductory free trial", kind: core.ProductKindSubscription, offerType: offer(1), discountType: "FREE_TRIAL", want: core.OfferPhaseFreeTrial},
+		{name: "promotional free trial", kind: core.ProductKindSubscription, offerType: offer(2), discountType: "FREE_TRIAL", want: core.OfferPhaseFreeTrial},
+		{name: "introductory pay as you go", kind: core.ProductKindSubscription, offerType: offer(1), discountType: "PAY_AS_YOU_GO", want: core.OfferPhaseDiscounted},
+		{name: "offer code pay up front", kind: core.ProductKindSubscription, offerType: offer(3), discountType: "PAY_UP_FRONT", want: core.OfferPhaseDiscounted},
+		{name: "win-back one time", kind: core.ProductKindSubscription, offerType: offer(4), discountType: "ONE_TIME", want: core.OfferPhaseDiscounted},
+		{name: "offer without payment mode", kind: core.ProductKindSubscription, offerType: offer(1), want: core.OfferPhaseUnknown},
+		{name: "unrecognized payment mode", kind: core.ProductKindSubscription, offerType: offer(5), discountType: "FUTURE_MODE", want: core.OfferPhaseUnknown},
+		{name: "non-subscription", kind: core.ProductKindNonConsumable, offerType: offer(1), discountType: "FREE_TRIAL", want: core.OfferPhaseNotRecorded},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			transaction := transactionPayload{OfferType: test.offerType, OfferDiscountType: test.discountType}
+			if got := offerPhase(test.kind, transaction); got != test.want {
+				t.Fatalf("offerPhase() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// TestTransactionReasonAndLineageStartUseSignedValuesOnly verifies unrecognized or absent Apple values stay unrecorded.
+func TestTransactionReasonAndLineageStartUseSignedValuesOnly(t *testing.T) {
+	t.Parallel()
+
+	for value, want := range map[string]core.TransactionReason{
+		"PURCHASE": core.TransactionReasonPurchase, "RENEWAL": core.TransactionReasonRenewal,
+		"": core.TransactionReasonNotRecorded, "REFUND": core.TransactionReasonNotRecorded,
+	} {
+		if got := transactionReason(core.ProductKindSubscription, transactionPayload{TransactionReason: value}); got != want {
+			t.Errorf("transactionReason(%q) = %q, want %q", value, got, want)
+		}
+	}
+	if got := transactionReason(core.ProductKindNonConsumable, transactionPayload{TransactionReason: "PURCHASE"}); got != core.TransactionReasonNotRecorded {
+		t.Errorf("non-subscription transactionReason() = %q, want not recorded", got)
+	}
+	if started := lineageStartedAt(core.ProductKindSubscription, transactionPayload{}); started != nil {
+		t.Errorf("lineageStartedAt(absent) = %v, want nil", started)
+	}
+	if started := lineageStartedAt(core.ProductKindNonConsumable, transactionPayload{OriginalPurchaseDate: 1}); started != nil {
+		t.Errorf("non-subscription lineageStartedAt() = %v, want nil", started)
+	}
+}
+
 // TestAdapterVerifiesAuthoritativeLifetimeTransaction verifies signed client and server JWS scope end to end.
 func TestAdapterVerifiesAuthoritativeLifetimeTransaction(t *testing.T) {
 	t.Parallel()
@@ -228,6 +317,8 @@ func TestAdapterReconcilesAuthoritativeGracePeriod(t *testing.T) {
 		ExpiresDate: now.Add(-time.Minute).UnixMilli(), Quantity: 1, Type: appleSubscriptionType,
 		AppAccountToken: fixtureAccountToken, OwnershipType: applePurchasedOwnership,
 		SignedDate: now.UnixMilli(), Environment: "Sandbox",
+		OfferType: func() *int { value := 1; return &value }(), OfferDiscountType: appleOfferDiscountPayAsYouGo,
+		TransactionReason: appleTransactionReasonRenewal, OriginalPurchaseDate: now.Add(-90 * 24 * time.Hour).UnixMilli(),
 	}
 	graceEndsAt := now.Add(30 * time.Minute)
 	renewal := renewalPayload{
@@ -306,6 +397,13 @@ func TestAdapterReconcilesAuthoritativeGracePeriod(t *testing.T) {
 		observation.AccessReason != core.AccessReasonGracePeriod ||
 		observation.EffectivePeriod.EndsAt == nil || !observation.EffectivePeriod.EndsAt.Equal(graceEndsAt) {
 		t.Fatalf("Reconcile() observation = %#v", observation)
+	}
+	if observation.OfferPhase != core.OfferPhaseDiscounted {
+		t.Fatalf("Reconcile() offer phase = %q, want discounted from the signed status transaction", observation.OfferPhase)
+	}
+	if observation.TransactionReason != core.TransactionReasonRenewal || observation.LineageStartedAt == nil ||
+		!observation.LineageStartedAt.Equal(milliseconds(transaction.OriginalPurchaseDate)) {
+		t.Fatalf("Reconcile() lineage evidence = (%q, %v)", observation.TransactionReason, observation.LineageStartedAt)
 	}
 }
 
@@ -469,6 +567,100 @@ func TestNormalizeActiveStatusNearExpiry(t *testing.T) {
 					decision, decisionReason, clientGrants, access, reason)
 			}
 		})
+	}
+}
+
+// TestNormalizeGracePeriodNearExpiry keeps a grace end inside the clock-skew window allowed, like an active expiry.
+func TestNormalizeGracePeriodNearExpiry(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 25, 11, 0, 0, 0, time.UTC)
+	transaction := transactionPayload{
+		OriginalTransactionID: "2000000723456789", TransactionID: "2000000723456790",
+		BundleID: fixtureBundleID, ProductID: fixtureProductID,
+		PurchaseDate: now.Add(-24 * time.Hour).UnixMilli(), ExpiresDate: now.Add(-2 * time.Minute).UnixMilli(),
+		Quantity: 1, Type: appleSubscriptionType, AppAccountToken: fixtureAccountToken,
+		OwnershipType: applePurchasedOwnership, Environment: "Sandbox",
+	}
+	tests := []struct {
+		name       string
+		graceEnd   time.Time
+		wantState  core.LifecycleState
+		wantAccess core.AccessStatus
+		wantReason core.AccessReason
+		wantEnd    time.Time
+	}{
+		{
+			name: "one minute before now", graceEnd: now.Add(-time.Minute),
+			wantState: core.LifecycleGracePeriod, wantAccess: core.AccessAllowed,
+			wantReason: core.AccessReasonGracePeriod, wantEnd: now.Add(-time.Minute).Add(maximumNotificationClockSkew),
+		},
+		{
+			name: "six minutes before now", graceEnd: now.Add(-6 * time.Minute),
+			wantState: core.LifecycleOnHold, wantAccess: core.AccessDenied,
+			wantReason: core.AccessReasonBillingIssue, wantEnd: now.Add(-6 * time.Minute),
+		},
+		{
+			name: "skew boundary denied", graceEnd: now.Add(-maximumNotificationClockSkew),
+			wantState: core.LifecycleOnHold, wantAccess: core.AccessDenied,
+			wantReason: core.AccessReasonBillingIssue, wantEnd: now.Add(-maximumNotificationClockSkew),
+		},
+		{
+			name: "still in future", graceEnd: now.Add(time.Minute),
+			wantState: core.LifecycleGracePeriod, wantAccess: core.AccessAllowed,
+			wantReason: core.AccessReasonGracePeriod, wantEnd: now.Add(time.Minute),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := subscriptionSnapshot{Status: subscriptionStatusGracePeriod, Renewal: renewalPayload{
+				AutoRenewStatus: autoRenewEnabled, AutoRenewProductID: fixtureProductID,
+				RenewalDate: now.Add(time.Hour).UnixMilli(), GracePeriodExpiresDate: test.graceEnd.UnixMilli(),
+			}}
+			state, access, reason, endsAt, _ := normalizeSubscriptionStatus(transaction, snapshot, now)
+			if state != test.wantState || access != test.wantAccess || reason != test.wantReason {
+				t.Fatalf("normalizeSubscriptionStatus() = (%q, %q, %q), want (%q, %q, %q)",
+					state, access, reason, test.wantState, test.wantAccess, test.wantReason)
+			}
+			if endsAt == nil || !endsAt.Equal(test.wantEnd) {
+				t.Fatalf("effective end = %v, want %v", endsAt, test.wantEnd)
+			}
+		})
+	}
+
+	// The adjusted end flows into the observation identity, so a changed adjusted end is a new snapshot.
+	adapter := &Adapter{clock: func() time.Time { return now }}
+	artifact, err := stores.NewEvidence("application/json", []byte(`{"subscription":"status"}`))
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	application := appleApplication(core.EnvironmentSandbox)
+	observe := func(graceEndsAt time.Time) core.PurchaseObservation {
+		t.Helper()
+		result, resultErr := adapter.result(application, core.ProductKindSubscription, transaction, artifact, &subscriptionSnapshot{
+			Status: subscriptionStatusGracePeriod,
+			Renewal: renewalPayload{
+				AutoRenewStatus: autoRenewEnabled, AutoRenewProductID: fixtureProductID,
+				GracePeriodExpiresDate: graceEndsAt.UnixMilli(), RenewalDate: now.Add(time.Hour).UnixMilli(),
+			},
+		})
+		if resultErr != nil {
+			t.Fatalf("result() error = %v", resultErr)
+		}
+		return result.Observations[0]
+	}
+	first := observe(now.Add(-time.Minute))
+	second := observe(now.Add(-2 * time.Minute))
+	replayed := observe(now.Add(-time.Minute))
+	if first.Access != core.AccessAllowed || first.EffectivePeriod.EndsAt == nil ||
+		!first.EffectivePeriod.EndsAt.Equal(now.Add(-time.Minute).Add(maximumNotificationClockSkew)) {
+		t.Fatalf("first adjusted observation = %#v", first)
+	}
+	if first.ID == second.ID {
+		t.Fatal("changed adjusted grace end reused the observation ID")
+	}
+	if first.ID != replayed.ID {
+		t.Fatalf("unchanged adjusted grace observations = (%q, %q), want one identity", first.ID, replayed.ID)
 	}
 }
 
@@ -814,6 +1006,9 @@ func TestAdapterClosesStalePreviousProductAtUpgrade(t *testing.T) {
 	if result.Observations[0].ID == result.Observations[1].ID {
 		t.Fatal("upgrade reused one observation ID for both products")
 	}
+	if len(result.SupersededObservations) != 1 || result.SupersededObservations[0] != result.Observations[1].ID {
+		t.Fatalf("SupersededObservations = %v, want the closed previous product", result.SupersededObservations)
+	}
 	lineage := stores.VerificationRequest{
 		Application: appleApplication(core.EnvironmentSandbox), CustomerID: "customer-1",
 		ClaimedProducts:          result.ProductsForClaim([]core.ProviderProductID{fixtureProductID}),
@@ -822,6 +1017,170 @@ func TestAdapterClosesStalePreviousProductAtUpgrade(t *testing.T) {
 	}
 	if err := result.ValidateForVerification(lineage); err != nil {
 		t.Fatalf("ValidateForVerification() error = %v", err)
+	}
+}
+
+// TestAdapterClosesPreviousProductFromHistoryWhenEvidenceIsNewProduct closes the old product in the
+// same verify that records an upgrade whose submitted JWS is already the new transaction (#250).
+// The upgraded monthly transaction exists only in transaction history (second page), and an
+// UPGRADE notification reaches this same Verify path through NotificationEnvelope evidence
+// (TestAdapterClosesPreviousProductFromUpgradeNotification).
+func TestAdapterClosesPreviousProductFromHistoryWhenEvidenceIsNewProduct(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, time.UTC)
+	upgradeAt := now.Add(-time.Minute)
+	const upgradedProduct = "iapstack.pro.annual"
+
+	for _, test := range []struct {
+		name         string
+		historyFails bool
+		sameProduct  bool
+		wantClosed   bool
+	}{
+		{name: "upgraded predecessor in history", wantClosed: true},
+		{name: "history endpoint failure degrades", historyFails: true},
+		{name: "same product predecessor does not close", sameProduct: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSigningFixture(t, now)
+			monthly := transactionPayload{
+				OriginalTransactionID: "2000000923456789", TransactionID: "2000000923456790",
+				BundleID: fixtureBundleID, ProductID: fixtureProductID,
+				PurchaseDate: now.Add(-10 * 24 * time.Hour).UnixMilli(), ExpiresDate: now.Add(20 * 24 * time.Hour).UnixMilli(),
+				Quantity: 1, Type: appleSubscriptionType, AppAccountToken: fixtureAccountToken,
+				OwnershipType: applePurchasedOwnership, SignedDate: now.UnixMilli(),
+				Environment: "Sandbox", IsUpgraded: true,
+			}
+			annual := monthly
+			annual.TransactionID = "2000000923456791"
+			annual.ProductID = upgradedProduct
+			annual.PurchaseDate = upgradeAt.UnixMilli()
+			annual.ExpiresDate = now.Add(365 * 24 * time.Hour).UnixMilli()
+			annual.IsUpgraded = false
+			predecessor := monthly
+			if test.sameProduct {
+				predecessor.ProductID = upgradedProduct
+				predecessor.IsUpgraded = false
+			}
+			renewal := renewalPayload{
+				AppAccountToken: annual.AppAccountToken, AutoRenewProductID: upgradedProduct,
+				AutoRenewStatus: autoRenewEnabled, Environment: annual.Environment,
+				OriginalTransactionID: annual.OriginalTransactionID, ProductID: upgradedProduct,
+				RenewalDate: annual.ExpiresDate, SignedDate: now.UnixMilli(),
+			}
+			adapter, err := New(
+				fakeCredentialSource{credential: credentialFixture(t, fixture, core.EnvironmentSandbox)},
+				time.Second,
+			)
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			adapter.clock = func() time.Time { return now }
+			historyCalls := 0
+			adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				verifyAuthorizationFixture(t, strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer "), &fixture.apiKey.PublicKey, now)
+				switch request.URL.Path {
+				case "/inApps/v1/transactions/" + annual.TransactionID:
+					return jsonResponse(t, http.StatusOK, transactionInfoResponse{
+						SignedTransactionInfo: signTransactionFixture(t, fixture, annual),
+					}, nil), nil
+				case "/inApps/v1/subscriptions/" + annual.OriginalTransactionID:
+					return jsonResponse(t, http.StatusOK, statusResponse{
+						Environment: annual.Environment, BundleID: annual.BundleID,
+						Data: []subscriptionGroupIdentifierItem{{
+							SubscriptionGroupIdentifier: "subscription-group-1",
+							LastTransactions: []lastTransactionsItem{{
+								OriginalTransactionID: annual.OriginalTransactionID,
+								Status:                subscriptionStatusActive,
+								SignedTransactionInfo: signTransactionFixture(t, fixture, annual),
+								SignedRenewalInfo:     signApplePayloadFixture(t, fixture, renewal),
+							}},
+						}},
+					}, nil), nil
+				case "/inApps/v2/history/" + annual.OriginalTransactionID:
+					historyCalls++
+					if request.URL.Query().Get("sort") != historySortDescending ||
+						request.URL.Query().Get("productType") != historyProductTypeAutoRenewable {
+						t.Fatalf("history query = %q, want descending auto-renewable records", request.URL.RawQuery)
+					}
+					if test.historyFails {
+						return jsonResponse(t, http.StatusInternalServerError, map[string]string{}, nil), nil
+					}
+					if request.URL.Query().Get("revision") == "" {
+						return jsonResponse(t, http.StatusOK, transactionHistoryResponse{
+							Revision: "rev-2", HasMore: true, Environment: annual.Environment, BundleID: annual.BundleID,
+							SignedTransactions: []string{signTransactionFixture(t, fixture, annual)},
+						}, nil), nil
+					}
+					if request.URL.Query().Get("revision") != "rev-2" {
+						t.Fatalf("history revision = %q, want rev-2", request.URL.Query().Get("revision"))
+					}
+					return jsonResponse(t, http.StatusOK, transactionHistoryResponse{
+						Revision: "rev-3", HasMore: false, Environment: annual.Environment, BundleID: annual.BundleID,
+						SignedTransactions: []string{signTransactionFixture(t, fixture, predecessor)},
+					}, nil), nil
+				default:
+					t.Fatalf("unexpected provider request path %q", request.URL.Path)
+					return nil, nil
+				}
+			})
+			binding, err := core.NewStoreReference(core.ReferenceCustomerBinding, "app_account_token", fixtureAccountToken)
+			if err != nil {
+				t.Fatalf("NewStoreReference() error = %v", err)
+			}
+			result, err := adapter.Verify(context.Background(), stores.VerificationRequest{
+				Application: appleApplication(core.EnvironmentSandbox), CustomerID: "customer-1",
+				ClaimedProducts:          []core.ProviderProductID{upgradedProduct},
+				ExpectedCustomerBindings: []core.StoreReference{binding},
+				Evidence:                 evidenceFixture(t, fixture, annual, core.ProductKindSubscription),
+			})
+			if err != nil {
+				t.Fatalf("Verify() error = %v", err)
+			}
+			if historyCalls == 0 {
+				t.Fatal("Verify() made no transaction history request")
+			}
+			if test.historyFails && historyCalls != 1 {
+				t.Fatalf("history calls = %d, want one failed attempt", historyCalls)
+			}
+			if !test.historyFails && historyCalls != 2 {
+				t.Fatalf("history calls = %d, want two paginated requests", historyCalls)
+			}
+			wantObservations := 1
+			if test.wantClosed {
+				wantObservations = 2
+			}
+			if len(result.Observations) != wantObservations {
+				t.Fatalf("Verify() observations = %#v, want %d", result.Observations, wantObservations)
+			}
+			current := result.Observations[0]
+			if current.ProductID != upgradedProduct || current.Access != core.AccessAllowed {
+				t.Fatalf("current observation = %#v, want allowed %s", current, upgradedProduct)
+			}
+			if !test.wantClosed {
+				return
+			}
+			assertSupersededAppleProduct(t, result.Observations[1], fixtureProductID, upgradeAt)
+			closedID := result.Observations[1].ID
+			if len(result.SupersededObservations) != 1 || result.SupersededObservations[0] != closedID {
+				t.Fatalf("SupersededObservations = %v, want the closed snapshot %q", result.SupersededObservations, closedID)
+			}
+
+			// Replaying the new transaction, as the daily job does, reuses the same snapshot identity.
+			replayed, err := adapter.Verify(context.Background(), stores.VerificationRequest{
+				Application: appleApplication(core.EnvironmentSandbox), CustomerID: "customer-1",
+				ClaimedProducts:          []core.ProviderProductID{upgradedProduct},
+				ExpectedCustomerBindings: []core.StoreReference{binding},
+				Evidence:                 evidenceFixture(t, fixture, annual, core.ProductKindSubscription),
+			})
+			if err != nil {
+				t.Fatalf("Verify(replay) error = %v", err)
+			}
+			if len(replayed.Observations) != 2 || replayed.Observations[1].ID != closedID {
+				t.Fatalf("Verify(replay) observations = %#v, want closed snapshot %q reused", replayed.Observations, closedID)
+			}
+		})
 	}
 }
 
@@ -1052,6 +1411,9 @@ func TestAdapterPublishesClockSkewAllowance(t *testing.T) {
 	}
 	adapter.clock = func() time.Time { return now }
 	adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/inApps/v2/history/"+transaction.OriginalTransactionID {
+			return jsonResponse(t, http.StatusOK, emptyTransactionHistory(transaction), nil), nil
+		}
 		if request.URL.Path != "/inApps/v1/subscriptions/"+transaction.OriginalTransactionID {
 			t.Fatalf("subscription status path = %q", request.URL.Path)
 		}
@@ -1431,6 +1793,9 @@ func adapterFixture(
 	adapter.clock = func() time.Time { return now }
 	adapter.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var response any = transactionInfoResponse{SignedTransactionInfo: signTransactionFixture(t, fixture, transaction)}
+		if request.URL.Path == "/inApps/v2/history/"+transaction.OriginalTransactionID {
+			return jsonResponse(t, status, emptyTransactionHistory(transaction), header), nil
+		}
 		if transaction.Type == appleSubscriptionType && status >= http.StatusOK && status < http.StatusMultipleChoices {
 			expectedPath := "/inApps/v1/subscriptions/" + transaction.OriginalTransactionID
 			if request.URL.Path != expectedPath {
@@ -1461,6 +1826,11 @@ func adapterFixture(
 		return jsonResponse(t, status, response, header), nil
 	})
 	return adapter
+}
+
+// emptyTransactionHistory returns a scoped history page with no predecessor for one transaction.
+func emptyTransactionHistory(transaction transactionPayload) transactionHistoryResponse {
+	return transactionHistoryResponse{Environment: transaction.Environment, BundleID: transaction.BundleID}
 }
 
 // evidenceFixture signs and wraps one transaction evidence fixture.

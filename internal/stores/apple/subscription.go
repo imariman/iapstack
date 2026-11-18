@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -84,28 +85,11 @@ func (adapter *Adapter) querySubscriptionStatus(
 		return transactionPayload{}, renewalPayload{}, 0, stores.Evidence{},
 			invalid("subscription_status", errors.New("apple original transaction ID is required"))
 	}
-	token, err := adapter.authorizationToken(configuration)
+	body, err := adapter.get(
+		ctx, application, configuration, "subscription_status",
+		"/inApps/v1/subscriptions/"+url.PathEscape(originalTransactionID), nil,
+	)
 	if err != nil {
-		return transactionPayload{}, renewalPayload{}, 0, stores.Evidence{},
-			stores.NewFailure(adapter.Provider(), "token", stores.FailurePermanent, 0, err)
-	}
-	baseURL := adapter.productionURL
-	if application.Store.Environment == core.EnvironmentSandbox {
-		baseURL = adapter.sandboxURL
-	}
-	endpoint := strings.TrimRight(baseURL, "/") + "/inApps/v1/subscriptions/" + url.PathEscape(originalTransactionID)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return transactionPayload{}, renewalPayload{}, 0, stores.Evidence{},
-			stores.NewFailure(adapter.Provider(), "subscription_status", stores.FailurePermanent, 0, err)
-	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Accept", "application/json")
-	body, status, responseHeader, err := adapter.do(request)
-	if err != nil {
-		return transactionPayload{}, renewalPayload{}, 0, stores.Evidence{}, err
-	}
-	if err := adapter.classifyProviderStatus("subscription_status", status, responseHeader); err != nil {
 		return transactionPayload{}, renewalPayload{}, 0, stores.Evidence{}, err
 	}
 	var response statusResponse
@@ -113,7 +97,9 @@ func (adapter *Adapter) querySubscriptionStatus(
 		return transactionPayload{}, renewalPayload{}, 0, stores.Evidence{},
 			invalid("subscription_status", errors.New("apple subscription status response is invalid"))
 	}
-	if err := validateStatusResponseScope(application, configuration, response); err != nil {
+	if err := validateResponseScope(
+		application, configuration, "subscription status", response.Environment, response.BundleID, response.AppAppleID,
+	); err != nil {
 		return transactionPayload{}, renewalPayload{}, 0, stores.Evidence{}, invalid("subscription_status", err)
 	}
 	item, err := selectSubscriptionStatus(response, originalTransactionID)
@@ -156,18 +142,22 @@ func (adapter *Adapter) classifyProviderStatus(operation string, status int, hea
 	}
 }
 
-// validateStatusResponseScope checks App Store application and environment response fields.
-func validateStatusResponseScope(
+// validateResponseScope checks the environment, bundle ID, and production App Apple ID that one
+// App Store Server API response names. subject names the response in the error.
+func validateResponseScope(
 	application core.Application,
 	configuration configuration,
-	response statusResponse,
+	subject string,
+	environment string,
+	bundleID string,
+	appAppleID uint64,
 ) error {
-	environment, err := appleEnvironment(application.Store.Environment)
-	if err != nil || response.Environment != environment || response.BundleID != configuration.bundleID {
-		return errors.New("apple subscription status application scope mismatch")
+	expected, err := appleEnvironment(application.Store.Environment)
+	if err != nil || environment != expected || bundleID != configuration.bundleID {
+		return fmt.Errorf("apple %s application scope mismatch", subject)
 	}
-	if application.Store.Environment == core.EnvironmentProduction && response.AppAppleID != configuration.appAppleID {
-		return errors.New("apple subscription status App Apple ID mismatch")
+	if application.Store.Environment == core.EnvironmentProduction && appAppleID != configuration.appAppleID {
+		return fmt.Errorf("apple %s App Apple ID mismatch", subject)
 	}
 	return nil
 }
@@ -225,42 +215,54 @@ func normalizeSubscriptionStatus(
 	}
 	switch subscription.Status {
 	case subscriptionStatusActive:
-		switch {
-		case endsAt == nil:
+		if endsAt == nil {
 			return core.LifecycleUnresolved, core.AccessUnresolved, core.AccessReasonUnresolved, endsAt, renewal
-		case !endsAt.After(now.Add(-maximumNotificationClockSkew)):
+		}
+		allowedEnd, allowed := clockSkewAllowedEnd(*endsAt, now)
+		if !allowed {
 			// Apple still reports this subscription as active, but the signed expiry is
 			// outside the clock-skew window.
 			return core.LifecycleExpired, core.AccessDenied, core.AccessReasonExpired, endsAt, renewal
 		}
-		// Readers and SDKs deny an allowed projection whose end is not after now.
-		// An expiry inside the skew window stays allowed, so publish the signed
-		// expiry plus that allowance. The effective end is then still after now,
-		// and the API, webhooks, and clients keep access until the window closes.
-		// One second before expiry publishes the signed end; one second after publishes end+5m. That asymmetry is intended.
-		if !endsAt.After(now) {
-			adjusted := endsAt.Add(maximumNotificationClockSkew)
-			endsAt = &adjusted
-		}
 		if renewal.Status == core.RenewalDisabled {
-			return core.LifecycleCanceled, core.AccessAllowed, core.AccessReasonCanceledAtPeriodEnd, endsAt, renewal
+			return core.LifecycleCanceled, core.AccessAllowed, core.AccessReasonCanceledAtPeriodEnd, &allowedEnd, renewal
 		}
-		return core.LifecycleActive, core.AccessAllowed, core.AccessReasonPurchaseValid, endsAt, renewal
+		return core.LifecycleActive, core.AccessAllowed, core.AccessReasonPurchaseValid, &allowedEnd, renewal
 	case subscriptionStatusExpired:
 		return core.LifecycleExpired, core.AccessDenied, core.AccessReasonExpired, endsAt, renewal
 	case subscriptionStatusBillingRetry:
 		return core.LifecycleOnHold, core.AccessDenied, core.AccessReasonBillingIssue, endsAt, renewal
 	case subscriptionStatusGracePeriod:
+		// The grace end gets the same clock-skew allowance as an active expiry.
 		graceEndsAt := optionalMilliseconds(subscription.Renewal.GracePeriodExpiresDate)
-		if graceEndsAt == nil || !graceEndsAt.After(now) {
+		if graceEndsAt == nil {
 			return core.LifecycleOnHold, core.AccessDenied, core.AccessReasonBillingIssue, graceEndsAt, renewal
 		}
-		return core.LifecycleGracePeriod, core.AccessAllowed, core.AccessReasonGracePeriod, graceEndsAt, renewal
+		allowedEnd, allowed := clockSkewAllowedEnd(*graceEndsAt, now)
+		if !allowed {
+			return core.LifecycleOnHold, core.AccessDenied, core.AccessReasonBillingIssue, graceEndsAt, renewal
+		}
+		return core.LifecycleGracePeriod, core.AccessAllowed, core.AccessReasonGracePeriod, &allowedEnd, renewal
 	case subscriptionStatusRevoked:
 		return core.LifecycleRevoked, core.AccessDenied, core.AccessReasonRevoked, endsAt, renewal
 	default:
 		return core.LifecycleUnresolved, core.AccessUnresolved, core.AccessReasonUnresolved, endsAt, renewal
 	}
+}
+
+// clockSkewAllowedEnd reports whether a signed access end still allows access at now, and the end to publish.
+// An end inside the clock-skew window stays allowed. Readers and SDKs deny an allowed projection whose end
+// is not after now and add no window of their own, so such an end is published plus that allowance: the
+// API, webhooks, and clients then keep access until the window closes. One second before the end publishes
+// the signed end; one second after publishes end+5m. That asymmetry is intended.
+func clockSkewAllowedEnd(end time.Time, now time.Time) (time.Time, bool) {
+	if !end.After(now.Add(-maximumNotificationClockSkew)) {
+		return end, false
+	}
+	if !end.After(now) {
+		return end.Add(maximumNotificationClockSkew), true
+	}
+	return end, true
 }
 
 // normalizeRenewal maps verified App Store renewal claims into the shared renewal projection.

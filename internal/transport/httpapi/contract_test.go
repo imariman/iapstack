@@ -16,6 +16,7 @@ import (
 	"github.com/imariman/iapstack/internal/credentials"
 	"github.com/imariman/iapstack/internal/offering"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/verification"
 )
 
 const (
@@ -113,11 +114,30 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 		"AdminSandboxValue":            {"amounts", "transaction_count", "missing_price_count"},
 		"AdminMoney":                   {"milliunits", "currency"},
 		"AdminDailyActivity":           {"date", "verified", "allowed", "denied", "unresolved", "reversed"},
+		"AdminSubscriptionMetrics": {
+			"environment", "window_days", "window_start", "window_end", "measured_at", "active_at_start",
+			"active_at_end", "in_trial_at_end", "active_during_window", "new_subscriptions", "renewals",
+			"plan_changes", "resubscriptions", "churn",
+			"trials", "breakdown", "breakdown_truncated", "daily_active",
+		},
+		"AdminSubscriptionChurn": {"churned", "voluntary", "billing", "reversed", "unclassified", "replaced", "paused", "awaiting_evidence", "rate"},
+		"AdminSubscriptionTrials": {
+			"provider", "availability", "active_during_window", "with_offer_phase", "started", "ended",
+			"converted", "not_converted", "outcome_not_recorded", "conversion_rate",
+		},
+		"AdminSubscriptionBreakdown":   {"application_id", "provider", "product_id", "active_at_end", "new_subscriptions", "renewals", "churned"},
+		"AdminSubscriptionDailyActive": {"date", "active"},
 		"CredentialMetadata":           {"project_id", "application_id", "kind", "content_type", "schema_version", "revision", "created_at", "updated_at"},
 		"ApiKeyCollection":             {"api_keys"},
 		"ApiKey":                       {"id", "role", "created_at", "current"},
 		"CustomerResolution":           {"project_id", "external_id", "canonical_customer_id", "match"},
 		"CustomerMerge":                {"id", "project_id", "canonical_customer_id", "source_customer_id", "idempotency_key", "created_at"},
+		"AdminCustomerSearchPage":      {"customers"},
+		"AdminCustomerDetail":          {"customer", "canonical_customer_id", "entitlements", "manual_grants", "timeline", "timeline_truncated"},
+		"AdminCustomerEntitlement":     {"key", "source", "source_id", "access", "reason", "version"},
+		"ManualGrant":                  {"id", "customer_id", "entitlement_key", "reason", "actor_key_id", "status", "effective_ends_at"},
+		"ManualGrantRequest":           {"idempotency_key", "entitlement_id", "product_id", "application_id", "reason"},
+		"ManualGrantRevocationRequest": {"reason"},
 		"AppleConsumptionStatus":       {"settings", "recent_requests"},
 		"AppleConsumptionSettings":     {"project_id", "application_id", "enabled", "refund_preference", "sample_content_provided", "revision"},
 		"AppleConsumptionConsent":      {"application_id", "customer_id", "external_customer_id", "consented", "updated_at"},
@@ -238,6 +258,46 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 			Customers: []adminCustomerResponse{}, RecentTransactions: []adminTransactionResponse{},
 			Queues: []adminQueueResponse{}, RecentWebhookEvents: []adminWebhookEventResponse{},
 		}},
+		{name: "manual grant entitlement", schema: "EntitlementSnapshot", value: map[string]any{
+			"customer_id": "customer-1",
+			"entitlements": entitlementResponses([]persistence.CustomerEntitlement{
+				fakeAdminCustomerEntitlement(now),
+			}, now),
+		}},
+		{name: "customer search page", schema: "AdminCustomerSearchPage", value: adminCustomerSearchResponse{
+			Customers: []adminCustomerMatchResponse{{
+				adminCustomerResponse: adminCustomerResponse{
+					ID: "customer-1", ExternalID: "user-1", AliasCount: 1, EntitlementCount: 1,
+					AllowedCount: 1, LastObservedAt: &now, CreatedAt: now,
+				},
+				Match: persistence.AdminCustomerMatchTransactionID,
+			}},
+			NextPageToken: encodeSearchPageToken(persistence.AdminCustomerSearchCursor{
+				Rank: 4, CreatedAt: now, CustomerID: "customer-1",
+			}, "2000000123456789"),
+		}},
+		{name: "customer listing page", schema: "AdminCustomerSearchPage", value: adminCustomerSearchResponse{
+			Customers: []adminCustomerMatchResponse{{
+				adminCustomerResponse: adminCustomerResponse{ID: "customer-2", ExternalID: "user-2", CreatedAt: now},
+			}},
+		}},
+		{name: "customer detail", schema: "AdminCustomerDetail", value: adminCustomerDetailFromRecord(
+			fakeAdminCustomerDetail("project-1"), now,
+		)},
+		{name: "manual grant result", schema: "ManualGrantResult", value: manualGrantResultFromRecord(
+			persistence.ManualGrantResult{Grant: fakeAdminCustomerDetail("project-1").ManualGrants[0]},
+			verification.ProjectionRefreshResult{ProjectionsChanged: 1, WebhooksEnqueued: 1}, now,
+		)},
+		{name: "subscription metrics", schema: "AdminSubscriptionMetrics", value: subscriptionMetricsFromRecord(
+			fakeSubscriptionMetrics(persistence.SubscriptionMetricsQuery{Environment: core.EnvironmentProduction, WindowDays: 30}),
+		)},
+		{name: "empty subscription metrics", schema: "AdminSubscriptionMetrics", value: subscriptionMetricsFromRecord(
+			persistence.ComputeSubscriptionMetrics(
+				persistence.SubscriptionMetricsQuery{Environment: core.EnvironmentSandbox, WindowDays: 1},
+				persistence.SubscriptionWindow{Start: now.Truncate(24 * time.Hour), End: now.Truncate(24 * time.Hour).Add(24 * time.Hour), MeasuredAt: now},
+				[]core.Provider{core.ProviderHuaweiAppGallery}, nil,
+			),
+		)},
 		{name: "credential metadata", schema: "CredentialMetadata", value: credentials.Metadata{
 			ProjectID: "project-1", ApplicationID: "application-1", Kind: "huawei_server_api",
 			ContentType: "application/vnd.iapstack.huawei-credentials+json", SchemaVersion: 1,

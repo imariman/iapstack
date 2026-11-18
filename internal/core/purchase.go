@@ -57,6 +57,9 @@ const (
 	AccessReasonProviderDecision AccessReason = "provider_decision"
 	// AccessReasonUnresolved indicates that no safe access decision is available yet.
 	AccessReasonUnresolved AccessReason = "unresolved"
+	// AccessReasonManualGrant indicates access from an audited administrator grant, not a store purchase.
+	// Only a manual entitlement source may carry it; observations and imports never do.
+	AccessReasonManualGrant AccessReason = "manual_grant"
 
 	// OwnershipPurchased indicates that the current customer bought the product.
 	OwnershipPurchased Ownership = "purchased"
@@ -82,6 +85,38 @@ const (
 	RenewalDisabled RenewalStatus = "disabled"
 	// RenewalStatusUnknown indicates that automatic renewal status is unavailable.
 	RenewalStatusUnknown RenewalStatus = "unknown"
+
+	// OfferPhaseNotRecorded means the observation carries no provider-signed offer phase.
+	// Older observations, providers without an offer field, and non-subscriptions use it.
+	OfferPhaseNotRecorded OfferPhase = ""
+	// OfferPhaseBase identifies a subscription period with no trial or discount offer applied.
+	OfferPhaseBase OfferPhase = "base"
+	// OfferPhaseFreeTrial identifies a subscription period that the provider signs as a free trial.
+	OfferPhaseFreeTrial OfferPhase = "free_trial"
+	// OfferPhaseDiscounted identifies a paid subscription period at an introductory or promotional price.
+	OfferPhaseDiscounted OfferPhase = "discounted"
+	// OfferPhaseProration identifies a provider proration period after a plan change.
+	OfferPhaseProration OfferPhase = "proration"
+	// OfferPhaseUnknown identifies a signed offer whose payment mode the adapter does not recognize.
+	OfferPhaseUnknown OfferPhase = "unknown"
+
+	// TransactionReasonNotRecorded means the provider evidence names no reason for the transaction.
+	TransactionReasonNotRecorded TransactionReason = ""
+	// TransactionReasonPurchase identifies a customer-initiated purchase, including an upgrade or a resubscription.
+	TransactionReasonPurchase TransactionReason = "purchase"
+	// TransactionReasonRenewal identifies a provider-initiated renewal, including a downgrade that takes effect at renewal.
+	TransactionReasonRenewal TransactionReason = "renewal"
+
+	// CancellationReasonNotRecorded means the provider evidence names no cancellation context.
+	CancellationReasonNotRecorded CancellationReason = ""
+	// CancellationReasonCustomer identifies a cancellation the customer initiated.
+	CancellationReasonCustomer CancellationReason = "customer"
+	// CancellationReasonSystem identifies a cancellation the provider initiated, such as after a billing failure.
+	CancellationReasonSystem CancellationReason = "system"
+	// CancellationReasonDeveloper identifies a cancellation the developer initiated through the provider.
+	CancellationReasonDeveloper CancellationReason = "developer"
+	// CancellationReasonReplacement identifies a subscription canceled because another purchase replaced it.
+	CancellationReasonReplacement CancellationReason = "replacement"
 )
 
 type LifecycleState string
@@ -95,6 +130,18 @@ type Ownership string
 type RenewalMode string
 
 type RenewalStatus string
+
+// OfferPhase is the provider-signed pricing phase of one subscription period.
+// It is analytics evidence only and never changes an access decision.
+type OfferPhase string
+
+// TransactionReason is the provider-signed reason a subscription transaction exists.
+// It is analytics evidence only and never changes an access decision.
+type TransactionReason string
+
+// CancellationReason is the provider-reported initiator of a subscription cancellation.
+// It is analytics evidence only and never changes an access decision.
+type CancellationReason string
 
 // PurchasePrice is one provider-signed transaction price in thousandths of an ISO 4217 currency unit.
 type PurchasePrice struct {
@@ -118,23 +165,31 @@ type EffectivePeriod struct {
 // at a point in time. ID must be a non-sensitive deterministic idempotency key;
 // provider tokens belong in redacted StoreReference values instead.
 type PurchaseObservation struct {
-	ID              ObservationID
-	ApplicationID   ApplicationID
-	Store           StoreApplication
-	ProductID       ProviderProductID
-	ProductKind     ProductKind
-	State           LifecycleState
-	ProviderState   string
-	Access          AccessStatus
-	AccessReason    AccessReason
-	Ownership       Ownership
-	Quantity        uint32
-	Price           *PurchasePrice
-	OccurredAt      time.Time
-	ObservedAt      time.Time
-	EffectivePeriod EffectivePeriod
-	Renewal         Renewal
-	References      []StoreReference
+	ID            ObservationID
+	ApplicationID ApplicationID
+	Store         StoreApplication
+	ProductID     ProviderProductID
+	ProductKind   ProductKind
+	State         LifecycleState
+	ProviderState string
+	Access        AccessStatus
+	AccessReason  AccessReason
+	Ownership     Ownership
+	Quantity      uint32
+	Price         *PurchasePrice
+	// OfferPhase is the signed offer phase of a subscription period, or OfferPhaseNotRecorded.
+	OfferPhase OfferPhase
+	// TransactionReason is the signed reason for a subscription transaction, or TransactionReasonNotRecorded.
+	TransactionReason TransactionReason
+	// LineageStartedAt is the signed purchase time of the first transaction in this lineage, when the provider supplies it.
+	LineageStartedAt *time.Time
+	// CancellationReason is the provider-reported cancellation initiator, or CancellationReasonNotRecorded.
+	CancellationReason CancellationReason
+	OccurredAt         time.Time
+	ObservedAt         time.Time
+	EffectivePeriod    EffectivePeriod
+	Renewal            Renewal
+	References         []StoreReference
 	// PriorSnapshotID is an older identity for this same logical snapshot.
 	// Persistence reuses that stored row when the snapshot still matches, so an
 	// identity encoding change does not duplicate an unchanged observation.
@@ -181,7 +236,7 @@ func (reason AccessReason) Validate() error {
 	case AccessReasonPurchaseValid, AccessReasonGracePeriod, AccessReasonPendingPayment,
 		AccessReasonCanceledAtPeriodEnd, AccessReasonExpired, AccessReasonBillingIssue,
 		AccessReasonPaused, AccessReasonRefunded, AccessReasonRevoked,
-		AccessReasonProviderDecision, AccessReasonUnresolved:
+		AccessReasonProviderDecision, AccessReasonUnresolved, AccessReasonManualGrant:
 		return nil
 	default:
 		return fmt.Errorf("unsupported access reason %q", reason)
@@ -195,6 +250,38 @@ func (ownership Ownership) Validate() error {
 		return nil
 	default:
 		return fmt.Errorf("unsupported ownership %q", ownership)
+	}
+}
+
+// Validate checks that the offer phase is empty or belongs to the normalized phase vocabulary.
+func (phase OfferPhase) Validate() error {
+	switch phase {
+	case OfferPhaseNotRecorded, OfferPhaseBase, OfferPhaseFreeTrial, OfferPhaseDiscounted,
+		OfferPhaseProration, OfferPhaseUnknown:
+		return nil
+	default:
+		return fmt.Errorf("unsupported offer phase %q", phase)
+	}
+}
+
+// Validate checks that the transaction reason is empty or belongs to the normalized vocabulary.
+func (reason TransactionReason) Validate() error {
+	switch reason {
+	case TransactionReasonNotRecorded, TransactionReasonPurchase, TransactionReasonRenewal:
+		return nil
+	default:
+		return fmt.Errorf("unsupported transaction reason %q", reason)
+	}
+}
+
+// Validate checks that the cancellation reason is empty or belongs to the normalized vocabulary.
+func (reason CancellationReason) Validate() error {
+	switch reason {
+	case CancellationReasonNotRecorded, CancellationReasonCustomer, CancellationReasonSystem,
+		CancellationReasonDeveloper, CancellationReasonReplacement:
+		return nil
+	default:
+		return fmt.Errorf("unsupported cancellation reason %q", reason)
 	}
 }
 
@@ -297,12 +384,24 @@ func (observation PurchaseObservation) Validate() error {
 		validateIdentifier("provider state", observation.ProviderState),
 		observation.Access.Validate(),
 		observation.AccessReason.Validate(),
+		observationReasonIsNotManual(observation.AccessReason),
 		observation.Ownership.Validate(),
 		observation.EffectivePeriod.Validate(),
 		observation.Renewal.Validate(observation.ProductKind),
 		priceError,
+		observation.OfferPhase.Validate(),
+		observation.TransactionReason.Validate(),
+		observation.CancellationReason.Validate(),
 	); err != nil {
 		return err
+	}
+	if observation.ProductKind != ProductKindSubscription &&
+		(observation.OfferPhase != OfferPhaseNotRecorded || observation.TransactionReason != TransactionReasonNotRecorded ||
+			observation.LineageStartedAt != nil || observation.CancellationReason != CancellationReasonNotRecorded) {
+		return errors.New("subscription analytics evidence applies only to subscriptions")
+	}
+	if observation.LineageStartedAt != nil && observation.LineageStartedAt.IsZero() {
+		return errors.New("lineage start time must not be zero")
 	}
 
 	if observation.Quantity == 0 {
@@ -377,6 +476,14 @@ func validateReferenceSet(references []StoreReference) error {
 				return errors.New("duplicate store reference")
 			}
 		}
+	}
+	return nil
+}
+
+// observationReasonIsNotManual rejects the operator-only reason on verified store evidence.
+func observationReasonIsNotManual(reason AccessReason) error {
+	if reason == AccessReasonManualGrant {
+		return errors.New("a purchase observation cannot carry the manual grant access reason")
 	}
 	return nil
 }

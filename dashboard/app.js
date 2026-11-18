@@ -4,6 +4,9 @@ const huaweiCredentialContentType = "application/vnd.iapstack.huawei-credentials
 const appleCredentialContentType = "application/vnd.iapstack.apple-credentials+json";
 const googleCredentialContentType = "application/vnd.iapstack.google-play-credentials+json";
 const maximumCredentialFileBytes = 1024 * 1024;
+const customerPageSize = 25;
+const customerSearchMaxBytes = 512;
+const customerSearchDelayMs = 350;
 const state = {
   projects: [],
   selectedProject: "",
@@ -12,7 +15,19 @@ const state = {
   apiKeys: [],
   pendingRevokeKey: null,
   consumption: null,
+  customerSearch: { query: "", nextToken: "", count: 0, sequence: 0, timer: 0 },
+  customerDetail: null,
+  customerDetailID: "",
+  customerDetailSequence: 0,
+  pendingRevokeGrant: null,
+  grantIdempotencyKey: "",
+  subscriptionProject: "",
+  subscriptionEnvironment: "",
+  subscriptionWindowDays: 30,
+  subscriptionRequest: 0,
 };
+
+const subscriptionEnvironmentOrder = ["production", "sandbox", "test"];
 
 const elements = {
   authStage: document.querySelector("#auth-stage"),
@@ -62,6 +77,26 @@ const elements = {
   customerDialog: document.querySelector("#customer-dialog"),
   customerForm: document.querySelector("#customer-form"),
   customerMessage: document.querySelector("#customer-message"),
+  customerSearchForm: document.querySelector("#customer-search-form"),
+  customerSearch: document.querySelector("#customer-search"),
+  customersCount: document.querySelector("#customers-count"),
+  customerMore: document.querySelector("#customer-more"),
+  customerLoadMore: document.querySelector("#customer-load-more"),
+  customerDetailDialog: document.querySelector("#customer-detail-dialog"),
+  customerDetailBody: document.querySelector("#customer-detail-body"),
+  customerDetailMessage: document.querySelector("#customer-detail-message"),
+  grantDialog: document.querySelector("#grant-dialog"),
+  grantForm: document.querySelector("#grant-form"),
+  grantOption: document.querySelector("#grant-option"),
+  grantApplication: document.querySelector("#grant-application"),
+  grantDuration: document.querySelector("#grant-duration"),
+  grantUntilLabel: document.querySelector("#grant-until-label"),
+  grantEndsOn: document.querySelector("#grant-ends-on"),
+  grantMessage: document.querySelector("#grant-message"),
+  revokeGrantDialog: document.querySelector("#revoke-grant-dialog"),
+  revokeGrantForm: document.querySelector("#revoke-grant-form"),
+  revokeGrantIdentity: document.querySelector("#revoke-grant-identity"),
+  revokeGrantMessage: document.querySelector("#revoke-grant-message"),
   keyDialog: document.querySelector("#key-dialog"),
   revealedKeyTitle: document.querySelector("#revealed-key-title"),
   revealedKeyLabel: document.querySelector("#revealed-key-label"),
@@ -206,6 +241,10 @@ async function loadProjects(preferredProject = state.selectedProject) {
 
 async function loadOverview(projectID, focusWorkspace = false) {
   setGlobalMessage("");
+  if (projectID !== state.selectedProject) {
+    elements.customerSearch.value = "";
+    state.customerSearch.query = "";
+  }
   elements.refresh.disabled = true;
   elements.refresh.setAttribute("aria-busy", "true");
   try {
@@ -214,6 +253,8 @@ async function loadOverview(projectID, focusWorkspace = false) {
     renderProjectNavigation();
     renderOverview();
     elements.updatedAt.textContent = `Updated ${formatTime(new Date().toISOString())}`;
+    // Not awaited: the subscription query is slower, and it must not hold the overview or the refresh button.
+    loadSubscriptionMetrics(projectID);
     if (focusWorkspace) elements.appShell.querySelector("#workspace").focus({ preventScroll: true });
   } catch (error) {
     if (error.status === 401) {
@@ -256,6 +297,8 @@ function renderEmptyWorkspace() {
   setText("metric-products", "0");
   setText("metric-pending", "0");
   renderAnalytics(emptyAnalytics());
+  syncSubscriptionControls([]);
+  renderEmptySubscriptions("Subscription health appears after you create a project.");
   for (const id of ["application-grid", "product-list", "queue-list"]) {
     const container = document.querySelector(`#${id}`);
     container.replaceChildren(node("p", "empty-state", "This section will populate after you create a project."));
@@ -263,6 +306,9 @@ function renderEmptyWorkspace() {
   renderEmptyTable("transaction-rows", 5, "No verifications yet.");
   renderEmptyTable("customer-rows", 3, "No customers yet.");
   renderEmptyTable("webhook-rows", 3, "No webhook events yet.");
+  state.customerSearch.nextToken = "";
+  elements.customerMore.hidden = true;
+  elements.customersCount.textContent = "Newest first";
 }
 
 function renderOverview() {
@@ -318,8 +364,8 @@ function renderOverview() {
   renderProducts(overview.products);
   renderQueues(overview.queues);
   renderTransactions(overview.recent_transactions);
-  renderCustomers(overview.customers);
   renderWebhooks(overview.recent_webhook_events);
+  loadCustomerPage();
 }
 
 function emptyAnalytics() {
@@ -649,6 +695,283 @@ function formatChartDate(value) {
     month: "short",
     timeZone: "UTC",
   }).format(date);
+}
+
+function subscriptionEnvironments(applications) {
+  const present = new Set(applications.map((application) => application.environment));
+  return subscriptionEnvironmentOrder.filter((environment) => present.has(environment));
+}
+
+function environmentLabel(environment) {
+  return { production: "Production", sandbox: "Sandbox", test: "Test" }[environment] || environment;
+}
+
+function syncSubscriptionControls(environments) {
+  const select = document.querySelector("#subscription-environment");
+  select.replaceChildren();
+  for (const environment of environments) {
+    const option = node("option", "", environmentLabel(environment));
+    option.value = environment;
+    select.append(option);
+  }
+  if (!environments.length) select.append(node("option", "", "No applications"));
+  select.disabled = environments.length === 0;
+  if (environments.length) select.value = state.subscriptionEnvironment;
+  for (const button of document.querySelectorAll(".segmented-control [data-window-days]")) {
+    button.setAttribute("aria-pressed", String(Number(button.dataset.windowDays) === state.subscriptionWindowDays));
+  }
+}
+
+async function loadSubscriptionMetrics(projectID) {
+  const environments = subscriptionEnvironments(state.overview?.applications || []);
+  const projectChanged = state.subscriptionProject !== projectID;
+  if (projectChanged || !environments.includes(state.subscriptionEnvironment)) {
+    state.subscriptionProject = projectID;
+    state.subscriptionEnvironment = environments[0] || "";
+  }
+  syncSubscriptionControls(environments);
+  if (projectChanged && environments.length) {
+    renderEmptySubscriptions("Loading subscription metrics for this project…");
+  }
+  if (!environments.length) {
+    renderEmptySubscriptions("This project has no applications, so it has no subscriptions to count.");
+    return;
+  }
+  const request = ++state.subscriptionRequest;
+  const panel = document.querySelector(".subscription-panel");
+  panel.setAttribute("aria-busy", "true");
+  setText("subscription-message", "");
+  const query = new URLSearchParams({
+    environment: state.subscriptionEnvironment,
+    window_days: String(state.subscriptionWindowDays),
+  });
+  try {
+    const metrics = await apiRequest(
+      `/v1/admin/projects/${encodeURIComponent(projectID)}/subscription-metrics?${query.toString()}`,
+    );
+    if (request !== state.subscriptionRequest) return;
+    renderSubscriptionMetrics(metrics);
+  } catch (error) {
+    if (request !== state.subscriptionRequest) return;
+    if (error.status === 401) {
+      logout();
+      elements.authMessage.textContent = errorMessage(error);
+      return;
+    }
+    renderEmptySubscriptions("Subscription metrics could not be loaded.");
+    setText("subscription-message", errorMessage(error));
+  } finally {
+    if (request === state.subscriptionRequest) panel.removeAttribute("aria-busy");
+  }
+}
+
+function renderEmptySubscriptions(message) {
+  for (const id of ["subscriptions-active", "subscriptions-new", "subscriptions-renewals", "subscriptions-churned"]) {
+    setText(id, "0");
+  }
+  setText("subscriptions-active-note", "—");
+  setText("subscriptions-churn-rate", "—");
+  setText("subscriptions-renewals-note", "New store transactions in a subscription");
+  renderSubscriptionChart([], 0);
+  document.querySelector("#subscription-churn-reasons").replaceChildren();
+  const trials = document.querySelector("#subscription-trials");
+  trials.replaceChildren(node("p", "empty-state", message));
+  renderEmptyTable("subscription-rows", 6, message);
+}
+
+function renderSubscriptionMetrics(metrics) {
+  const trials = Array.isArray(metrics.trials) ? metrics.trials : [];
+  const trialsRecorded = trials.some((trial) => trial.availability === "available");
+  setText("subscriptions-active", formatNumber(metrics.active_at_end));
+  setText(
+    "subscriptions-active-note",
+    trialsRecorded
+      ? `${countLabel(metrics.in_trial_at_end, "subscription")} in a free trial · ${formatNumber(metrics.active_at_start)} at the start`
+      : `${formatNumber(metrics.active_at_start)} at the start · trial state not recorded`,
+  );
+  setText("subscriptions-new", formatNumber(metrics.new_subscriptions));
+  setText("subscriptions-renewals", formatNumber(metrics.renewals));
+  setText(
+    "subscriptions-renewals-note",
+    `Same plan · ${countLabel(metrics.plan_changes, "plan change")} and ${formatNumber(metrics.resubscriptions)} resubscribed not included`,
+  );
+  setText("subscriptions-churned", formatNumber(metrics.churn.churned));
+  setText(
+    "subscriptions-churn-rate",
+    metrics.churn.rate === null || metrics.churn.rate === undefined
+      ? "No subscription was active in this window"
+      : `${formatPercent(metrics.churn.rate)} churn rate · of ${formatNumber(metrics.active_during_window)} active in the window`,
+  );
+  setText(
+    "subscription-chart-caption",
+    `${environmentLabel(metrics.environment)} · UTC · ${metrics.window_days} days · today at ${formatTime(metrics.measured_at)}`,
+  );
+  renderSubscriptionChart(metrics.daily_active || [], metrics.window_days);
+  renderSubscriptionChurn(metrics.churn);
+  renderSubscriptionTrials(trials);
+  renderSubscriptionRows(metrics.breakdown || [], metrics.breakdown_truncated);
+}
+
+function renderSubscriptionChart(daily, windowDays) {
+  const chart = document.querySelector("#subscription-chart");
+  chart.replaceChildren();
+  const width = 760;
+  const top = 10;
+  const right = 8;
+  const bottom = 30;
+  const left = 34;
+  const plotWidth = width - left - right;
+  const plotHeight = 200 - top - bottom;
+  const baseline = top + plotHeight;
+  const peak = Math.max(0, ...daily.map((day) => Number(day.active || 0)));
+  const maximum = niceAxisMaximum(Math.max(1, peak));
+  const first = daily.length ? Number(daily[0].active || 0) : 0;
+  const last = daily.length ? Number(daily[daily.length - 1].active || 0) : 0;
+  chart.setAttribute(
+    "aria-label",
+    daily.length
+      ? `Active subscriptions over ${windowDays} days: ${first} at the end of the first day, ${last} now, peak ${peak}.`
+      : "No subscription activity in this window",
+  );
+
+  for (const tick of [...new Set([maximum, Math.ceil(maximum / 2), 0])]) {
+    const y = baseline - (tick / maximum) * plotHeight;
+    chart.append(
+      svgNode("line", { class: "chart-grid-line", x1: left, x2: width - right, y1: y, y2: y }),
+      svgNode("text", { class: "chart-axis-label", x: left - 7, y: y + 3, "text-anchor": "end" }, tick),
+    );
+  }
+  if (!peak) {
+    chart.append(svgNode(
+      "text",
+      { class: "chart-empty-label", x: left + plotWidth / 2, y: top + plotHeight / 2, "text-anchor": "middle" },
+      "No active subscriptions in this window",
+    ));
+  }
+
+  const slotWidth = daily.length ? plotWidth / daily.length : plotWidth;
+  const barWidth = Math.max(2, Math.min(14, slotWidth * 0.62));
+  const labelEvery = daily.length > 45 ? 14 : 7;
+  daily.forEach((day, index) => {
+    const x = left + index * slotWidth + (slotWidth - barWidth) / 2;
+    const value = Number(day.active || 0);
+    if (value) {
+      const height = (value / maximum) * plotHeight;
+      const bar = svgNode("rect", {
+        class: "chart-bar chart-bar-allowed", x, y: baseline - height, width: barWidth, height, rx: 2,
+      });
+      bar.append(svgNode("title", {}, `${formatChartDate(day.date)}: ${formatNumber(value)} active`));
+      chart.append(bar);
+    }
+    const finalDay = index === daily.length - 1;
+    const clearOfFinalLabel = index <= daily.length - 1 - Math.ceil(labelEvery / 2);
+    const periodicTick = daily.length <= 10 || (index % labelEvery === 0 && clearOfFinalLabel);
+    if (index === 0 || finalDay || periodicTick) {
+      chart.append(svgNode(
+        "text",
+        { class: "chart-axis-label", x: x + barWidth / 2, y: baseline + 19, "text-anchor": "middle" },
+        formatChartDate(day.date),
+      ));
+    }
+  });
+}
+
+function renderSubscriptionChurn(churn) {
+  const list = document.querySelector("#subscription-churn-reasons");
+  list.replaceChildren();
+  const rows = [
+    ["Renewal turned off", churn.voluntary],
+    ["Payment problem", churn.billing],
+    ["Refunded or revoked", churn.reversed],
+    ["Reason not recorded", churn.unclassified],
+  ];
+  for (const [label, value] of rows) {
+    list.append(subscriptionListRow(label, value));
+  }
+  const excluded = node("div", "subscription-list-note");
+  excluded.append(node("dt", "", "Not counted as churn"));
+  excluded.append(node(
+    "dd",
+    "",
+    `${formatNumber(churn.replaced)} replaced · ${formatNumber(churn.paused)} paused · ${formatNumber(churn.awaiting_evidence)} awaiting store evidence`,
+  ));
+  list.append(excluded);
+}
+
+function subscriptionListRow(label, value) {
+  const row = node("div");
+  row.append(node("dt", "", label), node("dd", "", formatNumber(value)));
+  return row;
+}
+
+function renderSubscriptionTrials(trials) {
+  const container = document.querySelector("#subscription-trials");
+  container.replaceChildren();
+  if (!trials.length) {
+    container.append(node("p", "empty-state", "No applications in this environment."));
+    return;
+  }
+  for (const trial of trials) {
+    const item = node("article", "subscription-trial");
+    item.append(node("strong", "", providerLabel(trial.provider)));
+    if (trial.availability !== "available") {
+      item.classList.add("not-available");
+      item.append(
+        node("span", "", `Not available for ${providerLabel(trial.provider)}`),
+        node("small", "", "Its stored purchase evidence does not mark a free trial, so no trial is counted."),
+      );
+      container.append(item);
+      continue;
+    }
+    const decided = Number(trial.converted || 0) + Number(trial.not_converted || 0);
+    const conversion = trial.conversion_rate === null || trial.conversion_rate === undefined
+      ? "no ended trial to convert yet"
+      : `${formatNumber(trial.converted)} of ${formatNumber(decided)} ended trials converted (${formatPercent(trial.conversion_rate)})`;
+    const outcome = Number(trial.outcome_not_recorded || 0)
+      ? ` · ${countLabel(trial.outcome_not_recorded, "outcome")} not recorded`
+      : "";
+    item.append(
+      node("span", "", `${countLabel(trial.started, "trial")} started · ${conversion}${outcome}`),
+      node(
+        "small",
+        "",
+        `${formatNumber(trial.with_offer_phase)} of ${countLabel(trial.active_during_window, "subscription")} carry a recorded offer phase.`,
+      ),
+    );
+    container.append(item);
+  }
+}
+
+function renderSubscriptionRows(breakdown, truncated) {
+  const body = document.querySelector("#subscription-rows");
+  body.replaceChildren();
+  if (!breakdown.length) {
+    renderEmptyTable("subscription-rows", 6, "No subscription was active in this window.");
+    return;
+  }
+  for (const row of breakdown) {
+    const tableRow = document.createElement("tr");
+    tableRow.append(
+      compoundCell(row.product_id, row.application_id),
+      textCell(providerLabel(row.provider)),
+      textCell(formatNumber(row.active_at_end)),
+      textCell(formatNumber(row.new_subscriptions)),
+      textCell(formatNumber(row.renewals)),
+      textCell(formatNumber(row.churned)),
+    );
+    body.append(tableRow);
+  }
+  if (truncated) {
+    const note = document.createElement("tr");
+    const cell = node("td", "empty-cell", "Showing the first 200 products. Totals above include every product.");
+    cell.colSpan = 6;
+    note.append(cell);
+    body.append(note);
+  }
+}
+
+function formatPercent(ratio) {
+  return `${(Number(ratio) * 100).toFixed(1)}%`;
 }
 
 function formatRevenue(minorUnits, currency) {
@@ -1359,17 +1682,82 @@ function renderTransactions(transactions) {
   }
 }
 
-function renderCustomers(customers) {
-  const body = document.querySelector("#customer-rows");
-  body.replaceChildren();
-  if (!customers.length) {
-    renderEmptyTable("customer-rows", 3, "No customers yet.");
+// customerSearchQuery normalizes the search field the same way the server trims it.
+function customerSearchQuery() {
+  return elements.customerSearch.value.trim();
+}
+
+// loadCustomerPage lists newest customers, or searches them, and appends a later page when asked.
+async function loadCustomerPage(append = false) {
+  if (!state.selectedProject) return;
+  const query = append ? state.customerSearch.query : customerSearchQuery();
+  if (new TextEncoder().encode(query).length > customerSearchMaxBytes) {
+    renderCustomerMessage("Search text is too long.", "Use at most 512 bytes.");
     return;
   }
+  const sequence = state.customerSearch.sequence + 1;
+  state.customerSearch.sequence = sequence;
+  const params = new URLSearchParams({ limit: String(customerPageSize) });
+  if (query) params.set("query", query);
+  if (append && state.customerSearch.nextToken) params.set("page_token", state.customerSearch.nextToken);
+  const project = encodeURIComponent(state.selectedProject);
+  elements.customerLoadMore.disabled = true;
+  elements.customersCount.textContent = query ? "Searching…" : elements.customersCount.textContent;
+  try {
+    const page = await apiRequest(`/v1/admin/projects/${project}/customers?${params}`);
+    if (sequence !== state.customerSearch.sequence) return;
+    state.customerSearch.query = query;
+    state.customerSearch.nextToken = page.next_page_token || "";
+    state.customerSearch.count = (append ? state.customerSearch.count : 0) + (page.customers || []).length;
+    renderCustomers(page.customers || [], { append, query });
+  } catch (error) {
+    if (sequence !== state.customerSearch.sequence) return;
+    if (error.status === 401) {
+      logout();
+      elements.authMessage.textContent = errorMessage(error);
+      return;
+    }
+    state.customerSearch.nextToken = "";
+    renderCustomerMessage("Customers could not be loaded.", errorMessage(error));
+  } finally {
+    if (sequence === state.customerSearch.sequence) elements.customerLoadMore.disabled = false;
+  }
+}
+
+// renderCustomers draws one page of customer rows, each opening the customer detail.
+function renderCustomers(customers, { append = false, query = "" } = {}) {
+  const body = document.querySelector("#customer-rows");
+  if (!append) body.replaceChildren();
+  const more = Boolean(state.customerSearch.nextToken);
+  elements.customerMore.hidden = !more;
+  if (!append && !customers.length) {
+    elements.customersCount.textContent = query ? "No matches" : "Newest first";
+    if (query) {
+      renderCustomerMessage(
+        `No customer matches “${query}”.`,
+        "Search covers external IDs, customer IDs, aliases, and store transaction IDs. Prefixes match external and customer IDs only.",
+      );
+    } else {
+      renderEmptyTable("customer-rows", 3, "No customers yet.");
+    }
+    return;
+  }
+  const count = state.customerSearch.count;
+  elements.customersCount.textContent = query
+    ? `${formatNumber(count)}${more ? "+" : ""} ${count === 1 && !more ? "match" : "matches"}`
+    : `Newest first · ${formatNumber(count)}${more ? "+" : ""} shown`;
   for (const customer of customers) {
     const row = document.createElement("tr");
+    const identity = document.createElement("td");
+    const open = node("button", "row-link");
+    open.type = "button";
+    open.setAttribute("aria-label", `Open customer ${customer.external_id}`);
+    open.append(node("strong", "", customer.external_id), node("code", "", customerIdentityDetail(customer)));
+    open.addEventListener("click", () => openCustomerDetail(customer.id));
+    identity.append(open);
+    if (customer.match) identity.append(node("span", "match-badge", customerMatchLabel(customer.match)));
     row.append(
-      compoundCell(customer.external_id, customerIdentityDetail(customer)),
+      identity,
       textCell(`${customer.allowed_count}/${customer.entitlement_count} allowed`),
       textCell(customer.last_observed_at ? formatTime(customer.last_observed_at) : "—"),
     );
@@ -1377,15 +1765,465 @@ function renderCustomers(customers) {
   }
 }
 
+// renderCustomerMessage replaces the customer rows with a two-line empty or error state.
+function renderCustomerMessage(title, detail) {
+  const body = document.querySelector("#customer-rows");
+  body.replaceChildren();
+  const row = document.createElement("tr");
+  const cell = node("td", "empty-cell");
+  cell.colSpan = 3;
+  cell.append(node("strong", "", title), node("span", "", detail));
+  row.append(cell);
+  body.append(row);
+  elements.customerMore.hidden = true;
+}
+
 function customerIdentityDetail(customer) {
   const details = [customer.id];
   if (customer.merged_into_customer_id) {
-    details.push(customer.merged_into_customer_id);
+    details.push(`merged into ${customer.merged_into_customer_id}`);
   }
   if (customer.alias_count) {
-    details.push(String(customer.alias_count));
+    details.push(`${formatNumber(customer.alias_count)} ${Number(customer.alias_count) === 1 ? "alias" : "aliases"}`);
   }
   return details.join(" · ");
+}
+
+// customerMatchLabel names why a customer matched the search text.
+function customerMatchLabel(match) {
+  return {
+    external_id: "External ID",
+    customer_id: "Customer ID",
+    alias: "Alias",
+    transaction_id: "Transaction ID",
+    original_transaction_id: "Original transaction ID",
+    external_id_prefix: "External ID prefix",
+    customer_id_prefix: "Customer ID prefix",
+  }[match] || match.replaceAll("_", " ");
+}
+
+// openCustomerDetail shows the customer dialog at once and loads its authoritative detail.
+async function openCustomerDetail(customerID) {
+  state.customerDetailID = customerID;
+  state.customerDetail = null;
+  setText("customer-detail-title", "Customer");
+  setText("customer-detail-meta", customerID);
+  elements.customerDetailBody.replaceChildren(node("p", "empty-state", "Loading customer…"));
+  setFormMessage(elements.customerDetailMessage, "");
+  if (!elements.customerDetailDialog.open) elements.customerDetailDialog.showModal();
+  await loadCustomerDetail(customerID);
+}
+
+// loadCustomerDetail refreshes the open customer dialog from the admin API.
+async function loadCustomerDetail(customerID, successMessage = "") {
+  const sequence = state.customerDetailSequence + 1;
+  state.customerDetailSequence = sequence;
+  const project = encodeURIComponent(state.selectedProject);
+  try {
+    const detail = await apiRequest(`/v1/admin/projects/${project}/customers/${encodeURIComponent(customerID)}`);
+    if (sequence !== state.customerDetailSequence || !elements.customerDetailDialog.open) return;
+    state.customerDetail = detail;
+    renderCustomerDetail(detail);
+    setFormMessage(elements.customerDetailMessage, successMessage, successMessage ? "success" : "error");
+  } catch (error) {
+    if (sequence !== state.customerDetailSequence) return;
+    if (error.status === 401) {
+      closeCustomerDetail();
+      logout();
+      elements.authMessage.textContent = errorMessage(error);
+      return;
+    }
+    elements.customerDetailBody.replaceChildren();
+    setFormMessage(
+      elements.customerDetailMessage,
+      error.status === 404 ? "This customer no longer exists in the project." : errorMessage(error),
+    );
+  }
+}
+
+function closeCustomerDetail() {
+  state.customerDetail = null;
+  state.customerDetailID = "";
+  elements.customerDetailBody.replaceChildren();
+  setFormMessage(elements.customerDetailMessage, "");
+  if (elements.customerDetailDialog.open) elements.customerDetailDialog.close();
+}
+
+// renderCustomerDetail draws identity, access sources, manual grants, and the timeline.
+function renderCustomerDetail(detail) {
+  setText("customer-detail-title", detail.customer.external_id);
+  setText("customer-detail-meta", detail.customer.id);
+  elements.customerDetailBody.replaceChildren(
+    customerIdentitySection(detail),
+    customerAccessSection(detail),
+    customerGrantsSection(detail),
+    customerTimelineSection(detail),
+  );
+}
+
+// detailSection creates one titled section with optional heading actions.
+function detailSection(title, count = "", ...actions) {
+  const section = node("section", "detail-section");
+  const heading = node("div", "detail-heading");
+  const titleRow = node("div");
+  titleRow.append(node("h3", "", title));
+  if (count) titleRow.append(node("span", "panel-count", count));
+  heading.append(titleRow, ...actions);
+  section.append(heading);
+  return section;
+}
+
+function customerIdentitySection(detail) {
+  const section = detailSection("Identity");
+  const vitals = node("dl", "detail-vitals");
+  const merged = detail.customer.merged_into_customer_id;
+  vitals.append(
+    detailVital("External ID", detail.customer.external_id, true),
+    detailVital("Customer ID", detail.customer.id, true),
+    detailVital("Created", formatTime(detail.customer.created_at)),
+    detailVital("Identity", merged ? "Merged" : "Canonical"),
+  );
+  section.append(vitals);
+  if (merged) {
+    const note = node("div", "detail-note");
+    const open = node("button", "text-button", "Open canonical customer");
+    open.type = "button";
+    open.addEventListener("click", () => openCustomerDetail(merged));
+    note.append(
+      node("span", "", "Merged into "),
+      node("code", "", merged),
+      node("span", "", ". Access, grants, and the timeline below belong to the canonical customer."),
+      open,
+    );
+    section.append(note);
+  }
+  const list = node("ul", "detail-list");
+  for (const alias of detail.aliases) {
+    const item = node("li");
+    item.append(
+      node("span", "source-badge", "Alias"),
+      node("code", "", alias.external_id),
+      node("small", "", `Added ${formatTime(alias.created_at)} by ${alias.actor_role} key ${alias.actor_key_id}`),
+    );
+    list.append(item);
+  }
+  for (const merge of detail.merges) {
+    const item = node("li");
+    item.append(
+      node("span", "source-badge", "Merge"),
+      node("code", "", `${merge.source_external_id} → ${merge.canonical_customer_id}`),
+      node("small", "", `Merged ${formatTime(merge.created_at)} by admin key ${merge.actor_key_id}`),
+    );
+    list.append(item);
+  }
+  if (!detail.aliases.length && !detail.merges.length) {
+    list.append(node("li", "detail-empty", "No aliases or merges."));
+  }
+  section.append(list);
+  return section;
+}
+
+function detailVital(label, value, identifier = false) {
+  const item = node("div");
+  item.append(node("dt", "", label), node("dd", identifier ? "identifier" : "", value));
+  return item;
+}
+
+function customerAccessSection(detail) {
+  const grant = node("button", "secondary-button compact-button", "Grant access");
+  grant.type = "button";
+  grant.disabled = !detail.grant_options.some((option) => option.application_ids.length);
+  if (grant.disabled) grant.title = "Map a product that grants an entitlement to an application first.";
+  grant.addEventListener("click", openGrantDialog);
+  const section = detailSection("Access", countLabel(detail.entitlements.length, "entitlement"), grant);
+  if (!detail.entitlements.length) {
+    section.append(node("p", "detail-empty", "No entitlement projections yet."));
+    return section;
+  }
+  const wrap = node("div", "detail-table");
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["Entitlement", "Access", "Source", "Ends"]) headRow.append(node("th", "", label));
+  head.append(headRow);
+  const body = document.createElement("tbody");
+  for (const entitlement of detail.entitlements) {
+    const row = document.createElement("tr");
+    const source = document.createElement("td");
+    source.append(node("span", `source-badge ${entitlement.source}`, sourceLabel(entitlement.source)), node("code", "", entitlement.source_id));
+    row.append(
+      compoundCell(entitlement.key, entitlement.entitlement_id),
+      cellBadge(entitlement.access, entitlement.reason),
+      source,
+      textCell(entitlement.effective_ends_at ? formatTime(entitlement.effective_ends_at) : "No end"),
+    );
+    body.append(row);
+  }
+  table.append(head, body);
+  wrap.append(table);
+  section.append(wrap);
+  return section;
+}
+
+// sourceLabel names an access source so store evidence is never confused with other sources.
+function sourceLabel(source) {
+  return {
+    store_observation: "Store verification",
+    import: "Import",
+    manual: "Manual grant",
+  }[source] || String(source || "").replaceAll("_", " ");
+}
+
+function customerGrantsSection(detail) {
+  const section = detailSection("Manual grants", countLabel(detail.manual_grants.length, "grant"));
+  const list = node("ul", "detail-list grant-list");
+  for (const grant of detail.manual_grants) {
+    const item = node("li", `grant-item ${grant.status}`);
+    const summary = node("div", "grant-summary");
+    const title = node("div");
+    title.append(node("strong", "", grant.entitlement_key), node("span", `status-badge ${statusClass(grant.status)}`, grant.status));
+    summary.append(
+      title,
+      node("p", "grant-reason", grant.reason),
+      node("small", "", `${formatTime(grant.effective_starts_at)} to ${formatTime(grant.effective_ends_at)} · ${grant.application_id} · by key ${grant.actor_key_id}`),
+    );
+    if (grant.revoked_at) {
+      summary.append(node("small", "", `Revoked ${formatTime(grant.revoked_at)} by key ${grant.revoked_by_key_id}: ${grant.revocation_reason}`));
+    }
+    item.append(summary);
+    if (grant.status === "active") {
+      const revoke = node("button", "text-button revoke-grant-button", "Revoke");
+      revoke.type = "button";
+      revoke.setAttribute("aria-label", `Revoke manual grant of ${grant.entitlement_key}`);
+      revoke.addEventListener("click", () => openRevokeGrant(grant));
+      item.append(revoke);
+    }
+    list.append(item);
+  }
+  if (!detail.manual_grants.length) {
+    list.append(node("li", "detail-empty", "No manual grants. Store purchases and imports appear under Access."));
+  }
+  section.append(list);
+  return section;
+}
+
+function customerTimelineSection(detail) {
+  const section = detailSection(
+    "Timeline",
+    detail.timeline_truncated ? `Latest ${formatNumber(detail.timeline.length)} · older records exist` : countLabel(detail.timeline.length, "event"),
+  );
+  const list = node("ol", "timeline");
+  for (const event of detail.timeline) list.append(timelineEntry(event));
+  if (!detail.timeline.length) list.append(node("li", "detail-empty", "No stored records yet."));
+  section.append(list);
+  return section;
+}
+
+// timelineEntry renders one stored record with text labels for every state.
+function timelineEntry(event) {
+  const item = node("li", `timeline-item ${event.kind.replaceAll("_", "-")}`);
+  const time = node("time", "", formatTime(event.occurred_at));
+  time.dateTime = event.occurred_at;
+  const content = node("div", "timeline-content");
+  const title = node("div", "timeline-title");
+  const lines = [];
+  const identifiers = [];
+  let badge = "";
+  let badgeNote = "";
+  switch (event.kind) {
+    case "customer_created":
+      title.append(node("strong", "", "Customer created"));
+      identifiers.push(event.external_id, event.customer_id);
+      break;
+    case "alias_added":
+      title.append(node("strong", "", "Alias added"));
+      identifiers.push(event.external_id);
+      lines.push(`By ${event.actor_role || "admin"} key ${event.actor_key_id}`);
+      break;
+    case "customer_merged":
+      title.append(node("strong", "", "Customer merged"));
+      lines.push(`${event.external_id} merged into this customer by admin key ${event.actor_key_id}`);
+      identifiers.push(event.related_customer_id, event.source_id);
+      break;
+    case "purchase_observed":
+      title.append(node("strong", "", "Store observation"));
+      badge = event.lifecycle_state;
+      lines.push(
+        event.previous_lifecycle_state && event.previous_lifecycle_state !== event.lifecycle_state
+          ? `Lifecycle ${event.previous_lifecycle_state.replaceAll("_", " ")} to ${event.lifecycle_state.replaceAll("_", " ")}`
+          : `Lifecycle ${event.lifecycle_state.replaceAll("_", " ")}`,
+        `Access ${event.access} · ${String(event.access_reason || "").replaceAll("_", " ")}${event.effective_ends_at ? ` · ends ${formatTime(event.effective_ends_at)}` : ""}`,
+      );
+      identifiers.push(event.provider_product_id, event.application_id, event.source_id);
+      break;
+    case "import_grant_recorded":
+      title.append(node("strong", "", "Import grant"));
+      badge = event.access;
+      badgeNote = event.access_reason;
+      lines.push(`${event.entitlement_key} from ${event.origin_store}. Imported history, not store verification.`);
+      identifiers.push(event.source_id);
+      break;
+    case "manual_grant_created":
+      title.append(node("strong", "", "Manual grant"));
+      lines.push(`${event.entitlement_key} until ${formatTime(event.effective_ends_at)} · by key ${event.actor_key_id}`, `Reason: ${event.reason}`);
+      identifiers.push(event.source_id);
+      break;
+    case "manual_grant_revoked":
+      title.append(node("strong", "", "Manual grant revoked"));
+      badge = "revoked";
+      lines.push(`${event.entitlement_key} · by key ${event.actor_key_id}`, `Reason: ${event.reason}`);
+      identifiers.push(event.source_id);
+      break;
+    case "entitlement_changed":
+      title.append(node("strong", "", "Entitlement changed"));
+      badge = event.access;
+      badgeNote = event.access_reason;
+      lines.push(`${event.entitlement_key}${event.version ? ` · version ${event.version}` : ""} · source ${sourceLabel(event.source).toLowerCase()}`);
+      lines.push(event.status ? `Webhook ${event.status}` : "No webhook record");
+      identifiers.push(event.source_id);
+      break;
+    case "webhook_delivered":
+    case "webhook_failed":
+      title.append(node("strong", "", event.kind === "webhook_delivered" ? "Webhook delivered" : "Webhook failed"));
+      badge = event.kind === "webhook_delivered" ? "delivered" : "failed";
+      badgeNote = event.error_code || "";
+      lines.push(`${event.entitlement_key}${event.version ? ` · version ${event.version}` : ""} to ${event.application_id}`);
+      identifiers.push(event.source_id);
+      break;
+    case "reconciliation":
+      title.append(node("strong", "", "Store re-check"));
+      badge = event.status;
+      badgeNote = event.error_code || "";
+      lines.push(`Reconciliation job for ${event.application_id}`);
+      identifiers.push(event.source_id);
+      break;
+    default:
+      title.append(node("strong", "", event.kind.replaceAll("_", " ")));
+  }
+  if (badge) {
+    title.append(node("span", `status-badge ${statusClass(badge)}`, String(badge).replaceAll("_", " ")));
+    if (badgeNote) title.append(node("small", "", String(badgeNote).replaceAll("_", " ")));
+  }
+  content.append(title);
+  for (const line of lines) content.append(node("p", "", line));
+  const ids = identifiers.filter(Boolean);
+  if (ids.length) content.append(node("code", "", ids.join(" · ")));
+  item.append(time, content);
+  return item;
+}
+
+// openGrantDialog prepares a manual grant for the canonical customer of the open detail.
+function openGrantDialog() {
+  const detail = state.customerDetail;
+  if (!detail) return;
+  elements.grantForm.reset();
+  setFormMessage(elements.grantMessage, "");
+  state.grantIdempotencyKey = newIdempotencyKey();
+  elements.grantOption.replaceChildren();
+  detail.grant_options.forEach((option, index) => {
+    if (!option.application_ids.length) return;
+    const label = `${option.entitlement_key} · via ${option.product_id} (${productKindLabel(option.product_kind)})`;
+    const item = node("option", "", label);
+    item.value = String(index);
+    elements.grantOption.append(item);
+  });
+  syncGrantApplications();
+  syncGrantDuration();
+  const tomorrow = new Date(Date.now() + 86400000);
+  elements.grantEndsOn.min = localDateValue(tomorrow);
+  elements.grantDialog.showModal();
+  elements.grantOption.focus();
+}
+
+// syncGrantApplications lists only the applications that map the chosen product; the server refuses others.
+function syncGrantApplications() {
+  const option = state.customerDetail?.grant_options[Number(elements.grantOption.value || 0)];
+  const providers = new Map((state.overview?.applications || []).map((application) => [application.id, application.provider]));
+  elements.grantApplication.replaceChildren();
+  for (const applicationID of option?.application_ids || []) {
+    const provider = providers.get(applicationID);
+    const item = node("option", "", provider ? `${applicationID} · ${providerLabel(provider)}` : applicationID);
+    item.value = applicationID;
+    elements.grantApplication.append(item);
+  }
+}
+
+function syncGrantDuration() {
+  const custom = elements.grantDuration.value === "date";
+  elements.grantUntilLabel.hidden = !custom;
+  elements.grantEndsOn.required = custom;
+  elements.grantEndsOn.disabled = !custom;
+}
+
+function localDateValue(date) {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function newIdempotencyKey() {
+  if (window.crypto?.randomUUID) return `dashboard-${window.crypto.randomUUID()}`;
+  const bytes = new Uint8Array(16);
+  window.crypto.getRandomValues(bytes);
+  return `dashboard-${Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
+// submitManualGrant sends one audited grant; the stored idempotency key makes a resubmit safe.
+async function submitManualGrant() {
+  const detail = state.customerDetail;
+  const option = detail?.grant_options[Number(elements.grantOption.value)];
+  if (!detail || !option) return;
+  const data = Object.fromEntries(new FormData(elements.grantForm));
+  const body = {
+    idempotency_key: state.grantIdempotencyKey,
+    entitlement_id: option.entitlement_id,
+    product_id: option.product_id,
+    application_id: data.application_id,
+    reason: String(data.reason || "").trim(),
+  };
+  if (elements.grantDuration.value === "date") {
+    const endsAt = new Date(`${data.ends_on}T23:59:59`);
+    if (Number.isNaN(endsAt.valueOf()) || endsAt <= new Date()) {
+      throw Object.assign(new Error("Choose a date in the future."), { status: 400 });
+    }
+    body.ends_at = endsAt.toISOString();
+  } else {
+    body.duration_days = Number(elements.grantDuration.value);
+  }
+  const project = encodeURIComponent(state.selectedProject);
+  const customer = encodeURIComponent(detail.canonical_customer_id);
+  return apiRequest(`/v1/admin/projects/${project}/customers/${customer}/manual-grants`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+function openRevokeGrant(grant) {
+  state.pendingRevokeGrant = grant;
+  elements.revokeGrantForm.reset();
+  setFormMessage(elements.revokeGrantMessage, "");
+  elements.revokeGrantIdentity.textContent = `${grant.entitlement_key} · ${grant.id}`;
+  elements.revokeGrantDialog.showModal();
+  elements.revokeGrantForm.querySelector("input[name='reason']").focus();
+}
+
+function closeRevokeGrant() {
+  state.pendingRevokeGrant = null;
+  elements.revokeGrantIdentity.textContent = "";
+  if (elements.revokeGrantDialog.open) elements.revokeGrantDialog.close();
+}
+
+// manualGrantOutcome explains what a grant or revocation changed without implying store evidence.
+function manualGrantOutcome(result, action) {
+  if (result.replay) return `This ${action} was already recorded. Nothing changed.`;
+  if (!result.projections_changed) {
+    return action === "grant"
+      ? "Grant recorded. Another source already gives equal or longer access, so current access did not change."
+      : "Revocation recorded. Current access did not change.";
+  }
+  return action === "grant"
+    ? `Access granted. ${countLabel(result.webhooks_enqueued, "webhook")} queued.`
+    : `Grant revoked. ${countLabel(result.webhooks_enqueued, "webhook")} queued.`;
 }
 
 function renderWebhooks(events) {
@@ -1510,10 +2348,17 @@ async function logout() {
   state.overview = null;
   state.apiKeys = [];
   state.pendingRevokeKey = null;
+  state.customerDetail = null;
+  state.customerDetailID = "";
+  state.pendingRevokeGrant = null;
+  window.clearTimeout(state.customerSearch.timer);
+  state.customerSearch = { query: "", nextToken: "", count: 0, sequence: state.customerSearch.sequence + 1, timer: 0 };
+  elements.customerSearch.value = "";
   elements.credentialForm.reset();
   elements.webhookForm.reset();
   elements.revealedKey.value = "";
   for (const dialog of [
+    elements.revokeGrantDialog, elements.grantDialog, elements.customerDetailDialog,
     elements.applicationDialog, elements.apiKeyDialog, elements.revokeKeyDialog,
     elements.customerDialog, elements.keyDialog, elements.setupDialog,
   ]) {
@@ -1799,6 +2644,99 @@ elements.customerForm.addEventListener("submit", async (event) => {
   }
 });
 
+elements.customerSearchForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  window.clearTimeout(state.customerSearch.timer);
+  loadCustomerPage();
+});
+
+elements.customerSearch.addEventListener("input", () => {
+  window.clearTimeout(state.customerSearch.timer);
+  state.customerSearch.timer = window.setTimeout(() => {
+    if (customerSearchQuery() !== state.customerSearch.query) loadCustomerPage();
+  }, customerSearchDelayMs);
+});
+
+elements.customerLoadMore.addEventListener("click", () => loadCustomerPage(true));
+
+document.querySelector("#close-customer-detail").addEventListener("click", closeCustomerDetail);
+elements.customerDetailDialog.addEventListener("close", () => {
+  state.customerDetail = null;
+  state.customerDetailID = "";
+  elements.customerDetailBody.replaceChildren();
+});
+
+elements.grantOption.addEventListener("change", syncGrantApplications);
+elements.grantDuration.addEventListener("change", syncGrantDuration);
+// A changed request is a new grant, so it must not reuse the replay key of the request it replaces.
+elements.grantForm.addEventListener("input", () => {
+  if (elements.grantDialog.open) state.grantIdempotencyKey = newIdempotencyKey();
+});
+document.querySelector("#close-grant").addEventListener("click", () => elements.grantDialog.close());
+document.querySelector("#cancel-grant").addEventListener("click", () => elements.grantDialog.close());
+elements.grantDialog.addEventListener("close", () => {
+  elements.grantForm.reset();
+  setFormMessage(elements.grantMessage, "");
+  state.grantIdempotencyKey = "";
+});
+
+elements.grantForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setFormBusy(elements.grantForm, true);
+  setFormMessage(elements.grantMessage, "Recording grant…", "working");
+  try {
+    const result = await submitManualGrant();
+    const customerID = state.customerDetailID;
+    elements.grantDialog.close();
+    await loadCustomerDetail(customerID, manualGrantOutcome(result, "grant"));
+    loadOverview(state.selectedProject);
+  } catch (error) {
+    setFormMessage(
+      elements.grantMessage,
+      error.status === 403 ? "Manual grants need a stored admin key. Sign in with one instead of the bootstrap key." : errorMessage(error),
+    );
+  } finally {
+    setFormBusy(elements.grantForm, false);
+  }
+});
+
+document.querySelector("#close-revoke-grant").addEventListener("click", closeRevokeGrant);
+document.querySelector("#cancel-revoke-grant").addEventListener("click", closeRevokeGrant);
+elements.revokeGrantDialog.addEventListener("close", () => {
+  state.pendingRevokeGrant = null;
+  elements.revokeGrantIdentity.textContent = "";
+  setFormMessage(elements.revokeGrantMessage, "");
+});
+
+elements.revokeGrantForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const grant = state.pendingRevokeGrant;
+  const detail = state.customerDetail;
+  if (!grant || !detail) return;
+  setFormBusy(elements.revokeGrantForm, true);
+  setFormMessage(elements.revokeGrantMessage, "Revoking grant…", "working");
+  try {
+    const reason = String(new FormData(elements.revokeGrantForm).get("reason") || "").trim();
+    const project = encodeURIComponent(state.selectedProject);
+    const customer = encodeURIComponent(detail.canonical_customer_id);
+    const result = await apiRequest(
+      `/v1/admin/projects/${project}/customers/${customer}/manual-grants/${encodeURIComponent(grant.id)}:revoke`,
+      { method: "POST", body: JSON.stringify({ reason }) },
+    );
+    const customerID = state.customerDetailID;
+    closeRevokeGrant();
+    await loadCustomerDetail(customerID, manualGrantOutcome(result, "revocation"));
+    loadOverview(state.selectedProject);
+  } catch (error) {
+    setFormMessage(
+      elements.revokeGrantMessage,
+      error.status === 403 ? "Revoking needs a stored admin key. Sign in with one instead of the bootstrap key." : errorMessage(error),
+    );
+  } finally {
+    setFormBusy(elements.revokeGrantForm, false);
+  }
+});
+
 document.querySelector("#copy-key").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(elements.revealedKey.value);
@@ -1816,6 +2754,22 @@ elements.keyDialog.addEventListener("close", () => {
   elements.revealedKey.value = "";
   elements.copyMessage.textContent = "";
 });
+
+document.querySelector("#subscription-environment").addEventListener("change", (event) => {
+  state.subscriptionEnvironment = event.currentTarget.value;
+  if (state.selectedProject) loadSubscriptionMetrics(state.selectedProject);
+});
+
+for (const button of document.querySelectorAll(".segmented-control [data-window-days]")) {
+  button.addEventListener("click", () => {
+    state.subscriptionWindowDays = Number(button.dataset.windowDays);
+    if (state.selectedProject) {
+      loadSubscriptionMetrics(state.selectedProject);
+    } else {
+      syncSubscriptionControls([]);
+    }
+  });
+}
 
 clearLegacyBearerStorage();
 syncSetupProvider();

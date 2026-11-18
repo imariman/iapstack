@@ -324,6 +324,107 @@ func TestAdapterNormalizesSandboxGraceSubscription(t *testing.T) {
 	}
 }
 
+// TestAdapterRecordsSignedOfferPhase verifies Google's offerPhase union reaches the normalized observation.
+func TestAdapterRecordsSignedOfferPhase(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentSandbox)
+	payload := map[string]any{
+		"kind": "androidpublisher#subscriptionPurchaseV2",
+		"lineItems": []map[string]any{{
+			"productId": fixtureProductID, "expiryTime": fixture.now.Add(7 * 24 * time.Hour).Format(time.RFC3339Nano),
+			"latestSuccessfulOrderId": "GPA.3234-5678-9012-34567",
+			"autoRenewingPlan":        map[string]any{"autoRenewEnabled": true},
+			"offerDetails":            map[string]any{"basePlanId": "monthly", "offerId": "trial-7d", "offerTags": []string{}},
+			"offerPhase":              map[string]any{"freeTrial": map[string]any{}},
+		}},
+		"startTime": fixture.now.Add(-time.Hour).Format(time.RFC3339Nano), "subscriptionState": subscriptionStateActive,
+		"latestOrderId": "GPA.3234-5678-9012-34567", "testPurchase": map[string]any{},
+		"acknowledgementState":       acknowledgementStateAcknowledged,
+		"externalAccountIdentifiers": map[string]any{"obfuscatedExternalAccountId": fixtureAccountID},
+	}
+	fixture.adapter.client.Transport = providerTransport(t, fixture, payload)
+	result, err := fixture.adapter.Verify(context.Background(), verificationRequest(t, core.EnvironmentSandbox, core.ProductKindSubscription))
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if phase := result.Observations[0].OfferPhase; phase != core.OfferPhaseFreeTrial {
+		t.Fatalf("Verify() offer phase = %q, want free_trial", phase)
+	}
+}
+
+// TestCancellationReasonMapsGoogleUnion verifies every documented CanceledStateContext member and the absent case.
+func TestCancellationReasonMapsGoogleUnion(t *testing.T) {
+	t.Parallel()
+
+	for body, want := range map[string]core.CancellationReason{
+		`{}`: core.CancellationReasonNotRecorded,
+		`{"canceledStateContext":{"userInitiatedCancellation":{"cancelSurveyResult":{"reason":"CANCEL_SURVEY_REASON_NOT_ENOUGH_USAGE"}}}}`: core.CancellationReasonCustomer,
+		`{"canceledStateContext":{"systemInitiatedCancellation":{}}}`:                                                                      core.CancellationReasonSystem,
+		`{"canceledStateContext":{"developerInitiatedCancellation":{}}}`:                                                                   core.CancellationReasonDeveloper,
+		`{"canceledStateContext":{"replacementCancellation":{}}}`:                                                                          core.CancellationReasonReplacement,
+		`{"canceledStateContext":{"futureCancellation":{}}}`:                                                                               core.CancellationReasonNotRecorded,
+	} {
+		var purchase subscriptionPurchase
+		if err := json.Unmarshal([]byte(body), &purchase); err != nil {
+			t.Fatalf("Unmarshal(%s) error = %v", body, err)
+		}
+		if got := cancellationReason(purchase.CanceledStateContext); got != want {
+			t.Errorf("cancellationReason(%s) = %q, want %q", body, got, want)
+		}
+	}
+}
+
+// TestAdapterRecordsReplacementCancellation verifies an expired replaced token carries its signed cancellation context.
+func TestAdapterRecordsReplacementCancellation(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAdapterFixture(t, core.EnvironmentSandbox)
+	payload := map[string]any{
+		"kind": "androidpublisher#subscriptionPurchaseV2",
+		"lineItems": []map[string]any{{
+			"productId": fixtureProductID, "expiryTime": fixture.now.Add(-time.Hour).Format(time.RFC3339Nano),
+			"latestSuccessfulOrderId": "GPA.4234-5678-9012-34567",
+			"autoRenewingPlan":        map[string]any{"autoRenewEnabled": false},
+		}},
+		"startTime": fixture.now.Add(-30 * 24 * time.Hour).Format(time.RFC3339Nano), "subscriptionState": subscriptionStateExpired,
+		"latestOrderId": "GPA.4234-5678-9012-34567", "testPurchase": map[string]any{},
+		"acknowledgementState":       acknowledgementStateAcknowledged,
+		"externalAccountIdentifiers": map[string]any{"obfuscatedExternalAccountId": fixtureAccountID},
+		"canceledStateContext":       map[string]any{"replacementCancellation": map[string]any{}},
+	}
+	fixture.adapter.client.Transport = providerTransport(t, fixture, payload)
+	result, err := fixture.adapter.Verify(context.Background(), verificationRequest(t, core.EnvironmentSandbox, core.ProductKindSubscription))
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if reason := result.Observations[0].CancellationReason; reason != core.CancellationReasonReplacement {
+		t.Fatalf("Verify() cancellation reason = %q, want replacement", reason)
+	}
+}
+
+// TestOfferPhaseMapsGoogleUnion verifies every documented OfferPhase member and the absent case.
+func TestOfferPhaseMapsGoogleUnion(t *testing.T) {
+	t.Parallel()
+
+	for body, want := range map[string]core.OfferPhase{
+		`{}`:                              core.OfferPhaseNotRecorded,
+		`{"offerPhase":{"basePrice":{}}}`: core.OfferPhaseBase,
+		`{"offerPhase":{"freeTrial":{}}}`: core.OfferPhaseFreeTrial,
+		`{"offerPhase":{"introductoryPrice":{}}}`:                                    core.OfferPhaseDiscounted,
+		`{"offerPhase":{"prorationPeriod":{"originalOfferPhaseType":"FREE_TRIAL"}}}`: core.OfferPhaseProration,
+		`{"offerPhase":{"futurePhase":{}}}`:                                          core.OfferPhaseUnknown,
+	} {
+		var item subscriptionLineItem
+		if err := json.Unmarshal([]byte(body), &item); err != nil {
+			t.Fatalf("Unmarshal(%s) error = %v", body, err)
+		}
+		if got := offerPhase(item.OfferPhase); got != want {
+			t.Errorf("offerPhase(%s) = %q, want %q", body, got, want)
+		}
+	}
+}
+
 // TestAdapterReconcilesAuthoritativeAccountHold verifies missed RTDN delivery converges through Android Publisher.
 func TestAdapterReconcilesAuthoritativeAccountHold(t *testing.T) {
 	t.Parallel()
@@ -822,13 +923,24 @@ func TestAdapterFollowsItemReplacementOnOneItemPurchase(t *testing.T) {
 		t.Fatalf("Reconcile() replaced observation = %#v, want expired stored product without a period", replaced)
 	}
 
+	// Naming the new product must still expire the replaced one (#251): that verify/reconcile
+	// is what records the replacement, so dropping the snapshot left the old product allowed.
 	request.ExpectedProducts = []core.ProviderProductID{fixtureReplacementProductID}
 	result, err = fixture.adapter.Reconcile(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Reconcile(expected replacement) error = %v", err)
 	}
-	if len(result.Observations) != 1 || result.Observations[0].ProductID != fixtureReplacementProductID {
-		t.Fatalf("Reconcile(expected replacement) observations = %#v, want only the current item", result.Observations)
+	if len(result.Observations) != 2 || result.Observations[0].ProductID != fixtureReplacementProductID ||
+		result.Observations[0].Access != core.AccessAllowed {
+		t.Fatalf("Reconcile(expected replacement) observations = %#v, want allowed new and denied old", result.Observations)
+	}
+	if denied := result.Observations[1]; denied.ProductID != fixtureProductID ||
+		denied.State != core.LifecycleExpired || denied.Access != core.AccessDenied || denied.ID != replaced.ID {
+		t.Fatalf("Reconcile(expected replacement) replaced = %#v, want same denied snapshot %q", denied, replaced.ID)
+	}
+	// The snapshot is superseded, so a replaced product outside the catalog cannot fail this purchase.
+	if len(result.SupersededObservations) != 1 || result.SupersededObservations[0] != replaced.ID {
+		t.Fatalf("Reconcile(expected replacement) SupersededObservations = %v, want %q", result.SupersededObservations, replaced.ID)
 	}
 	verify := verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription)
 	verify.ClaimedProducts = []core.ProviderProductID{fixtureReplacementProductID}
@@ -836,8 +948,26 @@ func TestAdapterFollowsItemReplacementOnOneItemPurchase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify(claim replacement) error = %v", err)
 	}
-	if len(verified.Observations) != 1 {
-		t.Fatalf("Verify(claim replacement) observations = %#v, want only the current item", verified.Observations)
+	if len(verified.Observations) != 2 || verified.Observations[0].ProductID != fixtureReplacementProductID ||
+		verified.Observations[0].Access != core.AccessAllowed ||
+		verified.Observations[1].ProductID != fixtureProductID ||
+		verified.Observations[1].Access != core.AccessDenied || verified.Observations[1].ID != replaced.ID {
+		t.Fatalf("Verify(claim replacement) observations = %#v, want allowed new and same denied old", verified.Observations)
+	}
+
+	// A following renewal of the new item reuses the same replaced snapshot instead of minting a second one.
+	current["expiryTime"] = newExpiry.Add(30 * 24 * time.Hour).Format(time.RFC3339)
+	current["latestSuccessfulOrderId"] = "GPA.3372-8415-2906-11223"
+	fixture.adapter.client.Transport = providerTransport(t, fixture, payload)
+	renewed, err := fixture.adapter.Reconcile(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Reconcile(renewed replacement) error = %v", err)
+	}
+	if len(renewed.Observations) != 2 || renewed.Observations[1].ID != replaced.ID {
+		t.Fatalf("Reconcile(renewed replacement) observations = %#v, want replaced snapshot %q reused", renewed.Observations, replaced.ID)
+	}
+	if renewed.Observations[0].ID == result.Observations[0].ID {
+		t.Fatal("renewal reused the current item observation ID, so the renewal fixture did not change the current item")
 	}
 	request.ExpectedProducts = []core.ProviderProductID{fixtureProductID}
 

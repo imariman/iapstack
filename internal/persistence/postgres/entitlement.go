@@ -32,7 +32,31 @@ const (
 	), '')`
 	// importLineageSQL derives the purchase lineage key of the import grant aliased ig.
 	importLineageSQL = `'import:' || encode(ig.lineage_fingerprint, 'hex')`
-	// entitlementSelectSQL reads one projection from either its observation or its import grant.
+	// manualLineageSQL derives the access source key of the manual grant aliased mg.
+	// Every operator grant is its own source, so a revocation never touches another grant.
+	manualLineageSQL = `'manual:' || mg.id`
+	// manualAccessSQL derives a manual grant's access at refresh time: allowed until revoked or ended, then denied.
+	// A grant's end is known in advance, so an ended grant never competes as allowed with later store evidence.
+	manualAccessSQL = `CASE
+		WHEN mg.revoked_at IS NULL AND mg.effective_ends_at > CURRENT_TIMESTAMP THEN 'allowed'
+		ELSE 'denied'
+	END`
+	// manualReasonSQL derives a manual grant's access reason: manual_grant while it allows access,
+	// revoked after an early revocation, and expired after its end.
+	manualReasonSQL = `CASE
+		WHEN mg.revoked_at IS NOT NULL THEN 'revoked'
+		WHEN mg.effective_ends_at <= CURRENT_TIMESTAMP THEN 'expired'
+		ELSE 'manual_grant'
+	END`
+	// manualEndSQL ends a revoked grant's period at its revocation when that falls inside the period.
+	manualEndSQL = `CASE
+		WHEN mg.revoked_at IS NOT NULL
+			AND mg.revoked_at > mg.effective_starts_at
+			AND mg.revoked_at < mg.effective_ends_at
+		THEN mg.revoked_at
+		ELSE mg.effective_ends_at
+	END`
+	// entitlementSelectSQL reads one projection from its observation, import grant, or manual grant.
 	entitlementSelectSQL = `
 		SELECT
 			ce.project_id,
@@ -43,9 +67,14 @@ const (
 			ce.source_kind,
 			ce.source_observation_id,
 			ce.source_import_id,
-			COALESCE(po.application_id, ig.application_id),
+			ce.source_manual_grant_id,
+			COALESCE(po.application_id, ig.application_id, mg.application_id),
 			ce.source_product_id,
-			CASE WHEN ce.source_kind = 'import' THEN ` + importLineageSQL + ` ELSE ` + observationLineageSQL + ` END,
+			CASE
+				WHEN ce.source_kind = 'import' THEN ` + importLineageSQL + `
+				WHEN ce.source_kind = 'manual' THEN ` + manualLineageSQL + `
+				ELSE ` + observationLineageSQL + `
+			END,
 			ce.access_status,
 			ce.access_reason,
 			ce.effective_starts_at,
@@ -66,9 +95,17 @@ const (
 			AND ig.customer_id = ce.source_customer_id
 			AND ig.product_id = ce.source_product_id
 			AND ig.entitlement_id = ce.entitlement_id
+		LEFT JOIN manual_grants AS mg
+			ON ce.source_kind = 'manual'
+			AND mg.id = ce.source_manual_grant_id
+			AND mg.project_id = ce.project_id
+			AND mg.customer_id = ce.source_customer_id
+			AND mg.product_id = ce.source_product_id
+			AND mg.entitlement_id = ce.entitlement_id
 		WHERE (
 			(ce.source_kind = 'store_observation' AND po.id IS NOT NULL)
 			OR (ce.source_kind = 'import' AND ig.id IS NOT NULL)
+			OR (ce.source_kind = 'manual' AND mg.id IS NOT NULL)
 		) AND `
 )
 
@@ -82,6 +119,7 @@ type entitlementRow struct {
 	sourceKind          string
 	sourceObservationID string
 	sourceImportID      string
+	sourceManualGrantID string
 	sourceApplicationID string
 	sourceProductID     string
 	sourceLineage       string
@@ -100,6 +138,7 @@ type entitlementSourceRow struct {
 	sourceKind          string
 	sourceObservationID string
 	sourceImportID      string
+	sourceManualGrantID string
 	sourceApplicationID string
 	sourceProductID     string
 	sourceLineage       string
@@ -151,13 +190,14 @@ func (repository *transaction) PutEntitlement(
 			source_kind,
 			source_observation_id,
 			source_import_id,
+			source_manual_grant_id,
 			source_product_id,
 			source_customer_id,
 			access_status,
 			access_reason,
 			effective_starts_at,
 			effective_ends_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (customer_id, entitlement_id) DO NOTHING
 		RETURNING version
 	`,
@@ -167,6 +207,7 @@ func (repository *transaction) PutEntitlement(
 		projection.SourceKind,
 		nullableText(string(projection.SourceObservationID)),
 		nullableText(projection.SourceImportID),
+		nullableText(projection.SourceManualGrantID),
 		projection.SourceProductID,
 		projection.SourceCustomerID,
 		projection.Access,
@@ -205,23 +246,25 @@ func (repository *transaction) PutEntitlement(
 		SET source_kind = $1,
 			source_observation_id = $2,
 			source_import_id = $3,
-			source_product_id = $4,
-			source_customer_id = $5,
-			access_status = $6,
-			access_reason = $7,
-			effective_starts_at = $8,
-			effective_ends_at = $9,
+			source_manual_grant_id = $4,
+			source_product_id = $5,
+			source_customer_id = $6,
+			access_status = $7,
+			access_reason = $8,
+			effective_starts_at = $9,
+			effective_ends_at = $10,
 			version = version + 1,
 			updated_at = now()
-		WHERE project_id = $10
-			AND customer_id = $11
-			AND entitlement_id = $12
-			AND version = $13
+		WHERE project_id = $11
+			AND customer_id = $12
+			AND entitlement_id = $13
+			AND version = $14
 		RETURNING version
 	`,
 		projection.SourceKind,
 		nullableText(string(projection.SourceObservationID)),
 		nullableText(projection.SourceImportID),
+		nullableText(projection.SourceManualGrantID),
 		projection.SourceProductID,
 		projection.SourceCustomerID,
 		projection.Access,
@@ -252,7 +295,7 @@ func (repository *transaction) PutEntitlement(
 }
 
 // CustomerEntitlementSources returns the latest observation or import grant for every purchase lineage
-// of every application product in the customer closure.
+// of every application product in the customer closure, plus every manual grant as its own source.
 // Observation times are compared only inside one lineage, so a refreshed expired lineage cannot hide a
 // later purchase of the same product. Equal times prefer an allowed snapshot, so a merged source grant
 // is not hidden by a denied twin.
@@ -271,8 +314,8 @@ func (repository *transaction) CustomerEntitlementSources(
 	}
 	rows, err := repository.tx.Query(ctx, `
 		SELECT project_id, customer_id, entitlement_id, source_kind, source_observation_id,
-			source_import_id, application_id, product_id, source_lineage, access_status, access_reason,
-			effective_starts_at, effective_ends_at, observed_at
+			source_import_id, source_manual_grant_id, application_id, product_id, source_lineage,
+			access_status, access_reason, effective_starts_at, effective_ends_at, observed_at
 		FROM (
 			SELECT DISTINCT ON (pe.entitlement_id, po.application_id, po.product_id, lineage.source_lineage)
 				po.project_id,
@@ -281,6 +324,7 @@ func (repository *transaction) CustomerEntitlementSources(
 				'store_observation'::text AS source_kind,
 				po.id AS source_observation_id,
 				NULL::text AS source_import_id,
+				NULL::text AS source_manual_grant_id,
 				po.application_id,
 				po.product_id,
 				lineage.source_lineage,
@@ -301,8 +345,8 @@ func (repository *transaction) CustomerEntitlementSources(
 		) AS observations
 		UNION ALL
 		SELECT project_id, customer_id, entitlement_id, source_kind, source_observation_id,
-			source_import_id, application_id, product_id, source_lineage, access_status, access_reason,
-			effective_starts_at, effective_ends_at, observed_at
+			source_import_id, source_manual_grant_id, application_id, product_id, source_lineage,
+			access_status, access_reason, effective_starts_at, effective_ends_at, observed_at
 		FROM (
 			SELECT DISTINCT ON (ig.entitlement_id, ig.application_id, ig.product_id, ig.lineage_fingerprint)
 				ig.project_id,
@@ -311,6 +355,7 @@ func (repository *transaction) CustomerEntitlementSources(
 				'import'::text AS source_kind,
 				NULL::text AS source_observation_id,
 				ig.id AS source_import_id,
+				NULL::text AS source_manual_grant_id,
 				ig.application_id,
 				ig.product_id,
 				`+importLineageSQL+` AS source_lineage,
@@ -325,6 +370,25 @@ func (repository *transaction) CustomerEntitlementSources(
 				ig.observed_at DESC,
 				ig.id ASC
 		) AS imports
+		UNION ALL
+		SELECT
+			mg.project_id,
+			mg.customer_id,
+			mg.entitlement_id,
+			'manual'::text AS source_kind,
+			NULL::text AS source_observation_id,
+			NULL::text AS source_import_id,
+			mg.id AS source_manual_grant_id,
+			mg.application_id,
+			mg.product_id,
+			`+manualLineageSQL+` AS source_lineage,
+			`+manualAccessSQL+` AS access_status,
+			`+manualReasonSQL+` AS access_reason,
+			mg.effective_starts_at,
+			`+manualEndSQL+` AS effective_ends_at,
+			COALESCE(mg.revoked_at, mg.created_at) AS observed_at
+		FROM manual_grants AS mg
+		WHERE mg.project_id = $1 AND mg.customer_id = ANY($2)
 	`, projectID, members)
 	if err != nil {
 		return nil, classifyError("load customer entitlement sources", err)
@@ -397,6 +461,7 @@ func (repository *transaction) loadCustomerEntitlement(
 	row := entitlementRow{}
 	var observationID pgtype.Text
 	var importID pgtype.Text
+	var manualGrantID pgtype.Text
 	err := repository.tx.QueryRow(ctx, entitlementSelectSQL+`
 		ce.project_id = $1 AND ce.customer_id = $2 AND ce.entitlement_id = $3
 	`, projectID, customerID, entitlementID).Scan(
@@ -408,6 +473,7 @@ func (repository *transaction) loadCustomerEntitlement(
 		&row.sourceKind,
 		&observationID,
 		&importID,
+		&manualGrantID,
 		&row.sourceApplicationID,
 		&row.sourceProductID,
 		&row.sourceLineage,
@@ -419,6 +485,7 @@ func (repository *transaction) loadCustomerEntitlement(
 	)
 	row.sourceObservationID = textValue(observationID)
 	row.sourceImportID = textValue(importID)
+	row.sourceManualGrantID = textValue(manualGrantID)
 	if err != nil {
 		return persistence.CustomerEntitlement{}, classifyError("load entitlement projection", err)
 	}
@@ -430,6 +497,7 @@ func scanEntitlementRow(rows pgx.Rows) (entitlementRow, error) {
 	row := entitlementRow{}
 	var observationID pgtype.Text
 	var importID pgtype.Text
+	var manualGrantID pgtype.Text
 	if err := rows.Scan(
 		&row.projectID,
 		&row.customerID,
@@ -439,6 +507,7 @@ func scanEntitlementRow(rows pgx.Rows) (entitlementRow, error) {
 		&row.sourceKind,
 		&observationID,
 		&importID,
+		&manualGrantID,
 		&row.sourceApplicationID,
 		&row.sourceProductID,
 		&row.sourceLineage,
@@ -452,6 +521,7 @@ func scanEntitlementRow(rows pgx.Rows) (entitlementRow, error) {
 	}
 	row.sourceObservationID = textValue(observationID)
 	row.sourceImportID = textValue(importID)
+	row.sourceManualGrantID = textValue(manualGrantID)
 	return row, nil
 }
 
@@ -460,6 +530,7 @@ func scanEntitlementSourceRow(rows pgx.Rows) (entitlementSourceRow, error) {
 	row := entitlementSourceRow{}
 	var observationID pgtype.Text
 	var importID pgtype.Text
+	var manualGrantID pgtype.Text
 	if err := rows.Scan(
 		&row.projectID,
 		&row.customerID,
@@ -467,6 +538,7 @@ func scanEntitlementSourceRow(rows pgx.Rows) (entitlementSourceRow, error) {
 		&row.sourceKind,
 		&observationID,
 		&importID,
+		&manualGrantID,
 		&row.sourceApplicationID,
 		&row.sourceProductID,
 		&row.sourceLineage,
@@ -480,6 +552,7 @@ func scanEntitlementSourceRow(rows pgx.Rows) (entitlementSourceRow, error) {
 	}
 	row.sourceObservationID = textValue(observationID)
 	row.sourceImportID = textValue(importID)
+	row.sourceManualGrantID = textValue(manualGrantID)
 	return row, nil
 }
 
@@ -492,6 +565,7 @@ func (row entitlementRow) entitlement() (persistence.CustomerEntitlement, error)
 		SourceKind:          persistence.SourceKind(row.sourceKind),
 		SourceObservationID: core.ObservationID(row.sourceObservationID),
 		SourceImportID:      row.sourceImportID,
+		SourceManualGrantID: row.sourceManualGrantID,
 		SourceProductID:     core.ProductID(row.sourceProductID),
 		SourceCustomerID:    core.CustomerID(row.sourceCustomerID),
 		Access:              core.AccessStatus(row.access),
@@ -530,6 +604,7 @@ func (row entitlementSourceRow) entitlementSource() (persistence.EntitlementSour
 			SourceKind:          persistence.SourceKind(row.sourceKind),
 			SourceObservationID: core.ObservationID(row.sourceObservationID),
 			SourceImportID:      row.sourceImportID,
+			SourceManualGrantID: row.sourceManualGrantID,
 			SourceProductID:     core.ProductID(row.sourceProductID),
 			SourceCustomerID:    core.CustomerID(row.customerID),
 			Access:              core.AccessStatus(row.access),
@@ -559,6 +634,7 @@ func projectionsEqual(left, right persistence.EntitlementProjection) bool {
 		left.SourceKind == right.SourceKind &&
 		left.SourceObservationID == right.SourceObservationID &&
 		left.SourceImportID == right.SourceImportID &&
+		left.SourceManualGrantID == right.SourceManualGrantID &&
 		left.SourceProductID == right.SourceProductID &&
 		left.SourceCustomerID == right.SourceCustomerID &&
 		left.Access == right.Access &&

@@ -330,6 +330,66 @@ func TestDashboardRevenueCardDistinguishesImportedReports(t *testing.T) {
 	}
 }
 
+// TestDashboardRendersHonestSubscriptionMetrics keeps the subscription panel to counts, definitions, and stated gaps.
+func TestDashboardRendersHonestSubscriptionMetrics(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	styles, err := fs.ReadFile(assets, "app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	for _, required := range []string{
+		`aria-labelledby="subscriptions-title"`, `id="subscription-chart"`, `id="subscription-environment"`,
+		`data-window-days="30" aria-pressed="true"`, `id="subscription-rows"`, `id="subscription-trials"`,
+		"Churn rate is churned subscriptions divided by subscriptions active at any time in the window",
+		"Plan changes and pauses are not churn", "No money figure is shown here",
+	} {
+		if !strings.Contains(string(document), required) {
+			t.Fatalf("dashboard subscription panel does not contain %q", required)
+		}
+	}
+	source := string(script)
+	start := strings.Index(source, "function subscriptionEnvironments")
+	end := strings.Index(source, "function formatPercent")
+	if start < 0 || end < start {
+		t.Fatal("subscription renderers are missing")
+	}
+	renderers := source[start:end]
+	for _, required := range []string{
+		"loadSubscriptionMetrics", "renderSubscriptionChart", "renderSubscriptionTrials", "Not available for ",
+		`trial.availability !== "available"`, "Reason not recorded", "Not counted as churn", "trial state not recorded",
+		"ended trials converted", "carry a recorded offer phase",
+	} {
+		if !strings.Contains(renderers, required) {
+			t.Fatalf("subscription renderers do not contain %q", required)
+		}
+	}
+	panelStart := strings.Index(string(document), `class="panel subscription-panel"`)
+	panelEnd := strings.Index(string(document), `<div class="dashboard-grid">`)
+	panel := string(document)[panelStart:panelEnd] + renderers
+	for _, forbidden := range []string{
+		"MRR", "ARR", "estimated", "projected", "forecast", "revenue", "Revenue", "price", "currency", "formatRevenue",
+		"formatMilliunitValue",
+	} {
+		if strings.Contains(panel, forbidden) {
+			t.Fatalf("subscription panel contains %q", forbidden)
+		}
+	}
+	for _, required := range []string{".subscription-panel", ".subscription-vitals", ".segmented-control button[aria-pressed=\"true\"]", ".subscription-side"} {
+		if !strings.Contains(string(styles), required) {
+			t.Fatalf("dashboard styles do not contain %q", required)
+		}
+	}
+}
+
 // TestHandlerRedirectsAndDelegates verifies the canonical entrypoint and API fallthrough.
 func TestHandlerRedirectsAndDelegates(t *testing.T) {
 	t.Parallel()
@@ -352,5 +412,57 @@ func TestHandlerRedirectsAndDelegates(t *testing.T) {
 	handler.ServeHTTP(delegated, httptest.NewRequest(http.MethodGet, "/v1/admin/projects", nil))
 	if delegated.Code != http.StatusTeapot {
 		t.Fatalf("delegated status = %d, want %d", delegated.Code, http.StatusTeapot)
+	}
+}
+
+// TestDashboardCustomerSupportWorkflow keeps customer search, detail, and audited manual grants wired.
+func TestDashboardCustomerSupportWorkflow(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	styles, err := fs.ReadFile(assets, "app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	if strings.Contains(string(document), "First 200") {
+		t.Fatal("customers panel still advertises the fixed first-200 listing")
+	}
+	for _, required := range []string{
+		`id="customer-search-form" role="search"`, `id="customer-search"`, `type="search"`, `maxlength="512"`,
+		`id="customers-count" aria-live="polite"`, `id="customer-load-more"`, `id="customer-rows"`, `id="open-customer"`,
+		`id="customer-detail-dialog" class="setup-dialog customer-detail-dialog"`,
+		`id="grant-dialog" class="setup-dialog small-dialog"`, `id="grant-reason" required maxlength="500"`,
+		`id="revoke-grant-dialog" class="setup-dialog small-dialog"`, `id="revoke-grant-reason" required maxlength="500"`,
+		"never as store evidence",
+	} {
+		if !strings.Contains(string(document), required) {
+			t.Fatalf("dashboard customer support markup does not contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		"loadCustomerPage", "openCustomerDetail", "renderCustomerDetail", "timelineEntry", "submitManualGrant",
+		"customerSearchMaxBytes", "state.customerSearch.sequence", "newIdempotencyKey",
+		`store_observation: "Store verification"`, `manual: "Manual grant"`, `import: "Import"`,
+		"No customers yet.", "No customer matches", "Imported history, not store verification.",
+		"Manual grants need a stored admin key",
+	} {
+		if !strings.Contains(string(script), required) {
+			t.Fatalf("dashboard customer support script does not contain %q", required)
+		}
+	}
+	if strings.Contains(string(script), "innerHTML") {
+		t.Fatal("dashboard must render untrusted customer data through text nodes only")
+	}
+	for _, required := range []string{".customer-search", ".detail-section", ".timeline-item", ".source-badge.manual", "border-style: dashed"} {
+		if !strings.Contains(string(styles), required) {
+			t.Fatalf("dashboard customer support styles do not contain %q", required)
+		}
 	}
 }
