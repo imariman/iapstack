@@ -837,6 +837,10 @@ func TestAdapterFollowsItemReplacementOnOneItemPurchase(t *testing.T) {
 		denied.State != core.LifecycleExpired || denied.Access != core.AccessDenied || denied.ID != replaced.ID {
 		t.Fatalf("Reconcile(expected replacement) replaced = %#v, want same denied snapshot %q", denied, replaced.ID)
 	}
+	// The snapshot is superseded, so a replaced product outside the catalog cannot fail this purchase.
+	if len(result.SupersededObservations) != 1 || result.SupersededObservations[0] != replaced.ID {
+		t.Fatalf("Reconcile(expected replacement) SupersededObservations = %v, want %q", result.SupersededObservations, replaced.ID)
+	}
 	verify := verificationRequest(t, core.EnvironmentProduction, core.ProductKindSubscription)
 	verify.ClaimedProducts = []core.ProviderProductID{fixtureReplacementProductID}
 	verified, err := fixture.adapter.Verify(context.Background(), verify)

@@ -257,8 +257,6 @@ func TestAdapterReconcilesAuthoritativeGracePeriod(t *testing.T) {
 			return jsonResponse(t, http.StatusOK, transactionInfoResponse{
 				SignedTransactionInfo: signTransactionFixture(t, fixture, transaction),
 			}, nil), nil
-		case "/inApps/v2/history/" + transaction.OriginalTransactionID:
-			return jsonResponse(t, http.StatusOK, emptyTransactionHistory(transaction), nil), nil
 		case "/inApps/v1/subscriptions/" + transaction.OriginalTransactionID:
 			return jsonResponse(t, http.StatusOK, statusResponse{
 				Environment: transaction.Environment, BundleID: transaction.BundleID,
@@ -910,6 +908,9 @@ func TestAdapterClosesStalePreviousProductAtUpgrade(t *testing.T) {
 	if result.Observations[0].ID == result.Observations[1].ID {
 		t.Fatal("upgrade reused one observation ID for both products")
 	}
+	if len(result.SupersededObservations) != 1 || result.SupersededObservations[0] != result.Observations[1].ID {
+		t.Fatalf("SupersededObservations = %v, want the closed previous product", result.SupersededObservations)
+	}
 	lineage := stores.VerificationRequest{
 		Application: appleApplication(core.EnvironmentSandbox), CustomerID: "customer-1",
 		ClaimedProducts:          result.ProductsForClaim([]core.ProviderProductID{fixtureProductID}),
@@ -924,7 +925,8 @@ func TestAdapterClosesStalePreviousProductAtUpgrade(t *testing.T) {
 // TestAdapterClosesPreviousProductFromHistoryWhenEvidenceIsNewProduct closes the old product in the
 // same verify that records an upgrade whose submitted JWS is already the new transaction (#250).
 // The upgraded monthly transaction exists only in transaction history (second page), and an
-// UPGRADE notification reaches this same Verify path through NotificationEnvelope evidence.
+// UPGRADE notification reaches this same Verify path through NotificationEnvelope evidence
+// (TestAdapterClosesPreviousProductFromUpgradeNotification).
 func TestAdapterClosesPreviousProductFromHistoryWhenEvidenceIsNewProduct(t *testing.T) {
 	t.Parallel()
 
@@ -1000,8 +1002,9 @@ func TestAdapterClosesPreviousProductFromHistoryWhenEvidenceIsNewProduct(t *test
 					}, nil), nil
 				case "/inApps/v2/history/" + annual.OriginalTransactionID:
 					historyCalls++
-					if request.URL.Query().Get("sort") != historySortDescending {
-						t.Fatalf("history sort = %q, want %q", request.URL.Query().Get("sort"), historySortDescending)
+					if request.URL.Query().Get("sort") != historySortDescending ||
+						request.URL.Query().Get("productType") != historyProductTypeAutoRenewable {
+						t.Fatalf("history query = %q, want descending auto-renewable records", request.URL.RawQuery)
 					}
 					if test.historyFails {
 						return jsonResponse(t, http.StatusInternalServerError, map[string]string{}, nil), nil
@@ -1062,25 +1065,22 @@ func TestAdapterClosesPreviousProductFromHistoryWhenEvidenceIsNewProduct(t *test
 			}
 			assertSupersededAppleProduct(t, result.Observations[1], fixtureProductID, upgradeAt)
 			closedID := result.Observations[1].ID
-
-			// Reconciling the new transaction reuses the same history path and snapshot identity.
-			historyCalls = 0
-			queryReference, err := core.NewStoreReference(core.ReferenceQuery, "transaction_id", annual.TransactionID)
-			if err != nil {
-				t.Fatalf("NewStoreReference() query error = %v", err)
+			if len(result.SupersededObservations) != 1 || result.SupersededObservations[0] != closedID {
+				t.Fatalf("SupersededObservations = %v, want the closed snapshot %q", result.SupersededObservations, closedID)
 			}
-			reconciled, err := adapter.Reconcile(context.Background(), stores.ReconciliationRequest{
+
+			// Replaying the new transaction, as the daily job does, reuses the same snapshot identity.
+			replayed, err := adapter.Verify(context.Background(), stores.VerificationRequest{
 				Application: appleApplication(core.EnvironmentSandbox), CustomerID: "customer-1",
-				ExpectedProducts:         []core.ProviderProductID{upgradedProduct},
-				ExpectedProductKind:      core.ProductKindSubscription,
+				ClaimedProducts:          []core.ProviderProductID{upgradedProduct},
 				ExpectedCustomerBindings: []core.StoreReference{binding},
-				QueryReferences:          []core.StoreReference{queryReference},
+				Evidence:                 evidenceFixture(t, fixture, annual, core.ProductKindSubscription),
 			})
 			if err != nil {
-				t.Fatalf("Reconcile() error = %v", err)
+				t.Fatalf("Verify(replay) error = %v", err)
 			}
-			if len(reconciled.Observations) != 2 || reconciled.Observations[1].ID != closedID {
-				t.Fatalf("Reconcile() observations = %#v, want closed snapshot %q reused", reconciled.Observations, closedID)
+			if len(replayed.Observations) != 2 || replayed.Observations[1].ID != closedID {
+				t.Fatalf("Verify(replay) observations = %#v, want closed snapshot %q reused", replayed.Observations, closedID)
 			}
 		})
 	}

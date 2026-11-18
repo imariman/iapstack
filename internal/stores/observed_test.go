@@ -11,6 +11,12 @@ import (
 	"github.com/imariman/iapstack/internal/stores"
 )
 
+// reportingAdapter makes one optional provider call whose outcome it reports instead of returning.
+type reportingAdapter struct {
+	fakeAdapter
+	report stores.ProviderCallObserver
+}
+
 // linkedResolverAdapter reports one configured replacement link and records the forwarded request.
 type linkedResolverAdapter struct {
 	fakeAdapter
@@ -68,6 +74,25 @@ func TestObservedAdapterForwardsLinkedPurchase(t *testing.T) {
 	assertProviderCalls(t, registry, `provider="google_play",operation="linked_purchase",outcome="not_found"} 1`)
 }
 
+// TestObservedAdapterRecordsReportedProviderCalls counts optional provider calls an adapter only reports.
+// A failed enrichment lookup leaves Verify successful, so without this the failure would be invisible.
+func TestObservedAdapterRecordsReportedProviderCalls(t *testing.T) {
+	t.Parallel()
+
+	inner := &reportingAdapter{fakeAdapter: fakeAdapter{provider: core.ProviderAppleAppStore}}
+	registry := metrics.New()
+	if _, err := stores.NewObservedAdapter(inner, registry); err != nil {
+		t.Fatalf("NewObservedAdapter() error = %v", err)
+	}
+	if inner.report == nil {
+		t.Fatal("NewObservedAdapter() did not register a provider call observer")
+	}
+	inner.report("transaction_history", nil)
+	inner.report("transaction_history", stores.NewFailure(core.ProviderAppleAppStore, "transaction_history", stores.FailureRateLimited, 0, nil))
+	assertProviderCalls(t, registry, `provider="apple_app_store",operation="transaction_history",outcome="success"} 1`)
+	assertProviderCalls(t, registry, `provider="apple_app_store",operation="transaction_history",outcome="rate_limited"} 1`)
+}
+
 // TestObservedAdapterRejectsLinkedPurchaseForUnsupportedAdapter keeps unsupported providers explicit.
 func TestObservedAdapterRejectsLinkedPurchaseForUnsupportedAdapter(t *testing.T) {
 	t.Parallel()
@@ -103,4 +128,9 @@ func (adapter *linkedResolverAdapter) LinkedPurchase(
 	adapter.calls++
 	adapter.request = request
 	return adapter.linked, adapter.err
+}
+
+// ReportProviderCalls keeps the observer the wrapper registers.
+func (adapter *reportingAdapter) ReportProviderCalls(observer stores.ProviderCallObserver) {
+	adapter.report = observer
 }
