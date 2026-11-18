@@ -873,10 +873,12 @@ h2 {
 }
 
 .signal-line ol::after {
+  /* The pulse is 22% of the route line and moves with transform and opacity only, so it stays on the compositor. */
   animation: route-flow 4.8s linear infinite;
-  background: linear-gradient(90deg, transparent, var(--primary-strong) 50%, transparent) no-repeat;
-  background-size: 22% 100%;
-  opacity: 0.9;
+  background: linear-gradient(90deg, transparent, var(--primary-strong) 50%, transparent);
+  opacity: 0;
+  right: auto;
+  width: calc((75% + 8px) * 0.22);
 }
 
 .signal-line li {
@@ -2207,10 +2209,16 @@ td code {
 
 @keyframes route-flow {
   from {
-    background-position: -30% 0;
+    opacity: 0;
+    transform: translateX(0);
+  }
+  15%,
+  85% {
+    opacity: 0.9;
   }
   to {
-    background-position: 130% 0;
+    opacity: 0;
+    transform: translateX(354.5%);
   }
 }
 
@@ -2432,10 +2440,6 @@ td code {
 
   .commerce-heading p {
     display: none;
-  }
-
-  .activity-vitals > span + span {
-    padding-left: 20px;
   }
 
   .activity-vitals {
