@@ -98,6 +98,52 @@ func TestServicePersistsAndReplaysWithPostgreSQL(t *testing.T) {
 	assertVerificationTableCount(t, database, "outbox_events", 1)
 }
 
+// TestServiceSkipsUnmappedSupersededObservationWithPostgreSQL stores a purchase whose result also closes an
+// unmapped replaced product. The repository reports that product as not found inside the same transaction,
+// which must stay usable for the mapped superseded product looked up after it and for every write.
+func TestServiceSkipsUnmappedSupersededObservationWithPostgreSQL(t *testing.T) {
+	database := openVerificationTestDatabase(t)
+	fixture := newVerificationFixture(t)
+	seedVerificationCatalog(t, database, fixture)
+	seedVerificationProduct(t, database, fixture, "product-replaced", "provider-product-replaced")
+
+	superseded := func(id core.ObservationID, productID core.ProviderProductID) core.PurchaseObservation {
+		t.Helper()
+		reference, err := core.NewStoreReference(core.ReferenceTransaction, "order_id", string(id)+"-order")
+		if err != nil {
+			t.Fatalf("NewStoreReference() error = %v", err)
+		}
+		observation := fixture.result.Observations[0]
+		observation.ID = id
+		observation.ProductID = productID
+		observation.State, observation.ProviderState = core.LifecycleExpired, "expired"
+		observation.Access, observation.AccessReason = core.AccessDenied, core.AccessReasonExpired
+		observation.ObservedAt = observation.ObservedAt.Add(-time.Microsecond)
+		observation.References = []core.StoreReference{reference}
+		return observation
+	}
+	legacy := superseded("observation-legacy", "provider-product-legacy")
+	replaced := superseded("observation-replaced", "provider-product-replaced")
+	result := fixture.result
+	result.Observations = []core.PurchaseObservation{fixture.result.Observations[0], legacy, replaced}
+	result.NamedProducts = []core.ProviderProductID{verificationProviderProductID, legacy.ProductID, replaced.ProductID}
+	result.SupersededObservations = []core.ObservationID{legacy.ID, replaced.ID}
+	service := newVerificationService(t, database.store, &fakeAdapter{result: result}, &fakeProtector{}, fixture.clock)
+
+	verified, err := service.Verify(database.ctx, fixture.command)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if len(verified.Observations) != 2 || verified.Observations[0].ID != fixture.result.Observations[0].ID ||
+		verified.Observations[1].ID != replaced.ID {
+		t.Fatalf("Verify() observations = %#v, want the current and the mapped replaced product", verified.Observations)
+	}
+	assertVerificationTableCount(t, database, "purchase_observations", 2)
+	assertVerificationEntitlement(
+		t, verified.Entitlements, core.AccessAllowed, verificationProductID, fixture.result.Observations[0].ID,
+	)
+}
+
 // TestServiceRollsBackPostgreSQLWhenOutboxFails verifies use-case atomicity through the real store.
 func TestServiceRollsBackPostgreSQLWhenOutboxFails(t *testing.T) {
 	database := openVerificationTestDatabase(t)

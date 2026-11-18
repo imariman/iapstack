@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -638,17 +639,16 @@ func (service *Service) persist(
 			}
 		}
 
-		providerProductIDs := observationProductIDs(providerResult.Observations)
-		catalogProducts, err := repository.CatalogProducts(
-			ctx,
-			command.ProjectID,
-			command.ApplicationID,
-			providerProductIDs,
-		)
+		catalogProducts, err := resultCatalogProducts(ctx, repository, command, providerResult)
 		if err != nil {
 			return err
 		}
-		catalogByProviderID, err := indexCatalogProducts(catalogProducts, providerResult.Observations)
+		stored := storedObservationIndexes(providerResult, catalogProducts)
+		storedObservations := make([]core.PurchaseObservation, 0, len(stored))
+		for _, index := range stored {
+			storedObservations = append(storedObservations, providerResult.Observations[index])
+		}
+		catalogByProviderID, err := indexCatalogProducts(catalogProducts, storedObservations)
 		if err != nil {
 			return err
 		}
@@ -666,7 +666,8 @@ func (service *Service) persist(
 			}
 		}
 
-		for _, preparedObservation := range prepared.observations {
+		for _, index := range stored {
+			preparedObservation := prepared.observations[index]
 			observation := preparedObservation.write.Observation
 			catalogProduct := catalogByProviderID[observation.ProductID]
 			observationWrite := preparedObservation.write
@@ -692,6 +693,7 @@ func (service *Service) persist(
 		}
 
 		verificationResult.Customer = currentCustomer
+		verificationResult.Observations = storedObservations
 		verificationResult.Entitlements, err = repository.CustomerEntitlements(
 			ctx,
 			command.ProjectID,
@@ -705,18 +707,62 @@ func (service *Service) persist(
 	return verificationResult, nil
 }
 
-// observationProductIDs returns each observed provider product ID once in result order.
-func observationProductIDs(observations []core.PurchaseObservation) []core.ProviderProductID {
-	productIDs := make([]core.ProviderProductID, 0, len(observations))
-	seen := make(map[core.ProviderProductID]struct{}, len(observations))
-	for _, observation := range observations {
-		if _, exists := seen[observation.ProductID]; exists {
+// resultCatalogProducts loads the catalog mappings a provider result needs.
+// Every product of an observation that is not superseded must be mapped. A product seen only in superseded
+// observations is loaded on its own, and a missing mapping for it is not an error: those observations only
+// close a product the purchase replaced, and an unmapped product grants nothing to close.
+func resultCatalogProducts(
+	ctx context.Context,
+	repository persistence.Transaction,
+	command Command,
+	result stores.VerificationResult,
+) ([]persistence.CatalogProduct, error) {
+	var required, optional []core.ProviderProductID
+	for _, observation := range result.Observations {
+		if !result.Superseded(observation.ID) && !slices.Contains(required, observation.ProductID) {
+			required = append(required, observation.ProductID)
+		}
+	}
+	for _, observation := range result.Observations {
+		if !slices.Contains(required, observation.ProductID) && !slices.Contains(optional, observation.ProductID) {
+			optional = append(optional, observation.ProductID)
+		}
+	}
+	catalogProducts, err := repository.CatalogProducts(ctx, command.ProjectID, command.ApplicationID, required)
+	if err != nil {
+		return nil, err
+	}
+	for _, productID := range optional {
+		mapped, err := repository.CatalogProducts(
+			ctx, command.ProjectID, command.ApplicationID, []core.ProviderProductID{productID},
+		)
+		if errors.Is(err, persistence.ErrNotFound) {
 			continue
 		}
-		seen[observation.ProductID] = struct{}{}
-		productIDs = append(productIDs, observation.ProductID)
+		if err != nil {
+			return nil, err
+		}
+		catalogProducts = append(catalogProducts, mapped...)
 	}
-	return productIDs
+	return catalogProducts, nil
+}
+
+// storedObservationIndexes returns, in result order, the observations persistence stores.
+// A superseded observation whose product the catalog does not map is skipped; every other one is stored.
+func storedObservationIndexes(
+	result stores.VerificationResult,
+	catalogProducts []persistence.CatalogProduct,
+) []int {
+	stored := make([]int, 0, len(result.Observations))
+	for index, observation := range result.Observations {
+		mapped := slices.ContainsFunc(catalogProducts, func(product persistence.CatalogProduct) bool {
+			return product.Mapping.ProviderID == observation.ProductID
+		})
+		if mapped || !result.Superseded(observation.ID) {
+			stored = append(stored, index)
+		}
+	}
+	return stored
 }
 
 // clonePostCommitActions defensively copies opaque provider references before adapter execution.
