@@ -161,6 +161,16 @@ type subscriptionPurchase struct {
 	TestPurchase               *struct{}                  `json:"testPurchase"`
 	AcknowledgementState       string                     `json:"acknowledgementState"`
 	ExternalAccountIdentifiers externalAccountIdentifiers `json:"externalAccountIdentifiers"`
+	// CanceledStateContext is Google's cancellation initiator, present for canceled and expired subscriptions.
+	CanceledStateContext *canceledStateContext `json:"canceledStateContext"`
+}
+
+// canceledStateContext is Google's CanceledStateContext union. Exactly one member is set.
+type canceledStateContext struct {
+	UserInitiatedCancellation      *struct{} `json:"userInitiatedCancellation"`
+	SystemInitiatedCancellation    *struct{} `json:"systemInitiatedCancellation"`
+	DeveloperInitiatedCancellation *struct{} `json:"developerInitiatedCancellation"`
+	ReplacementCancellation        *struct{} `json:"replacementCancellation"`
 }
 
 // subscriptionLineItem contains one Google Play subscription product, its plan, and any replacement details.
@@ -711,7 +721,7 @@ func (adapter *Adapter) subscriptionObservations(
 		ProductID: core.ProviderProductID(lineItem.ProductID), ProductKind: core.ProductKindSubscription,
 		State: state, ProviderState: purchase.SubscriptionState,
 		Access: access, AccessReason: reason, Ownership: core.OwnershipPurchased, Quantity: 1,
-		OfferPhase: offerPhase(lineItem.OfferPhase),
+		OfferPhase: offerPhase(lineItem.OfferPhase), CancellationReason: cancellationReason(purchase.CanceledStateContext),
 		OccurredAt: purchase.StartTime, ObservedAt: now,
 		EffectivePeriod: core.EffectivePeriod{StartsAt: purchase.StartTime, EndsAt: timePointer(lineItem.ExpiryTime)},
 		Renewal:         renewal, References: references,
@@ -924,6 +934,25 @@ func offerPhase(phase *subscriptionOfferPhase) core.OfferPhase {
 		return core.OfferPhaseProration
 	default:
 		return core.OfferPhaseUnknown
+	}
+}
+
+// cancellationReason maps Google's CanceledStateContext union onto the shared cancellation reason.
+// An absent union, or one with no known member, records no reason.
+func cancellationReason(context *canceledStateContext) core.CancellationReason {
+	switch {
+	case context == nil:
+		return core.CancellationReasonNotRecorded
+	case context.ReplacementCancellation != nil:
+		return core.CancellationReasonReplacement
+	case context.UserInitiatedCancellation != nil:
+		return core.CancellationReasonCustomer
+	case context.SystemInitiatedCancellation != nil:
+		return core.CancellationReasonSystem
+	case context.DeveloperInitiatedCancellation != nil:
+		return core.CancellationReasonDeveloper
+	default:
+		return core.CancellationReasonNotRecorded
 	}
 }
 

@@ -96,6 +96,24 @@ const (
 	OfferPhaseProration OfferPhase = "proration"
 	// OfferPhaseUnknown identifies a signed offer whose payment mode the adapter does not recognize.
 	OfferPhaseUnknown OfferPhase = "unknown"
+
+	// TransactionReasonNotRecorded means the provider evidence names no reason for the transaction.
+	TransactionReasonNotRecorded TransactionReason = ""
+	// TransactionReasonPurchase identifies a customer-initiated purchase, including an upgrade or a resubscription.
+	TransactionReasonPurchase TransactionReason = "purchase"
+	// TransactionReasonRenewal identifies a provider-initiated renewal, including a downgrade that takes effect at renewal.
+	TransactionReasonRenewal TransactionReason = "renewal"
+
+	// CancellationReasonNotRecorded means the provider evidence names no cancellation context.
+	CancellationReasonNotRecorded CancellationReason = ""
+	// CancellationReasonCustomer identifies a cancellation the customer initiated.
+	CancellationReasonCustomer CancellationReason = "customer"
+	// CancellationReasonSystem identifies a cancellation the provider initiated, such as after a billing failure.
+	CancellationReasonSystem CancellationReason = "system"
+	// CancellationReasonDeveloper identifies a cancellation the developer initiated through the provider.
+	CancellationReasonDeveloper CancellationReason = "developer"
+	// CancellationReasonReplacement identifies a subscription canceled because another purchase replaced it.
+	CancellationReasonReplacement CancellationReason = "replacement"
 )
 
 type LifecycleState string
@@ -113,6 +131,14 @@ type RenewalStatus string
 // OfferPhase is the provider-signed pricing phase of one subscription period.
 // It is analytics evidence only and never changes an access decision.
 type OfferPhase string
+
+// TransactionReason is the provider-signed reason a subscription transaction exists.
+// It is analytics evidence only and never changes an access decision.
+type TransactionReason string
+
+// CancellationReason is the provider-reported initiator of a subscription cancellation.
+// It is analytics evidence only and never changes an access decision.
+type CancellationReason string
 
 // PurchasePrice is one provider-signed transaction price in thousandths of an ISO 4217 currency unit.
 type PurchasePrice struct {
@@ -149,12 +175,18 @@ type PurchaseObservation struct {
 	Quantity      uint32
 	Price         *PurchasePrice
 	// OfferPhase is the signed offer phase of a subscription period, or OfferPhaseNotRecorded.
-	OfferPhase      OfferPhase
-	OccurredAt      time.Time
-	ObservedAt      time.Time
-	EffectivePeriod EffectivePeriod
-	Renewal         Renewal
-	References      []StoreReference
+	OfferPhase OfferPhase
+	// TransactionReason is the signed reason for a subscription transaction, or TransactionReasonNotRecorded.
+	TransactionReason TransactionReason
+	// LineageStartedAt is the signed purchase time of the first transaction in this lineage, when the provider supplies it.
+	LineageStartedAt *time.Time
+	// CancellationReason is the provider-reported cancellation initiator, or CancellationReasonNotRecorded.
+	CancellationReason CancellationReason
+	OccurredAt         time.Time
+	ObservedAt         time.Time
+	EffectivePeriod    EffectivePeriod
+	Renewal            Renewal
+	References         []StoreReference
 	// PriorSnapshotID is an older identity for this same logical snapshot.
 	// Persistence reuses that stored row when the snapshot still matches, so an
 	// identity encoding change does not duplicate an unchanged observation.
@@ -226,6 +258,27 @@ func (phase OfferPhase) Validate() error {
 		return nil
 	default:
 		return fmt.Errorf("unsupported offer phase %q", phase)
+	}
+}
+
+// Validate checks that the transaction reason is empty or belongs to the normalized vocabulary.
+func (reason TransactionReason) Validate() error {
+	switch reason {
+	case TransactionReasonNotRecorded, TransactionReasonPurchase, TransactionReasonRenewal:
+		return nil
+	default:
+		return fmt.Errorf("unsupported transaction reason %q", reason)
+	}
+}
+
+// Validate checks that the cancellation reason is empty or belongs to the normalized vocabulary.
+func (reason CancellationReason) Validate() error {
+	switch reason {
+	case CancellationReasonNotRecorded, CancellationReasonCustomer, CancellationReasonSystem,
+		CancellationReasonDeveloper, CancellationReasonReplacement:
+		return nil
+	default:
+		return fmt.Errorf("unsupported cancellation reason %q", reason)
 	}
 }
 
@@ -333,11 +386,18 @@ func (observation PurchaseObservation) Validate() error {
 		observation.Renewal.Validate(observation.ProductKind),
 		priceError,
 		observation.OfferPhase.Validate(),
+		observation.TransactionReason.Validate(),
+		observation.CancellationReason.Validate(),
 	); err != nil {
 		return err
 	}
-	if observation.OfferPhase != OfferPhaseNotRecorded && observation.ProductKind != ProductKindSubscription {
-		return errors.New("offer phase applies only to subscriptions")
+	if observation.ProductKind != ProductKindSubscription &&
+		(observation.OfferPhase != OfferPhaseNotRecorded || observation.TransactionReason != TransactionReasonNotRecorded ||
+			observation.LineageStartedAt != nil || observation.CancellationReason != CancellationReasonNotRecorded) {
+		return errors.New("subscription analytics evidence applies only to subscriptions")
+	}
+	if observation.LineageStartedAt != nil && observation.LineageStartedAt.IsZero() {
+		return errors.New("lineage start time must not be zero")
 	}
 
 	if observation.Quantity == 0 {

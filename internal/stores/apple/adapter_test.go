@@ -129,11 +129,17 @@ func TestAppleJWSDecodesSignedOfferFields(t *testing.T) {
 	signed := signApplePayloadFixture(t, fixture, map[string]any{
 		"transactionId": "2000000023456790", "signedDate": now.UnixMilli(),
 		"offerType": 1, "offerDiscountType": "FREE_TRIAL", "offerPeriod": "P1W",
-		"transactionReason": "PURCHASE",
+		"transactionReason": "PURCHASE", "originalPurchaseDate": now.Add(-48 * time.Hour).UnixMilli(),
 	})
 	decoded, err := verifyTransactionJWS(signed, roots)
 	if err != nil {
 		t.Fatalf("verifyTransactionJWS() error = %v", err)
+	}
+	if reason := transactionReason(core.ProductKindSubscription, decoded); reason != core.TransactionReasonPurchase {
+		t.Fatalf("transactionReason() = %q, want purchase", reason)
+	}
+	if started := lineageStartedAt(core.ProductKindSubscription, decoded); started == nil || !started.Equal(now.Add(-48*time.Hour)) {
+		t.Fatalf("lineageStartedAt() = %v, want the signed originalPurchaseDate", started)
 	}
 	if decoded.OfferType == nil || *decoded.OfferType != 1 || decoded.OfferDiscountType != appleOfferDiscountFreeTrial {
 		t.Fatalf("decoded offer = (%v, %q)", decoded.OfferType, decoded.OfferDiscountType)
@@ -173,6 +179,29 @@ func TestOfferPhaseMapsAppleOfferTypes(t *testing.T) {
 				t.Fatalf("offerPhase() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+// TestTransactionReasonAndLineageStartUseSignedValuesOnly verifies unrecognized or absent Apple values stay unrecorded.
+func TestTransactionReasonAndLineageStartUseSignedValuesOnly(t *testing.T) {
+	t.Parallel()
+
+	for value, want := range map[string]core.TransactionReason{
+		"PURCHASE": core.TransactionReasonPurchase, "RENEWAL": core.TransactionReasonRenewal,
+		"": core.TransactionReasonNotRecorded, "REFUND": core.TransactionReasonNotRecorded,
+	} {
+		if got := transactionReason(core.ProductKindSubscription, transactionPayload{TransactionReason: value}); got != want {
+			t.Errorf("transactionReason(%q) = %q, want %q", value, got, want)
+		}
+	}
+	if got := transactionReason(core.ProductKindNonConsumable, transactionPayload{TransactionReason: "PURCHASE"}); got != core.TransactionReasonNotRecorded {
+		t.Errorf("non-subscription transactionReason() = %q, want not recorded", got)
+	}
+	if started := lineageStartedAt(core.ProductKindSubscription, transactionPayload{}); started != nil {
+		t.Errorf("lineageStartedAt(absent) = %v, want nil", started)
+	}
+	if started := lineageStartedAt(core.ProductKindNonConsumable, transactionPayload{OriginalPurchaseDate: 1}); started != nil {
+		t.Errorf("non-subscription lineageStartedAt() = %v, want nil", started)
 	}
 }
 
@@ -289,6 +318,7 @@ func TestAdapterReconcilesAuthoritativeGracePeriod(t *testing.T) {
 		AppAccountToken: fixtureAccountToken, OwnershipType: applePurchasedOwnership,
 		SignedDate: now.UnixMilli(), Environment: "Sandbox",
 		OfferType: func() *int { value := 1; return &value }(), OfferDiscountType: appleOfferDiscountPayAsYouGo,
+		TransactionReason: appleTransactionReasonRenewal, OriginalPurchaseDate: now.Add(-90 * 24 * time.Hour).UnixMilli(),
 	}
 	graceEndsAt := now.Add(30 * time.Minute)
 	renewal := renewalPayload{
@@ -370,6 +400,10 @@ func TestAdapterReconcilesAuthoritativeGracePeriod(t *testing.T) {
 	}
 	if observation.OfferPhase != core.OfferPhaseDiscounted {
 		t.Fatalf("Reconcile() offer phase = %q, want discounted from the signed status transaction", observation.OfferPhase)
+	}
+	if observation.TransactionReason != core.TransactionReasonRenewal || observation.LineageStartedAt == nil ||
+		!observation.LineageStartedAt.Equal(milliseconds(transaction.OriginalPurchaseDate)) {
+		t.Fatalf("Reconcile() lineage evidence = (%q, %v)", observation.TransactionReason, observation.LineageStartedAt)
 	}
 }
 

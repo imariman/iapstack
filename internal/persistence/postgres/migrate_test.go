@@ -296,6 +296,21 @@ func TestSubscriptionOfferPhaseMigrationConstraints(t *testing.T) {
 		catalog.applicationID, catalog.customerID, "free_trial")
 	expectConstraint(t, database, "purchase_observations_offer_phase_valid", insertSubscription,
 		"observation-intro", purchase.evidenceID, catalog.projectID, catalog.applicationID, catalog.customerID, "intro")
+	mustExec(t, database, `
+		UPDATE purchase_observations
+		SET transaction_reason = 'renewal', lineage_started_at = now() - interval '1 year',
+			cancellation_reason = 'replacement'
+		WHERE id = 'observation-trial'
+	`)
+	expectConstraint(t, database, "purchase_observations_transaction_reason_valid", `
+		UPDATE purchase_observations SET transaction_reason = 'upgrade' WHERE id = 'observation-trial'
+	`)
+	expectConstraint(t, database, "purchase_observations_cancellation_reason_valid", `
+		UPDATE purchase_observations SET cancellation_reason = 'refund' WHERE id = 'observation-trial'
+	`)
+	expectConstraint(t, database, "purchase_observations_offer_phase_kind_valid", `
+		UPDATE purchase_observations SET lineage_started_at = now() WHERE id = $1
+	`, purchase.observationID)
 }
 
 // TestFinancialReportMigrationConstraints verifies accepted amounts, one current period, and no raw payload.

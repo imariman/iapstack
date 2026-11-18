@@ -380,10 +380,13 @@ func (repository *transaction) insertObservation(
 			next_renewal_at,
 			price_milliunits,
 			price_currency,
-			offer_phase
+			offer_phase,
+			transaction_reason,
+			lineage_started_at,
+			cancellation_reason
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-			$12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+			$15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
 		)
 		ON CONFLICT (id) DO NOTHING
 		RETURNING id
@@ -413,6 +416,9 @@ func (repository *transaction) insertObservation(
 		nullablePriceMilliunits(observation.Price),
 		nullablePriceCurrency(observation.Price),
 		nullableString(string(observation.OfferPhase)),
+		nullableString(string(observation.TransactionReason)),
+		nullableTimePointer(observation.LineageStartedAt),
+		nullableString(string(observation.CancellationReason)),
 	).Scan(&insertedID)
 	if err == nil {
 		return true, nil
@@ -444,26 +450,39 @@ func (repository *transaction) enrichObservationPrice(
 	return nil
 }
 
-// enrichObservationOfferPhase records a newly available signed offer phase on an existing snapshot.
-// Rows stored before migration 014 have no phase. The phase never takes part in observationMatches:
-// adapter identities already cover the signed transaction or order it comes from, and an analytics
-// field must not turn an identical access snapshot into a conflict. The first recorded phase is kept.
+// enrichObservationOfferPhase records newly available subscription analytics evidence on an existing
+// snapshot: offer phase, transaction reason, lineage start, and cancellation reason. Rows stored before
+// migration 014 have none of them. Each column is filled only while it is NULL, so the first recorded
+// value is kept. None of them takes part in observationMatches: adapter identities already cover the
+// signed transaction or order they come from, and an analytics field must not turn an identical access
+// snapshot into a conflict.
 func (repository *transaction) enrichObservationOfferPhase(
 	ctx context.Context,
 	write persistence.ObservationWrite,
 ) error {
-	if write.Observation.OfferPhase == core.OfferPhaseNotRecorded {
+	observation := write.Observation
+	if observation.OfferPhase == core.OfferPhaseNotRecorded &&
+		observation.TransactionReason == core.TransactionReasonNotRecorded &&
+		observation.LineageStartedAt == nil &&
+		observation.CancellationReason == core.CancellationReasonNotRecorded {
 		return nil
 	}
 	_, err := repository.tx.Exec(ctx, `
 		UPDATE purchase_observations
-		SET offer_phase = $2
+		SET offer_phase = COALESCE(offer_phase, $2),
+			transaction_reason = COALESCE(transaction_reason, $3),
+			lineage_started_at = COALESCE(lineage_started_at, $4),
+			cancellation_reason = COALESCE(cancellation_reason, $5)
 		WHERE id = $1
-			AND offer_phase IS NULL
 			AND product_kind = 'subscription'
-	`, write.Observation.ID, string(write.Observation.OfferPhase))
+	`, observation.ID,
+		nullableString(string(observation.OfferPhase)),
+		nullableString(string(observation.TransactionReason)),
+		nullableTimePointer(observation.LineageStartedAt),
+		nullableString(string(observation.CancellationReason)),
+	)
 	if err != nil {
-		return classifyError("enrich purchase observation offer phase", err)
+		return classifyError("enrich purchase observation analytics evidence", err)
 	}
 	return nil
 }

@@ -249,6 +249,40 @@ func TestOfferPhaseValidationKeepsAnalyticsEvidenceOnSubscriptions(t *testing.T)
 	if err := observation.Validate(); err != nil {
 		t.Fatalf("Validate() non-subscription without phase error = %v", err)
 	}
+	observation.TransactionReason = core.TransactionReasonPurchase
+	if err := observation.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want transaction reason rejected on a non-subscription")
+	}
+}
+
+// TestSubscriptionLineageEvidenceValidation verifies the transaction, lineage start, and cancellation vocabularies.
+func TestSubscriptionLineageEvidenceValidation(t *testing.T) {
+	t.Parallel()
+
+	observation := deniedObservation(t, core.LifecycleExpired)
+	started := observation.EffectivePeriod.StartsAt.Add(-time.Hour)
+	observation.TransactionReason = core.TransactionReasonRenewal
+	observation.LineageStartedAt = &started
+	for _, reason := range []core.CancellationReason{
+		core.CancellationReasonNotRecorded, core.CancellationReasonCustomer, core.CancellationReasonSystem,
+		core.CancellationReasonDeveloper, core.CancellationReasonReplacement,
+	} {
+		observation.CancellationReason = reason
+		if err := observation.Validate(); err != nil {
+			t.Fatalf("Validate() cancellation %q error = %v", reason, err)
+		}
+	}
+	for name, mutate := range map[string]func(*core.PurchaseObservation){
+		"transaction reason":  func(value *core.PurchaseObservation) { value.TransactionReason = "upgrade" },
+		"cancellation reason": func(value *core.PurchaseObservation) { value.CancellationReason = "refund" },
+		"zero lineage start":  func(value *core.PurchaseObservation) { value.LineageStartedAt = &time.Time{} },
+	} {
+		invalid := observation
+		mutate(&invalid)
+		if err := invalid.Validate(); err == nil {
+			t.Errorf("Validate() %s error = nil", name)
+		}
+	}
 }
 
 // TestStoreReferenceIsRedacted verifies safe formatting and explicit value access.
