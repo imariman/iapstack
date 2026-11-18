@@ -35,10 +35,19 @@ const (
 	// manualLineageSQL derives the access source key of the manual grant aliased mg.
 	// Every operator grant is its own source, so a revocation never touches another grant.
 	manualLineageSQL = `'manual:' || mg.id`
-	// manualAccessSQL derives a manual grant's access: allowed until revoked, then denied.
-	manualAccessSQL = `CASE WHEN mg.revoked_at IS NULL THEN 'allowed' ELSE 'denied' END`
-	// manualReasonSQL derives a manual grant's access reason: manual_grant until revoked, then revoked.
-	manualReasonSQL = `CASE WHEN mg.revoked_at IS NULL THEN 'manual_grant' ELSE 'revoked' END`
+	// manualAccessSQL derives a manual grant's access at refresh time: allowed until revoked or ended, then denied.
+	// A grant's end is known in advance, so an ended grant never competes as allowed with later store evidence.
+	manualAccessSQL = `CASE
+		WHEN mg.revoked_at IS NULL AND mg.effective_ends_at > CURRENT_TIMESTAMP THEN 'allowed'
+		ELSE 'denied'
+	END`
+	// manualReasonSQL derives a manual grant's access reason: manual_grant while it allows access,
+	// revoked after an early revocation, and expired after its end.
+	manualReasonSQL = `CASE
+		WHEN mg.revoked_at IS NOT NULL THEN 'revoked'
+		WHEN mg.effective_ends_at <= CURRENT_TIMESTAMP THEN 'expired'
+		ELSE 'manual_grant'
+	END`
 	// manualEndSQL ends a revoked grant's period at its revocation when that falls inside the period.
 	manualEndSQL = `CASE
 		WHEN mg.revoked_at IS NOT NULL

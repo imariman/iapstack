@@ -40,21 +40,19 @@ func (repository *transaction) CreateManualGrant(
 	if err := write.Validate(); err != nil {
 		return persistence.ManualGrantResult{}, err
 	}
-	canonicalID, err := repository.lockCanonicalClosure(ctx, write.ProjectID, write.CustomerID)
+	canonicalID, members, err := repository.lockCanonicalClosure(ctx, write.ProjectID, write.CustomerID)
 	if err != nil {
 		return persistence.ManualGrantResult{}, err
 	}
 
-	existing, err := repository.scanManualGrant(repository.tx.QueryRow(ctx, manualGrantSelectSQL+`
+	existing, err := scanManualGrantRow(repository.tx.QueryRow(ctx, manualGrantSelectSQL+`
 		WHERE mg.project_id = $1 AND mg.idempotency_key = $2
 	`, write.ProjectID, write.IdempotencyKey))
 	if err != nil && !errors.Is(err, persistence.ErrNotFound) {
 		return persistence.ManualGrantResult{}, err
 	}
 	if err == nil {
-		if existing.CustomerID != canonicalID || existing.ApplicationID != write.ApplicationID ||
-			existing.ProductID != write.ProductID || existing.EntitlementID != write.EntitlementID ||
-			existing.Reason != write.Reason {
+		if !manualGrantReplays(existing, write, members) {
 			return persistence.ManualGrantResult{}, fmt.Errorf("create manual grant: %w", persistence.ErrConflict)
 		}
 		return persistence.ManualGrantResult{Grant: existing, CanonicalCustomerID: canonicalID, Replay: true}, nil
@@ -103,11 +101,7 @@ func (repository *transaction) RevokeManualGrant(
 	if err := revocation.Validate(); err != nil {
 		return persistence.ManualGrantResult{}, err
 	}
-	canonicalID, err := repository.lockCanonicalClosure(ctx, revocation.ProjectID, revocation.CustomerID)
-	if err != nil {
-		return persistence.ManualGrantResult{}, err
-	}
-	_, members, err := repository.customerClosure(ctx, revocation.ProjectID, canonicalID)
+	canonicalID, members, err := repository.lockCanonicalClosure(ctx, revocation.ProjectID, revocation.CustomerID)
 	if err != nil {
 		return persistence.ManualGrantResult{}, err
 	}
@@ -120,6 +114,10 @@ func (repository *transaction) RevokeManualGrant(
 	}
 	if grant.RevokedAt != nil {
 		return persistence.ManualGrantResult{Grant: grant, CanonicalCustomerID: canonicalID, Replay: true}, nil
+	}
+	if !revocation.RevokedAt.Before(grant.EndsAt) {
+		// An ended grant no longer gives access; recording an early revocation would rewrite history.
+		return persistence.ManualGrantResult{}, fmt.Errorf("revoke ended manual grant: %w", persistence.ErrConflict)
 	}
 	command, err := repository.tx.Exec(ctx, `
 		UPDATE manual_grants
@@ -147,31 +145,35 @@ func (repository *transaction) RevokeManualGrant(
 	return persistence.ManualGrantResult{Grant: grant, CanonicalCustomerID: canonicalID}, nil
 }
 
-// lockCanonicalClosure resolves one customer to its canonical owner and locks that closure.
+// lockCanonicalClosure resolves one customer to its canonical owner, locks that closure, and returns its members.
+// It reuses customerClosure, so the one-hop merge rule lives in one place. An unknown customer is not found.
 func (repository *transaction) lockCanonicalClosure(
 	ctx context.Context,
 	projectID core.ProjectID,
 	customerID core.CustomerID,
-) (core.CustomerID, error) {
-	identity, err := repository.customerIdentityByID(ctx, projectID, customerID)
+) (core.CustomerID, []string, error) {
+	canonicalID, members, err := repository.customerClosure(ctx, projectID, customerID)
 	if err != nil {
-		return "", err
-	}
-	canonicalID := identity.id
-	if identity.mergedInto != nil {
-		target, err := repository.customerIdentityByID(ctx, projectID, core.CustomerID(*identity.mergedInto))
-		if err != nil {
-			return "", err
-		}
-		if target.mergedInto != nil {
-			return "", fmt.Errorf("resolve canonical customer: %w", persistence.ErrConflict)
-		}
-		canonicalID = target.id
+		return "", nil, err
 	}
 	if err := repository.LockCustomerClosure(ctx, projectID, canonicalID); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return canonicalID, nil
+	return canonicalID, members, nil
+}
+
+// manualGrantReplays reports whether a stored grant answers a repeated request with the same key.
+// The customer may have been merged since, so any closure member matches. The period matches when the
+// requested duration or the requested absolute end equals the stored one.
+func manualGrantReplays(existing persistence.ManualGrant, write persistence.ManualGrantWrite, members []string) bool {
+	if !closureContains(members, string(existing.CustomerID)) || existing.ApplicationID != write.ApplicationID ||
+		existing.ProductID != write.ProductID || existing.EntitlementID != write.EntitlementID ||
+		existing.Reason != write.Reason {
+		return false
+	}
+	storedDuration := normalizeTime(existing.EndsAt).Sub(normalizeTime(existing.StartsAt))
+	requestedDuration := normalizeTime(write.EndsAt).Sub(normalizeTime(write.StartsAt))
+	return storedDuration == requestedDuration || normalizeTime(existing.EndsAt).Equal(normalizeTime(write.EndsAt))
 }
 
 // requireManualGrantCatalog confirms the application and the product's entitlement grant exist in the project.
@@ -218,18 +220,9 @@ func (repository *transaction) manualGrantByID(
 	projectID core.ProjectID,
 	grantID string,
 ) (persistence.ManualGrant, error) {
-	return repository.scanManualGrant(repository.tx.QueryRow(ctx, manualGrantSelectSQL+`
+	return scanManualGrantRow(repository.tx.QueryRow(ctx, manualGrantSelectSQL+`
 		WHERE mg.project_id = $1 AND mg.id = $2
 	`, projectID, grantID))
-}
-
-// scanManualGrant scans and validates one stored grant row.
-func (repository *transaction) scanManualGrant(row pgx.Row) (persistence.ManualGrant, error) {
-	grant, err := scanManualGrantRow(row)
-	if err != nil {
-		return persistence.ManualGrant{}, err
-	}
-	return grant, nil
 }
 
 // scanManualGrantRow converts one manualGrantSelectSQL row into a validated grant.

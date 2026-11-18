@@ -71,10 +71,14 @@ func (store *Store) AdminSearchCustomers(
 	if err := validateAdminCustomerSearch(&search); err != nil {
 		return persistence.AdminCustomerSearchPage{}, err
 	}
+	lookups, err := store.adminReferenceLookups(ctx, search)
+	if err != nil {
+		return persistence.AdminCustomerSearchPage{}, err
+	}
 	var page persistence.AdminCustomerSearchPage
-	err := store.transact(ctx, pgx.RepeatableRead, func(repository *transaction) error {
+	err = store.transact(ctx, pgx.RepeatableRead, func(repository *transaction) error {
 		var loadErr error
-		page, loadErr = repository.adminSearchCustomers(ctx, search)
+		page, loadErr = repository.adminSearchCustomers(ctx, search, lookups)
 		return loadErr
 	})
 	return page, err
@@ -129,6 +133,7 @@ func validateAdminCustomerSearch(search *persistence.AdminCustomerSearch) error 
 func (repository *transaction) adminSearchCustomers(
 	ctx context.Context,
 	search persistence.AdminCustomerSearch,
+	lookups []persistence.AdminReferenceFingerprint,
 ) (persistence.AdminCustomerSearchPage, error) {
 	var projectFound bool
 	if err := repository.tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1)`, search.ProjectID).
@@ -165,10 +170,6 @@ func (repository *transaction) adminSearchCustomers(
 		return scanAdminSearchPage(rows, search.Limit)
 	}
 
-	lookups, err := repository.adminReferenceLookups(ctx, search)
-	if err != nil {
-		return persistence.AdminCustomerSearchPage{}, err
-	}
 	applicationIDs := make([]string, 0, len(lookups))
 	roles := make([]string, 0, len(lookups))
 	kinds := make([]string, 0, len(lookups))
@@ -241,33 +242,37 @@ func (repository *transaction) adminSearchCustomers(
 	return scanAdminSearchPage(rows, search.Limit)
 }
 
-// adminReferenceLookups asks the fingerprinter for the search text in every project application scope.
-func (repository *transaction) adminReferenceLookups(
+// adminReferenceLookups lists the project applications, then asks the fingerprinter for the search text in every project application scope.
+func (store *Store) adminReferenceLookups(
 	ctx context.Context,
 	search persistence.AdminCustomerSearch,
 ) ([]persistence.AdminReferenceFingerprint, error) {
-	if search.References == nil {
+	if search.References == nil || search.Query == "" {
 		return nil, nil
 	}
-	rows, err := repository.tx.Query(ctx, `
-		SELECT id FROM applications WHERE project_id = $1 ORDER BY id LIMIT $2
-	`, search.ProjectID, adminCollectionLimit)
-	if err != nil {
-		return nil, classifyError("list admin search applications", err)
-	}
 	applicationIDs := make([]core.ApplicationID, 0)
-	for rows.Next() {
-		var applicationID core.ApplicationID
-		if err := rows.Scan(&applicationID); err != nil {
-			rows.Close()
-			return nil, classifyError("scan admin search application", err)
+	err := store.transact(ctx, pgx.ReadCommitted, func(repository *transaction) error {
+		applicationIDs = applicationIDs[:0]
+		rows, err := repository.tx.Query(ctx, `
+			SELECT id FROM applications WHERE project_id = $1 ORDER BY id LIMIT $2
+		`, search.ProjectID, adminCollectionLimit)
+		if err != nil {
+			return classifyError("list admin search applications", err)
 		}
-		applicationIDs = append(applicationIDs, applicationID)
+		defer rows.Close()
+		for rows.Next() {
+			var applicationID core.ApplicationID
+			if err := rows.Scan(&applicationID); err != nil {
+				return classifyError("scan admin search application", err)
+			}
+			applicationIDs = append(applicationIDs, applicationID)
+		}
+		return classifyError("iterate admin search applications", rows.Err())
+	})
+	if err != nil {
+		return nil, err
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, classifyError("iterate admin search applications", err)
-	}
+	// Fingerprinting runs after that short read commits, so no database transaction waits on it.
 	if len(applicationIDs) == 0 {
 		return nil, nil
 	}
@@ -335,16 +340,9 @@ func (repository *transaction) adminCustomerDetail(
 		return persistence.AdminCustomerDetail{}, err
 	}
 	detail.Customer = requested
-	detail.CanonicalCustomerID = requested.ID
-	if requested.MergedIntoCustomerID != nil {
-		canonical, err := repository.adminCustomerIdentity(ctx, projectID, *requested.MergedIntoCustomerID)
-		if err != nil {
-			return persistence.AdminCustomerDetail{}, err
-		}
-		if canonical.MergedIntoCustomerID != nil {
-			return persistence.AdminCustomerDetail{}, fmt.Errorf("resolve canonical customer: %w", persistence.ErrConflict)
-		}
-		detail.CanonicalCustomerID = canonical.ID
+	// customerClosure owns the one-hop merge rule shared with projections and manual grants.
+	if detail.CanonicalCustomerID, _, err = repository.customerClosure(ctx, projectID, requested.ID); err != nil {
+		return persistence.AdminCustomerDetail{}, err
 	}
 	detail.Members, err = repository.adminCustomerMembers(ctx, projectID, detail.CanonicalCustomerID)
 	if err != nil {
@@ -420,8 +418,7 @@ func (repository *transaction) adminCustomerMembers(
 		FROM customers
 		WHERE project_id = $1 AND (id = $2 OR merged_into_customer_id = $2)
 		ORDER BY (id = $2) DESC, created_at, id
-		LIMIT $3
-	`, projectID, canonicalID, persistence.AdminCustomerTimelineSourceLimit)
+	`, projectID, canonicalID)
 	if err != nil {
 		return nil, classifyError("list admin customer closure", err)
 	}
@@ -793,7 +790,7 @@ func (repository *transaction) addAdminOutboxEvents(
 			Version: version, Status: status,
 		}
 		timeline.add(change)
-		timeline.noteDelivery(change.EntitlementID, version)
+		timeline.noteDelivery(change.CustomerID, change.EntitlementID, version)
 		delivery := persistence.AdminTimelineEvent{
 			CustomerID: change.CustomerID, SourceID: outboxID, ApplicationID: change.ApplicationID,
 			EntitlementID: change.EntitlementID, EntitlementKey: key, Version: version, Status: status,
@@ -877,9 +874,10 @@ func (timeline *adminTimeline) noteSource(count int) {
 	}
 }
 
-// noteDelivery records that an outbox event exists for one projection version.
-func (timeline *adminTimeline) noteDelivery(entitlementID core.EntitlementID, version int64) {
-	timeline.delivered[fmt.Sprintf("%s\x00%d", entitlementID, version)] = struct{}{}
+// noteDelivery records that an outbox event exists for one customer's projection version.
+// Versions count per customer and entitlement, so the customer is part of the key.
+func (timeline *adminTimeline) noteDelivery(customerID core.CustomerID, entitlementID core.EntitlementID, version int64) {
+	timeline.delivered[deliveryKey(customerID, entitlementID, version)] = struct{}{}
 }
 
 // addIdentity adds customer creation, alias, and merge audit rows.
@@ -941,7 +939,7 @@ func (timeline *adminTimeline) addUndeliveredProjections(
 	entitlements []persistence.AdminCustomerEntitlement,
 ) {
 	for _, entitlement := range entitlements {
-		if _, exists := timeline.delivered[fmt.Sprintf("%s\x00%d", entitlement.EntitlementID, entitlement.Version)]; exists {
+		if _, exists := timeline.delivered[deliveryKey(canonicalID, entitlement.EntitlementID, entitlement.Version)]; exists {
 			continue
 		}
 		timeline.add(persistence.AdminTimelineEvent{
@@ -973,4 +971,9 @@ func (timeline *adminTimeline) sorted() ([]persistence.AdminTimelineEvent, bool)
 		truncated = true
 	}
 	return timeline.events, truncated
+}
+
+// deliveryKey identifies one projection version of one customer.
+func deliveryKey(customerID core.CustomerID, entitlementID core.EntitlementID, version int64) string {
+	return fmt.Sprintf("%s\x00%s\x00%d", customerID, entitlementID, version)
 }

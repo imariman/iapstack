@@ -2265,6 +2265,10 @@ elements.customerDetailDialog.addEventListener("close", () => {
 
 elements.grantOption.addEventListener("change", syncGrantApplications);
 elements.grantDuration.addEventListener("change", syncGrantDuration);
+// A changed request is a new grant, so it must not reuse the replay key of the request it replaces.
+elements.grantForm.addEventListener("input", () => {
+  if (elements.grantDialog.open) state.grantIdempotencyKey = newIdempotencyKey();
+});
 document.querySelector("#close-grant").addEventListener("click", () => elements.grantDialog.close());
 document.querySelector("#cancel-grant").addEventListener("click", () => elements.grantDialog.close());
 elements.grantDialog.addEventListener("close", () => {
