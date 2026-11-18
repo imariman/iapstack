@@ -31,6 +31,11 @@ type subscriptionSnapshotSpec struct {
 	lineage     string
 	lineageKind string
 	linked      string
+	// product is the internal product id; empty uses monthly. Its provider id is store-<product>.
+	product      string
+	txReason     core.TransactionReason
+	lineageAgo   time.Duration
+	cancellation core.CancellationReason
 }
 
 // TestAdminSubscriptionMetricsReadsStoredLineages verifies the SQL lineage evidence against the stated definitions.
@@ -206,6 +211,120 @@ func TestAdminSubscriptionMetricsReadsStoredLineages(t *testing.T) {
 	}
 }
 
+// TestAdminSubscriptionMetricsUsesSignedLineageEvidence verifies transaction reason, lineage start, and cancellation context.
+func TestAdminSubscriptionMetricsUsesSignedLineageEvidence(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	store := openRepositoryStore(t, database.ctx)
+	const projectID = "project-lineage"
+	mustExec(t, database, `INSERT INTO projects (id) VALUES ($1)`, projectID)
+	for _, product := range []string{"monthly", "annual"} {
+		mustExec(t, database, `INSERT INTO products (id, project_id, kind) VALUES ($1, $2, 'subscription')`, product, projectID)
+	}
+	for _, application := range []struct{ id, provider string }{{"app-apple", "apple_app_store"}, {"app-google", "google_play"}} {
+		mustExec(t, database, `
+			INSERT INTO applications (id, project_id, provider, environment, provider_application_id)
+			VALUES ($1, $2, $3, 'production', $1)
+		`, application.id, projectID, application.provider)
+		for _, product := range []string{"monthly", "annual"} {
+			mustExec(t, database, `
+				INSERT INTO store_products (project_id, application_id, product_id, provider_product_id)
+				VALUES ($1, $2, $3, 'store-' || $3)
+			`, projectID, application.id, product)
+		}
+	}
+	for _, customer := range []string{"customer-1", "customer-2", "customer-3", "customer-4"} {
+		mustExec(t, database, `INSERT INTO customers (id, project_id, external_id) VALUES ($1, $2, $1)`, customer, projectID)
+	}
+	var base time.Time
+	if err := database.conn.QueryRow(database.ctx, `SELECT now()`).Scan(&base); err != nil {
+		t.Fatalf("read database time: %v", err)
+	}
+	day := 24 * time.Hour
+	save := func(spec subscriptionSnapshotSpec) {
+		t.Helper()
+		if spec.application == "" {
+			spec.application, spec.provider, spec.lineageKind = "app-apple", core.ProviderAppleAppStore, "original_transaction_id"
+		}
+		spec.environment = core.EnvironmentProduction
+		if spec.state == "" {
+			spec.state, spec.access, spec.reason, spec.renewal = core.LifecycleActive, core.AccessAllowed, core.AccessReasonPurchaseValid, core.RenewalEnabled
+		}
+		storeSubscriptionSnapshot(t, database, store, projectID, base, spec)
+	}
+
+	// An existing Apple subscriber first seen at a renewal, then renewed, upgraded, and downgraded back.
+	save(subscriptionSnapshotSpec{
+		id: "a-renewal-1", customer: "customer-1", startsAgo: 20 * day, endsIn: -15 * day, observedAgo: 20 * day,
+		storedAgo: 20 * day, transaction: "a-t1", lineage: "a", txReason: core.TransactionReasonRenewal, lineageAgo: 400 * day,
+	})
+	save(subscriptionSnapshotSpec{
+		id: "a-renewal-2", customer: "customer-1", startsAgo: 15 * day, endsIn: -10 * day, observedAgo: 15 * day,
+		storedAgo: 15 * day, transaction: "a-t2", lineage: "a", txReason: core.TransactionReasonRenewal, lineageAgo: 400 * day,
+	})
+	save(subscriptionSnapshotSpec{
+		id: "a-upgrade", customer: "customer-1", product: "annual", startsAgo: 10 * day, endsIn: -5 * day, observedAgo: 10 * day,
+		storedAgo: 10 * day, transaction: "a-t3", lineage: "a", txReason: core.TransactionReasonPurchase, lineageAgo: 400 * day,
+	})
+	save(subscriptionSnapshotSpec{
+		id: "a-downgrade", customer: "customer-1", startsAgo: 5 * day, endsIn: 25 * day, observedAgo: day,
+		storedAgo: 5 * day, transaction: "a-t4", lineage: "a", txReason: core.TransactionReasonRenewal, lineageAgo: 400 * day,
+	})
+	// A new Apple subscriber whose original purchase is inside the window.
+	save(subscriptionSnapshotSpec{
+		id: "b-purchase", customer: "customer-2", startsAgo: 3 * day, endsIn: 27 * day, observedAgo: day,
+		storedAgo: 3 * day, transaction: "b-t1", lineage: "b", txReason: core.TransactionReasonPurchase, lineageAgo: 3 * day,
+	})
+	// A Google Play plan change with a two-day gap: the old token carries replacementCancellation.
+	save(subscriptionSnapshotSpec{
+		id: "c-old", application: "app-google", provider: core.ProviderGooglePlay, lineageKind: "purchase_token",
+		customer: "customer-3", startsAgo: 60 * day, endsIn: -6 * day, observedAgo: 7 * day, storedAgo: 60 * day,
+		transaction: "c-t1", lineage: "token-c-old",
+	})
+	save(subscriptionSnapshotSpec{
+		id: "c-old-expired", application: "app-google", provider: core.ProviderGooglePlay, lineageKind: "purchase_token",
+		customer: "customer-3", state: core.LifecycleExpired, access: core.AccessDenied, reason: core.AccessReasonExpired,
+		renewal: core.RenewalDisabled, startsAgo: 60 * day, endsIn: -6 * day, observedAgo: 5 * day, storedAgo: 5 * day,
+		transaction: "c-t1", lineage: "token-c-old", cancellation: core.CancellationReasonReplacement,
+	})
+	save(subscriptionSnapshotSpec{
+		id: "c-new", application: "app-google", provider: core.ProviderGooglePlay, lineageKind: "purchase_token",
+		customer: "customer-3", startsAgo: 4 * day, endsIn: 26 * day, observedAgo: day, storedAgo: 4 * day,
+		transaction: "c-t2", lineage: "token-c-new", linked: "token-c-old",
+	})
+	// A Google Play customer cancellation with no earlier canceled snapshot is voluntary.
+	save(subscriptionSnapshotSpec{
+		id: "d-active", application: "app-google", provider: core.ProviderGooglePlay, lineageKind: "purchase_token",
+		customer: "customer-4", startsAgo: 50 * day, endsIn: -8 * day, observedAgo: 9 * day, storedAgo: 50 * day,
+		transaction: "d-t1", lineage: "token-d",
+	})
+	save(subscriptionSnapshotSpec{
+		id: "d-expired", application: "app-google", provider: core.ProviderGooglePlay, lineageKind: "purchase_token",
+		customer: "customer-4", state: core.LifecycleExpired, access: core.AccessDenied, reason: core.AccessReasonExpired,
+		renewal: core.RenewalDisabled, startsAgo: 50 * day, endsIn: -8 * day, observedAgo: 7 * day, storedAgo: 7 * day,
+		transaction: "d-t1", lineage: "token-d", cancellation: core.CancellationReasonCustomer,
+	})
+
+	metrics, err := store.AdminSubscriptionMetrics(database.ctx, projectID, persistence.SubscriptionMetricsQuery{
+		Environment: core.EnvironmentProduction, WindowDays: 30,
+	})
+	if err != nil {
+		t.Fatalf("AdminSubscriptionMetrics() error = %v", err)
+	}
+	for name, got := range map[string][2]int64{
+		"new":             {metrics.New, 1},
+		"renewals":        {metrics.Renewals, 1},
+		"plan changes":    {metrics.PlanChanges, 2},
+		"resubscriptions": {metrics.Resubscriptions, 0},
+		"replaced":        {metrics.Churn.Replaced, 1},
+		"churned":         {metrics.Churn.Churned, 1},
+		"voluntary":       {metrics.Churn.Voluntary, 1},
+	} {
+		if got[0] != got[1] {
+			t.Errorf("%s = %d, want %d", name, got[0], got[1])
+		}
+	}
+}
+
 // storeSubscriptionSnapshot stores one subscription observation through SaveObservation and pins its storage time.
 // Every time is relative to one shared base, so back-to-back periods of different lineages meet exactly.
 func storeSubscriptionSnapshot(
@@ -220,6 +339,15 @@ func storeSubscriptionSnapshot(
 
 	startsAt := now.Add(-spec.startsAgo).UTC().Truncate(time.Microsecond)
 	endsAt := now.Add(spec.endsIn).UTC().Truncate(time.Microsecond)
+	product := spec.product
+	if product == "" {
+		product = "monthly"
+	}
+	var lineageStartedAt *time.Time
+	if spec.lineageAgo > 0 {
+		value := now.Add(-spec.lineageAgo).UTC().Truncate(time.Microsecond)
+		lineageStartedAt = &value
+	}
 	ownership := spec.ownership
 	if ownership == "" {
 		ownership = core.OwnershipPurchased
@@ -254,9 +382,10 @@ func storeSubscriptionSnapshot(
 		Store: core.StoreApplication{
 			Provider: spec.provider, Environment: spec.environment, ID: core.ProviderApplicationID(spec.application),
 		},
-		ProductID: "store-monthly", ProductKind: core.ProductKindSubscription,
+		ProductID: core.ProviderProductID("store-" + product), ProductKind: core.ProductKindSubscription,
 		State: spec.state, ProviderState: string(spec.state), Access: spec.access, AccessReason: spec.reason,
 		Ownership: ownership, Quantity: 1, OfferPhase: spec.phase,
+		TransactionReason: spec.txReason, LineageStartedAt: lineageStartedAt, CancellationReason: spec.cancellation,
 		OccurredAt: startsAt, ObservedAt: now.Add(-spec.observedAgo).UTC().Truncate(time.Microsecond),
 		EffectivePeriod: core.EffectivePeriod{StartsAt: startsAt, EndsAt: &endsAt},
 		Renewal:         core.Renewal{Mode: core.RenewalAuto, Status: spec.renewal},
@@ -273,7 +402,7 @@ func storeSubscriptionSnapshot(
 		}
 		return repository.SaveObservation(database.ctx, persistence.ObservationWrite{
 			ProjectID: core.ProjectID(projectID), CustomerID: core.CustomerID(spec.customer),
-			ProductID: "monthly", EvidenceID: evidenceID, Observation: observation, References: protected,
+			ProductID: core.ProductID(product), EvidenceID: evidenceID, Observation: observation, References: protected,
 		})
 	})
 	if err != nil {

@@ -30,6 +30,7 @@ Apple [`JWSTransactionDecodedPayload`](https://developer.apple.com/documentation
 - [`offerDiscountType`](https://developer.apple.com/documentation/appstoreserverapi/offerdiscounttype): `FREE_TRIAL`, `PAY_AS_YOU_GO`, `PAY_UP_FRONT`, `ONE_TIME`.
 - `offerIdentifier`, `offerPeriod`, and [`transactionReason`](https://developer.apple.com/documentation/appstoreserverapi/transactionreason) (`PURCHASE`, `RENEWAL`; an upgrade is `PURCHASE`, a downgrade takes effect as `RENEWAL`).
 - The page says `price` and `currency` are not for revenue reconciliation or recognition.
+- `originalPurchaseDate`: the purchase time of the original transaction of the lineage.
 - The adapter decodes the JWS payload with a non-strict `json.Unmarshal`, so these fields were present and ignored before this change.
 
 Google Play [`purchases.subscriptionsv2`](https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.subscriptionsv2), read for this plan:
@@ -37,7 +38,7 @@ Google Play [`purchases.subscriptionsv2`](https://developers.google.com/android-
 - `SubscriptionPurchaseLineItem.offerDetails`: `basePlanId`, `offerId` (discounted offers only), `offerTags`.
 - `SubscriptionPurchaseLineItem.offerPhase`: a union of `basePrice`, `freeTrial`, `introductoryPrice`, and `prorationPeriod` (with `originalOfferPhaseType`).
 - `autoRenewingPlan.recurringPrice` excludes discounts and taxes. IAPStack does not store it.
-- `canceledStateContext`, present for canceled and expired subscriptions, is a union of `userInitiatedCancellation`, `systemInitiatedCancellation`, `developerInitiatedCancellation`, and `replacementCancellation`. The adapter does not decode it.
+- `canceledStateContext`, present for canceled and expired subscriptions, is a union of `userInitiatedCancellation`, `systemInitiatedCancellation`, `developerInitiatedCancellation`, and `replacementCancellation`. The adapter now decodes it into the cancellation reason below.
 
 Huawei: the official `InAppPurchaseData` reference renders only as a navigation index, so its field table was not read. A third-party Go client documents `trialFlag` and `introductoryFlag` (0 or 1) and cites Huawei's server data model. That is not a verified contract, and no captured Huawei response in this repository carries either field. Huawei offer phase is not mapped.
 
@@ -58,6 +59,18 @@ Huawei: the official `InAppPurchaseData` reference renders only as a navigation 
 
 Persistence inserts the phase with a new snapshot and fills a NULL phase on an identical snapshot (`enrichObservationOfferPhase`). The phase never takes part in `observationMatches`: Apple identity covers the transaction id and Google Play identity covers the order id and expiry, and an analytics field must not turn an identical access snapshot into a conflict. The first stored phase is kept.
 
+## Lineage evidence
+
+Migration 014 also stores three more optional normalized fields. Each is NULL when not recorded, limited to subscriptions by the same CHECK, filled from signed evidence only, and enriched and kept out of `observationMatches` exactly like the offer phase.
+
+| Field | Column | Source | Values |
+| --- | --- | --- | --- |
+| `TransactionReason` | `transaction_reason` | Apple `transactionReason` | `purchase` (`PURCHASE`), `renewal` (`RENEWAL`). Absent or unrecognized: not recorded |
+| `LineageStartedAt` | `lineage_started_at` | Apple `originalPurchaseDate` | signed time; absent or zero: not recorded |
+| `CancellationReason` | `cancellation_reason` | Google Play `canceledStateContext` | `customer`, `system`, `developer`, `replacement`. Absent or no known member: not recorded |
+
+Google Play has no transaction reason or original purchase date, and Apple has no cancellation context field in the transaction; Huawei maps none of the three. Rows without a field keep the rule that applied before these fields existed, named in each definition below.
+
 ## Unit and scope
 
 A subscription is one lineage of a `subscription` product in one application of the selected environment (`production`, `sandbox`, or `test`; default `production`). Family-shared observations are not counted. Import grants are not counted. Lineages are counted per application, so the same customer on two applications is two subscriptions.
@@ -73,16 +86,20 @@ A subscription is one lineage of a `subscription` product in one application of 
 - **Active at start / active now.** Active at `window_start` / at `measured_at`.
 - **In a free trial now.** Active now, and the covering period's phase is `free_trial`. Counted only where the phase is recorded.
 - **Active during the window.** Some allowed period starts before `measured_at` and ends after `window_start`.
-- **New subscription.** The lineage's earliest stored allowed period starts in [`window_start`, `measured_at`), the lineage has no `linked_lineage` reference (Google Play upgrade, downgrade, or resubscribe), and no other lineage of the same canonical customer in the same application has a period that started before and ends at or after that start. Trials count as new.
-- **Renewal.** A provider transaction first stored in the window, in a lineage that already had an earlier stored transaction. The first paid period after a free trial is a renewal. The first transaction IAPStack ever saw in a lineage is never a renewal.
+- **New subscription.** The lineage starts in [`window_start`, `measured_at`): its signed lineage start when any snapshot carries one (Apple `originalPurchaseDate`, so a subscriber first seen at a renewal is not new), otherwise its earliest stored allowed period. The earliest stored allowed period must also be inside the window, the lineage has no `linked_lineage` reference (Google Play upgrade, downgrade, or resubscribe), and no other lineage of the same canonical customer in the same application has a period that started before and ends at or after that start. Trials count as new.
+- **Later transaction.** A provider transaction first stored in the window, in a lineage that already had an earlier stored transaction. The first transaction IAPStack ever saw in a lineage is never one. A later transaction is exactly one of:
+  - **plan change:** it has a signed transaction reason and its product differs from the previous stored transaction of the lineage (an Apple upgrade is `purchase`, a downgrade takes effect as `renewal`);
+  - **resubscription:** its signed reason is `purchase` and the product is unchanged;
+  - **renewal:** otherwise. A transaction with no signed reason is always a renewal, as before. The first paid period after a free trial is a renewal.
 - **Ended.** The lineage's last allowed period ends after `window_start` and at or before `measured_at`.
-- **Replaced.** Ended, and another lineage of the same canonical customer and application has a period that started at or before that end and ends after it. Not churn.
+- **Replaced.** Ended, and the latest recorded cancellation reason is `replacement` (Google Play `replacementCancellation`, which holds even when the old and new periods leave a gap), or another lineage of the same canonical customer and application has a period that started at or before that end and ends after it. Not churn.
 - **Paused.** Ended, and the latest snapshot is `paused`. Not churn.
 - **Churned.** Ended and neither replaced nor paused. The reason is the first that matches:
   1. reversed: the latest snapshot is `refunded` or `revoked` with access `denied`;
-  2. billing: the last live snapshot (latest of `active`, `grace_period`, `on_hold`, `canceled`) is `grace_period` or `on_hold`, or its reason is `billing_issue`;
-  3. voluntary: that snapshot has renewal `disabled`, is `canceled`, or its reason is `canceled_at_period_end`;
-  4. unclassified: otherwise, including a lineage with no live snapshot.
+  2. the latest recorded cancellation reason: `customer` is voluntary, `system` is billing; `developer` and no reason fall through;
+  3. billing: the last live snapshot (latest of `active`, `grace_period`, `on_hold`, `canceled`) is `grace_period` or `on_hold`, or its reason is `billing_issue`;
+  4. voluntary: that snapshot has renewal `disabled`, is `canceled`, or its reason is `canceled_at_period_end`;
+  5. unclassified: otherwise, including a lineage with no live snapshot.
   "Latest" orders by `observed_at`, then `created_at`, then id.
 - **Churn rate.** Churned ÷ active during the window. Null when nothing was active. The numerator is a subset of the denominator.
 - **Trial started.** The earliest start of the lineage's `free_trial` snapshots is in [`window_start`, `measured_at`).
@@ -97,9 +114,9 @@ A subscription is one lineage of a `subscription` product in one application of 
 
 ## Known limits
 
-- An Apple lineage whose first stored transaction is a renewal (for example, an existing subscriber who opens an app after IAPStack is adopted) counts as new on that renewal's purchase date. `originalPurchaseDate` and `transactionReason` are not stored.
-- An Apple upgrade inside one subscription group creates a new transaction in the same lineage and counts as a renewal.
-- A Google Play plan change is replaced only when the old and new token periods meet or overlap. A gap counts as churn plus a linked, not-new subscription.
+- Rows stored before migration 014 carry none of the new fields until reconciliation re-reads the subscription and enriches an identical snapshot, or a new snapshot is stored. For those rows the earlier rules still apply: an Apple lineage first seen at a renewal counts as new on that renewal, an Apple upgrade counts as a renewal, and a Google Play plan change counts as replaced only when the old and new periods meet or overlap.
+- A Google Play replacement is exact only once the old token has been read after the replacement, so its expired snapshot carries `replacementCancellation`.
+- Google Play plan changes always use a new token, so they appear as replaced plus a linked subscription, not in `plan_changes`. `plan_changes` and `resubscriptions` are Apple-only today.
 - A Google Play allowed snapshot covers the span from the subscription `startTime` to the current expiry, so a hold that later recovered is not a gap in the history.
 - Huawei renewals count only if the order id changes at renewal. No captured Huawei renewal fixture confirms it.
 - Counts follow what IAPStack has observed. An unobserved renewal or expiry is missing until the next notification or reconciliation, and a past window can change when late evidence arrives.
@@ -122,18 +139,17 @@ The Subscriptions panel sits under Revenue & activity: an environment select, a 
 ## Tests
 
 - `internal/persistence/subscription_metrics_test.go`: one scripted lineage set pins every definition above without a database, plus the no-future rule and query bounds.
-- `internal/persistence/postgres/subscription_metrics_test.go`: stores snapshots through `SaveObservation` and checks the SQL against the definitions, phase enrichment, environment and family-sharing exclusion, and `not_found`.
+- `internal/persistence/postgres/subscription_metrics_test.go`: stores snapshots through `SaveObservation` and checks the SQL against the definitions, phase enrichment, environment and family-sharing exclusion, and `not_found`; a second scenario covers an Apple subscriber first seen at a renewal, an upgrade and a downgrade, a Google Play replacement with a gap, and a customer cancellation.
 - `internal/persistence/postgres/migrate_test.go`: migration 014 lifecycle and constraints.
-- Apple and Google Play adapter tests: field names decoded from signed JSON and every mapping row.
+- Apple and Google Play adapter tests: field names decoded from signed JSON (`offerType`, `offerDiscountType`, `transactionReason`, `originalPurchaseDate`, `offerPhase`, `canceledStateContext`) and every mapping row.
 - `internal/transport/httpapi`: defaults, bounds, 401, 404, null trial counts for Huawei, OpenAPI conformance, and the `-tags=integration` HTTP path.
 - `dashboard`: route, parameters, and fields on the contract; the stated definitions in the markup; no revenue wording in the panel.
 
 ## Open questions
 
 - Huawei offer phase. Capture a real `InAppPurchaseData` response carrying `trialFlag` and `introductoryFlag` into a fixture next to the adapter, then map them. Until then Huawei stays `not_available`.
-- Apple `transactionReason` and `originalPurchaseDate`. Storing them as optional normalized fields would remove the first two known limits. Is a second analytics field acceptable under ADR-0005, or should it wait for a provider-neutral "period reason"?
-- Google Play replacement. Should the adapter also emit the linked token under the lineage purpose, so SQL can join a replacement to the lineage it replaced instead of relying on meeting periods?
-- Churn reason. Apple `expirationIntent` (already decoded in the renewal payload, not normalized) and Google Play `canceledStateContext` name the reason directly, and `replacementCancellation` marks a Google Play plan change without relying on meeting periods. Normalizing one cancellation reason would shrink `unclassified` and make `replaced` exact.
+- Apple churn reason. Apple `expirationIntent` (decoded in the renewal payload, not normalized) could fill the cancellation reason for Apple too. It is in the renewal info, not the transaction, so it needs its own mapping and fixture.
+- Backfill. Should a one-off reconciliation pass re-read active subscriptions after migration 014, so older rows gain the new fields sooner than the daily refresh?
 - Trial cohort. Should conversion also be reported per start cohort (trials started in the window), as RevenueCat does, in addition to trials ended in the window?
 - Scale. Is a per-request scan acceptable for the largest expected self-hosted project, or should a daily rollup table be added?
 - Money. Should IAPStack ever show a list-price run rate? It would need Google Play `recurringPrice` and a stored billing period for every provider, and it must stay out of the revenue card.

@@ -76,6 +76,10 @@ type SubscriptionTrialEvidence struct {
 // SubscriptionLineage is one subscription purchase lineage with the stored evidence the metrics read.
 // Key is an opaque grouping key that is never returned by the API. Intervals holds the allowed
 // periods that overlap the window. FirstStartsAt is the earliest allowed period in all stored history.
+// StartedAt is the provider-signed start of the whole lineage (Apple originalPurchaseDate), nil when no
+// stored snapshot carries it. Renewals lists the product of each plain renewal first stored in the window;
+// PlanChanges and Resubscriptions count the transactions the signed transaction reason separates from
+// renewals. CancellationReason is the latest recorded provider cancellation context.
 type SubscriptionLineage struct {
 	Key           string
 	ApplicationID core.ApplicationID
@@ -89,6 +93,11 @@ type SubscriptionLineage struct {
 	Renewals      []core.ProductID
 	PhaseRecorded bool
 	Trial         *SubscriptionTrialEvidence
+
+	StartedAt          *time.Time
+	PlanChanges        int64
+	Resubscriptions    int64
+	CancellationReason core.CancellationReason
 }
 
 // SubscriptionChurn splits subscriptions that ended in the window. Churned is the sum of the four
@@ -143,6 +152,8 @@ type SubscriptionMetrics struct {
 	ActiveDuringWindow int64
 	New                int64
 	Renewals           int64
+	PlanChanges        int64
+	Resubscriptions    int64
 	Churn              SubscriptionChurn
 	Providers          []SubscriptionProviderMetrics
 	Breakdown          []SubscriptionBreakdown
@@ -310,7 +321,13 @@ func ComputeSubscriptionMetrics(
 		}
 
 		first := lineage.FirstStartsAt
-		if !first.Before(start) && first.Before(measuredAt) && !lineage.Linked &&
+		// A signed lineage start replaces the earliest stored period, so a subscriber first seen at a
+		// renewal is not new. Without it, the earliest stored period decides, as before migration 014.
+		lineageStart := first
+		if lineage.StartedAt != nil {
+			lineageStart = *lineage.StartedAt
+		}
+		if !lineageStart.Before(start) && lineageStart.Before(measuredAt) && !first.Before(start) && !lineage.Linked &&
 			!otherCovers(index, func(interval SubscriptionInterval) bool {
 				return interval.StartsAt.Before(first) && !interval.EndsAt.Before(first)
 			}) {
@@ -324,10 +341,14 @@ func ComputeSubscriptionMetrics(
 			metrics.Renewals++
 			row(lineage, productID).Renewals++
 		}
+		metrics.PlanChanges += lineage.PlanChanges
+		metrics.Resubscriptions += lineage.Resubscriptions
 
 		if ending, found := lineage.lastEnd(); found && ending.EndsAt.After(start) && !ending.EndsAt.After(measuredAt) {
 			endedAt := ending.EndsAt
 			switch {
+			case lineage.CancellationReason == core.CancellationReasonReplacement:
+				metrics.Churn.Replaced++
 			case otherCovers(index, func(interval SubscriptionInterval) bool {
 				return !interval.StartsAt.After(endedAt) && interval.EndsAt.After(endedAt)
 			}):
@@ -423,13 +444,20 @@ func nonEmptyIntervals(intervals []SubscriptionInterval) []SubscriptionInterval 
 	return kept
 }
 
-// churnReason classifies an ended lineage from its latest and last live evidence, in that order.
-// A refund or revocation wins. Billing evidence comes before a disabled renewal, because a customer
-// can turn renewal off while a payment is already failing. Missing evidence stays unclassified.
+// churnReason classifies an ended lineage. A refund or revocation wins. A recorded provider cancellation
+// context comes next: customer is voluntary and system is billing; developer falls through. Then the last
+// live snapshot: billing evidence comes before a disabled renewal, because a customer can turn renewal
+// off while a payment is already failing. Missing evidence stays unclassified.
 func churnReason(lineage SubscriptionLineage) subscriptionChurnReason {
 	if (lineage.Latest.State == core.LifecycleRefunded || lineage.Latest.State == core.LifecycleRevoked) &&
 		lineage.Latest.Access == core.AccessDenied {
 		return churnReversed
+	}
+	switch lineage.CancellationReason {
+	case core.CancellationReasonCustomer:
+		return churnVoluntary
+	case core.CancellationReasonSystem:
+		return churnBilling
 	}
 	live := lineage.LastLive
 	if live == nil {

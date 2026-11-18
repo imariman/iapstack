@@ -115,7 +115,8 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 		"AdminDailyActivity":           {"date", "verified", "allowed", "denied", "unresolved", "reversed"},
 		"AdminSubscriptionMetrics": {
 			"environment", "window_days", "window_start", "window_end", "measured_at", "active_at_start",
-			"active_at_end", "in_trial_at_end", "active_during_window", "new_subscriptions", "renewals", "churn",
+			"active_at_end", "in_trial_at_end", "active_during_window", "new_subscriptions", "renewals",
+			"plan_changes", "resubscriptions", "churn",
 			"trials", "breakdown", "breakdown_truncated", "daily_active",
 		},
 		"AdminSubscriptionChurn": {"churned", "voluntary", "billing", "reversed", "unclassified", "replaced", "paused", "rate"},

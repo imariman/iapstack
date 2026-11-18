@@ -2519,7 +2519,7 @@ components:
         Huawei purchase token) of a subscription product. It is active at an instant when an allowed,
         provider-signed period covers that instant; a stored refund or revocation ends that period when
         IAPStack stored it. Definitions are in docs/plans/subscription-metrics.md.
-      required: [environment, window_days, window_start, window_end, measured_at, active_at_start, active_at_end, in_trial_at_end, active_during_window, new_subscriptions, renewals, churn, trials, breakdown, breakdown_truncated, daily_active]
+      required: [environment, window_days, window_start, window_end, measured_at, active_at_start, active_at_end, in_trial_at_end, active_during_window, new_subscriptions, renewals, plan_changes, resubscriptions, churn, trials, breakdown, breakdown_truncated, daily_active]
       properties:
         environment:
           type: string
@@ -2564,13 +2564,30 @@ components:
           format: int64
           minimum: 0
           description: >-
-            Earliest stored allowed period starts inside the window, with no linked earlier Google Play token and
-            no other subscription of the same customer and application active up to that start.
+            The subscription starts inside the window: the signed lineage start (Apple originalPurchaseDate) when a
+            stored snapshot carries it, otherwise the earliest stored allowed period. It also needs no linked
+            earlier Google Play token and no other subscription of the same customer and application active up
+            to its first stored period.
         renewals:
           type: integer
           format: int64
           minimum: 0
-          description: Provider transactions first stored inside the window in a subscription that already had an earlier stored transaction.
+          description: >-
+            Provider transactions first stored inside the window in a subscription that already had an earlier
+            stored transaction, excluding those counted in plan_changes and resubscriptions. A transaction with no
+            signed reason is a renewal.
+        plan_changes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Such transactions with a signed reason (Apple transactionReason) whose product differs from the
+            previous stored transaction of the same subscription, such as an upgrade or a downgrade at renewal.
+        resubscriptions:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Such transactions with the signed reason purchase and the same product as the previous one.
         churn:
           $ref: '#/components/schemas/AdminSubscriptionChurn'
         trials:
@@ -2607,12 +2624,16 @@ components:
           type: integer
           format: int64
           minimum: 0
-          description: The last live snapshot had renewal turned off or was canceled at period end.
+          description: >-
+            The latest recorded cancellation context is customer-initiated (Google Play), or, without a context,
+            the last live snapshot had renewal turned off or was canceled at period end.
         billing:
           type: integer
           format: int64
           minimum: 0
-          description: The last live snapshot was a billing grace period, a hold, or a billing issue.
+          description: >-
+            The latest recorded cancellation context is system-initiated (Google Play), or, without a context,
+            the last live snapshot was a billing grace period, a hold, or a billing issue.
         reversed:
           type: integer
           format: int64
@@ -2627,7 +2648,9 @@ components:
           type: integer
           format: int64
           minimum: 0
-          description: Another subscription of the same customer and application was active at the end instant (plan change on a new lineage).
+          description: >-
+            The latest recorded cancellation context is a replacement (Google Play replacementCancellation), or
+            another subscription of the same customer and application was active at the end instant.
         paused:
           type: integer
           format: int64

@@ -137,8 +137,11 @@ active series and a product table. It reads only stored, provider-signed purchas
 observations, so a renewal or expiry that IAPStack has not yet observed (by
 notification or the daily reconciliation) is not counted yet. Trials and trial
 conversion appear only where the adapter records a signed offer phase (Apple, Google
-Play); Huawei shows "Not available". Observations stored before schema version 14 carry
-no offer phase. The panel shows no money figure.
+Play); Huawei shows "Not available". Apple transaction reasons and original purchase
+dates separate plan changes and existing subscribers from renewals and new
+subscriptions, and Google Play cancellation context marks replacements. Observations
+stored before schema version 14 carry none of these fields and use the earlier rules
+until reconciliation enriches them. The panel shows no money figure.
 The access-key workspace lists active and revoked administrator/application key
 metadata, identifies the current stored key, creates one-time administrator bearers,
 and requires explicit confirmation before revocation.

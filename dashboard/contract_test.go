@@ -102,7 +102,7 @@ func TestDashboardUsesDocumentedAdminOperations(t *testing.T) {
 	}
 	for _, field := range []string{
 		"active_at_end", "active_at_start", "in_trial_at_end", "active_during_window", "new_subscriptions",
-		"renewals", "churn", "trials", "breakdown", "breakdown_truncated", "daily_active", "measured_at",
+		"renewals", "plan_changes", "resubscriptions", "churn", "trials", "breakdown", "breakdown_truncated", "daily_active", "measured_at",
 	} {
 		if _, exists := metrics.Value.Properties[field]; !exists {
 			t.Errorf("AdminSubscriptionMetrics is missing %q", field)

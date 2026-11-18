@@ -27,7 +27,7 @@ func fakeSubscriptionMetrics(query persistence.SubscriptionMetricsQuery) persist
 	return persistence.SubscriptionMetrics{
 		Environment: query.Environment, WindowDays: query.WindowDays,
 		Window:        persistence.SubscriptionWindow{Start: start, End: end, MeasuredAt: measuredAt},
-		ActiveAtStart: 10, ActiveAtEnd: 12, InTrialAtEnd: 2, ActiveDuringWindow: 16, New: 5, Renewals: 7,
+		ActiveAtStart: 10, ActiveAtEnd: 12, InTrialAtEnd: 2, ActiveDuringWindow: 16, New: 5, Renewals: 7, PlanChanges: 2, Resubscriptions: 1,
 		Churn: persistence.SubscriptionChurn{
 			Churned: 4, Voluntary: 2, Billing: 1, Reversed: 1, Replaced: 1, Paused: 1,
 		},

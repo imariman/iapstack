@@ -704,6 +704,7 @@ function renderEmptySubscriptions(message) {
   }
   setText("subscriptions-active-note", "—");
   setText("subscriptions-churn-rate", "—");
+  setText("subscriptions-renewals-note", "New store transactions in a subscription");
   renderSubscriptionChart([], 0);
   document.querySelector("#subscription-churn-reasons").replaceChildren();
   const trials = document.querySelector("#subscription-trials");
@@ -723,6 +724,10 @@ function renderSubscriptionMetrics(metrics) {
   );
   setText("subscriptions-new", formatNumber(metrics.new_subscriptions));
   setText("subscriptions-renewals", formatNumber(metrics.renewals));
+  setText(
+    "subscriptions-renewals-note",
+    `Same plan · ${countLabel(metrics.plan_changes, "plan change")} and ${formatNumber(metrics.resubscriptions)} resubscribed not included`,
+  );
   setText("subscriptions-churned", formatNumber(metrics.churn.churned));
   setText(
     "subscriptions-churn-rate",
@@ -821,7 +826,7 @@ function renderSubscriptionChurn(churn) {
   excluded.append(node(
     "dd",
     "",
-    `${countLabel(churn.replaced, "plan change")} · ${formatNumber(churn.paused)} paused`,
+    `${formatNumber(churn.replaced)} replaced · ${formatNumber(churn.paused)} paused`,
   ));
   list.append(excluded);
 }

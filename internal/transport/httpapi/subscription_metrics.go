@@ -31,6 +31,8 @@ type adminSubscriptionMetricsResponse struct {
 	ActiveDuringWindow int64                                `json:"active_during_window"`
 	NewSubscriptions   int64                                `json:"new_subscriptions"`
 	Renewals           int64                                `json:"renewals"`
+	PlanChanges        int64                                `json:"plan_changes"`
+	Resubscriptions    int64                                `json:"resubscriptions"`
 	Churn              adminSubscriptionChurnResponse       `json:"churn"`
 	Trials             []adminSubscriptionTrialResponse     `json:"trials"`
 	Breakdown          []adminSubscriptionBreakdownResponse `json:"breakdown"`
@@ -134,6 +136,7 @@ func subscriptionMetricsFromRecord(metrics persistence.SubscriptionMetrics) admi
 		WindowStart: metrics.Window.Start, WindowEnd: metrics.Window.End, MeasuredAt: metrics.Window.MeasuredAt,
 		ActiveAtStart: metrics.ActiveAtStart, ActiveAtEnd: metrics.ActiveAtEnd, InTrialAtEnd: metrics.InTrialAtEnd,
 		ActiveDuringWindow: metrics.ActiveDuringWindow, NewSubscriptions: metrics.New, Renewals: metrics.Renewals,
+		PlanChanges: metrics.PlanChanges, Resubscriptions: metrics.Resubscriptions,
 		Churn: adminSubscriptionChurnResponse{
 			Churned: metrics.Churn.Churned, Voluntary: metrics.Churn.Voluntary, Billing: metrics.Churn.Billing,
 			Reversed: metrics.Churn.Reversed, Unclassified: metrics.Churn.Unclassified,

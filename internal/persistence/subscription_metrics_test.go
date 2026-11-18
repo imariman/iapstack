@@ -156,6 +156,66 @@ func TestComputeSubscriptionMetricsFollowsStatedDefinitions(t *testing.T) {
 	}
 }
 
+// TestComputeSubscriptionMetricsUsesSignedLineageEvidence pins the rules that apply only when the fields were recorded.
+func TestComputeSubscriptionMetricsUsesSignedLineageEvidence(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, time.October, 20, 0, 0, 0, 0, time.UTC)
+	measuredAt := start.Add(29*24*time.Hour + 12*time.Hour)
+	window := persistence.SubscriptionWindow{Start: start, End: start.Add(30 * 24 * time.Hour), MeasuredAt: measuredAt}
+	day := func(offset int) time.Time { return start.Add(time.Duration(offset) * 24 * time.Hour) }
+	expired := persistence.SubscriptionEvidence{State: core.LifecycleExpired, Access: core.AccessDenied, Reason: core.AccessReasonExpired}
+	active := persistence.SubscriptionEvidence{
+		State: core.LifecycleActive, Access: core.AccessAllowed, Reason: core.AccessReasonPurchaseValid, RenewalStatus: core.RenewalEnabled,
+	}
+	lineage := func(key string, customer core.CustomerID, from, to time.Time) persistence.SubscriptionLineage {
+		return persistence.SubscriptionLineage{
+			Key: key, ApplicationID: "app-1", Provider: core.ProviderGooglePlay, CustomerID: customer, FirstStartsAt: from,
+			Intervals: []persistence.SubscriptionInterval{{ProductID: "monthly", StartsAt: from, EndsAt: to}},
+			Latest:    active, LastLive: &active,
+		}
+	}
+	originalStart := day(-200)
+	firstSeenAtRenewal := lineage("apple-existing", "customer-1", day(5), day(35))
+	firstSeenAtRenewal.Provider = core.ProviderAppleAppStore
+	firstSeenAtRenewal.StartedAt = &originalStart
+	firstSeenAtRenewal.PlanChanges, firstSeenAtRenewal.Resubscriptions = 2, 1
+	originalInWindow := lineage("apple-new", "customer-2", day(7), day(37))
+	originalInWindow.Provider = core.ProviderAppleAppStore
+	originalInWindow.StartedAt = &originalInWindow.FirstStartsAt
+	replacedWithGap := lineage("google-old", "customer-3", day(-40), day(10))
+	replacedWithGap.Latest, replacedWithGap.CancellationReason = expired, core.CancellationReasonReplacement
+	replacement := lineage("google-new", "customer-3", day(12), day(42))
+	replacement.Linked = true
+	customerCanceled := lineage("google-customer", "customer-4", day(-10), day(11))
+	customerCanceled.Latest, customerCanceled.CancellationReason = expired, core.CancellationReasonCustomer
+	systemCanceled := lineage("google-system", "customer-5", day(-10), day(12))
+	systemCanceled.Latest, systemCanceled.CancellationReason = expired, core.CancellationReasonSystem
+	developerCanceled := lineage("google-developer", "customer-6", day(-10), day(13))
+	developerCanceled.Latest, developerCanceled.CancellationReason = expired, core.CancellationReasonDeveloper
+
+	metrics := persistence.ComputeSubscriptionMetrics(
+		persistence.SubscriptionMetricsQuery{Environment: core.EnvironmentProduction, WindowDays: 30}, window, nil,
+		[]persistence.SubscriptionLineage{
+			firstSeenAtRenewal, originalInWindow, replacedWithGap, replacement, customerCanceled, systemCanceled, developerCanceled,
+		},
+	)
+	for name, got := range map[string][2]int64{
+		"new":             {metrics.New, 1},
+		"plan changes":    {metrics.PlanChanges, 2},
+		"resubscriptions": {metrics.Resubscriptions, 1},
+		"replaced":        {metrics.Churn.Replaced, 1},
+		"churned":         {metrics.Churn.Churned, 3},
+		"voluntary":       {metrics.Churn.Voluntary, 1},
+		"billing":         {metrics.Churn.Billing, 1},
+		"unclassified":    {metrics.Churn.Unclassified, 1},
+	} {
+		if got[0] != got[1] {
+			t.Errorf("%s = %d, want %d", name, got[0], got[1])
+		}
+	}
+}
+
 // TestComputeSubscriptionMetricsNeverEvaluatesTheFuture keeps the daily series at or before generation time.
 func TestComputeSubscriptionMetricsNeverEvaluatesTheFuture(t *testing.T) {
 	t.Parallel()

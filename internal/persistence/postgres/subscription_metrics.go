@@ -24,6 +24,7 @@ const (
 			SELECT po.id, po.application_id, scope.provider, po.product_id,
 				po.lifecycle_state, po.access_status, po.access_reason, po.renewal_status,
 				po.effective_starts_at, po.effective_ends_at, po.observed_at, po.created_at, po.offer_phase,
+				po.transaction_reason, po.lineage_started_at, po.cancellation_reason,
 				COALESCE(customer.merged_into_customer_id, customer.id) AS customer_id,
 				COALESCE(NULLIF(lineage.key, ''), 'observation:' || po.id) AS lineage,
 				transaction_reference.key AS transaction_key,
@@ -97,7 +98,10 @@ const (
 		), lineage_facts AS (
 			SELECT application_id, lineage,
 				bool_or(linked) AS linked,
-				bool_or(offer_phase IS NOT NULL) AS phase_recorded
+				bool_or(offer_phase IS NOT NULL) AS phase_recorded,
+				min(lineage_started_at) AS started_at,
+				(array_agg(cancellation_reason ORDER BY observed_at DESC, created_at DESC, id DESC)
+					FILTER (WHERE cancellation_reason IS NOT NULL))[1] AS cancellation_reason
 			FROM snapshots
 			GROUP BY application_id, lineage
 		), latest AS (
@@ -113,20 +117,38 @@ const (
 			ORDER BY application_id, lineage, observed_at DESC, created_at DESC, id DESC
 		), transactions AS (
 			SELECT application_id, lineage, transaction_key, min(created_at) AS first_stored_at,
-				(array_agg(product_id ORDER BY created_at, id))[1] AS product_id
+				(array_agg(product_id ORDER BY created_at, id))[1] AS product_id,
+				(array_agg(transaction_reason ORDER BY created_at, id)
+					FILTER (WHERE transaction_reason IS NOT NULL))[1] AS reason
 			FROM snapshots
 			WHERE transaction_key IS NOT NULL
 			GROUP BY application_id, lineage, transaction_key
 		), ranked_transactions AS (
-			SELECT application_id, lineage, product_id, first_stored_at, transaction_key,
+			SELECT application_id, lineage, product_id, first_stored_at, transaction_key, reason,
 				row_number() OVER (
 					PARTITION BY application_id, lineage ORDER BY first_stored_at, transaction_key
-				) AS transaction_rank
+				) AS transaction_rank,
+				lag(product_id) OVER (
+					PARTITION BY application_id, lineage ORDER BY first_stored_at, transaction_key
+				) AS previous_product_id
 			FROM transactions
+		), classified_transactions AS (
+			-- Without a signed reason every later transaction stays a renewal, as before migration 014.
+			SELECT application_id, lineage, product_id, first_stored_at, transaction_key, transaction_rank,
+				CASE
+					WHEN reason IS NULL THEN 'renewal'
+					WHEN product_id IS DISTINCT FROM previous_product_id THEN 'plan_change'
+					WHEN reason = 'purchase' THEN 'resubscription'
+					ELSE 'renewal'
+				END AS transaction_kind
+			FROM ranked_transactions
 		), renewals AS (
 			SELECT application_id, lineage,
-				array_agg(product_id ORDER BY first_stored_at, transaction_key) AS products
-			FROM ranked_transactions
+				COALESCE(array_agg(product_id ORDER BY first_stored_at, transaction_key)
+					FILTER (WHERE transaction_kind = 'renewal'), ARRAY[]::text[]) AS products,
+				count(*) FILTER (WHERE transaction_kind = 'plan_change') AS plan_changes,
+				count(*) FILTER (WHERE transaction_kind = 'resubscription') AS resubscriptions
+			FROM classified_transactions
 			WHERE transaction_rank > 1 AND first_stored_at >= $3 AND first_stored_at < $4
 			GROUP BY application_id, lineage
 		), trials AS (
@@ -162,7 +184,9 @@ const (
 			last_live.lifecycle_state, last_live.access_status, last_live.access_reason, last_live.renewal_status,
 			COALESCE(renewals.products, ARRAY[]::text[]),
 			trial_outcomes.starts_at, trial_outcomes.ends_at,
-			COALESCE(trial_outcomes.converted, false), COALESCE(trial_outcomes.unknown_after, false)
+			COALESCE(trial_outcomes.converted, false), COALESCE(trial_outcomes.unknown_after, false),
+			lineage_facts.started_at, COALESCE(lineage_facts.cancellation_reason, ''),
+			COALESCE(renewals.plan_changes, 0), COALESCE(renewals.resubscriptions, 0)
 		FROM window_intervals
 		JOIN latest USING (application_id, lineage)
 		JOIN lineage_facts USING (application_id, lineage)
@@ -279,6 +303,7 @@ func (repository *transaction) subscriptionLineages(
 		var liveState, liveAccess, liveReason, liveRenewal *string
 		var trialStarts, trialEnds *time.Time
 		var converted, unknownAfter bool
+		var startedAt *time.Time
 		if err := rows.Scan(
 			&lineage.Key, &lineage.ApplicationID, &lineage.Provider, &lineage.CustomerID,
 			&lineage.Linked, &lineage.PhaseRecorded, &lineage.FirstStartsAt,
@@ -286,6 +311,7 @@ func (repository *transaction) subscriptionLineages(
 			&lineage.Latest.State, &lineage.Latest.Access, &lineage.Latest.Reason, &lineage.Latest.RenewalStatus,
 			&liveState, &liveAccess, &liveReason, &liveRenewal,
 			&renewals, &trialStarts, &trialEnds, &converted, &unknownAfter,
+			&startedAt, &lineage.CancellationReason, &lineage.PlanChanges, &lineage.Resubscriptions,
 		); err != nil {
 			return nil, classifyError("scan subscription lineage", err)
 		}
@@ -293,6 +319,10 @@ func (repository *transaction) subscriptionLineages(
 			return nil, errors.New("subscription lineage interval arrays differ in length")
 		}
 		lineage.FirstStartsAt = lineage.FirstStartsAt.UTC()
+		if startedAt != nil {
+			started := startedAt.UTC()
+			lineage.StartedAt = &started
+		}
 		lineage.Intervals = make([]persistence.SubscriptionInterval, 0, len(products))
 		for index := range products {
 			lineage.Intervals = append(lineage.Intervals, persistence.SubscriptionInterval{

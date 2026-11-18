@@ -175,10 +175,20 @@ health for one application environment (`environment`, default `production`) ove
 whole UTC days ending today (`window_days`, 1 to 90, default 30). A subscription is
 one purchase lineage of a subscription product. The response gives active
 subscriptions at the window start and at `measured_at`, new subscriptions, renewals,
-churn split into voluntary, billing, reversed, and unclassified, a churn rate of
+plan changes and resubscriptions (kept out of renewals), churn split into voluntary,
+billing, reversed, and unclassified, a churn rate of
 `churned / active_during_window`, a daily active series, and an application and
 product breakdown. Every figure is evaluated at or before `measured_at`; nothing is
 projected. Family-shared access and imported RevenueCat grants are not counted.
+
+Migration 014 also stores Apple `transactionReason` and `originalPurchaseDate` and
+Google Play `canceledStateContext`. With them, an Apple subscriber first seen at a
+renewal is not new, an Apple upgrade or downgrade is a plan change rather than a
+renewal, and a Google Play token canceled by `replacementCancellation` is replaced
+rather than churned even when the new token starts after a gap. Rows without these
+fields, including rows stored before migration 014, keep the earlier rules: earliest
+stored period for new, every later transaction a renewal, and replaced only when the
+periods meet.
 
 Trials come only from a provider-signed offer phase. Apple and Google Play record
 one; Huawei does not, so its `trials` row is `not_available` with null counts.
