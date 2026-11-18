@@ -54,6 +54,7 @@ type Service struct {
 	protection   protection.Service
 	replacements linkedPurchaseReader
 	verification *verification.Service
+	consumption  appleConsumptionSender
 	clock        func() time.Time
 	logger       *slog.Logger
 }
@@ -96,6 +97,7 @@ func (service *Service) HandleInbox(ctx context.Context, message persistence.Que
 }
 
 // handleAppleInbox re-queries authoritative App Store state from one verified V2 signal.
+// A CONSUMPTION_REQUEST also schedules its consumption answer first, so a failed refresh does not lose it.
 func (service *Service) handleAppleInbox(
 	ctx context.Context,
 	message persistence.QueueMessage,
@@ -104,6 +106,12 @@ func (service *Service) handleAppleInbox(
 	var notification apple.NotificationEnvelope
 	if err := decodeStrict(payload, &notification); err != nil {
 		return fmt.Errorf("decode App Store notification: %w", err)
+	}
+	if err := notification.Validate(); err != nil {
+		return fmt.Errorf("validate App Store notification: %w", err)
+	}
+	if err := service.scheduleAppleConsumption(ctx, message, notification); err != nil {
+		return err
 	}
 	evidence, process, err := notification.VerificationEvidence()
 	if err != nil || !process {

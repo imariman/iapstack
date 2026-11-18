@@ -1,4 +1,4 @@
-// Package worker executes durable inbox, reconciliation, and outbox jobs through River.
+// Package worker executes durable inbox, reconciliation, outbox, and App Store consumption jobs through River.
 package worker
 
 import (
@@ -105,6 +105,13 @@ type reconciliationWorker struct {
 	executor *executor
 }
 
+// appleConsumptionWorker adapts River consumption arguments and applies their deadline-bounded backoff.
+type appleConsumptionWorker struct {
+	river.WorkerDefaults[jobs.AppleConsumptionArgs]
+	executor *executor
+	clock    func() time.Time
+}
+
 // Handle calls the adapted handler function.
 func (handler HandlerFunc) Handle(ctx context.Context, message persistence.QueueMessage) error {
 	return handler(ctx, message)
@@ -153,11 +160,15 @@ func New(
 	if err := river.AddWorkerSafely(workers, &reconciliationWorker{executor: execution}); err != nil {
 		return nil, fmt.Errorf("register reconciliation River worker: %w", err)
 	}
+	if err := river.AddWorkerSafely(workers, &appleConsumptionWorker{executor: execution, clock: time.Now}); err != nil {
+		return nil, fmt.Errorf("register Apple consumption River worker: %w", err)
+	}
 	queueConfig := river.QueueConfig{MaxWorkers: config.Concurrency}
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
 		ID: strings.TrimSpace(config.WorkerID),
 		Queues: map[string]river.QueueConfig{
 			jobs.QueueInbox: queueConfig, jobs.QueueOutbox: queueConfig, jobs.QueueReconciliation: queueConfig,
+			jobs.QueueAppleConsumption: queueConfig,
 		},
 		Workers:                     workers,
 		Logger:                      logger,
@@ -317,7 +328,7 @@ func (runner *Runner) refreshQueueDepth(ctx context.Context) error {
 		FROM river_job
 		WHERE queue = ANY($1)
 		GROUP BY queue, state
-	`, []string{jobs.QueueInbox, jobs.QueueOutbox, jobs.QueueReconciliation})
+	`, riverQueues())
 	if err != nil {
 		return fmt.Errorf("query River queue depth: %w", err)
 	}
@@ -345,7 +356,7 @@ func (runner *Runner) refreshQueueDepth(ctx context.Context) error {
 			AND state IN ('available', 'retryable', 'scheduled')
 			AND scheduled_at <= CURRENT_TIMESTAMP
 		GROUP BY queue
-	`, []string{jobs.QueueInbox, jobs.QueueOutbox, jobs.QueueReconciliation})
+	`, riverQueues())
 	if err != nil {
 		return fmt.Errorf("query River queue age: %w", err)
 	}
@@ -381,6 +392,20 @@ func (worker *outboxWorker) Work(ctx context.Context, job *river.Job[jobs.Outbox
 // Work processes one protected lifecycle reconciliation job.
 func (worker *reconciliationWorker) Work(ctx context.Context, job *river.Job[jobs.ReconciliationArgs]) error {
 	return worker.executor.execute(ctx, persistence.QueueReconciliation, job.Args.JobID, job.Attempt, job.MaxAttempts, snoozeCount(job.Metadata))
+}
+
+// Work runs one attempt of a protected App Store consumption request.
+func (worker *appleConsumptionWorker) Work(ctx context.Context, job *river.Job[jobs.AppleConsumptionArgs]) error {
+	return worker.executor.execute(ctx, persistence.QueueAppleConsumption, job.Args.RequestID, job.Attempt, job.MaxAttempts, snoozeCount(job.Metadata))
+}
+
+// NextRetry doubles the delay from one minute up to one hour and never schedules past the request deadline.
+func (worker *appleConsumptionWorker) NextRetry(job *river.Job[jobs.AppleConsumptionArgs]) time.Time {
+	clock := worker.clock
+	if clock == nil {
+		clock = time.Now
+	}
+	return jobs.AppleConsumptionRetryAt(job.Attempt, clock(), job.Args.DeadlineAt)
 }
 
 // execute loads one audit record, invokes its handler, and persists terminal outcomes.
@@ -541,7 +566,13 @@ func durableQueues() []persistence.QueueName {
 		persistence.QueueInbox,
 		persistence.QueueReconciliation,
 		persistence.QueueOutbox,
+		persistence.QueueAppleConsumption,
 	}
+}
+
+// riverQueues returns every River queue name sampled for depth and age metrics.
+func riverQueues() []string {
+	return []string{jobs.QueueInbox, jobs.QueueOutbox, jobs.QueueReconciliation, jobs.QueueAppleConsumption}
 }
 
 // persistenceQueue maps one River queue name back to the stable metrics label.
@@ -553,6 +584,8 @@ func persistenceQueue(queue string) (persistence.QueueName, bool) {
 		return persistence.QueueOutbox, true
 	case jobs.QueueReconciliation:
 		return persistence.QueueReconciliation, true
+	case jobs.QueueAppleConsumption:
+		return persistence.QueueAppleConsumption, true
 	default:
 		return "", false
 	}

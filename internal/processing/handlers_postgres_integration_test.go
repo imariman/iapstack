@@ -683,11 +683,12 @@ func assertProcessingIntegrationCount(
 ) {
 	t.Helper()
 	allowed := map[string]struct{}{
-		"customer_entitlements": {},
-		"inbox_messages":        {},
-		"outbox_events":         {},
-		"purchase_evidence":     {},
-		"purchase_observations": {},
+		"apple_consumption_requests": {},
+		"customer_entitlements":      {},
+		"inbox_messages":             {},
+		"outbox_events":              {},
+		"purchase_evidence":          {},
+		"purchase_observations":      {},
 	}
 	if _, ok := allowed[table]; !ok {
 		t.Fatalf("table %q is not allowed by processing integration helper", table)

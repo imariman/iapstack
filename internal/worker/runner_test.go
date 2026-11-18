@@ -105,7 +105,7 @@ func TestNewValidatesWorkerDependenciesAndConfiguration(t *testing.T) {
 	handler := HandlerFunc(func(context.Context, persistence.QueueMessage) error { return nil })
 	handlers := map[persistence.QueueName]Handler{
 		persistence.QueueInbox: handler, persistence.QueueOutbox: handler,
-		persistence.QueueReconciliation: handler,
+		persistence.QueueReconciliation: handler, persistence.QueueAppleConsumption: handler,
 	}
 	tests := []struct {
 		name     string
@@ -119,6 +119,9 @@ func TestNewValidatesWorkerDependenciesAndConfiguration(t *testing.T) {
 		{name: "missing store", pool: pool, config: config, handlers: handlers, wantCode: "store is required"},
 		{name: "invalid configuration", pool: pool, store: store, handlers: handlers, wantCode: "configuration is invalid"},
 		{name: "missing handler", pool: pool, store: store, config: config, handlers: map[persistence.QueueName]Handler{}, wantCode: "handler for inbox is required"},
+		{name: "missing consumption handler", pool: pool, store: store, config: config, handlers: map[persistence.QueueName]Handler{
+			persistence.QueueInbox: handler, persistence.QueueOutbox: handler, persistence.QueueReconciliation: handler,
+		}, wantCode: "handler for apple_consumption is required"},
 	}
 	for _, test := range tests {
 		test := test
@@ -227,6 +230,7 @@ func TestExecutorRetriesUnavailableHandlerStorageForEveryQueue(t *testing.T) {
 		persistence.QueueInbox,
 		persistence.QueueOutbox,
 		persistence.QueueReconciliation,
+		persistence.QueueAppleConsumption,
 	}
 	for _, queue := range queues {
 		queue := queue
@@ -565,6 +569,7 @@ func TestQueueMappingsAndSafeCodesCoverClosedVocabularies(t *testing.T) {
 		persistence.QueueInbox,
 		persistence.QueueReconciliation,
 		persistence.QueueOutbox,
+		persistence.QueueAppleConsumption,
 	}
 	if got := durableQueues(); !reflect.DeepEqual(got, wantQueues) {
 		t.Fatalf("durableQueues() = %#v, want %#v", got, wantQueues)
@@ -578,6 +583,7 @@ func TestQueueMappingsAndSafeCodesCoverClosedVocabularies(t *testing.T) {
 		{name: "inbox", queue: jobs.QueueInbox, want: persistence.QueueInbox, ok: true},
 		{name: "outbox", queue: jobs.QueueOutbox, want: persistence.QueueOutbox, ok: true},
 		{name: "reconciliation", queue: jobs.QueueReconciliation, want: persistence.QueueReconciliation, ok: true},
+		{name: "apple consumption", queue: jobs.QueueAppleConsumption, want: persistence.QueueAppleConsumption, ok: true},
 		{name: "unknown", queue: "dynamic-provider-queue"},
 	} {
 		test := test
@@ -610,6 +616,7 @@ func newTestExecutor(transaction *executorTransaction, handler Handler) *executo
 		store: &executorStore{transaction: transaction},
 		handlers: map[persistence.QueueName]Handler{
 			persistence.QueueInbox: handler, persistence.QueueOutbox: handler, persistence.QueueReconciliation: handler,
+			persistence.QueueAppleConsumption: handler,
 		},
 		metrics: metrics.New(),
 		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
