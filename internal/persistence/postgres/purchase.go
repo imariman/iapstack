@@ -453,9 +453,9 @@ func (repository *transaction) enrichObservationPrice(
 // enrichObservationOfferPhase records newly available subscription analytics evidence on an existing
 // snapshot: offer phase, transaction reason, lineage start, and cancellation reason. Rows stored before
 // migration 014 have none of them. Each column is filled only while it is NULL, so the first recorded
-// value is kept. None of them takes part in observationMatches: adapter identities already cover the
-// signed transaction or order they come from, and an analytics field must not turn an identical access
-// snapshot into a conflict.
+// value is kept, and the row is not rewritten when no NULL column has a new value. None of them takes
+// part in observationMatches: adapter identities already cover the signed transaction or order they
+// come from, and an analytics field must not turn an identical access snapshot into a conflict.
 func (repository *transaction) enrichObservationOfferPhase(
 	ctx context.Context,
 	write persistence.ObservationWrite,
@@ -475,6 +475,12 @@ func (repository *transaction) enrichObservationOfferPhase(
 			cancellation_reason = COALESCE(cancellation_reason, $5)
 		WHERE id = $1
 			AND product_kind = 'subscription'
+			AND (
+				(offer_phase IS NULL AND $2::text IS NOT NULL)
+				OR (transaction_reason IS NULL AND $3::text IS NOT NULL)
+				OR (lineage_started_at IS NULL AND $4::timestamptz IS NOT NULL)
+				OR (cancellation_reason IS NULL AND $5::text IS NOT NULL)
+			)
 	`, observation.ID,
 		nullableString(string(observation.OfferPhase)),
 		nullableString(string(observation.TransactionReason)),
