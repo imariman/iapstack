@@ -167,14 +167,14 @@ A small always-on VM fits this workload better.
 | --- | --- | --- |
 | Oracle Cloud Always Free, Ampere A1 | USD 0 | Up to 4 Arm OCPUs and 24 GB RAM. Upgrade the account to Pay As You Go, which still costs nothing within Always Free limits, so idle instances are not reclaimed. |
 | Google Cloud e2-micro (Always Free, US regions) | USD 0 | 1 GB RAM; workable for low traffic with the documented memory tuning. |
-| Hetzner Cloud CAX11 / CX22 | About EUR 4–5/month | Predictable billing and the fewest provider surprises. |
+| Hetzner Cloud CAX11 / CX22 | About EUR 4–5/month | Predictable billing and the fewest provider surprises; installed from one cloud-init file. |
 | A server you already operate | USD 0 | The tunnel works behind NAT, but store notifications need continuous uptime. |
 
 You also need a domain whose DNS is on Cloudflare's free plan, because store
 notification URLs must be stable HTTPS endpoints. Confirm each provider's live terms
 before creating resources.
 
-There are two automated ways to install it:
+There are three automated ways to install it:
 
 - **Oracle Cloud, one click.** The **Deploy to Oracle Cloud** button opens an Oracle
   Resource Manager stack. The stack creates an outbound-only network and an Always
@@ -183,6 +183,11 @@ There are two automated ways to install it:
   the [Oracle guide](deploy/oracle/README.md).
 
   [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://imariman.github.io/iapstack/deploy/iapstack-oracle-stack.zip)
+
+- **Hetzner Cloud, one pasted file.** Fill in the tunnel token in
+  [`deploy/hetzner/cloud-init.yaml`](deploy/hetzner/cloud-init.yaml) and paste it into
+  **Cloud config** when creating the server, or pass it to the `hcloud` CLI. It runs
+  the installer below on first boot. See the [Hetzner guide](deploy/hetzner/README.md).
 
 - **Any Ubuntu or Debian host, one command.** [`install.sh`](deploy/vps/install.sh)
   installs Docker, checks out the requested ref into `/opt/iapstack`, generates

@@ -1,0 +1,28 @@
+#cloud-config
+# IAPStack single-VM install for Hetzner Cloud (or any cloud-init host).
+#
+# 1. Paste your Cloudflare Tunnel token between the quotes below, or leave it empty
+#    and add it later over SSH.
+# 2. Optionally pin IAPSTACK_REF to a release tag or a tested commit.
+# 3. Paste this file into "Cloud config" when creating the server, or pass it with
+#    `hcloud server create --user-data-from-file cloud-init.yaml`.
+#
+# Installation takes about 5-10 minutes after boot. Follow it with:
+#   tail -f /var/log/cloud-init-output.log
+write_files:
+  - path: /root/iapstack-install.env
+    permissions: "0600"
+    owner: root:root
+    content: |
+      IAPSTACK_REF='main'
+      CLOUDFLARE_TUNNEL_TOKEN=''
+
+runcmd:
+  - - sh
+    - -c
+    - >-
+      set -eu;
+      set -a; . /root/iapstack-install.env; set +a;
+      curl -fsSL --retry 5 "https://raw.githubusercontent.com/imariman/iapstack/$IAPSTACK_REF/deploy/vps/install.sh" -o /root/iapstack-install.sh;
+      sh /root/iapstack-install.sh;
+      rm -f /root/iapstack-install.env

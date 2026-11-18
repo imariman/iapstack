@@ -52,6 +52,15 @@ The button creates the network and an Always Free Ampere A1 VM through Oracle
 Resource Manager, then runs the installer below on first boot. See the
 [Oracle guide](../oracle/README.md) for the form fields, outputs, and troubleshooting.
 
+### Hetzner Cloud: one pasted file
+
+Paste [`deploy/hetzner/cloud-init.yaml`](../hetzner/cloud-init.yaml), with your
+tunnel token filled in, into **Cloud config** when creating the server, or pass it to
+`hcloud server create --user-data-from-file`. It runs the installer below on first
+boot. See the [Hetzner guide](../hetzner/README.md) for the firewall, CLI commands, and
+post-install steps. The same file works with other providers that accept cloud-init
+user data.
+
 ### Any Ubuntu or Debian host: one command
 
 [`install.sh`](install.sh) performs the manual steps below on a fresh host. It
