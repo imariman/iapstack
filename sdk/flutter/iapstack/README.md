@@ -24,7 +24,9 @@ final offering = await client.getOffering(bundledOffering);
 `getOffering` is unauthenticated. It remembers the last successful response body
 in memory only, then uses that body and the caller-supplied fallback when the
 network fails or the attempt times out. HTTP 404 clears that memory and returns
-the fallback, so a removed offering is not shown again. That failure does not
+the fallback, so a removed offering is not shown again. When calls overlap, a
+response that arrives after a later-started call's 200 or 404 still goes to its
+own caller but does not change that memory. An offering failure does not
 change purchase or entitlement calls, and the client never stores a durable
 application bearer.
 

@@ -120,6 +120,7 @@ void main() {
         'customer-1 ',
         ' customer-1 ',
         ' ',
+        ..._invalidCharacterIds,
       ]) {
         await expectLater(
           huawei.purchaseAndVerify(
@@ -130,6 +131,154 @@ void main() {
         );
       }
       expect(platform.purchaseCalls, 0);
+    });
+
+    test('rejects a padded customer id on restore before paging', () async {
+      final platform = _FakePlatform(
+        pages: <HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>{
+          HuaweiProductKind.subscription: Queue<HuaweiOwnedPurchasesPage>.of(
+            <HuaweiOwnedPurchasesPage>[
+              HuaweiOwnedPurchasesPage(
+                purchases: <HuaweiSignedPurchase>[
+                  _signedPurchase('premium_monthly', customerId: 'customer-1'),
+                ],
+              ),
+            ],
+          ),
+        },
+      );
+      var backendCalled = false;
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async {
+          backendCalled = true;
+          return http.Response('{}', 500);
+        }),
+        productKinds: _productKinds,
+        platform: platform,
+      );
+
+      for (final customerId in <String>[
+        ' customer-1',
+        'customer-1 ',
+        ' customer-1 ',
+        '',
+        ' ',
+        ..._invalidCharacterIds,
+      ]) {
+        await expectLater(
+          huawei.restorePurchases(externalCustomerId: customerId),
+          throwsA(
+            isA<ArgumentError>().having(
+              (error) => error.message,
+              'message',
+              _customerIdMessage,
+            ),
+          ),
+        );
+      }
+      expect(platform.restoreCalls, isEmpty);
+      expect(backendCalled, isFalse);
+    });
+
+    test('restore still submits rows bound to the unpadded customer id',
+        () async {
+      late List<dynamic> submittedPurchases;
+      final platform = _FakePlatform(
+        pages: <HuaweiProductKind, Queue<HuaweiOwnedPurchasesPage>>{
+          HuaweiProductKind.subscription: Queue<HuaweiOwnedPurchasesPage>.of(
+            <HuaweiOwnedPurchasesPage>[
+              HuaweiOwnedPurchasesPage(
+                purchases: <HuaweiSignedPurchase>[
+                  _signedPurchase('premium_monthly', customerId: 'customer-1'),
+                ],
+              ),
+            ],
+          ),
+        },
+      );
+      final huawei = HuaweiIapStack(
+        client: _backend((request) async {
+          submittedPurchases = (jsonDecode(request.body)
+              as Map<String, dynamic>)['purchases']! as List<dynamic>;
+          return http.Response(
+            jsonEncode(<String, Object?>{
+              'results': <Object?>[_verificationJson],
+            }),
+            200,
+          );
+        }),
+        productKinds: _productKinds,
+        platform: platform,
+      );
+
+      final result = await huawei.restorePurchases(
+        externalCustomerId: 'customer-1',
+        productKinds: const <HuaweiProductKind>{HuaweiProductKind.subscription},
+      );
+
+      expect(submittedPurchases, hasLength(1));
+      final submission =
+          (submittedPurchases.single as Map).cast<String, Object?>();
+      expect(submission['external_customer_id'], 'customer-1');
+      expect((submission['evidence']! as Map)['purchase_data'],
+          _purchaseData('premium_monthly', customerId: 'customer-1'));
+      expect(result.results, hasLength(1));
+      expect(result.skipped.differentCustomer, 0);
+    });
+
+    test('rejects a padded customer id when building a submission', () {
+      final evidence = HuaweiPurchaseEvidence(
+        purchaseData:
+            _purchaseData('premium_monthly', customerId: 'customer-1'),
+        signature: 'signature-premium_monthly',
+        productKind: HuaweiProductKind.subscription,
+      );
+
+      for (final customerId in <String>[
+        ' customer-1 ',
+        ..._invalidCharacterIds,
+      ]) {
+        expect(
+          () => evidence.toSubmission(externalCustomerId: customerId),
+          throwsA(
+            isA<ArgumentError>().having(
+              (error) => error.message,
+              'message',
+              _customerIdMessage,
+            ),
+          ),
+        );
+      }
+      expect(
+        evidence
+            .toSubmission(externalCustomerId: 'customer-1')
+            .externalCustomerId,
+        'customer-1',
+      );
+    });
+
+    test('accepts ids the server accepts, inner spaces and non-ASCII included',
+        () {
+      for (final customerId in <String>[
+        'customer 1',
+        'müşteri-1',
+        'user@example.com',
+        '顧客-1',
+        'customer-\u{1f600}',
+      ]) {
+        final evidence = HuaweiPurchaseEvidence(
+          purchaseData:
+              _purchaseData('premium_monthly', customerId: customerId),
+          signature: 'signature-premium_monthly',
+          productKind: HuaweiProductKind.subscription,
+        );
+        expect(
+          evidence
+              .toSubmission(externalCustomerId: customerId)
+              .externalCustomerId,
+          customerId,
+        );
+      }
     });
 
     test('evicts requested products when a re-query fails part-way', () async {
@@ -620,6 +769,25 @@ const Map<String, HuaweiProductKind> _productKinds =
   'premium_lifetime': HuaweiProductKind.nonConsumable,
   'premium_monthly': HuaweiProductKind.subscription,
 };
+
+const String _customerIdMessage = 'must be non-empty valid Unicode without '
+    'surrounding whitespace or control characters';
+
+/// Ids the server's `validateIdentifier` rejects: a control character (C0
+/// U+0000-U+001F, DEL, or C1 U+0080-U+009F) anywhere in the id, or an
+/// unpaired surrogate, which UTF-8 encoding replaces with U+FFFD.
+const List<String> _invalidCharacterIds = <String>[
+  'customer\u00001',
+  'customer\t1',
+  'customer\n1',
+  'customer\u001f1',
+  'customer\u007f1',
+  'customer\u00851',
+  'customer\u009f1',
+  'customer\ud8001',
+  'customer\udc001',
+  'customer-1\ud83d',
+];
 
 HuaweiProduct _product(String id, {int status = 0}) => HuaweiProduct(
       id: id,
