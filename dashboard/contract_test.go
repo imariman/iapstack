@@ -40,6 +40,7 @@ func TestDashboardUsesDocumentedAdminOperations(t *testing.T) {
 		{method: http.MethodDelete, path: "/v1/admin/api-keys/{key_id}", operationID: "revokeApiKey"},
 		{method: http.MethodGet, path: "/v1/admin/projects", operationID: "listAdminProjects"},
 		{method: http.MethodGet, path: "/v1/admin/projects/{project_id}/overview", operationID: "getAdminProjectOverview"},
+		{method: http.MethodGet, path: "/v1/admin/projects/{project_id}/subscription-metrics", operationID: "getAdminSubscriptionMetrics"},
 		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}", operationID: "putAdminProject"},
 		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}/applications/{application_id}", operationID: "putAdminApplication"},
 		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}/customers/{customer_id}", operationID: "putAdminCustomer"},
@@ -79,9 +80,35 @@ func TestDashboardUsesDocumentedAdminOperations(t *testing.T) {
 		"alias_count",
 		"/v1/admin/dashboard-session", "/v1/admin/api-keys", "/v1/admin/projects", "/overview", "/applications/",
 		"/customers/", "/entitlements/", "/products/", "/store-products/", "/credentials/", "/webhook",
+		"/subscription-metrics?",
 	} {
 		if !strings.Contains(string(script), fragment) {
 			t.Errorf("dashboard script is missing documented route fragment %q", fragment)
+		}
+	}
+
+	metrics := document.Components.Schemas["AdminSubscriptionMetrics"]
+	if metrics == nil || metrics.Value == nil {
+		t.Fatal("AdminSubscriptionMetrics schema is missing")
+	}
+	operation := document.Paths.Value("/v1/admin/projects/{project_id}/subscription-metrics").Get
+	for _, parameter := range []string{"environment", "window_days"} {
+		if operation.Parameters.GetByInAndName("query", parameter) == nil {
+			t.Errorf("subscription metrics query parameter %q is not documented", parameter)
+		}
+		if !strings.Contains(string(script), parameter+":") {
+			t.Errorf("dashboard script does not send documented query parameter %q", parameter)
+		}
+	}
+	for _, field := range []string{
+		"active_at_end", "active_at_start", "in_trial_at_end", "active_during_window", "new_subscriptions",
+		"renewals", "churn", "trials", "breakdown", "breakdown_truncated", "daily_active", "measured_at",
+	} {
+		if _, exists := metrics.Value.Properties[field]; !exists {
+			t.Errorf("AdminSubscriptionMetrics is missing %q", field)
+		}
+		if !strings.Contains(string(script), "."+field) {
+			t.Errorf("dashboard script does not read subscription metrics field %q", field)
 		}
 	}
 }

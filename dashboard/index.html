@@ -144,6 +144,51 @@
           </div>
         </section>
 
+        <section class="panel subscription-panel" aria-labelledby="subscriptions-title">
+          <header class="subscription-heading">
+            <div><h2 id="subscriptions-title">Subscriptions</h2><p>Lifecycle from store-signed purchase evidence</p></div>
+            <div class="subscription-controls">
+              <label class="subscription-environment">Environment<select id="subscription-environment"><option value="production">Production</option></select></label>
+              <div class="segmented-control" role="group" aria-label="Window length">
+                <button type="button" data-window-days="7" aria-pressed="false">7 days</button>
+                <button type="button" data-window-days="30" aria-pressed="true">30 days</button>
+                <button type="button" data-window-days="90" aria-pressed="false">90 days</button>
+              </div>
+            </div>
+          </header>
+          <dl class="subscription-vitals" aria-label="Subscription totals">
+            <div><dt>Active now</dt><dd id="subscriptions-active">0</dd><small id="subscriptions-active-note">—</small></div>
+            <div><dt>New</dt><dd id="subscriptions-new">0</dd><small>First period started in the window</small></div>
+            <div><dt>Renewals</dt><dd id="subscriptions-renewals">0</dd><small>New store transactions in a subscription</small></div>
+            <div><dt>Churned</dt><dd id="subscriptions-churned">0</dd><small id="subscriptions-churn-rate">—</small></div>
+          </dl>
+          <div class="subscription-grid">
+            <figure class="activity-figure subscription-figure">
+              <svg class="activity-chart" id="subscription-chart" viewBox="0 0 760 200" role="img" aria-label="No subscription activity in this window"></svg>
+              <figcaption>
+                <span class="chart-legend"><i class="allowed" aria-hidden="true"></i>Active subscriptions</span>
+                <span class="chart-caption" id="subscription-chart-caption">End of each UTC day · today at generation time</span>
+              </figcaption>
+            </figure>
+            <aside class="subscription-side" aria-labelledby="subscription-churn-title">
+              <h3 id="subscription-churn-title">Why subscriptions ended</h3>
+              <dl class="subscription-breakdown-list" id="subscription-churn-reasons"></dl>
+            </aside>
+          </div>
+          <section class="subscription-trials-strip" aria-labelledby="subscription-trials-title">
+            <h3 id="subscription-trials-title">Free trials</h3>
+            <div class="subscription-trials" id="subscription-trials"></div>
+          </section>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Product</th><th>Store</th><th>Active now</th><th>New</th><th>Renewals</th><th>Churned</th></tr></thead>
+              <tbody id="subscription-rows"></tbody>
+            </table>
+          </div>
+          <p class="subscription-definitions" id="subscription-definitions">A subscription is active while a store-signed period covers it. Churn rate is churned subscriptions divided by subscriptions active at any time in the window. Plan changes and pauses are not churn. No money figure is shown here.</p>
+          <p class="form-message subscription-message" id="subscription-message" role="status"></p>
+        </section>
+
         <div class="dashboard-grid">
           <section class="panel applications-panel" aria-labelledby="apps-title">
             <div class="panel-heading">
