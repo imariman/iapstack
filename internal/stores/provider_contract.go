@@ -28,3 +28,16 @@ func EvidenceContentType(provider core.Provider) (string, error) {
 		return "", fmt.Errorf("unsupported purchase provider %q", provider)
 	}
 }
+
+// RecordsOfferPhase reports whether this server's adapter for provider maps a signed offer phase.
+// Apple maps offerType and offerDiscountType from the signed transaction. Google Play maps the
+// subscriptionsv2 line-item offerPhase union. Huawei is not mapped: the official InAppPurchaseData
+// field table was not captured in a fixture, so trial evidence stays unavailable rather than guessed.
+func RecordsOfferPhase(provider core.Provider) bool {
+	switch provider {
+	case core.ProviderAppleAppStore, core.ProviderGooglePlay:
+		return true
+	default:
+		return false
+	}
+}

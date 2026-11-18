@@ -55,6 +55,14 @@ const (
 	applePurchasedOwnership = "PURCHASED"
 	// appleFamilySharedOwnership is Apple's family sharing ownership discriminator.
 	appleFamilySharedOwnership = "FAMILY_SHARED"
+	// appleOfferDiscountFreeTrial is Apple's offerDiscountType for a free trial payment mode.
+	appleOfferDiscountFreeTrial = "FREE_TRIAL"
+	// appleOfferDiscountPayAsYouGo is Apple's offerDiscountType for a discount paid each period.
+	appleOfferDiscountPayAsYouGo = "PAY_AS_YOU_GO"
+	// appleOfferDiscountPayUpFront is Apple's offerDiscountType for a discount paid once up front.
+	appleOfferDiscountPayUpFront = "PAY_UP_FRONT"
+	// appleOfferDiscountOneTime is Apple's offerDiscountType for a one-time In-App Purchase discount.
+	appleOfferDiscountOneTime = "ONE_TIME"
 )
 
 // Adapter verifies Apple evidence with application-scoped credentials and authoritative server APIs.
@@ -117,6 +125,11 @@ type transactionPayload struct {
 	RevocationDate        int64  `json:"revocationDate"`
 	IsUpgraded            bool   `json:"isUpgraded"`
 	Environment           string `json:"environment"`
+	// OfferType is Apple's signed offer type (introductory, promotional, offer code, win-back,
+	// retention). Apple omits it when no offer applies to the transaction.
+	OfferType *int `json:"offerType,omitempty"`
+	// OfferDiscountType is Apple's signed payment mode of that offer.
+	OfferDiscountType string `json:"offerDiscountType,omitempty"`
 }
 
 // New constructs a bounded Apple App Store server adapter.
@@ -513,6 +526,7 @@ func supersededSubscriptionObservation(
 		AccessReason:    reason,
 		Ownership:       ownership,
 		Quantity:        quantity,
+		OfferPhase:      offerPhase(kind, previous),
 		OccurredAt:      startsAt,
 		ObservedAt:      observedAt,
 		EffectivePeriod: core.EffectivePeriod{StartsAt: startsAt, EndsAt: &endsAt},
@@ -594,6 +608,7 @@ func (adapter *Adapter) result(
 		Ownership:       ownership,
 		Quantity:        quantity,
 		Price:           price,
+		OfferPhase:      offerPhase(kind, transaction),
 		OccurredAt:      startsAt,
 		ObservedAt:      observedAt,
 		EffectivePeriod: core.EffectivePeriod{StartsAt: startsAt, EndsAt: endsAt},
@@ -623,6 +638,26 @@ func applePurchasePrice(transaction transactionPayload) (*core.PurchasePrice, er
 		return nil, fmt.Errorf("apple transaction price: %w", err)
 	}
 	return price, nil
+}
+
+// offerPhase maps Apple's signed offerType and offerDiscountType onto the shared subscription offer phase.
+// No offerType means no offer applies, so the period is billed at the base price. An offer with an
+// absent or unrecognized payment mode is unknown, never guessed. Non-subscriptions carry no phase.
+func offerPhase(kind core.ProductKind, transaction transactionPayload) core.OfferPhase {
+	if kind != core.ProductKindSubscription {
+		return core.OfferPhaseNotRecorded
+	}
+	if transaction.OfferType == nil {
+		return core.OfferPhaseBase
+	}
+	switch transaction.OfferDiscountType {
+	case appleOfferDiscountFreeTrial:
+		return core.OfferPhaseFreeTrial
+	case appleOfferDiscountPayAsYouGo, appleOfferDiscountPayUpFront, appleOfferDiscountOneTime:
+		return core.OfferPhaseDiscounted
+	default:
+		return core.OfferPhaseUnknown
+	}
 }
 
 // transactionQuantity normalizes Apple's optional positive quantity to at least one item.

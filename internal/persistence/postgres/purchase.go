@@ -270,6 +270,9 @@ func (repository *transaction) SaveObservation(
 		if err := repository.enrichObservationPrice(ctx, write); err != nil {
 			return err
 		}
+		if err := repository.enrichObservationOfferPhase(ctx, write); err != nil {
+			return err
+		}
 		matches, err := repository.observationMatches(ctx, write, members)
 		if err != nil {
 			return err
@@ -376,10 +379,11 @@ func (repository *transaction) insertObservation(
 			next_provider_product_id,
 			next_renewal_at,
 			price_milliunits,
-			price_currency
+			price_currency,
+			offer_phase
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-			$12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
+			$12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
 		)
 		ON CONFLICT (id) DO NOTHING
 		RETURNING id
@@ -408,6 +412,7 @@ func (repository *transaction) insertObservation(
 		nullableTimePointer(observation.Renewal.NextRenewalAt),
 		nullablePriceMilliunits(observation.Price),
 		nullablePriceCurrency(observation.Price),
+		nullableString(string(observation.OfferPhase)),
 	).Scan(&insertedID)
 	if err == nil {
 		return true, nil
@@ -435,6 +440,30 @@ func (repository *transaction) enrichObservationPrice(
 	`, write.Observation.ID, write.Observation.Price.Milliunits, write.Observation.Price.Currency)
 	if err != nil {
 		return classifyError("enrich purchase observation price", err)
+	}
+	return nil
+}
+
+// enrichObservationOfferPhase records a newly available signed offer phase on an existing snapshot.
+// Rows stored before migration 014 have no phase. The phase never takes part in observationMatches:
+// adapter identities already cover the signed transaction or order it comes from, and an analytics
+// field must not turn an identical access snapshot into a conflict. The first recorded phase is kept.
+func (repository *transaction) enrichObservationOfferPhase(
+	ctx context.Context,
+	write persistence.ObservationWrite,
+) error {
+	if write.Observation.OfferPhase == core.OfferPhaseNotRecorded {
+		return nil
+	}
+	_, err := repository.tx.Exec(ctx, `
+		UPDATE purchase_observations
+		SET offer_phase = $2
+		WHERE id = $1
+			AND offer_phase IS NULL
+			AND product_kind = 'subscription'
+	`, write.Observation.ID, string(write.Observation.OfferPhase))
+	if err != nil {
+		return classifyError("enrich purchase observation offer phase", err)
 	}
 	return nil
 }

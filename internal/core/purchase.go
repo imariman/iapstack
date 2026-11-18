@@ -82,6 +82,20 @@ const (
 	RenewalDisabled RenewalStatus = "disabled"
 	// RenewalStatusUnknown indicates that automatic renewal status is unavailable.
 	RenewalStatusUnknown RenewalStatus = "unknown"
+
+	// OfferPhaseNotRecorded means the observation carries no provider-signed offer phase.
+	// Older observations, providers without an offer field, and non-subscriptions use it.
+	OfferPhaseNotRecorded OfferPhase = ""
+	// OfferPhaseBase identifies a subscription period with no trial or discount offer applied.
+	OfferPhaseBase OfferPhase = "base"
+	// OfferPhaseFreeTrial identifies a subscription period that the provider signs as a free trial.
+	OfferPhaseFreeTrial OfferPhase = "free_trial"
+	// OfferPhaseDiscounted identifies a paid subscription period at an introductory or promotional price.
+	OfferPhaseDiscounted OfferPhase = "discounted"
+	// OfferPhaseProration identifies a provider proration period after a plan change.
+	OfferPhaseProration OfferPhase = "proration"
+	// OfferPhaseUnknown identifies a signed offer whose payment mode the adapter does not recognize.
+	OfferPhaseUnknown OfferPhase = "unknown"
 )
 
 type LifecycleState string
@@ -95,6 +109,10 @@ type Ownership string
 type RenewalMode string
 
 type RenewalStatus string
+
+// OfferPhase is the provider-signed pricing phase of one subscription period.
+// It is analytics evidence only and never changes an access decision.
+type OfferPhase string
 
 // PurchasePrice is one provider-signed transaction price in thousandths of an ISO 4217 currency unit.
 type PurchasePrice struct {
@@ -118,18 +136,20 @@ type EffectivePeriod struct {
 // at a point in time. ID must be a non-sensitive deterministic idempotency key;
 // provider tokens belong in redacted StoreReference values instead.
 type PurchaseObservation struct {
-	ID              ObservationID
-	ApplicationID   ApplicationID
-	Store           StoreApplication
-	ProductID       ProviderProductID
-	ProductKind     ProductKind
-	State           LifecycleState
-	ProviderState   string
-	Access          AccessStatus
-	AccessReason    AccessReason
-	Ownership       Ownership
-	Quantity        uint32
-	Price           *PurchasePrice
+	ID            ObservationID
+	ApplicationID ApplicationID
+	Store         StoreApplication
+	ProductID     ProviderProductID
+	ProductKind   ProductKind
+	State         LifecycleState
+	ProviderState string
+	Access        AccessStatus
+	AccessReason  AccessReason
+	Ownership     Ownership
+	Quantity      uint32
+	Price         *PurchasePrice
+	// OfferPhase is the signed offer phase of a subscription period, or OfferPhaseNotRecorded.
+	OfferPhase      OfferPhase
 	OccurredAt      time.Time
 	ObservedAt      time.Time
 	EffectivePeriod EffectivePeriod
@@ -195,6 +215,17 @@ func (ownership Ownership) Validate() error {
 		return nil
 	default:
 		return fmt.Errorf("unsupported ownership %q", ownership)
+	}
+}
+
+// Validate checks that the offer phase is empty or belongs to the normalized phase vocabulary.
+func (phase OfferPhase) Validate() error {
+	switch phase {
+	case OfferPhaseNotRecorded, OfferPhaseBase, OfferPhaseFreeTrial, OfferPhaseDiscounted,
+		OfferPhaseProration, OfferPhaseUnknown:
+		return nil
+	default:
+		return fmt.Errorf("unsupported offer phase %q", phase)
 	}
 }
 
@@ -301,8 +332,12 @@ func (observation PurchaseObservation) Validate() error {
 		observation.EffectivePeriod.Validate(),
 		observation.Renewal.Validate(observation.ProductKind),
 		priceError,
+		observation.OfferPhase.Validate(),
 	); err != nil {
 		return err
+	}
+	if observation.OfferPhase != OfferPhaseNotRecorded && observation.ProductKind != ProductKindSubscription {
+		return errors.New("offer phase applies only to subscriptions")
 	}
 
 	if observation.Quantity == 0 {
