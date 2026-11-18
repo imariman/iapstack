@@ -31,9 +31,17 @@ final class GooglePlayPurchase {
   }) : productIds = List<String>.unmodifiable(productIds);
 
   /// Opaque query token sent only to the IAPStack verification API.
+  ///
+  /// Empty for a [GooglePlayPurchaseStatus.cancelled] or
+  /// [GooglePlayPurchaseStatus.failed] update that Google Play reported
+  /// without a purchase row.
   final String purchaseToken;
 
   /// Provider products associated with this Billing purchase.
+  ///
+  /// Empty for a [GooglePlayPurchaseStatus.cancelled] or
+  /// [GooglePlayPurchaseStatus.failed] update that Google Play reported
+  /// without a purchase row.
   final List<String> productIds;
 
   /// Current device-side purchase status.
@@ -45,7 +53,13 @@ final class GooglePlayPurchase {
   /// Whether the purchase snapshot already reports provider acknowledgement.
   final bool isAcknowledged;
 
-  /// Safe plugin error code for failed purchase updates.
+  /// Safe error code for cancelled and failed purchase updates.
+  ///
+  /// A Play Billing result uses the Android SDK codes: `purchase_cancelled`
+  /// for USER_CANCELED, `billing_service_disconnected` for
+  /// SERVICE_DISCONNECTED, and `billing_error_<code>` for other results, such
+  /// as `billing_error_7` for ITEM_ALREADY_OWNED. Other plugin codes pass
+  /// through unchanged.
   final String? errorCode;
 
   /// Whether an automatic purchase listener should submit this update.

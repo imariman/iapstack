@@ -50,6 +50,15 @@ jobs:
           git check-ignore -q sdk/flutter/iapstack_huawei/example/android/key.properties
           node --check dashboard/app.js
           test -x deploy/e2e/run.sh
+          for script in deploy/vps/install.sh deploy/vps/init-env.sh deploy/vps/backup.sh; do
+            test -x "$script"
+            sh -n "$script"
+          done
+          git check-ignore -q deploy/vps/.env
+          test -x deploy/gcp/deploy.sh
+          bash -n deploy/gcp/deploy.sh
+          ruby -ryaml -e 'YAML.load_file("deploy/vps/cloud-init.yaml")'
+          GOOGLE_CLOUD_PROJECT=ci IAPSTACK_DRY_RUN=1 bash deploy/gcp/deploy.sh >/dev/null
 
   go:
     name: Go checks
@@ -344,16 +353,71 @@ jobs:
             if (Reflect.ownKeys(client).length !== 0) process.exit(1);
           "
 
-  flutter-ios:
-    name: Flutter iOS build
-    runs-on: macos-latest
-    timeout-minutes: 25
+  changes:
+    name: Detect iOS-relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ios: ${{ steps.filter.outputs.ios }}
 
     steps:
       - name: Check out repository
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Decide whether the Flutter iOS build must run
+        id: filter
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Pushes to main and manual runs always build for real.
+          if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The StoreKit harness compiles sdk/flutter/iapstack_apple, its
+          # path dependency sdk/flutter/iapstack and pub.dev packages only; it
+          # does not pull sdk/ios sources. sdk/ios stays listed as a safety net.
+          pattern='^(sdk/flutter/|sdk/ios/|\.github/workflows/ci\.yml$|\.github/scripts/install-flutter\.sh$)'
+          changed="$(git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA")"
+          echo "Changed files:"
+          echo "$changed"
+          if grep -Eq "$pattern" <<< "$changed"; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ios=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  flutter-ios:
+    # This check name is required by the "Protect main" ruleset, so the job
+    # must always report. When no iOS-relevant path changed it finishes on
+    # ubuntu without touching a macOS runner. Anything other than an explicit
+    # "false" (including a failed change detection) runs the real build.
+    name: Flutter iOS build
+    needs: changes
+    if: ${{ !cancelled() }}
+    runs-on: ${{ needs.changes.outputs.ios == 'false' && 'ubuntu-latest' || 'macos-latest' }}
+    timeout-minutes: 25
+    env:
+      IOS_BUILD: ${{ needs.changes.outputs.ios != 'false' }}
+
+    steps:
+      - name: Skip macOS build (no iOS-relevant changes)
+        if: env.IOS_BUILD != 'true'
+        run: echo "No Flutter or iOS paths changed; skipping the macOS StoreKit harness build."
+
+      - name: Check out repository
+        if: env.IOS_BUILD == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Cache Flutter SDK and packages
+        if: env.IOS_BUILD == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -362,15 +426,36 @@ jobs:
           key: flutter-${{ runner.os }}-${{ runner.arch }}-3.47.1
 
       - name: Set up Flutter
+        if: env.IOS_BUILD == 'true'
         env:
           FLUTTER_VERSION: 3.47.1
         run: .github/scripts/install-flutter.sh
 
       - name: Build StoreKit testing harness
+        if: env.IOS_BUILD == 'true'
         working-directory: sdk/flutter/iapstack_apple/example
         run: |
           flutter pub get
           flutter build ios --simulator --debug
+
+  oracle-stack:
+    name: Oracle Resource Manager stack
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Check formatting and validate
+        shell: bash
+        run: |
+          terraform() {
+            docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+              -v "$PWD/deploy/oracle:/stack" -w /stack hashicorp/terraform:1.9.8 "$@"
+          }
+          terraform fmt -check -diff
+          terraform init -backend=false -input=false
+          terraform validate
 
   container:
     name: Container build
