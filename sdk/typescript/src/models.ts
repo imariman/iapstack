@@ -79,6 +79,8 @@ export class EntitlementChange {
   readonly sourceObservationId: string;
   readonly source?: string;
   readonly sourceImportId?: string;
+  /** Audited operator grant behind a schema version 3 projection. It is not store evidence. */
+  readonly sourceManualGrantId?: string;
   readonly sourceApplicationId: string;
   readonly sourceProductId: string;
   readonly effectiveStartsAt: Date | null;
@@ -97,6 +99,7 @@ export class EntitlementChange {
     sourceObservationId: string;
     source?: string;
     sourceImportId?: string;
+    sourceManualGrantId?: string;
     sourceApplicationId: string;
     sourceProductId: string;
     effectiveStartsAt?: Date | null;
@@ -114,6 +117,7 @@ export class EntitlementChange {
     this.sourceObservationId = init.sourceObservationId;
     this.source = init.source;
     this.sourceImportId = init.sourceImportId;
+    this.sourceManualGrantId = init.sourceManualGrantId;
     this.sourceApplicationId = init.sourceApplicationId;
     this.sourceProductId = init.sourceProductId;
     this.effectiveStartsAt = init.effectiveStartsAt ?? null;

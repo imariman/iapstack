@@ -313,6 +313,53 @@ func TestWebhookVerifierAcceptsImportSchema(t *testing.T) {
 	}
 }
 
+// TestWebhookVerifierAcceptsManualGrantSchema verifies version 3 only when source is manual.
+func TestWebhookVerifierAcceptsManualGrantSchema(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.November, 18, 10, 0, 0, 0, time.UTC)
+	verifier := newTestVerifier(t, now, defaultWebhookBodyLimit)
+	defer verifier.Close()
+
+	body := []byte(`{` +
+		`"schema_version":3,` +
+		`"project_id":"project-1",` +
+		`"application_id":"ios-sandbox",` +
+		`"customer_id":"customer-internal",` +
+		`"entitlement_id":"entitlement-1",` +
+		`"entitlement_key":"premium",` +
+		`"access":"allowed",` +
+		`"access_reason":"purchase_valid",` +
+		`"source":"manual",` +
+		`"source_manual_grant_id":"mgr-0123456789abcdef0123456789abcdef",` +
+		`"source_application_id":"ios-sandbox",` +
+		`"source_product_id":"premium_annual",` +
+		`"effective_starts_at":"2026-11-18T10:00:00Z",` +
+		`"effective_ends_at":"2026-12-18T10:00:00Z",` +
+		`"version":3` +
+		`}`)
+	event, err := verifier.VerifyRequest(signedWebhookRequest(t, now, body, "event-manual"))
+	if err != nil {
+		t.Fatalf("VerifyRequest() error = %v", err)
+	}
+	if event.Change.SchemaVersion != 3 || event.Change.Source != "manual" ||
+		event.Change.SourceManualGrantID != "mgr-0123456789abcdef0123456789abcdef" ||
+		event.Change.SourceObservationID != "" || !event.Change.Entitlement().GrantsAccessAt(now) {
+		t.Fatalf("change = %#v, want manual grant schema", event.Change)
+	}
+	for name, replacement := range map[string][2]string{
+		"store-labeled":       {`"source":"manual"`, `"source":"store"`},
+		"import-labeled":      {`"source":"manual"`, `"source":"import"`},
+		"missing-grant":       {`"source_manual_grant_id":"mgr-0123456789abcdef0123456789abcdef",`, ``},
+		"observation-present": {`"source":"manual",`, `"source":"manual","source_observation_id":"observation-1",`},
+	} {
+		invalid := bytes.Replace(body, []byte(replacement[0]), []byte(replacement[1]), 1)
+		if _, err := verifier.VerifyRequest(signedWebhookRequest(t, now, invalid, "event-manual-"+name)); !webhookCode(err, "invalid_event") {
+			t.Fatalf("%s version 3 error = %v, want invalid_event", name, err)
+		}
+	}
+}
+
 // TestWebhookVerifierAppliesDefaultBounds verifies zero config values become production defaults.
 func TestWebhookVerifierAppliesDefaultBounds(t *testing.T) {
 	t.Parallel()

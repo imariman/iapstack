@@ -483,18 +483,28 @@ function decodeEntitlementChange(body: Buffer): EntitlementChange {
     let sourceObservationId = '';
     let source: string | undefined;
     let sourceImportId: string | undefined;
+    let sourceManualGrantId: string | undefined;
+    const present = (field: string): boolean => {
+      const value = json[field];
+      return typeof value === 'string' && value.length > 0;
+    };
     if (schemaVersion === 2) {
       source = requiredString(json, 'source');
       sourceImportId = requiredString(json, 'source_import_id');
-      if (source !== 'import') {
+      if (source !== 'import' || present('source_observation_id') || present('source_manual_grant_id')) {
         throw new Error('webhook event metadata is invalid');
       }
-      const observation = json.source_observation_id;
-      if (typeof observation === 'string' && observation.length > 0) {
+    } else if (schemaVersion === 3) {
+      source = requiredString(json, 'source');
+      sourceManualGrantId = requiredString(json, 'source_manual_grant_id');
+      if (source !== 'manual' || present('source_observation_id') || present('source_import_id')) {
         throw new Error('webhook event metadata is invalid');
       }
     } else if (schemaVersion === 1) {
       sourceObservationId = requiredString(json, 'source_observation_id');
+      if (present('source_manual_grant_id')) {
+        throw new Error('webhook event metadata is invalid');
+      }
     } else {
       throw new Error('webhook event metadata is invalid');
     }
@@ -510,6 +520,7 @@ function decodeEntitlementChange(body: Buffer): EntitlementChange {
       sourceObservationId,
       source,
       sourceImportId,
+      sourceManualGrantId,
       sourceApplicationId: requiredString(json, 'source_application_id'),
       sourceProductId: requiredString(json, 'source_product_id'),
       effectiveStartsAt: optionalDate(json, 'effective_starts_at'),
