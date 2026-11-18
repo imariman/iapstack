@@ -33,6 +33,9 @@ type Counts struct {
 	SkippedAnonymous      int `json:"skipped_anonymous"`
 	Failed                int `json:"failed"`
 	RefundEndDisagreement int `json:"refund_end_disagreement"`
+	// IgnoredEarlierRefunds counts refunded rows from an earlier period that a
+	// later unrefunded row in the same lineage superseded.
+	IgnoredEarlierRefunds int `json:"ignored_earlier_refunds"`
 	TrialPeriods          int `json:"trial_periods"`
 	// NotYetStarted counts grants stored denied because their start is still in the future.
 	NotYetStarted int `json:"not_yet_started"`
@@ -49,20 +52,22 @@ type Failure struct {
 
 // Subscriber is the planned canonical customer and the grants that would be written.
 type Subscriber struct {
-	ExternalID         string
-	CustomerID         core.CustomerID
-	Aliases            []string
-	Grants             []Grant
-	Failures           []Failure
-	Skipped            bool
-	Anonymous          bool
-	Fatal              bool
-	Created            bool
-	Reused             bool
-	GrantsUpserted     int
-	GrantsUnchanged    int
-	ProjectionsChanged int
-	WebhooksEnqueued   int
+	ExternalID string
+	CustomerID core.CustomerID
+	Aliases    []string
+	Grants     []Grant
+	Failures   []Failure
+	Skipped    bool
+	Anonymous  bool
+	Fatal      bool
+	Created    bool
+	Reused     bool
+	// IgnoredEarlierRefunds counts earlier-period refunded rows superseded by a later unrefunded row.
+	IgnoredEarlierRefunds int
+	GrantsUpserted        int
+	GrantsUnchanged       int
+	ProjectionsChanged    int
+	WebhooksEnqueued      int
 }
 
 // Grant is one mapped lineage after access is decided. It has no raw store transaction id.

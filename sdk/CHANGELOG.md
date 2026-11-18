@@ -30,11 +30,26 @@
   exhaustive `when` or `switch` on `IapStackException` with no `else` or
   `default` fails to compile. Add a branch for
   `IapStackIncompleteRestoreException`, or an `else` / `default` branch.
-- React Native: a product that grants nothing, and an unresolved purchase, emit
-  `pending` and never `verified`. That includes an empty entitlement list and a
-  purchase that stays unresolved while another entitlement already grants
-  access. An app that waits only for `verified` can hang. Wait with a timeout,
-  or read `grantsAccess` before unlocking.
+- React Native (Android and iOS): a product that grants nothing, and an
+  unresolved purchase, emit `pending` and never `verified`. That includes an
+  empty entitlement list and a purchase that stays unresolved while another
+  entitlement already grants access. An app that waits only for `verified` can
+  hang. Wait with a timeout, or read `grantsAccess` before unlocking.
+- React Native: `RestoreResult` has two new required fields, `skipped`
+  (`RestoreSkipCounts`) and `pageLimitReached`. A `RestoreResult` literal, such
+  as a test double or a mocked `restore()` value, no longer type-checks until
+  it sets both. `IapStackStore.restore()` fills them from the native companion;
+  `IapStackClient.restorePurchases` returns zero counts and `false`.
+- React Native: when restore stops after the server accepted at least one
+  batch, `IapStackStore.restore()` rejects with `IapStackIncompleteRestoreError`
+  instead of the native rejection. That happens when a later batch fails, or on
+  iOS when StoreKit cannot finish a transaction from an accepted batch. That
+  type did not exist in 0.1.0-sdk.2. `code` and `message` are the underlying
+  failure's, and an API failure's `statusCode`, `retryable`, `retryAfterMs`,
+  and `requestId` are fields on the error. `userInfo`, `domain`, and the native
+  stack are no longer on the thrown error; read them from `cause`, the original
+  rejection. A failure before any batch is accepted is still the original
+  rejection.
 - TypeScript host: aborting after a parsed 429 or 5xx body, before the backoff
   wait, rejects with `AbortError` instead of `APIError`. A `catch` of
   `APIError` no longer matches that cancel. Catch `AbortError`.
@@ -79,6 +94,10 @@
 - `RestoreResult.skipped` (`unbound`, `differentCustomer`, `unknownProduct`,
   `multipleProducts`) and `RestoreResult.pageLimitReached`. Direct HTTP
   `fromJson` still reads only `results`.
+- React Native: `RestoreSkipCounts`, `decodeRestoreSkipCounts`,
+  `RestoreResult.skipped`, `RestoreResult.pageLimitReached`, and
+  `IapStackIncompleteRestoreError` (`committedResults`, `skipped`,
+  `pageLimitReached`, and the API failure fields).
 - Flutter: `RestoreSkipCounts.unsigned`, included in `total`. Flutter Apple
   counts restore rows with no JWS there. Swift and Kotlin have no such count.
 

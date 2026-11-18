@@ -221,8 +221,9 @@ type externalAccountIdentifiers struct {
 
 // queryResult contains one authoritative provider artifact and its normalized observations.
 // products lists every product the purchase names, including replaced and pending replacement items.
-// itemReplaced is the expired snapshot of the product a one-item purchase names in itemReplacement. Its
-// period is unknown, so it is recorded only when the request names that product for this purchase token.
+// itemReplaced is the expired snapshot of the product a one-item purchase names in itemReplacement. It is
+// added to every result for this purchase, whichever product the request names, as a superseded observation:
+// the verification service stores it only while the catalog maps that product.
 type queryResult struct {
 	artifact          stores.Evidence
 	observations      []core.PurchaseObservation
@@ -283,7 +284,7 @@ func (adapter *Adapter) Verify(
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}
-	verificationResult := result.verificationResult(adapter.clock().UTC(), request.ClaimedProducts)
+	verificationResult := result.verificationResult(adapter.clock().UTC())
 	validationRequest := request
 	validationRequest.ClaimedProducts = verificationResult.ProductsForClaim(request.ClaimedProducts)
 	if err := verificationResult.ValidateForVerification(validationRequest); err != nil {
@@ -315,7 +316,7 @@ func (adapter *Adapter) Reconcile(
 	if err != nil {
 		return stores.VerificationResult{}, err
 	}
-	verificationResult := result.verificationResult(adapter.clock().UTC(), request.ExpectedProducts)
+	verificationResult := result.verificationResult(adapter.clock().UTC())
 	validationRequest := request
 	validationRequest.ExpectedProducts = verificationResult.ProductsForClaim(request.ExpectedProducts)
 	if err := verificationResult.ValidateForReconciliation(validationRequest); err != nil {
@@ -793,8 +794,9 @@ func replacedItemObservation(
 // Google documents two items on a token after a deferred change, but a one-item response that names the
 // replaced product is accepted for a token stored with that product. Without an expired snapshot, the
 // stored allowed snapshot of the replaced product would keep its entitlement source after its end. Google
-// reports no period for that product here, so the snapshot has no end, and it is added to a result only
-// when the request names the replaced product.
+// reports no period for that product here, so the snapshot has no end. The purchase itself naming the
+// replacement is the gate, not the request: the snapshot is derived only when this token's one item names
+// a different replaced product, so including it for a new-product request cannot deny an unrelated product.
 func itemReplacementObservation(
 	application core.Application,
 	purchaseToken string,
@@ -897,20 +899,26 @@ func subscriptionProducts(purchase subscriptionPurchase) []core.ProviderProductI
 
 // verificationResult builds the provider result for one request.
 // A purchase that names more than one product reports them all, so a claim on any of them is checked against
-// the observed products. The itemReplacement snapshot is added only when the request names that product.
+// the observed products. The itemReplacement snapshot is always added when the purchase names a replaced
+// product, including when the request names the new product: verifying the replacement is exactly when the
+// old product must stop granting, and gating on the request left it allowed until an old-product refresh.
+// It is marked superseded, so a replaced product outside the catalog cannot fail this purchase's
+// verification, reconciliation, or acknowledgement.
 func (result queryResult) verificationResult(
 	verifiedAt time.Time,
-	requested []core.ProviderProductID,
 ) stores.VerificationResult {
 	observations := result.observations
-	if result.itemReplaced != nil && len(requested) == 1 && requested[0] == result.itemReplaced.ProductID {
+	var superseded []core.ObservationID
+	if result.itemReplaced != nil {
 		observations = append(append([]core.PurchaseObservation(nil), observations...), *result.itemReplaced)
+		superseded = []core.ObservationID{result.itemReplaced.ID}
 	}
 	verificationResult := stores.VerificationResult{
-		VerifiedAt:        verifiedAt,
-		Artifacts:         []stores.VerifiedArtifact{{Kind: "google_play_server_response", Evidence: result.artifact}},
-		Observations:      observations,
-		PostCommitActions: result.postCommitActions,
+		VerifiedAt:             verifiedAt,
+		Artifacts:              []stores.VerifiedArtifact{{Kind: "google_play_server_response", Evidence: result.artifact}},
+		Observations:           observations,
+		PostCommitActions:      result.postCommitActions,
+		SupersededObservations: superseded,
 	}
 	if len(result.products) > 1 {
 		verificationResult.NamedProducts = append([]core.ProviderProductID(nil), result.products...)

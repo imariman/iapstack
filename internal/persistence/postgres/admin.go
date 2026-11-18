@@ -184,11 +184,9 @@ func (repository *transaction) adminAnalytics(
 			WHERE project_id = $1
 		), entitlement_counts AS (
 			SELECT count(*) AS active_count
-			FROM customer_entitlements, bounds
-			WHERE project_id = $1
-				AND access_status = 'allowed'
-				AND effective_starts_at <= bounds.generated_at
-				AND (effective_ends_at IS NULL OR effective_ends_at > bounds.generated_at)
+			FROM customer_entitlements AS projection
+			WHERE projection.project_id = $1
+				AND `+activeAllowedSQL("projection")+`
 		), observations AS (
 			SELECT observation.id, observation.access_status, observation.lifecycle_state
 			FROM purchase_observations AS observation, bounds
@@ -490,7 +488,7 @@ func (repository *transaction) adminCustomers(
 	rows, err := repository.tx.Query(ctx, `
 		SELECT customer.id, customer.external_id, customer.merged_into_customer_id, customer.created_at,
 			count(DISTINCT projection.entitlement_id),
-			count(DISTINCT projection.entitlement_id) FILTER (WHERE projection.access_status = 'allowed'),
+			count(DISTINCT projection.entitlement_id) FILTER (WHERE `+activeAllowedSQL("projection")+`),
 			max(observation.observed_at),
 			(
 				SELECT count(*)
@@ -667,4 +665,18 @@ func (repository *transaction) adminWebhookEvents(
 		return nil, classifyError("iterate admin webhook events", err)
 	}
 	return events, nil
+}
+
+// unexpiredAllowedSQL is the SQL form of core.AccessAt for the customer_entitlements
+// row aliased alias: the row is stored allowed and its exclusive effective end is
+// absent or after the transaction clock. Like AccessAt, it ignores the start.
+func unexpiredAllowedSQL(alias string) string {
+	return "(" + alias + ".access_status = 'allowed' AND (" +
+		alias + ".effective_ends_at IS NULL OR " + alias + ".effective_ends_at > CURRENT_TIMESTAMP))"
+}
+
+// activeAllowedSQL adds a started period to unexpiredAllowedSQL. The admin counts
+// use it, so a not-yet-started allowed row is not reported as active.
+func activeAllowedSQL(alias string) string {
+	return "(" + unexpiredAllowedSQL(alias) + " AND " + alias + ".effective_starts_at <= CURRENT_TIMESTAMP)"
 }

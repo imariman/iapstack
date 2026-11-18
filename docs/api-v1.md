@@ -252,6 +252,22 @@ for non-consumables. Subscription verification calls
 and independently verifies the latest transaction and renewal JWS values before persistence. The API client JWT
 uses ES256, the required App Store Connect claims, and a five-minute lifetime.
 
+When subscription status has moved to another product than the submitted transaction, the previous product
+is recorded as expired at the new purchase. When the submitted transaction already is the new product (the
+StoreKit upgrade purchase, or an `UPGRADE` notification), verification also calls
+[Get Transaction History](https://developer.apple.com/documentation/appstoreserverapi/get-transaction-history)
+for that customer to find the replaced product. It does so only for a transaction purchased in the last 48
+hours that is not the first in its lineage and whose `transactionReason` is not `RENEWAL`, with
+`productType=AUTO_RENEWABLE`, newest-modified first, at most three pages, and a five-second budget. Each
+history entry is verified like submitted evidence and must share the lineage and `appAccountToken`. Every
+consecutive predecessor Apple marks `isUpgraded` inside that window is recorded as expired. The lookup uses
+the same In-App Purchase key, so plan its rate limit with the other App Store Server API calls. It is
+enrichment only: a failure leaves the verification result unchanged and is counted in
+`iapstack_provider_calls_total` with operation `transaction_history`. Daily reconciliation replays the
+submitted transaction, and Apple reconciliation by transaction reference makes no history call. A replaced
+product the catalog does not map grants nothing, so its expired record is skipped instead of failing the new
+purchase.
+
 The initial Apple server slice supports auto-renewable subscription and non-consumable
 transaction verification, restore submissions, renewal enabled/disabled status,
 billing retry, grace period, expiry, refund/revocation, ownership, and idempotent
@@ -282,9 +298,11 @@ expiry. Its renewal follows the new item's plan, and the new product is stored a
 next renewal product when that plan renews automatically. After the change, the
 replacement item is recorded together with the replaced item as expired, once the
 replaced item's expiry has passed, and later notifications for that token expect the
-new product. A one-item response whose `itemReplacement` names the stored product also
-records that product as expired for that token. Both products must stay mapped in the
-catalog. A claimed product may name either item of that replacement. A completed
+new product. Both products of that deferred replacement must stay mapped in the catalog.
+A one-item response whose `itemReplacement` names another product also records that
+product as expired for that token, whichever product the request names. When the catalog
+does not map the replaced product, that expired record is skipped and the new product is
+still stored and acknowledged. A claimed product may name either item of a replacement. A completed
 purchase whose `acknowledgementState` is pending produces a bounded provider action.
 IAPStack calls the matching Android Publisher product or subscription acknowledgement
 endpoint only after the evidence, observation, entitlement projection, and outbox

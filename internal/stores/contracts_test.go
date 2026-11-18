@@ -92,6 +92,52 @@ func TestVerificationResultSupportsMultipleLineItems(t *testing.T) {
 	}
 }
 
+// TestVerificationResultValidatesSupersededObservations keeps superseded IDs bound to denied observations.
+// The verification service may skip a superseded observation, so one must never be the only observation or
+// an observation that grants access.
+func TestVerificationResultValidatesSupersededObservations(t *testing.T) {
+	t.Parallel()
+
+	application := googleApplication()
+	evidence, err := stores.NewEvidence("application/vnd.iapstack.google-play.purchase+json", []byte(`{"token":"opaque"}`))
+	if err != nil {
+		t.Fatalf("NewEvidence() error = %v", err)
+	}
+	request := stores.VerificationRequest{Application: application, CustomerID: "customer_1", Evidence: evidence}
+	current := productObservation(t, application, "observation_current", "premium")
+	replaced := productObservation(t, application, "observation_replaced", "basic")
+	replaced.State, replaced.ProviderState = core.LifecycleExpired, "EXPIRED"
+	replaced.Access, replaced.AccessReason = core.AccessDenied, core.AccessReasonExpired
+	result := stores.VerificationResult{
+		VerifiedAt:             time.Now().UTC(),
+		Artifacts:              []stores.VerifiedArtifact{{Kind: "provider_response", Evidence: evidence}},
+		Observations:           []core.PurchaseObservation{current, replaced},
+		SupersededObservations: []core.ObservationID{replaced.ID},
+	}
+	if err := result.ValidateForVerification(request); err != nil {
+		t.Fatalf("ValidateForVerification() error = %v", err)
+	}
+	if !result.Superseded(replaced.ID) || result.Superseded(current.ID) {
+		t.Fatalf("Superseded() = (%t, %t), want only the replaced observation", result.Superseded(replaced.ID), result.Superseded(current.ID))
+	}
+	for name, superseded := range map[string][]core.ObservationID{
+		"unknown":   {"observation_missing"},
+		"allowed":   {current.ID},
+		"duplicate": {replaced.ID, replaced.ID},
+	} {
+		invalid := result
+		invalid.SupersededObservations = superseded
+		if err := invalid.ValidateForVerification(request); err == nil {
+			t.Fatalf("ValidateForVerification(%s superseded) error = nil", name)
+		}
+	}
+	only := result
+	only.Observations = []core.PurchaseObservation{replaced}
+	if err := only.ValidateForVerification(request); err == nil {
+		t.Fatal("ValidateForVerification(only superseded observations) error = nil")
+	}
+}
+
 // TestVerificationResultMapsClaimsOnlyForNamedProducts maps a claim onto observed products only when the purchase names it.
 func TestVerificationResultMapsClaimsOnlyForNamedProducts(t *testing.T) {
 	t.Parallel()
