@@ -73,8 +73,8 @@ func TestAppleConsumptionPipelineWithPostgreSQL(t *testing.T) {
 	if err := database.store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
 		if _, putErr := repository.PutAppleConsumptionSettings(database.ctx, persistence.AppleConsumptionSettingsWrite{
 			ProjectID: application.ProjectID, ApplicationID: application.ID, Enabled: true,
-			ConsentMode: persistence.ConsumptionConsentCustomerOptIn, RefundPreference: persistence.ConsumptionRefundPreferenceDecline,
-			ActorKeyID: "admin-key-1",
+			RefundPreference: persistence.ConsumptionRefundPreferenceDecline,
+			ActorKeyID:       "admin-key-1",
 		}); putErr != nil {
 			return putErr
 		}

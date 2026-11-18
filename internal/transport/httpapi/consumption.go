@@ -24,7 +24,6 @@ var (
 // Booleans are pointers so a missing field is rejected instead of read as false.
 type appleConsumptionSettingsRequest struct {
 	Enabled               *bool  `json:"enabled"`
-	ConsentMode           string `json:"consent_mode"`
 	RefundPreference      string `json:"refund_preference"`
 	SampleContentProvided *bool  `json:"sample_content_provided"`
 	ExpectedRevision      int64  `json:"expected_revision"`
@@ -35,7 +34,6 @@ type appleConsumptionSettingsResponse struct {
 	ProjectID             core.ProjectID     `json:"project_id"`
 	ApplicationID         core.ApplicationID `json:"application_id"`
 	Enabled               bool               `json:"enabled"`
-	ConsentMode           string             `json:"consent_mode"`
 	RefundPreference      string             `json:"refund_preference"`
 	SampleContentProvided bool               `json:"sample_content_provided"`
 	Revision              int64              `json:"revision"`
@@ -146,7 +144,6 @@ func (api *API) putAdminAppleConsumption(writer http.ResponseWriter, request *ht
 		ProjectID:             core.ProjectID(request.PathValue("project_id")),
 		ApplicationID:         core.ApplicationID(request.PathValue("application_id")),
 		Enabled:               *input.Enabled,
-		ConsentMode:           input.ConsentMode,
 		RefundPreference:      input.RefundPreference,
 		SampleContentProvided: *input.SampleContentProvided,
 		ExpectedRevision:      input.ExpectedRevision,
@@ -174,14 +171,14 @@ func (api *API) putAdminAppleConsumption(writer http.ResponseWriter, request *ht
 	}
 	api.logger.Info("apple consumption settings saved",
 		"project_id", string(settings.ProjectID), "application_id", string(settings.ApplicationID),
-		"enabled", settings.Enabled, "consent_mode", settings.ConsentMode,
-		"refund_preference", settings.RefundPreference, "revision", settings.Revision,
+		"enabled", settings.Enabled, "refund_preference", settings.RefundPreference, "revision", settings.Revision,
 	)
 	writeJSON(writer, http.StatusOK, consumptionSettingsResponse(settings))
 }
 
-// putApplicationAppleConsumptionConsent records one customer's consent through the application bearer.
-// The trusted host backend calls it after the customer answers the app's consent prompt.
+// putApplicationAppleConsumptionConsent records one customer's consent through the durable application bearer.
+// Only the trusted host backend may write consent. requireApplication accepts stored API keys only, so a
+// short-lived customer session, which the mobile app holds, is rejected with 401.
 func (api *API) putApplicationAppleConsumptionConsent(writer http.ResponseWriter, request *http.Request) {
 	principal, ok := api.requireApplication(writer, request)
 	if !ok || !api.requireDurableActor(writer, request, principal) {
@@ -233,7 +230,7 @@ func (api *API) putApplicationAppleConsumptionConsent(writer http.ResponseWriter
 func consumptionSettingsResponse(settings persistence.AppleConsumptionSettings) appleConsumptionSettingsResponse {
 	response := appleConsumptionSettingsResponse{
 		ProjectID: settings.ProjectID, ApplicationID: settings.ApplicationID, Enabled: settings.Enabled,
-		ConsentMode: settings.ConsentMode, RefundPreference: settings.RefundPreference,
+		RefundPreference:      settings.RefundPreference,
 		SampleContentProvided: settings.SampleContentProvided, Revision: settings.Revision,
 	}
 	if !settings.UpdatedAt.IsZero() {

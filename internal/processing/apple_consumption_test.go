@@ -66,7 +66,7 @@ func TestHandleAppleConsumptionSendsWhenConsentAndDeliveryAreEstablished(t *test
 	t.Parallel()
 
 	now := time.Date(2026, time.November, 18, 9, 0, 0, 0, time.UTC)
-	store := newConsumptionStore(t, now, persistence.ConsumptionConsentCustomerOptIn)
+	store := newConsumptionStore(t, now, false)
 	store.consent = &persistence.AppleConsumptionConsent{Consented: true}
 	store.settings.RefundPreference = persistence.ConsumptionRefundPreferenceGrantProrated
 	store.settings.SampleContentProvided = true
@@ -118,18 +118,10 @@ func TestHandleAppleConsumptionSkipsWithoutEstablishedFacts(t *testing.T) {
 			store.settings.Enabled = false
 			store.record.Payload.Fingerprint = [32]byte{1}
 		}},
-		{name: "opt-in without consent", reason: "no_consent", mutate: func(*consumptionStore) {}},
-		{name: "opt-in unknown customer", reason: "no_consent", mutate: func(store *consumptionStore) { store.customer = nil }},
-		{name: "withdrawn in opt-in", reason: "consent_withdrawn", mutate: func(store *consumptionStore) {
+		{name: "no consent record", reason: "no_consent", mutate: func(*consumptionStore) {}},
+		{name: "unknown customer", reason: "no_consent", mutate: func(store *consumptionStore) { store.customer = nil }},
+		{name: "recorded no", reason: "consent_withdrawn", mutate: func(store *consumptionStore) {
 			store.consent = &persistence.AppleConsumptionConsent{Consented: false}
-		}},
-		{name: "withdrawn in attested", reason: "consent_withdrawn", mutate: func(store *consumptionStore) {
-			store.settings.ConsentMode = persistence.ConsumptionConsentApplicationAttested
-			store.consent = &persistence.AppleConsumptionConsent{Consented: false}
-		}},
-		{name: "attested unknown customer", reason: "no_delivery_evidence", mutate: func(store *consumptionStore) {
-			store.settings.ConsentMode = persistence.ConsumptionConsentApplicationAttested
-			store.customer = nil
 		}},
 		{name: "no delivery evidence", reason: "no_delivery_evidence", mutate: func(store *consumptionStore) {
 			store.consent = &persistence.AppleConsumptionConsent{Consented: true}
@@ -149,7 +141,7 @@ func TestHandleAppleConsumptionSkipsWithoutEstablishedFacts(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			store := newConsumptionStore(t, now, persistence.ConsumptionConsentCustomerOptIn)
+			store := newConsumptionStore(t, now, false)
 			test.mutate(store)
 			sender := &fakeConsumptionSender{response: apple.ConsumptionResponse{HTTPStatus: http.StatusAccepted}}
 			service := newConsumptionService(store, sender, now)
@@ -173,7 +165,7 @@ func TestHandleAppleConsumptionAcceptsMergedSourcePurchase(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.November, 18, 10, 30, 0, 0, time.UTC)
-	store := newConsumptionStore(t, now, persistence.ConsumptionConsentApplicationAttested)
+	store := newConsumptionStore(t, now, true)
 	store.owners = []core.CustomerID{"customer-source"}
 	store.closure = map[core.CustomerID]bool{"customer-source": true}
 	sender := &fakeConsumptionSender{response: apple.ConsumptionResponse{HTTPStatus: http.StatusAccepted}}
@@ -191,7 +183,7 @@ func TestHandleAppleConsumptionExpiresAtDeadline(t *testing.T) {
 	t.Parallel()
 
 	signedAt := time.Date(2026, time.November, 18, 0, 0, 0, 0, time.UTC)
-	store := newConsumptionStore(t, signedAt, persistence.ConsumptionConsentApplicationAttested)
+	store := newConsumptionStore(t, signedAt, true)
 	sender := &fakeConsumptionSender{response: apple.ConsumptionResponse{HTTPStatus: http.StatusAccepted}}
 	service := newConsumptionService(store, sender, signedAt.Add(jobs.AppleConsumptionResponseWindow))
 	if err := service.HandleAppleConsumption(context.Background(), consumptionMessage(store)); err != nil {
@@ -235,7 +227,7 @@ func TestHandleAppleConsumptionRetriesTransientAndFailsPermanentErrors(t *testin
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			store := newConsumptionStore(t, now, persistence.ConsumptionConsentApplicationAttested)
+			store := newConsumptionStore(t, now, true)
 			sender := &fakeConsumptionSender{response: test.response, err: test.err}
 			service := newConsumptionService(store, sender, now)
 			err := service.HandleAppleConsumption(context.Background(), consumptionMessage(store))
@@ -265,7 +257,7 @@ func TestHandleAppleConsumptionIgnoresClosedAndForeignWork(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.November, 18, 12, 0, 0, 0, time.UTC)
-	store := newConsumptionStore(t, now, persistence.ConsumptionConsentApplicationAttested)
+	store := newConsumptionStore(t, now, true)
 	store.record.Status = persistence.ConsumptionStatusSent
 	sender := &fakeConsumptionSender{}
 	service := newConsumptionService(store, sender, now)
@@ -293,7 +285,7 @@ func TestHandleAppleConsumptionReportsAttemptStorageFailure(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.November, 18, 12, 30, 0, 0, time.UTC)
-	store := newConsumptionStore(t, now, persistence.ConsumptionConsentApplicationAttested)
+	store := newConsumptionStore(t, now, true)
 	store.recordAttempts = persistence.ErrUnavailable
 	service := newConsumptionService(store, &fakeConsumptionSender{response: apple.ConsumptionResponse{HTTPStatus: http.StatusAccepted}}, now)
 	if err := service.HandleAppleConsumption(context.Background(), consumptionMessage(store)); !errors.Is(err, persistence.ErrUnavailable) {
@@ -307,7 +299,7 @@ func TestHandleAppleInboxSchedulesConsumptionRequest(t *testing.T) {
 
 	signedAt := time.Date(2026, time.November, 18, 8, 0, 0, 0, time.UTC)
 	now := signedAt.Add(2 * time.Minute)
-	store := newConsumptionStore(t, signedAt, persistence.ConsumptionConsentCustomerOptIn)
+	store := newConsumptionStore(t, signedAt, false)
 	service := newConsumptionService(store, nil, now)
 	notification := apple.NotificationEnvelope{
 		NotificationUUID: consumptionTestNotificationUUID, NotificationType: apple.NotificationTypeConsumptionRequest,
@@ -532,7 +524,8 @@ func (sender *fakeConsumptionSender) SendConsumptionInformation(
 }
 
 // newConsumptionStore returns an enabled Apple application whose customer has delivery evidence.
-func newConsumptionStore(t *testing.T, signedAt time.Time, consentMode string) *consumptionStore {
+// consented records the customer's yes; without it the customer has no consent record.
+func newConsumptionStore(t *testing.T, signedAt time.Time, consented bool) *consumptionStore {
 	t.Helper()
 	store := &consumptionStore{
 		application: core.Application{
@@ -540,7 +533,7 @@ func newConsumptionStore(t *testing.T, signedAt time.Time, consentMode string) *
 			Store: core.StoreApplication{Provider: core.ProviderAppleAppStore, Environment: core.EnvironmentSandbox, ID: "com.example.iapstack"},
 		},
 		settings: &persistence.AppleConsumptionSettings{
-			ProjectID: "project-1", ApplicationID: "application-1", Enabled: true, ConsentMode: consentMode,
+			ProjectID: "project-1", ApplicationID: "application-1", Enabled: true,
 			RefundPreference: persistence.ConsumptionRefundPreferenceNone, Revision: 1,
 		},
 		customer: &core.Customer{ID: "customer-1", ProjectID: "project-1", ExternalID: consumptionTestAccountToken},
@@ -554,6 +547,9 @@ func newConsumptionStore(t *testing.T, signedAt time.Time, consentMode string) *
 			},
 			Status: persistence.ConsumptionStatusPending,
 		},
+	}
+	if consented {
+		store.consent = &persistence.AppleConsumptionConsent{Consented: true}
 	}
 	store.setPayload(t, apple.ConsumptionOwnershipPurchased)
 	return store

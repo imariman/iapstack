@@ -16,12 +16,6 @@ const (
 	// QueueAppleConsumption identifies protected App Store consumption response work.
 	QueueAppleConsumption QueueName = "apple_consumption"
 
-	// ConsumptionConsentCustomerOptIn sends only for customers whose consent the application recorded.
-	ConsumptionConsentCustomerOptIn = "customer_opt_in"
-	// ConsumptionConsentApplicationAttested sends unless the application recorded a withdrawal.
-	// The operator attests that the application collects consent from every customer before purchase.
-	ConsumptionConsentApplicationAttested = "application_attested"
-
 	// ConsumptionRefundPreferenceNone omits refundPreference from the request.
 	ConsumptionRefundPreferenceNone = "none"
 	// ConsumptionRefundPreferenceDecline asks Apple to decline the refund.
@@ -94,11 +88,11 @@ type AppleConsumptionRepository interface {
 
 // AppleConsumptionSettings is one application's operator choice for answering consumption requests.
 // Revision zero means the operator never saved settings, which is the same as disabled.
+// Consent is not a setting: a request is answered only for a customer with a recorded yes.
 type AppleConsumptionSettings struct {
 	ProjectID             core.ProjectID
 	ApplicationID         core.ApplicationID
 	Enabled               bool
-	ConsentMode           string
 	RefundPreference      string
 	SampleContentProvided bool
 	Revision              int64
@@ -112,7 +106,6 @@ type AppleConsumptionSettingsWrite struct {
 	ProjectID             core.ProjectID
 	ApplicationID         core.ApplicationID
 	Enabled               bool
-	ConsentMode           string
 	RefundPreference      string
 	SampleContentProvided bool
 	ExpectedRevision      int64
@@ -201,14 +194,8 @@ type AppleConsumptionAttempt struct {
 // DefaultAppleConsumptionSettings returns the disabled settings used before an operator saves any.
 func DefaultAppleConsumptionSettings(projectID core.ProjectID, applicationID core.ApplicationID) AppleConsumptionSettings {
 	return AppleConsumptionSettings{
-		ProjectID: projectID, ApplicationID: applicationID,
-		ConsentMode: ConsumptionConsentCustomerOptIn, RefundPreference: ConsumptionRefundPreferenceNone,
+		ProjectID: projectID, ApplicationID: applicationID, RefundPreference: ConsumptionRefundPreferenceNone,
 	}
-}
-
-// ValidConsumptionConsentMode reports whether a consent mode is supported.
-func ValidConsumptionConsentMode(value string) bool {
-	return value == ConsumptionConsentCustomerOptIn || value == ConsumptionConsentApplicationAttested
 }
 
 // ValidConsumptionRefundPreference reports whether a refund preference policy is supported.
@@ -222,12 +209,9 @@ func ValidConsumptionRefundPreference(value string) bool {
 	}
 }
 
-// Validate checks settings scope, closed vocabularies, and revision input.
+// Validate checks settings scope, the refund preference, and revision input.
 func (write AppleConsumptionSettingsWrite) Validate() error {
-	var modeError, preferenceError, actorError error
-	if !ValidConsumptionConsentMode(write.ConsentMode) {
-		modeError = fmt.Errorf("unsupported consumption consent mode %q", write.ConsentMode)
-	}
+	var preferenceError, actorError error
 	if !ValidConsumptionRefundPreference(write.RefundPreference) {
 		preferenceError = fmt.Errorf("unsupported consumption refund preference %q", write.RefundPreference)
 	}
@@ -237,7 +221,6 @@ func (write AppleConsumptionSettingsWrite) Validate() error {
 	return errors.Join(
 		write.ProjectID.Validate(),
 		write.ApplicationID.Validate(),
-		modeError,
 		preferenceError,
 		validateNonNegative("consumption settings expected revision", write.ExpectedRevision),
 		actorError,

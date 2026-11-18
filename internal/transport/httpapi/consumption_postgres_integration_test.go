@@ -38,29 +38,30 @@ func TestAppleConsumptionSettingsAndConsentHTTP(t *testing.T) {
 	settingsPath := project + "/applications/" + consumptionHTTPApplicationID + "/apple-consumption"
 	var initial appleConsumptionStatusResponse
 	fixture.requestJSON(t, http.MethodGet, settingsPath, admin, nil, http.StatusOK, &initial)
-	if initial.Settings.Enabled || initial.Settings.Revision != 0 || initial.Settings.ConsentMode != "customer_opt_in" ||
+	if initial.Settings.Enabled || initial.Settings.Revision != 0 ||
 		initial.Settings.RefundPreference != "none" || initial.RecentRequests == nil || len(initial.RecentRequests) != 0 {
 		t.Fatalf("default consumption status = %#v", initial)
 	}
 	fixture.requestJSON(t, http.MethodGet, project+"/applications/"+apiIntegrationApplicationID+"/apple-consumption",
 		admin, nil, http.StatusBadRequest, nil)
 	fixture.requestJSON(t, http.MethodPut, settingsPath, admin, map[string]any{
-		"consent_mode": "customer_opt_in", "refund_preference": "none", "expected_revision": 0,
+		"refund_preference": "none", "expected_revision": 0,
 	}, http.StatusBadRequest, nil)
+	// Consent is opt-in only, so the removed attested mode is an unknown field.
 	fixture.requestJSON(t, http.MethodPut, settingsPath, admin, map[string]any{
-		"enabled": true, "consent_mode": "everyone", "refund_preference": "none",
+		"enabled": true, "consent_mode": "application_attested", "refund_preference": "none",
 		"sample_content_provided": false, "expected_revision": 0,
 	}, http.StatusBadRequest, nil)
 	var saved appleConsumptionSettingsResponse
 	fixture.requestJSON(t, http.MethodPut, settingsPath, admin, map[string]any{
-		"enabled": true, "consent_mode": "application_attested", "refund_preference": "grant_full",
+		"enabled": true, "refund_preference": "grant_full",
 		"sample_content_provided": true, "expected_revision": 0,
 	}, http.StatusOK, &saved)
-	if !saved.Enabled || saved.Revision != 1 || saved.ConsentMode != "application_attested" || saved.UpdatedAt == nil {
+	if !saved.Enabled || saved.Revision != 1 || saved.RefundPreference != "grant_full" || saved.UpdatedAt == nil {
 		t.Fatalf("saved settings = %#v", saved)
 	}
 	fixture.requestJSON(t, http.MethodPut, settingsPath, admin, map[string]any{
-		"enabled": false, "consent_mode": "application_attested", "refund_preference": "grant_full",
+		"enabled": false, "refund_preference": "grant_full",
 		"sample_content_provided": true, "expected_revision": 0,
 	}, http.StatusConflict, nil)
 
@@ -81,6 +82,16 @@ func TestAppleConsumptionSettingsAndConsentHTTP(t *testing.T) {
 	}
 	fixture.requestJSON(t, http.MethodPut, consentPath, applicationKey["key"], map[string]any{}, http.StatusBadRequest, nil)
 	fixture.requestJSON(t, http.MethodPut, consentPath, admin, map[string]bool{"consented": true}, http.StatusUnauthorized, nil)
+	var session customerSessionResponse
+	fixture.requestJSON(t, http.MethodPost, "/v1/applications/"+consumptionHTTPApplicationID+"/customer-sessions",
+		applicationKey["key"], customerSessionRequest{ExternalCustomerID: consumptionHTTPExternalCustomerID},
+		http.StatusCreated, &session)
+	fixture.requestJSON(t, http.MethodPut, consentPath, session.Token, map[string]bool{"consented": false}, http.StatusUnauthorized, nil)
+	var afterSession appleConsumptionConsentResponse
+	fixture.requestJSON(t, http.MethodPut, consentPath, applicationKey["key"], map[string]bool{"consented": true}, http.StatusOK, &afterSession)
+	if !afterSession.Consented {
+		t.Fatalf("consent after rejected session write = %#v", afterSession)
+	}
 	fixture.requestJSON(t, http.MethodPut,
 		"/v1/applications/"+consumptionHTTPApplicationID+"/customers/unknown-customer/apple-consumption-consent",
 		applicationKey["key"], map[string]bool{"consented": true}, http.StatusNotFound, nil)

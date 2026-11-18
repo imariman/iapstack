@@ -29,7 +29,7 @@ const (
 	consumptionReasonAccepted = "accepted"
 	// consumptionReasonDisabled records an application whose operator has not enabled consumption answers.
 	consumptionReasonDisabled = "disabled"
-	// consumptionReasonNoConsent records a customer without recorded consent in opt-in mode.
+	// consumptionReasonNoConsent records a customer without a recorded yes.
 	consumptionReasonNoConsent = "no_consent"
 	// consumptionReasonConsentWithdrawn records a customer whose recorded decision is no consent.
 	consumptionReasonConsentWithdrawn = "consent_withdrawn"
@@ -321,7 +321,7 @@ func (service *Service) decideConsumption(
 			decision.skipReason = consumptionReasonUnsupportedOwnership
 			return nil
 		}
-		customerID, consented, reason, consentErr := consumptionConsent(ctx, repository, record, payload, settings)
+		customerID, reason, consentErr := consumptionConsent(ctx, repository, record, payload)
 		if consentErr != nil {
 			return consentErr
 		}
@@ -334,7 +334,7 @@ func (service *Service) decideConsumption(
 			return deliveryErr
 		}
 		decision.input = apple.ConsumptionInput{
-			ProductType: record.ProductType, CustomerConsented: consented, Delivered: delivered,
+			ProductType: record.ProductType, CustomerConsented: true, Delivered: delivered,
 			RefundPreference: settings.RefundPreference, SampleContentProvided: settings.SampleContentProvided,
 		}
 		return nil
@@ -342,40 +342,31 @@ func (service *Service) decideConsumption(
 	return decision, err
 }
 
-// consumptionConsent resolves the customer and applies the application's consent mode.
-// It returns a skip reason when consent is not established. Opt-in requires a recorded yes.
-// Attested mode sends unless the application recorded a no.
+// consumptionConsent resolves the customer and requires their recorded yes.
+// Consent is opt-in only: no record, an unknown customer, or a recorded no returns a skip reason.
 func consumptionConsent(
 	ctx context.Context,
 	repository persistence.OperationsTransaction,
 	record persistence.AppleConsumptionRequestRecord,
 	payload jobs.AppleConsumptionPayload,
-	settings persistence.AppleConsumptionSettings,
-) (core.CustomerID, bool, string, error) {
+) (core.CustomerID, string, error) {
 	customer, err := repository.CustomerByExternalID(ctx, record.ProjectID, payload.ExternalCustomerID)
 	if errors.Is(err, persistence.ErrNotFound) || errors.Is(err, persistence.ErrConflict) {
-		if settings.ConsentMode == persistence.ConsumptionConsentApplicationAttested {
-			return "", true, "", nil
-		}
-		return "", false, consumptionReasonNoConsent, nil
+		return "", consumptionReasonNoConsent, nil
 	}
 	if err != nil {
-		return "", false, "", err
+		return "", "", err
 	}
 	consent, err := repository.AppleConsumptionConsent(ctx, record.ProjectID, record.ApplicationID, customer.ID)
-	recorded := err == nil
-	if err != nil && !errors.Is(err, persistence.ErrNotFound) {
-		return "", false, "", err
-	}
 	switch {
-	case recorded && !consent.Consented:
-		return customer.ID, false, consumptionReasonConsentWithdrawn, nil
-	case recorded && consent.Consented:
-		return customer.ID, true, "", nil
-	case settings.ConsentMode == persistence.ConsumptionConsentApplicationAttested:
-		return customer.ID, true, "", nil
+	case errors.Is(err, persistence.ErrNotFound):
+		return customer.ID, consumptionReasonNoConsent, nil
+	case err != nil:
+		return "", "", err
+	case !consent.Consented:
+		return customer.ID, consumptionReasonConsentWithdrawn, nil
 	default:
-		return customer.ID, false, consumptionReasonNoConsent, nil
+		return customer.ID, "", nil
 	}
 }
 

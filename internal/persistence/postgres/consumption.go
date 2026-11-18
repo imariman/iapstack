@@ -30,13 +30,12 @@ func (repository *transaction) AppleConsumptionSettings(
 	var settings persistence.AppleConsumptionSettings
 	var actor *string
 	err := repository.tx.QueryRow(ctx, `
-		SELECT project_id, application_id, enabled, consent_mode, refund_preference,
+		SELECT project_id, application_id, enabled, refund_preference,
 			sample_content_provided, revision, updated_by_key_id, created_at, updated_at
 		FROM apple_consumption_settings
 		WHERE project_id = $1 AND application_id = $2
 	`, projectID, applicationID).Scan(
-		&settings.ProjectID, &settings.ApplicationID, &settings.Enabled, &settings.ConsentMode,
-		&settings.RefundPreference, &settings.SampleContentProvided, &settings.Revision, &actor,
+		&settings.ProjectID, &settings.ApplicationID, &settings.Enabled, &settings.RefundPreference, &settings.SampleContentProvided, &settings.Revision, &actor,
 		&settings.CreatedAt, &settings.UpdatedAt,
 	)
 	if err != nil {
@@ -61,11 +60,11 @@ func (repository *transaction) PutAppleConsumptionSettings(
 	if write.ExpectedRevision == 0 {
 		command, err := repository.tx.Exec(ctx, `
 			INSERT INTO apple_consumption_settings (
-				project_id, application_id, enabled, consent_mode, refund_preference,
+				project_id, application_id, enabled, refund_preference,
 				sample_content_provided, updated_by_key_id
-			) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			) VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (application_id) DO NOTHING
-		`, write.ProjectID, write.ApplicationID, write.Enabled, write.ConsentMode, write.RefundPreference,
+		`, write.ProjectID, write.ApplicationID, write.Enabled, write.RefundPreference,
 			write.SampleContentProvided, nullableString(write.ActorKeyID))
 		if err != nil {
 			return persistence.AppleConsumptionSettings{}, classifyError("create Apple consumption settings", err)
@@ -74,10 +73,10 @@ func (repository *transaction) PutAppleConsumptionSettings(
 	} else {
 		command, err := repository.tx.Exec(ctx, `
 			UPDATE apple_consumption_settings
-			SET enabled = $3, consent_mode = $4, refund_preference = $5, sample_content_provided = $6,
-				updated_by_key_id = $7, revision = revision + 1, updated_at = GREATEST(now(), created_at)
-			WHERE project_id = $1 AND application_id = $2 AND revision = $8
-		`, write.ProjectID, write.ApplicationID, write.Enabled, write.ConsentMode, write.RefundPreference,
+			SET enabled = $3, refund_preference = $4, sample_content_provided = $5,
+				updated_by_key_id = $6, revision = revision + 1, updated_at = GREATEST(now(), created_at)
+			WHERE project_id = $1 AND application_id = $2 AND revision = $7
+		`, write.ProjectID, write.ApplicationID, write.Enabled, write.RefundPreference,
 			write.SampleContentProvided, nullableString(write.ActorKeyID), write.ExpectedRevision)
 		if err != nil {
 			return persistence.AppleConsumptionSettings{}, classifyError("update Apple consumption settings", err)
@@ -459,8 +458,7 @@ func (repository *transaction) failAppleConsumption(ctx context.Context, failure
 
 // sameConsumptionSettings reports whether stored settings already equal one write.
 func sameConsumptionSettings(settings persistence.AppleConsumptionSettings, write persistence.AppleConsumptionSettingsWrite) bool {
-	return settings.Enabled == write.Enabled && settings.ConsentMode == write.ConsentMode &&
-		settings.RefundPreference == write.RefundPreference &&
+	return settings.Enabled == write.Enabled && settings.RefundPreference == write.RefundPreference &&
 		settings.SampleContentProvided == write.SampleContentProvided &&
 		settings.UpdatedByKeyID == write.ActorKeyID
 }

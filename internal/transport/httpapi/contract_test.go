@@ -119,7 +119,7 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 		"CustomerResolution":           {"project_id", "external_id", "canonical_customer_id", "match"},
 		"CustomerMerge":                {"id", "project_id", "canonical_customer_id", "source_customer_id", "idempotency_key", "created_at"},
 		"AppleConsumptionStatus":       {"settings", "recent_requests"},
-		"AppleConsumptionSettings":     {"project_id", "application_id", "enabled", "consent_mode", "refund_preference", "sample_content_provided", "revision"},
+		"AppleConsumptionSettings":     {"project_id", "application_id", "enabled", "refund_preference", "sample_content_provided", "revision"},
 		"AppleConsumptionConsent":      {"application_id", "customer_id", "external_customer_id", "consented", "updated_at"},
 	} {
 		schemaReference, exists := document.Components.Schemas[name]
@@ -260,7 +260,7 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 		{name: "Apple consumption status", schema: "AppleConsumptionStatus", value: appleConsumptionStatusResponse{
 			Settings: consumptionSettingsResponse(persistence.AppleConsumptionSettings{
 				ProjectID: "project-1", ApplicationID: "application-2", Enabled: true,
-				ConsentMode: persistence.ConsumptionConsentCustomerOptIn, RefundPreference: persistence.ConsumptionRefundPreferenceDecline,
+				RefundPreference:      persistence.ConsumptionRefundPreferenceDecline,
 				SampleContentProvided: true, Revision: 2, CreatedAt: now, UpdatedAt: now,
 			}),
 			RecentRequests: []appleConsumptionRequestResponse{

@@ -37,7 +37,7 @@ func TestAppleConsumptionSettingsUseOptimisticRevisions(t *testing.T) {
 	}
 	write := persistence.AppleConsumptionSettingsWrite{
 		ProjectID: projectID, ApplicationID: applicationID, Enabled: true,
-		ConsentMode: persistence.ConsumptionConsentCustomerOptIn, RefundPreference: persistence.ConsumptionRefundPreferenceDecline,
+		RefundPreference:      persistence.ConsumptionRefundPreferenceDecline,
 		SampleContentProvided: true, ActorKeyID: "key-1",
 	}
 	created := putConsumptionSettings(t, database, store, write)
@@ -62,7 +62,7 @@ func TestAppleConsumptionSettingsUseOptimisticRevisions(t *testing.T) {
 	if replayed := putConsumptionSettings(t, database, store, write); replayed.Revision != 2 {
 		t.Fatalf("identical update retry = %#v", replayed)
 	}
-	write.ConsentMode = persistence.ConsumptionConsentApplicationAttested
+	write.RefundPreference = persistence.ConsumptionRefundPreferenceGrantFull
 	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
 		_, putErr := repository.PutAppleConsumptionSettings(database.ctx, write)
 		return putErr

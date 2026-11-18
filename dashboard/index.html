@@ -326,10 +326,9 @@
             <form id="consumption-form" class="management-form">
               <div class="form-grid">
                 <label>Answer consumption requests<select name="enabled"><option value="false">Off</option><option value="true">On</option></select></label>
-                <label>Customer consent<select name="consent_mode"><option value="customer_opt_in">Recorded per customer</option><option value="application_attested">Collected by the app from every customer</option></select></label>
                 <label>Refund preference<select name="refund_preference"><option value="none">No preference</option><option value="decline">Decline</option><option value="grant_full">Grant in full</option><option value="grant_prorated">Grant prorated (subscriptions)</option></select></label>
                 <label>Sample or trial before purchase<select name="sample_content_provided"><option value="false">No</option><option value="true">Yes</option></select></label>
-                <p class="credential-note full-row">Your backend records each customer's answer with <code>PUT /v1/applications/{application_id}/customers/{external_customer_id}/apple-consumption-consent</code>. A recorded no always blocks that customer.</p>
+                <p class="credential-note full-row">Consent is opt-in. IAPStack answers only for customers your backend recorded as consenting, with the application key: <code>PUT /v1/applications/{application_id}/customers/{external_customer_id}/apple-consumption-consent</code>. No record or a recorded no skips the request.</p>
               </div>
               <p class="form-message" id="consumption-message" role="status"></p>
               <div class="section-actions"><button type="submit" class="primary-button">Save consumption answers</button></div>

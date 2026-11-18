@@ -1,11 +1,11 @@
 -- Answer App Store CONSUMPTION_REQUEST notifications for applications whose operator opted in.
--- Settings are off unless a row says enabled. Consent is per application and customer.
+-- Settings are off unless a row says enabled. Consent is opt-in only: one recorded decision per
+-- application and customer, written by the host backend with the application bearer.
 -- Requests are durable jobs. Every handler decision is one attempt row.
 CREATE TABLE apple_consumption_settings (
     project_id text NOT NULL,
     application_id text PRIMARY KEY,
     enabled boolean NOT NULL,
-    consent_mode text NOT NULL,
     refund_preference text NOT NULL,
     sample_content_provided boolean NOT NULL,
     revision bigint NOT NULL DEFAULT 1,
@@ -14,9 +14,6 @@ CREATE TABLE apple_consumption_settings (
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT apple_consumption_settings_application_fk FOREIGN KEY (application_id, project_id)
         REFERENCES applications (id, project_id) ON DELETE CASCADE,
-    CONSTRAINT apple_consumption_settings_consent_mode_valid CHECK (
-        consent_mode IN ('customer_opt_in', 'application_attested')
-    ),
     CONSTRAINT apple_consumption_settings_refund_preference_valid CHECK (
         refund_preference IN ('none', 'decline', 'grant_full', 'grant_prorated')
     ),

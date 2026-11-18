@@ -1023,7 +1023,6 @@ function renderConsumption(status) {
   state.consumption = settings;
   const form = elements.consumptionForm;
   form.elements.enabled.value = String(settings.enabled);
-  form.elements.consent_mode.value = settings.consent_mode;
   form.elements.refund_preference.value = settings.refund_preference;
   form.elements.sample_content_provided.value = String(settings.sample_content_provided);
   const stateLabel = settings.enabled ? "On" : "Off";
@@ -1070,7 +1069,6 @@ async function saveConsumption(form) {
     method: "PUT",
     body: JSON.stringify({
       enabled: data.enabled === "true",
-      consent_mode: data.consent_mode,
       refund_preference: data.refund_preference,
       sample_content_provided: data.sample_content_provided === "true",
       expected_revision: state.consumption?.revision || 0,

@@ -156,7 +156,7 @@ func TestDashboardOffersAppleConsumptionAnswersOnlyForAppleApplications(t *testi
 	for _, required := range []string{
 		`id="consumption-section"`, `aria-labelledby="consumption-title" hidden`, `id="consumption-form"`,
 		`<option value="false">Off</option><option value="true">On</option>`,
-		`value="customer_opt_in"`, `value="application_attested"`, `value="grant_prorated"`,
+		`value="grant_prorated"`, "Consent is opt-in.", "No record or a recorded no skips the request.",
 		`name="sample_content_provided"`, `id="consumption-rows"`, "apple-consumption-consent",
 	} {
 		if !strings.Contains(string(document), required) {
@@ -170,6 +170,11 @@ func TestDashboardOffersAppleConsumptionAnswersOnlyForAppleApplications(t *testi
 	} {
 		if !strings.Contains(string(script), required) {
 			t.Fatalf("dashboard consumption workflow does not contain %q", required)
+		}
+	}
+	for _, forbidden := range []string{"consent_mode", "application_attested", "customer_opt_in"} {
+		if strings.Contains(string(document), forbidden) || strings.Contains(string(script), forbidden) {
+			t.Fatalf("dashboard still offers the removed consent mode %q", forbidden)
 		}
 	}
 	if !strings.Contains(string(styles), ".status-badge.sent") {
