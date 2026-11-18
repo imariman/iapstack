@@ -137,6 +137,51 @@ func TestDashboardSupportsAppleCatalogCommissioning(t *testing.T) {
 	}
 }
 
+// TestDashboardOffersAppleConsumptionAnswersOnlyForAppleApplications pins the opt-in section and its labels.
+func TestDashboardOffersAppleConsumptionAnswersOnlyForAppleApplications(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	styles, err := fs.ReadFile(assets, "app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	for _, required := range []string{
+		`id="consumption-section"`, `aria-labelledby="consumption-title" hidden`, `id="consumption-form"`,
+		`<option value="false">Off</option><option value="true">On</option>`,
+		`value="grant_prorated"`, "Consent is opt-in.", "No record or a recorded no skips the request.",
+		`name="sample_content_provided"`, `id="consumption-rows"`, "apple-consumption-consent",
+	} {
+		if !strings.Contains(string(document), required) {
+			t.Fatalf("dashboard consumption section does not contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		`resetConsumptionSection(application.provider === "apple_app_store")`, `"/apple-consumption"`,
+		"expected_revision: state.consumption?.revision || 0", "No consumption requests yet.",
+		"cellBadge(request.status, request.status_reason",
+	} {
+		if !strings.Contains(string(script), required) {
+			t.Fatalf("dashboard consumption workflow does not contain %q", required)
+		}
+	}
+	for _, forbidden := range []string{"consent_mode", "application_attested", "customer_opt_in"} {
+		if strings.Contains(string(document), forbidden) || strings.Contains(string(script), forbidden) {
+			t.Fatalf("dashboard still offers the removed consent mode %q", forbidden)
+		}
+	}
+	if !strings.Contains(string(styles), ".status-badge.sent") {
+		t.Fatal("sent consumption requests have no healthy status style")
+	}
+}
+
 // TestDashboardUsesEnglishInterface verifies the embedded interface stays consistently English.
 func TestDashboardUsesEnglishInterface(t *testing.T) {
 	t.Parallel()

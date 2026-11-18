@@ -53,6 +53,8 @@ func TestDashboardUsesDocumentedAdminOperations(t *testing.T) {
 		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}/applications/{application_id}/store-products/{provider_product_id}", operationID: "putAdminStoreProduct"},
 		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}/applications/{application_id}/credentials/{kind}", operationID: "putAdminCredential"},
 		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}/applications/{application_id}/webhook", operationID: "putAdminWebhook"},
+		{method: http.MethodGet, path: "/v1/admin/projects/{project_id}/applications/{application_id}/apple-consumption", operationID: "getAdminAppleConsumption"},
+		{method: http.MethodPut, path: "/v1/admin/projects/{project_id}/applications/{application_id}/apple-consumption", operationID: "putAdminAppleConsumption"},
 	}
 	for _, operation := range expected {
 		pathItem := document.Paths.Value(operation.path)
@@ -110,6 +112,7 @@ func TestDashboardUsesDocumentedAdminOperations(t *testing.T) {
 		"/customers?", "/manual-grants", ":revoke", "page_token", "next_page_token",
 		"grant_options", "canonical_customer_id", "idempotency_key", "duration_days", "ends_at",
 		"/subscription-metrics?",
+		"/apple-consumption",
 	} {
 		if !strings.Contains(string(script), fragment) {
 			t.Errorf("dashboard script is missing documented route fragment %q", fragment)

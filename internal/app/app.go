@@ -156,14 +156,14 @@ func Run(
 			},
 			func(componentContext context.Context) error {
 				return runWorker(componentContext, cfg, store, keyring, webhookService,
-					verificationService, metricRegistry, logger)
+					verificationService, appleAdapter, metricRegistry, logger)
 			},
 		)
 	case "api":
 		runErr = runAPI(ctx, cfg, store, keyring, credentialService, webhookService,
 			verificationService, huaweiAdapter, appleAdapter, googlePlayAdapter, metricRegistry, logger)
 	case "worker":
-		runErr = runWorker(ctx, cfg, store, keyring, webhookService, verificationService, metricRegistry, logger)
+		runErr = runWorker(ctx, cfg, store, keyring, webhookService, verificationService, appleAdapter, metricRegistry, logger)
 	default:
 		panic("validated mode was not handled")
 	}
@@ -242,7 +242,7 @@ func runAPI(
 	return server.Run(ctx)
 }
 
-// runWorker composes durable provider and webhook handlers under the worker lifecycle.
+// runWorker composes durable provider, consumption, and webhook handlers under the worker lifecycle.
 func runWorker(
 	ctx context.Context,
 	cfg config.Config,
@@ -250,6 +250,7 @@ func runWorker(
 	keyring *platformprotection.Keyring,
 	webhookService *webhooks.Service,
 	verificationService *verification.Service,
+	appleAdapter *apple.Adapter,
 	metricRegistry *metrics.Registry,
 	logger *slog.Logger,
 ) error {
@@ -258,14 +259,16 @@ func runWorker(
 		return err
 	}
 	providerProcessing.SetLogger(logger)
+	providerProcessing.SetAppleConsumptionSender(appleAdapter)
 	runner, err := worker.New(store.Pool(), store, worker.Config{
 		WorkerID: cfg.WorkerID, PollInterval: cfg.WorkerPollInterval,
 		JobTimeout: cfg.WorkerJobTimeout, Concurrency: cfg.WorkerConcurrency,
 		ShutdownTimeout: cfg.ShutdownTimeout, MaxAttempts: cfg.WorkerMaxAttempts,
 		QueueRetention: cfg.QueueRetention,
 	}, map[persistence.QueueName]worker.Handler{
-		persistence.QueueInbox:          worker.HandlerFunc(providerProcessing.HandleInbox),
-		persistence.QueueReconciliation: worker.HandlerFunc(providerProcessing.HandleReconciliation),
+		persistence.QueueInbox:            worker.HandlerFunc(providerProcessing.HandleInbox),
+		persistence.QueueReconciliation:   worker.HandlerFunc(providerProcessing.HandleReconciliation),
+		persistence.QueueAppleConsumption: worker.HandlerFunc(providerProcessing.HandleAppleConsumption),
 		persistence.QueueOutbox: worker.HandlerFunc(func(ctx context.Context, message persistence.QueueMessage) error {
 			err := webhookService.Deliver(ctx, message)
 			if err != nil {

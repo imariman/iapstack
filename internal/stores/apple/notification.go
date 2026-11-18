@@ -19,6 +19,8 @@ const (
 	maximumNotificationIdentifier = 4096
 	// maximumNotificationClockSkew permits bounded signer and receiver clock drift.
 	maximumNotificationClockSkew = 5 * time.Minute
+	// NotificationTypeConsumptionRequest is Apple's refund consumption request notification type.
+	NotificationTypeConsumptionRequest = "CONSUMPTION_REQUEST"
 )
 
 // NotificationEnvelope is the validated minimal App Store notification retained in the protected inbox.
@@ -31,6 +33,7 @@ type NotificationEnvelope struct {
 	ProviderProductID  core.ProviderProductID `json:"provider_product_id,omitempty"`
 	ProductKind        core.ProductKind       `json:"product_kind,omitempty"`
 	SignedTransaction  string                 `json:"signed_transaction,omitempty"`
+	Consumption        *ConsumptionSignal     `json:"consumption,omitempty"`
 }
 
 // notificationRequest is Apple's JSON POST wrapper containing one signed V2 payload.
@@ -56,6 +59,8 @@ type notificationData struct {
 	SignedTransactionInfo string `json:"signedTransactionInfo,omitempty"`
 	SignedRenewalInfo     string `json:"signedRenewalInfo,omitempty"`
 	Status                int    `json:"status,omitempty"`
+	// ConsumptionRequestReason appears only on CONSUMPTION_REQUEST notifications.
+	ConsumptionRequestReason string `json:"consumptionRequestReason,omitempty"`
 }
 
 var (
@@ -109,6 +114,13 @@ func (adapter *Adapter) ValidateNotification(
 	if err != nil || validateNotificationTransaction(application, transaction) != nil {
 		return NotificationEnvelope{}, ErrNotificationInvalid
 	}
+	// A consumption request IAPStack cannot answer, such as an unknown product type, stays an
+	// ordinary notification. Rejecting it would make Apple redeliver it for days.
+	if decoded.NotificationType == NotificationTypeConsumptionRequest {
+		if signal, signalErr := consumptionSignal(transaction, decoded.Data.ConsumptionRequestReason); signalErr == nil {
+			envelope.Consumption = &signal
+		}
+	}
 	kind, err := productKind(transaction.Type)
 	if err != nil {
 		if decoded.Data.SignedRenewalInfo != "" {
@@ -161,6 +173,14 @@ func (notification NotificationEnvelope) Validate() error {
 	}
 	if notification.Subtype != "" && !validNotificationIdentifier(notification.Subtype) {
 		return errors.New("app store notification subtype is invalid")
+	}
+	if notification.Consumption != nil {
+		if notification.NotificationType != NotificationTypeConsumptionRequest {
+			return errors.New("app store consumption data requires a CONSUMPTION_REQUEST notification")
+		}
+		if err := notification.Consumption.Validate(); err != nil {
+			return err
+		}
 	}
 	if notification.SignedTransaction == "" {
 		if notification.ExternalCustomerID != "" || notification.ProviderProductID != "" || notification.ProductKind != "" {

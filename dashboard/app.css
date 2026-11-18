@@ -1999,7 +1999,8 @@ td code {
 .status-badge.active,
 .status-badge.allowed,
 .status-badge.delivered,
-.status-badge.processed {
+.status-badge.processed,
+.status-badge.sent {
   background: var(--accent-soft);
   border-color: rgba(52, 211, 153, 0.22);
   color: var(--accent);
@@ -2273,6 +2274,27 @@ td code {
 
 .management-section.key-section {
   grid-column: 2;
+}
+
+/* Apple only: spans both columns so the request list keeps its four columns. */
+.management-section.consumption-section {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.consumption-section .credential-note code {
+  overflow-wrap: anywhere;
+}
+
+.consumption-requests {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  max-height: 260px;
+  overflow: auto;
+}
+
+.consumption-requests td code {
+  display: block;
 }
 
 .management-heading {
@@ -3109,7 +3131,8 @@ td code {
     grid-row: auto;
   }
 
-  .management-section.key-section {
+  .management-section.key-section,
+  .management-section.consumption-section {
     grid-column: auto;
   }
 

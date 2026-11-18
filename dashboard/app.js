@@ -14,6 +14,7 @@ const state = {
   overview: null,
   apiKeys: [],
   pendingRevokeKey: null,
+  consumption: null,
   customerSearch: { query: "", nextToken: "", count: 0, sequence: 0, timer: 0 },
   customerDetail: null,
   customerDetailID: "",
@@ -63,6 +64,9 @@ const elements = {
   webhookMessage: document.querySelector("#webhook-message"),
   applicationKeyForm: document.querySelector("#application-key-form"),
   applicationKeyMessage: document.querySelector("#application-key-message"),
+  consumptionSection: document.querySelector("#consumption-section"),
+  consumptionForm: document.querySelector("#consumption-form"),
+  consumptionMessage: document.querySelector("#consumption-message"),
   apiKeyDialog: document.querySelector("#api-key-dialog"),
   apiKeyList: document.querySelector("#api-key-list"),
   apiKeyMessage: document.querySelector("#api-key-message"),
@@ -1052,7 +1056,11 @@ function openApplicationManager(application) {
   elements.applicationKeyMessage.textContent = "";
   configureCredentialForm(application);
   renderCommissioningStatus();
+  resetConsumptionSection(application.provider === "apple_app_store");
   elements.applicationDialog.showModal();
+  if (application.provider === "apple_app_store") {
+    loadConsumption();
+  }
   const activeFields = {
     apple_app_store: elements.appleCredentialFields,
     google_play: elements.googleCredentialFields,
@@ -1336,6 +1344,91 @@ async function saveWebhook(form) {
       url: data.url,
       signing_secret: data.signing_secret,
       expected_revision: state.managedApplication.webhook_revision,
+    }),
+  });
+}
+
+function resetConsumptionSection(visible) {
+  state.consumption = null;
+  elements.consumptionForm.reset();
+  elements.consumptionMessage.textContent = "";
+  elements.consumptionSection.hidden = !visible;
+  setText("consumption-revision", "Off");
+  document.querySelector("#consumption-rows").replaceChildren();
+}
+
+async function loadConsumption() {
+  const applicationID = state.managedApplication?.id;
+  setFormBusy(elements.consumptionForm, true);
+  setFormMessage(elements.consumptionMessage, "Loading consumption answers…", "working");
+  try {
+    const status = await apiRequest(applicationAdminPath("/apple-consumption"));
+    if (state.managedApplication?.id !== applicationID) return false;
+    renderConsumption(status);
+    elements.consumptionMessage.textContent = "";
+    return true;
+  } catch (error) {
+    setFormMessage(elements.consumptionMessage, errorMessage(error));
+    return false;
+  } finally {
+    setFormBusy(elements.consumptionForm, false);
+  }
+}
+
+function renderConsumption(status) {
+  const settings = status.settings;
+  state.consumption = settings;
+  const form = elements.consumptionForm;
+  form.elements.enabled.value = String(settings.enabled);
+  form.elements.refund_preference.value = settings.refund_preference;
+  form.elements.sample_content_provided.value = String(settings.sample_content_provided);
+  const stateLabel = settings.enabled ? "On" : "Off";
+  setText("consumption-revision", settings.revision ? `${stateLabel} · Revision ${settings.revision}` : stateLabel);
+  renderConsumptionRequests(status.recent_requests || []);
+}
+
+function renderConsumptionRequests(requests) {
+  const body = document.querySelector("#consumption-rows");
+  body.replaceChildren();
+  if (!requests.length) {
+    renderEmptyTable("consumption-rows", 4, "No consumption requests yet.");
+    return;
+  }
+  for (const request of requests) {
+    const row = document.createElement("tr");
+    const product = document.createElement("td");
+    const detail = request.customer_reason
+      ? `${consumptionProductLabel(request.product_type)} · ${request.customer_reason.replaceAll("_", " ")}`
+      : consumptionProductLabel(request.product_type);
+    product.append(node("strong", "", detail), node("code", "", request.provider_product_id));
+    row.append(
+      cellBadge(request.status, request.status_reason || ""),
+      product,
+      textCell(formatTime(request.received_at)),
+      textCell(formatTime(request.deadline_at)),
+    );
+    body.append(row);
+  }
+}
+
+function consumptionProductLabel(type) {
+  return {
+    consumable: "Consumable",
+    non_consumable: "Lifetime",
+    auto_renewable_subscription: "Subscription",
+    non_renewing_subscription: "Non-renewing subscription",
+  }[type] || String(type).replaceAll("_", " ");
+}
+
+async function saveConsumption(form) {
+  const data = Object.fromEntries(new FormData(form));
+  return apiRequest(applicationAdminPath("/apple-consumption"), {
+    method: "PUT",
+    body: JSON.stringify({
+      enabled: data.enabled === "true",
+      refund_preference: data.refund_preference,
+      sample_content_provided: data.sample_content_provided === "true",
+      expected_revision: state.consumption?.revision || 0,
     }),
   });
 }
@@ -2406,6 +2499,7 @@ elements.applicationDialog.addEventListener("close", () => {
   elements.credentialMessage.textContent = "";
   elements.webhookMessage.textContent = "";
   elements.applicationKeyMessage.textContent = "";
+  resetConsumptionSection(false);
   state.managedApplication = null;
 });
 
@@ -2476,6 +2570,28 @@ elements.webhookForm.addEventListener("submit", async (event) => {
     setFormMessage(elements.webhookMessage, errorMessage(error));
   } finally {
     setFormBusy(elements.webhookForm, false);
+  }
+});
+
+elements.consumptionForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!state.consumption) {
+    setFormMessage(elements.consumptionMessage, "Consumption answers are still loading. Try again when they appear.");
+    return;
+  }
+  setFormBusy(elements.consumptionForm, true);
+  setFormMessage(elements.consumptionMessage, "Saving consumption answers…", "working");
+  try {
+    state.consumption = await saveConsumption(elements.consumptionForm);
+    if (await loadConsumption()) {
+      setFormMessage(elements.consumptionMessage, "Consumption answers saved.", "success");
+    } else if (elements.consumptionMessage.textContent) {
+      setFormMessage(elements.consumptionMessage, `Consumption answers saved, but the list could not be refreshed. ${elements.consumptionMessage.textContent}`);
+    }
+  } catch (error) {
+    setFormMessage(elements.consumptionMessage, errorMessage(error));
+  } finally {
+    setFormBusy(elements.consumptionForm, false);
   }
 });
 

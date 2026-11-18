@@ -373,6 +373,27 @@
               <div class="section-actions"><button type="submit" class="secondary-button">Create application key</button></div>
             </form>
           </section>
+
+          <section class="management-section consumption-section" id="consumption-section" aria-labelledby="consumption-title" hidden>
+            <div class="management-heading"><div><h3 id="consumption-title">Refund consumption answers</h3></div><span id="consumption-revision" class="revision-badge">Off</span></div>
+            <p>When a customer asks Apple for a refund, Apple may ask this server about the purchase. IAPStack answers within 12 hours only with what it holds: the customer's consent, delivery from a verified purchase, and the declarations below. It never sends a consumption percentage.</p>
+            <form id="consumption-form" class="management-form">
+              <div class="form-grid">
+                <label>Answer consumption requests<select name="enabled"><option value="false">Off</option><option value="true">On</option></select></label>
+                <label>Refund preference<select name="refund_preference"><option value="none">No preference</option><option value="decline">Decline</option><option value="grant_full">Grant in full</option><option value="grant_prorated">Grant prorated (subscriptions)</option></select></label>
+                <label>Sample or trial before purchase<select name="sample_content_provided"><option value="false">No</option><option value="true">Yes</option></select></label>
+                <p class="credential-note full-row">Consent is opt-in. IAPStack answers only for customers your backend recorded as consenting, with the application key: <code>PUT /v1/applications/{application_id}/customers/{external_customer_id}/apple-consumption-consent</code>. No record or a recorded no skips the request.</p>
+              </div>
+              <p class="form-message" id="consumption-message" role="status"></p>
+              <div class="section-actions"><button type="submit" class="primary-button">Save consumption answers</button></div>
+            </form>
+            <div class="consumption-requests">
+              <table>
+                <thead><tr><th>Status</th><th>Product</th><th>Received</th><th>Deadline</th></tr></thead>
+                <tbody id="consumption-rows"></tbody>
+              </table>
+            </div>
+          </section>
         </div>
       </div>
     </dialog>
