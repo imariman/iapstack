@@ -105,7 +105,8 @@ func TestAppleConsumptionPipelineWithPostgreSQL(t *testing.T) {
 
 	sender := &fakeConsumptionSender{response: apple.ConsumptionResponse{HTTPStatus: http.StatusAccepted}}
 	processingService.SetAppleConsumptionSender(sender)
-	processingService.SetClock(func() time.Time { return now.Add(3 * time.Minute) })
+	// Past the one-hour wait, so the undelivered request is skipped instead of retried.
+	processingService.SetClock(func() time.Time { return now.Add(2 * time.Hour) })
 	rows, err := database.conn.Query(database.ctx, `SELECT id FROM apple_consumption_requests ORDER BY id`)
 	if err != nil {
 		t.Fatalf("list consumption requests: %v", err)

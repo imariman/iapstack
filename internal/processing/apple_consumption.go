@@ -24,6 +24,9 @@ const (
 	appleConsumptionIdentityPurpose = "apple_consumption_notification"
 	// appleConsumptionInitialDelay lets the same notification's purchase refresh commit before the first answer.
 	appleConsumptionInitialDelay = time.Minute
+	// appleConsumptionDeliveryEvidenceWait is how long after receipt missing delivery evidence is retried.
+	// The purchase refresh or a client verification may still be retrying; after this the request is skipped.
+	appleConsumptionDeliveryEvidenceWait = time.Hour
 
 	// consumptionReasonAccepted records that Apple accepted the consumption information.
 	consumptionReasonAccepted = "accepted"
@@ -39,6 +42,8 @@ const (
 	consumptionReasonUnsupportedOwnership = "unsupported_ownership"
 	// consumptionReasonNoDeliveryEvidence records a purchase IAPStack never verified with allowed access.
 	consumptionReasonNoDeliveryEvidence = "no_delivery_evidence"
+	// consumptionReasonAwaitingDeliveryEvidence records a retry while delivery evidence may still arrive.
+	consumptionReasonAwaitingDeliveryEvidence = "awaiting_delivery_evidence"
 	// consumptionReasonDeadlinePassed records a run at or after the twelve-hour deadline.
 	consumptionReasonDeadlinePassed = "deadline_passed"
 	// consumptionReasonAppleRejected records an HTTP 400 answer.
@@ -134,6 +139,15 @@ func (service *Service) HandleAppleConsumption(ctx context.Context, message pers
 			Outcome: persistence.ConsumptionAttemptSkipped, Reason: decision.skipReason,
 			Status: persistence.ConsumptionStatusSkipped,
 		})
+	}
+	if !decision.input.Delivered && now.Before(record.ReceivedAt.Add(appleConsumptionDeliveryEvidenceWait)) {
+		recorded, recordErr := service.recordConsumption(ctx, record, persistence.AppleConsumptionAttempt{
+			Outcome: persistence.ConsumptionAttemptTransientError, Reason: consumptionReasonAwaitingDeliveryEvidence,
+		})
+		if recordErr != nil || !recorded {
+			return recordErr
+		}
+		return &consumptionFailure{code: consumptionReasonAwaitingDeliveryEvidence, retryable: true}
 	}
 	body, err := apple.BuildConsumptionRequest(decision.input)
 	if err != nil {

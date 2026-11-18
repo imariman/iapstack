@@ -84,6 +84,9 @@ func (repository *transaction) PutAppleConsumptionSettings(
 		affected = command.RowsAffected()
 	}
 	settings, err := repository.AppleConsumptionSettings(ctx, write.ProjectID, write.ApplicationID)
+	if errors.Is(err, persistence.ErrNotFound) && write.ExpectedRevision > 0 {
+		return persistence.AppleConsumptionSettings{}, fmt.Errorf("update Apple consumption settings: %w", persistence.ErrConflict)
+	}
 	if err != nil {
 		return persistence.AppleConsumptionSettings{}, err
 	}
@@ -96,7 +99,9 @@ func (repository *transaction) PutAppleConsumptionSettings(
 	return persistence.AppleConsumptionSettings{}, fmt.Errorf("write Apple consumption settings: %w", persistence.ErrConflict)
 }
 
-// AppleConsumptionConsent returns the latest consent decision recorded for one customer.
+// AppleConsumptionConsent returns the latest consent decision recorded for one canonical customer.
+// Decisions recorded before a merge stay on the source customer, so customers merged directly into it count
+// too. The newest decision across them wins.
 func (repository *transaction) AppleConsumptionConsent(
 	ctx context.Context,
 	projectID core.ProjectID,
@@ -109,8 +114,14 @@ func (repository *transaction) AppleConsumptionConsent(
 	var consent persistence.AppleConsumptionConsent
 	err := repository.tx.QueryRow(ctx, `
 		SELECT project_id, application_id, customer_id, consented, actor_key_id, created_at, updated_at
-		FROM apple_consumption_consents
-		WHERE project_id = $1 AND application_id = $2 AND customer_id = $3
+		FROM apple_consumption_consents AS consent
+		WHERE consent.project_id = $1 AND consent.application_id = $2
+			AND (consent.customer_id = $3 OR consent.customer_id IN (
+				SELECT customer.id FROM customers AS customer
+				WHERE customer.project_id = $1 AND customer.merged_into_customer_id = $3
+			))
+		ORDER BY consent.updated_at DESC, consent.customer_id = $3 DESC
+		LIMIT 1
 	`, projectID, applicationID, customerID).Scan(
 		&consent.ProjectID, &consent.ApplicationID, &consent.CustomerID, &consent.Consented,
 		&consent.ActorKeyID, &consent.CreatedAt, &consent.UpdatedAt,

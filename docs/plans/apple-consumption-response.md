@@ -86,7 +86,8 @@ The task asked for account tenure and lifetime purchased and refunded amounts. T
 | Family Sharing transaction | `skipped` / `family_shared` (Apple rejects these) |
 | Other ownership, such as an assigned seat | `skipped` / `unsupported_ownership` |
 | No recorded yes for the customer (see below) | `skipped` / `no_consent` or `consent_withdrawn` |
-| No allowed observation for this transaction and customer | `skipped` / `no_delivery_evidence` |
+| No allowed observation yet, less than one hour after receipt | attempt `transient_error` / `awaiting_delivery_evidence`; River retries |
+| No allowed observation for this transaction and customer after that hour | `skipped` / `no_delivery_evidence` |
 | Apple answers 2xx | `sent` / `accepted` |
 | Apple answers 429, 5xx, or the network fails | attempt `transient_error`; River retries |
 | Apple answers 400, 401/403, 404, or another 4xx | `failed` / `apple_rejected`, `provider_unauthorized`, `transaction_not_found`, or `provider_permanent` |
@@ -117,7 +118,7 @@ Apple puts consent entirely on the developer. IAPStack never assumes it. Consent
 - **Only the host backend records consent.** It calls `PUT /v1/applications/{application_id}/customers/{external_customer_id}/apple-consumption-consent` with the durable application bearer, after the customer answers the app's consent prompt. The route uses `requireApplication`, which accepts stored application API keys only. A short-lived customer session token, the bearer the mobile app holds, is rejected with `401`, and so are admin bearers and dashboard sessions. `TestAppleConsumptionConsentRejectsCustomerSessions` and the HTTP integration test cover this.
 - The newest decision wins. Recording `consented: false` is how a customer withdraws.
 - There is no operator-level consent declaration. The settings hold only the switch, the refund preference, and the sample declaration.
-- Consent is per application, because Apple asks per app. Both the consent route and the worker resolve the app account token through the canonical customer, so an alias or merge does not lose consent.
+- Consent is per application, because Apple asks per app. Both the consent route and the worker resolve the app account token through the canonical customer. A decision recorded before a merge stays on the source customer and still counts; the newest decision across the canonical customer and customers merged into it wins.
 
 ## Privacy notes
 
@@ -137,7 +138,7 @@ Apple puts consent entirely on the developer. IAPStack never assumes it. Consent
 ## Known limits
 
 - Delivery evidence is exact: IAPStack must have observed that `transaction_id` with allowed access. A renewal that no refresh observed is skipped as `no_delivery_evidence`. Consumables are never verified by IAPStack, so they are always skipped this way.
-- The worker does not wait for evidence that arrives late. If the client verifies a purchase after the request has been answered or skipped, the request stays as recorded.
+- Missing delivery evidence is retried for one hour after receipt, because the purchase refresh or a client verification may still be retrying. Evidence that arrives later than that does not reopen a skipped request.
 - A setting applies when the job runs. A request skipped as `disabled` is not reopened when the operator turns the feature on.
 - `Retry-After` from Apple is not used; the doubling backoff applies.
 - There is no consent history table; the latest decision and its timestamps are kept.

@@ -144,7 +144,8 @@ func TestHandleAppleConsumptionSkipsWithoutEstablishedFacts(t *testing.T) {
 			store := newConsumptionStore(t, now, false)
 			test.mutate(store)
 			sender := &fakeConsumptionSender{response: apple.ConsumptionResponse{HTTPStatus: http.StatusAccepted}}
-			service := newConsumptionService(store, sender, now)
+			// Two hours after receipt, missing delivery evidence is no longer waited for.
+			service := newConsumptionService(store, sender, now.Add(2*time.Hour))
 			if err := service.HandleAppleConsumption(context.Background(), consumptionMessage(store)); err != nil {
 				t.Fatalf("HandleAppleConsumption() error = %v", err)
 			}
@@ -157,6 +158,35 @@ func TestHandleAppleConsumptionSkipsWithoutEstablishedFacts(t *testing.T) {
 				t.Fatalf("attempt = %#v, want skipped %s", attempt, test.reason)
 			}
 		})
+	}
+}
+
+// TestHandleAppleConsumptionWaitsForLateDeliveryEvidence verifies missing evidence is retried for one hour.
+func TestHandleAppleConsumptionWaitsForLateDeliveryEvidence(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.November, 18, 10, 15, 0, 0, time.UTC)
+	store := newConsumptionStore(t, now, true)
+	store.owners = nil
+	sender := &fakeConsumptionSender{response: apple.ConsumptionResponse{HTTPStatus: http.StatusAccepted}}
+	service := newConsumptionService(store, sender, now.Add(30*time.Minute))
+	err := service.HandleAppleConsumption(context.Background(), consumptionMessage(store))
+	var failure *consumptionFailure
+	if !errors.As(err, &failure) || !failure.Retryable() || failure.CodeValue() != "awaiting_delivery_evidence" {
+		t.Fatalf("HandleAppleConsumption() error = %v, want a retryable wait", err)
+	}
+	attempt := store.onlyAttempt(t)
+	if attempt.Outcome != persistence.ConsumptionAttemptTransientError || attempt.Status != "" || len(sender.requests) != 0 {
+		t.Fatalf("attempt = %#v, requests = %d", attempt, len(sender.requests))
+	}
+
+	store.attempts = nil
+	store.owners = []core.CustomerID{"customer-1"}
+	if err := service.HandleAppleConsumption(context.Background(), consumptionMessage(store)); err != nil {
+		t.Fatalf("HandleAppleConsumption(evidence arrived) error = %v", err)
+	}
+	if store.onlyAttempt(t).Status != persistence.ConsumptionStatusSent || len(sender.requests) != 1 {
+		t.Fatalf("attempts after evidence = %#v", store.attempts)
 	}
 }
 

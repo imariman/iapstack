@@ -119,7 +119,13 @@ CREATE TABLE apple_consumption_requests (
 );
 
 CREATE INDEX apple_consumption_requests_application_idx
-    ON apple_consumption_requests (application_id, received_at DESC, id);
+    ON apple_consumption_requests (application_id, received_at DESC, id DESC);
+
+-- Bound retention cleanup scans to closed requests, like migration 008 does for the other queues.
+CREATE INDEX apple_consumption_requests_processed_retention_idx
+    ON apple_consumption_requests (processed_at) WHERE processed_at IS NOT NULL;
+CREATE INDEX apple_consumption_requests_failed_retention_idx
+    ON apple_consumption_requests (failed_at) WHERE failed_at IS NOT NULL;
 
 -- Every handler run that reaches a decision writes one row, including skips and expiry.
 -- request_body is the exact JSON sent to Apple. It never contains an identifier.

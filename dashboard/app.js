@@ -1007,14 +1007,19 @@ function resetConsumptionSection(visible) {
 
 async function loadConsumption() {
   const applicationID = state.managedApplication?.id;
+  setFormBusy(elements.consumptionForm, true);
   setFormMessage(elements.consumptionMessage, "Loading consumption answers…", "working");
   try {
     const status = await apiRequest(applicationAdminPath("/apple-consumption"));
-    if (state.managedApplication?.id !== applicationID) return;
+    if (state.managedApplication?.id !== applicationID) return false;
     renderConsumption(status);
     elements.consumptionMessage.textContent = "";
+    return true;
   } catch (error) {
     setFormMessage(elements.consumptionMessage, errorMessage(error));
+    return false;
+  } finally {
+    setFormBusy(elements.consumptionForm, false);
   }
 }
 
@@ -1694,12 +1699,19 @@ elements.webhookForm.addEventListener("submit", async (event) => {
 
 elements.consumptionForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!state.consumption) {
+    setFormMessage(elements.consumptionMessage, "Consumption answers are still loading. Try again when they appear.");
+    return;
+  }
   setFormBusy(elements.consumptionForm, true);
   setFormMessage(elements.consumptionMessage, "Saving consumption answers…", "working");
   try {
-    await saveConsumption(elements.consumptionForm);
-    await loadConsumption();
-    setFormMessage(elements.consumptionMessage, "Consumption answers saved.", "success");
+    state.consumption = await saveConsumption(elements.consumptionForm);
+    if (await loadConsumption()) {
+      setFormMessage(elements.consumptionMessage, "Consumption answers saved.", "success");
+    } else if (elements.consumptionMessage.textContent) {
+      setFormMessage(elements.consumptionMessage, `Consumption answers saved, but the list could not be refreshed. ${elements.consumptionMessage.textContent}`);
+    }
   } catch (error) {
     setFormMessage(elements.consumptionMessage, errorMessage(error));
   } finally {

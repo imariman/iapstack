@@ -70,7 +70,7 @@ type AppleConsumptionRepository interface {
 	AppleConsumptionSettings(context.Context, core.ProjectID, core.ApplicationID) (AppleConsumptionSettings, error)
 	// PutAppleConsumptionSettings creates or updates settings with optimistic revision control.
 	PutAppleConsumptionSettings(context.Context, AppleConsumptionSettingsWrite) (AppleConsumptionSettings, error)
-	// AppleConsumptionConsent returns one customer's recorded consent or ErrNotFound.
+	// AppleConsumptionConsent returns the newest consent for a canonical customer and customers merged into it, or ErrNotFound.
 	AppleConsumptionConsent(context.Context, core.ProjectID, core.ApplicationID, core.CustomerID) (AppleConsumptionConsent, error)
 	// PutAppleConsumptionConsent records the latest consent decision for one customer.
 	PutAppleConsumptionConsent(context.Context, AppleConsumptionConsentWrite) (AppleConsumptionConsent, error)

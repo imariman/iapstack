@@ -35,6 +35,14 @@ func TestAppleConsumptionSettingsUseOptimisticRevisions(t *testing.T) {
 	}); !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatalf("AppleConsumptionSettings(new) error = %v, want ErrNotFound", err)
 	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		_, putErr := repository.PutAppleConsumptionSettings(database.ctx, persistence.AppleConsumptionSettingsWrite{
+			ProjectID: projectID, ApplicationID: applicationID, RefundPreference: "none", ExpectedRevision: 3,
+		})
+		return putErr
+	}); !errors.Is(err, persistence.ErrConflict) {
+		t.Fatalf("update of missing settings error = %v, want ErrConflict", err)
+	}
 	write := persistence.AppleConsumptionSettingsWrite{
 		ProjectID: projectID, ApplicationID: applicationID, Enabled: true,
 		RefundPreference:      persistence.ConsumptionRefundPreferenceDecline,
@@ -110,6 +118,53 @@ func TestAppleConsumptionConsentKeepsTheNewestDecision(t *testing.T) {
 		return putErr
 	}); !errors.Is(err, persistence.ErrConflict) {
 		t.Fatalf("consent for missing customer error = %v, want ErrConflict", err)
+	}
+}
+
+// TestAppleConsumptionConsentFollowsMerges verifies a decision recorded before a merge still counts.
+func TestAppleConsumptionConsentFollowsMerges(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	seedConsumptionApplication(t, database, fixture)
+	store := openRepositoryStore(t, database.ctx)
+	mustExec(t, database, `INSERT INTO customers (id, project_id, external_id) VALUES ('customer-source', $1, 'source-external')`,
+		fixture.projectID)
+	write := persistence.AppleConsumptionConsentWrite{
+		ProjectID: core.ProjectID(fixture.projectID), ApplicationID: consumptionApplicationID,
+		CustomerID: "customer-source", Consented: true, ActorKeyID: "application-key-1",
+	}
+	loadCanonical := func() persistence.AppleConsumptionConsent {
+		t.Helper()
+		var consent persistence.AppleConsumptionConsent
+		if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+			var loadErr error
+			consent, loadErr = repository.AppleConsumptionConsent(database.ctx, write.ProjectID, write.ApplicationID,
+				core.CustomerID(fixture.customerID))
+			return loadErr
+		}); err != nil {
+			t.Fatalf("AppleConsumptionConsent(canonical) error = %v", err)
+		}
+		return consent
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		_, putErr := repository.PutAppleConsumptionConsent(database.ctx, write)
+		return putErr
+	}); err != nil {
+		t.Fatalf("PutAppleConsumptionConsent(source) error = %v", err)
+	}
+	mustExec(t, database, `UPDATE customers SET merged_into_customer_id = $1 WHERE id = 'customer-source'`, fixture.customerID)
+	if consent := loadCanonical(); !consent.Consented || consent.CustomerID != "customer-source" {
+		t.Fatalf("consent after merge = %#v", consent)
+	}
+	write.CustomerID, write.Consented = core.CustomerID(fixture.customerID), false
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		_, putErr := repository.PutAppleConsumptionConsent(database.ctx, write)
+		return putErr
+	}); err != nil {
+		t.Fatalf("PutAppleConsumptionConsent(canonical) error = %v", err)
+	}
+	if consent := loadCanonical(); consent.Consented {
+		t.Fatalf("newest canonical decision = %#v, want the withdrawal", consent)
 	}
 }
 
