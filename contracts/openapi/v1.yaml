@@ -247,6 +247,55 @@ paths:
           $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/projects/{project_id}/subscription-metrics:
+    get:
+      tags: [Administration]
+      operationId: getAdminSubscriptionMetrics
+      summary: Load subscription health for one project environment
+      description: >-
+        Counts subscription purchase lineages from stored, provider-signed purchase observations of one
+        application environment over whole UTC days ending today. Every count is evaluated at or before
+        measured_at, never at a future instant. Family-shared access and imported RevenueCat grants are not
+        counted. The response contains no money figure, no provider reference, and no customer identity.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - name: environment
+          in: query
+          required: false
+          description: Application environment to count. Defaults to production.
+          schema:
+            type: string
+            enum: [production, sandbox, test]
+            default: production
+        - name: window_days
+          in: query
+          required: false
+          description: Number of whole UTC days in the window, ending with today. Defaults to 30.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 90
+            default: 30
+      responses:
+        '200':
+          description: Subscription metrics with their window and per-provider trial availability
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminSubscriptionMetrics'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /v1/admin/projects/{project_id}/financial-reports:
     get:
       tags: [Administration]
@@ -2459,6 +2508,235 @@ components:
           format: int64
           minimum: 0
         reversed:
+          type: integer
+          format: int64
+          minimum: 0
+    AdminSubscriptionMetrics:
+      type: object
+      additionalProperties: false
+      description: >-
+        A subscription is one purchase lineage (Apple original transaction, Google Play purchase token,
+        Huawei purchase token) of a subscription product. It is active at an instant when an allowed,
+        provider-signed period covers that instant; a stored refund or revocation ends that period when
+        IAPStack stored it. Definitions are in docs/plans/subscription-metrics.md.
+      required: [environment, window_days, window_start, window_end, measured_at, active_at_start, active_at_end, in_trial_at_end, active_during_window, new_subscriptions, renewals, churn, trials, breakdown, breakdown_truncated, daily_active]
+      properties:
+        environment:
+          type: string
+          enum: [production, sandbox, test]
+        window_days:
+          type: integer
+          minimum: 1
+          maximum: 90
+        window_start:
+          type: string
+          format: date-time
+          description: Inclusive UTC midnight of the first day.
+        window_end:
+          type: string
+          format: date-time
+          description: Exclusive UTC midnight after the last day.
+        measured_at:
+          type: string
+          format: date-time
+          description: Generation time. End-of-window figures are evaluated here, not at window_end.
+        active_at_start:
+          type: integer
+          format: int64
+          minimum: 0
+        active_at_end:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Active at measured_at. Includes subscriptions in a free trial and in a billing grace period.
+        in_trial_at_end:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Part of active_at_end whose covering period is signed as a free trial. Only counted where the offer phase is recorded.
+        active_during_window:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Subscriptions active at any instant of the window. The churn rate denominator.
+        new_subscriptions:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Earliest stored allowed period starts inside the window, with no linked earlier Google Play token and
+            no other subscription of the same customer and application active up to that start.
+        renewals:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Provider transactions first stored inside the window in a subscription that already had an earlier stored transaction.
+        churn:
+          $ref: '#/components/schemas/AdminSubscriptionChurn'
+        trials:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminSubscriptionTrials'
+        breakdown:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/AdminSubscriptionBreakdown'
+        breakdown_truncated:
+          type: boolean
+        daily_active:
+          type: array
+          minItems: 1
+          maxItems: 90
+          items:
+            $ref: '#/components/schemas/AdminSubscriptionDailyActive'
+    AdminSubscriptionChurn:
+      type: object
+      additionalProperties: false
+      description: >-
+        A subscription ended inside the window when its last allowed period ends after window_start and at or
+        before measured_at. churned is voluntary + billing + reversed + unclassified. replaced and paused ended
+        a period but are not churn.
+      required: [churned, voluntary, billing, reversed, unclassified, replaced, paused, rate]
+      properties:
+        churned:
+          type: integer
+          format: int64
+          minimum: 0
+        voluntary:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The last live snapshot had renewal turned off or was canceled at period end.
+        billing:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The last live snapshot was a billing grace period, a hold, or a billing issue.
+        reversed:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The latest snapshot is a refund or revocation that denies access.
+        unclassified:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Stored evidence names no reason, for example an expiry with no earlier cancellation or billing snapshot.
+        replaced:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Another subscription of the same customer and application was active at the end instant (plan change on a new lineage).
+        paused:
+          type: integer
+          format: int64
+          minimum: 0
+        rate:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          nullable: true
+          description: churned divided by active_during_window. Null when nothing was active.
+    AdminSubscriptionTrials:
+      type: object
+      additionalProperties: false
+      description: >-
+        Trial evidence for one provider in the environment. When availability is not_available the adapter
+        records no offer phase and every trial count is null, not zero.
+      required: [provider, availability, active_during_window, with_offer_phase, started, ended, converted, not_converted, outcome_not_recorded, conversion_rate]
+      properties:
+        provider:
+          type: string
+          enum: [apple_app_store, google_play, huawei_appgallery]
+        availability:
+          type: string
+          enum: [available, not_available]
+        active_during_window:
+          type: integer
+          format: int64
+          minimum: 0
+        with_offer_phase:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Part of active_during_window with at least one snapshot carrying a recorded offer phase.
+        started:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Free-trial periods that start inside the window.
+        ended:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Free-trial periods whose end is after window_start and at or before measured_at.
+        converted:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Ended trials followed by a later allowed period signed at the base or a discounted price.
+        not_converted:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Ended trials with no later allowed period.
+        outcome_not_recorded:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Ended trials followed by an allowed period whose offer phase was not recorded. Excluded from conversion_rate.
+        conversion_rate:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          nullable: true
+          description: converted divided by converted + not_converted. Null when that sum is zero or trials are not available.
+    AdminSubscriptionBreakdown:
+      type: object
+      additionalProperties: false
+      required: [application_id, provider, product_id, active_at_end, new_subscriptions, renewals, churned]
+      properties:
+        application_id:
+          $ref: '#/components/schemas/Identifier'
+        provider:
+          type: string
+          enum: [apple_app_store, google_play, huawei_appgallery]
+        product_id:
+          $ref: '#/components/schemas/Identifier'
+        active_at_end:
+          type: integer
+          format: int64
+          minimum: 0
+        new_subscriptions:
+          type: integer
+          format: int64
+          minimum: 0
+        renewals:
+          type: integer
+          format: int64
+          minimum: 0
+        churned:
+          type: integer
+          format: int64
+          minimum: 0
+    AdminSubscriptionDailyActive:
+      type: object
+      additionalProperties: false
+      description: Active subscriptions at the end of one UTC day. The last day is evaluated at measured_at.
+      required: [date, active]
+      properties:
+        date:
+          type: string
+          format: date
+        active:
           type: integer
           format: int64
           minimum: 0

@@ -91,6 +91,18 @@ func (fakeAdminQueryStore) AdminProjectOverview(
 	}, nil
 }
 
+// AdminSubscriptionMetrics returns deterministic subscription metrics for the requested window.
+func (fakeAdminQueryStore) AdminSubscriptionMetrics(
+	_ context.Context,
+	projectID core.ProjectID,
+	query persistence.SubscriptionMetricsQuery,
+) (persistence.SubscriptionMetrics, error) {
+	if projectID != "project-1" {
+		return persistence.SubscriptionMetrics{}, persistence.ErrNotFound
+	}
+	return fakeSubscriptionMetrics(query), nil
+}
+
 // Operate rejects durable work because bootstrap authentication does not require it.
 func (authOperationsStore) Operate(context.Context, persistence.OperationsFunc) error {
 	return persistence.ErrUnavailable

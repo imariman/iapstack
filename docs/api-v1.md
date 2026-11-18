@@ -170,6 +170,22 @@ refuses the pull until that provider's official parameter contract is pinned. It
 does not guess provider query parameters. `GET .../financial-reports` lists
 metadata only: no report body and no order id.
 
+`GET /v1/admin/projects/{project_id}/subscription-metrics` reports subscription
+health for one application environment (`environment`, default `production`) over
+whole UTC days ending today (`window_days`, 1 to 90, default 30). A subscription is
+one purchase lineage of a subscription product. The response gives active
+subscriptions at the window start and at `measured_at`, new subscriptions, renewals,
+churn split into voluntary, billing, reversed, and unclassified, a churn rate of
+`churned / active_during_window`, a daily active series, and an application and
+product breakdown. Every figure is evaluated at or before `measured_at`; nothing is
+projected. Family-shared access and imported RevenueCat grants are not counted.
+
+Trials come only from a provider-signed offer phase. Apple and Google Play record
+one; Huawei does not, so its `trials` row is `not_available` with null counts.
+Observations stored before migration 014 carry no phase, and `with_offer_phase`
+shows that coverage. The response has no money figure. The definitions are in
+[docs/plans/subscription-metrics.md](plans/subscription-metrics.md).
+
 Application summaries expose only `credential_revision` and `webhook_revision` for
 optimistic dashboard updates. A zero revision means the corresponding configuration
 is absent. Revision values are not secrets; endpoint URLs, signing secrets, provider
