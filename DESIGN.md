@@ -335,6 +335,7 @@ Compact and quiet. One light action per area, everything else recedes.
 - **Read-only:** Muted text. Textareas use mono at 12.5px for JSON and key material. Selects use a drawn chevron.
 
 ### Navigation (project rail)
+- **Visibility:** the rail collapses to a 60px icon rail from the panel icon beside the brand lockup (or Ctrl+B / Cmd+B), animated with the 200ms ease-out width transition and instant under reduced motion: the brand mark, project initials (still clickable, titled with the full project ID and counts), the new-catalog button and the health dot remain. The toggle never moves or disappears, so the way back is always where the operator left it — the rail is collapsed, never fully hidden. The choice is kept in a cookie scoped to `/dashboard/`, like the theme, and never changes the selected project. On narrow layouts, where the rail is a top bar, collapsed means a single compact row.
 - **Style:** project items have a 13.5px/500 name and a 12px Subtle count, 8px × 10px padding and an 8px radius.
 - **Hover:** 4% white wash and Ink text.
 - **Active:** 6% white wash, hairline border, top highlight, and a 2px Signal Indigo bar on the left edge (a bottom bar on mobile).
@@ -356,6 +357,9 @@ Sticky 12px Subtle headers on a near-ground fill. Rows are 13px Muted, tabular, 
 
 ### Purchase Route Strip (signature)
 Four equal stages on a 1px Hairline Strong track. A 22%-wide indigo gradient pulse travels the track every 4.8s. Each stage has an 18px ringed node (green circle when healthy, amber diamond when it needs attention), a 13px Muted stage name and a 16px/600 tabular value. When a stage needs attention, its value line turns amber. That line already states the counts behind the problem (for example "12 delivered · 1 failed"). The pulse is removed under reduced motion.
+
+### Charts
+Both bar charts accept pointer inspection: hovering (or touching) a day snaps a guide line to that day, restores its bars to full opacity while the rest dim, and shows a tooltip naming the date and the same labelled values as the legend. Hover targets span the full day slot so thin bars stay inspectable. The tooltip is a pointer enhancement only; the chart's `aria-label` summary and per-bar titles remain the accessible source.
 
 ### Revenue Card
 Sits right of the activity chart (360px), separated by a hairline, with a faint top gradient. It has a 13px Muted heading, a state pill (reports required / imported) and a 34px revenue figure, or the 26px state line when no reports exist. Sandbox test value follows below a dashed divider in its own neutral block.

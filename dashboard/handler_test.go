@@ -299,6 +299,57 @@ func TestDashboardSupportsLightDarkAndSystemThemes(t *testing.T) {
 	}
 }
 
+// TestDashboardSupportsSidebarToggleAndChartHover keeps the collapsible rail and chart inspection wired.
+func TestDashboardSupportsSidebarToggleAndChartHover(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	styles, err := fs.ReadFile(assets, "app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	for _, required := range []string{
+		`id="sidebar"`, `id="toggle-sidebar"`, `aria-controls="sidebar"`, `aria-label="Collapse sidebar"`,
+		`aria-expanded="true" aria-controls="sidebar" title="Collapse sidebar (Ctrl+B)"`,
+	} {
+		if !strings.Contains(string(document), required) {
+			t.Fatalf("dashboard sidebar toggle markup does not contain %q", required)
+		}
+	}
+	// The rail collapses to an icon rail; it is never removed from the layout,
+	// so the toggle that reopens it cannot disappear with it.
+	if strings.Contains(string(document), `id="show-sidebar"`) || strings.Contains(string(styles), `data-sidebar="hidden"`) {
+		t.Fatal("dashboard still uses the fully-hiding sidebar whose reopen control vanished with the rail")
+	}
+	for _, required := range []string{
+		`:root[data-sidebar="collapsed"] .app-shell`, `:root[data-sidebar="collapsed"] .sidebar-brand-row`,
+		".sidebar-brand-row", ".project-initials", "transition: width var(--duration-base)",
+		".chart-tooltip", ".chart-hit", ".chart-guide", ".chart-bar-active",
+	} {
+		if !strings.Contains(string(styles), required) {
+			t.Fatalf("dashboard shell styles do not contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		`sidebarCookieName = "iapstack_dashboard_sidebar"`, "storedSidebarCollapsed", "applySidebar",
+		"persistSidebar", "setSidebarCollapsed", `root.setAttribute("data-sidebar", "collapsed")`,
+		`value === "collapsed" || value === "hidden"`, "projectInitials", `"project-initials"`,
+		"addChartHover", "chart-tooltip", `"data-day": index`, `bar.setAttribute("data-day", String(index))`,
+		`guide.removeAttribute("hidden")`,
+	} {
+		if !strings.Contains(string(script), required) {
+			t.Fatalf("dashboard shell script does not contain %q", required)
+		}
+	}
+}
+
 // TestDashboardRendersTruthfulCommerceAnalytics keeps charts separate from untrusted client pricing.
 func TestDashboardRendersTruthfulCommerceAnalytics(t *testing.T) {
 	t.Parallel()

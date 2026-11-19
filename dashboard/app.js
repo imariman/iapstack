@@ -69,6 +69,45 @@ function persistThemePreference(preference) {
 let themePreference = storedThemePreference();
 applyTheme(themePreference);
 
+// Sidebar collapse is a display preference kept the same way as the theme.
+// Collapsed, the rail stays on screen as an icon rail and the toggle never
+// moves, so the way back is always where the operator left it.
+const sidebarCookieName = "iapstack_dashboard_sidebar";
+
+function storedSidebarCollapsed() {
+  const row = document.cookie.split("; ").find((entry) => entry.startsWith(`${sidebarCookieName}=`));
+  const value = row ? row.slice(sidebarCookieName.length + 1) : "";
+  // "hidden" was the value written by the first, fully-hiding version.
+  return value === "collapsed" || value === "hidden";
+}
+
+function applySidebar(collapsed) {
+  const root = document.documentElement;
+  if (collapsed) {
+    root.setAttribute("data-sidebar", "collapsed");
+  } else {
+    root.removeAttribute("data-sidebar");
+  }
+  const toggle = document.querySelector("#toggle-sidebar");
+  toggle.setAttribute("aria-expanded", String(!collapsed));
+  toggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+  toggle.setAttribute("title", collapsed ? "Expand sidebar (Ctrl+B)" : "Collapse sidebar (Ctrl+B)");
+}
+
+function persistSidebar(collapsed) {
+  const secure = window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${sidebarCookieName}=${collapsed ? "collapsed" : "visible"}; Path=/dashboard/; Max-Age=31536000; SameSite=Strict${secure}`;
+}
+
+function setSidebarCollapsed(collapsed) {
+  sidebarCollapsed = collapsed;
+  persistSidebar(collapsed);
+  applySidebar(collapsed);
+}
+
+let sidebarCollapsed = storedSidebarCollapsed();
+applySidebar(sidebarCollapsed);
+
 const state = {
   projects: [],
   selectedProject: "",
@@ -331,6 +370,14 @@ async function loadOverview(projectID, focusWorkspace = false) {
   }
 }
 
+// projectInitials is the collapsed-rail mark for a project: the first
+// letters of its first two words, or its first two letters when it is one word.
+function projectInitials(projectID) {
+  const parts = String(projectID).split(/[-_\s]+/).filter(Boolean);
+  const letters = (parts[0]?.[0] || "") + (parts[1]?.[0] || parts[0]?.[1] || "");
+  return letters.toUpperCase();
+}
+
 function renderProjectNavigation() {
   elements.projectNav.replaceChildren();
   for (const project of state.projects) {
@@ -338,9 +385,13 @@ function renderProjectNavigation() {
     button.type = "button";
     button.classList.toggle("active", project.id === state.selectedProject);
     button.setAttribute("aria-current", project.id === state.selectedProject ? "page" : "false");
+    const counts = `${countLabel(project.application_count, "app")} · ${countLabel(project.customer_count, "customer")}`;
+    button.setAttribute("aria-label", `${project.id}, ${counts}`);
+    button.setAttribute("title", `${project.id} · ${counts}`);
     button.append(
       node("strong", "", project.id),
-      node("small", "", `${countLabel(project.application_count, "app")} · ${countLabel(project.customer_count, "customer")}`),
+      node("small", "", counts),
+      node("span", "project-initials", projectInitials(project.id)),
     );
     button.addEventListener("click", () => loadOverview(project.id, true));
     elements.projectNav.append(button);
@@ -651,6 +702,72 @@ function renderSandboxValue(sandboxValue) {
   setText("sandbox-value-note", "Provider-signed test value, not real proceeds or accounting revenue.");
 }
 
+// addChartHover layers pointer inspection over a rendered bar chart: a guide
+// line snaps to the day under the pointer and a tooltip names its values.
+function addChartHover(chart, { left, top, baseline, slotWidth, entries }) {
+  const figure = chart.closest("figure");
+  if (!figure || !entries.length) return;
+  let tooltip = figure.querySelector(".chart-tooltip");
+  if (!tooltip) {
+    tooltip = node("div", "chart-tooltip");
+    tooltip.setAttribute("aria-hidden", "true");
+    figure.append(tooltip);
+  }
+  tooltip.classList.remove("visible");
+  const guide = svgNode("line", { class: "chart-guide", y1: top, y2: baseline, hidden: "" });
+  chart.append(guide);
+  const viewWidth = chart.viewBox.baseVal.width;
+  let activeIndex = -1;
+
+  const hide = () => {
+    activeIndex = -1;
+    tooltip.classList.remove("visible");
+    guide.setAttribute("hidden", "");
+    for (const bar of chart.querySelectorAll(".chart-bar-active")) {
+      bar.classList.remove("chart-bar-active");
+    }
+  };
+  const show = (index) => {
+    if (index === activeIndex) return;
+    activeIndex = index;
+    const entry = entries[index];
+    const children = [node("strong", "", entry.title)];
+    if (entry.summary) children.push(node("span", "chart-tooltip-summary", entry.summary));
+    for (const row of entry.rows) {
+      const line = node("span", "chart-tooltip-row");
+      const swatch = node("i", row.className);
+      swatch.setAttribute("aria-hidden", "true");
+      line.append(swatch, node("span", "", row.label), node("strong", "", row.value));
+      children.push(line);
+    }
+    tooltip.replaceChildren(...children);
+    const figureRect = figure.getBoundingClientRect();
+    const chartRect = chart.getBoundingClientRect();
+    const center = chartRect.left - figureRect.left
+      + ((left + index * slotWidth + slotWidth / 2) / viewWidth) * chartRect.width;
+    const half = tooltip.offsetWidth / 2;
+    tooltip.style.left = `${Math.min(Math.max(center, half + 4), Math.max(half + 4, figureRect.width - half - 4))}px`;
+    tooltip.style.top = `${chartRect.top - figureRect.top + 4}px`;
+    tooltip.classList.add("visible");
+    const x = left + index * slotWidth + slotWidth / 2;
+    guide.setAttribute("x1", String(x));
+    guide.setAttribute("x2", String(x));
+    guide.removeAttribute("hidden");
+    for (const bar of chart.querySelectorAll(".chart-bar")) {
+      bar.classList.toggle("chart-bar-active", bar.dataset.day === String(index));
+    }
+  };
+  entries.forEach((entry, index) => {
+    const hit = svgNode("rect", {
+      class: "chart-hit", x: left + index * slotWidth, y: top, width: slotWidth, height: baseline - top, "aria-hidden": "true",
+    });
+    hit.addEventListener("pointerenter", () => show(index));
+    hit.addEventListener("pointermove", () => show(index));
+    chart.append(hit);
+  });
+  chart.addEventListener("pointerleave", hide);
+}
+
 function renderActivityChart(activity, summary = summarizeActivity(activity)) {
   const chart = document.querySelector("#activity-chart");
   chart.replaceChildren();
@@ -703,6 +820,7 @@ function renderActivityChart(activity, summary = summarizeActivity(activity)) {
       const height = (value / maximum) * plotHeight;
       const bar = svgNode("rect", {
         class: `chart-bar ${className}`,
+        "data-day": index,
         x,
         y: baseline - stackedHeight - height,
         width: barWidth,
@@ -727,6 +845,19 @@ function renderActivityChart(activity, summary = summarizeActivity(activity)) {
         formatChartDate(day.date),
       ));
     }
+  });
+  addChartHover(chart, {
+    left, top, baseline, slotWidth,
+    entries: activity.map((day) => {
+      const rows = [
+        { className: "allowed", label: "Allowed", value: formatNumber(day.allowed || 0) },
+        { className: "denied", label: "Denied", value: formatNumber(day.denied || 0) },
+      ];
+      if (unresolved > 0) {
+        rows.push({ className: "unresolved", label: "Unresolved", value: formatNumber(day.unresolved || 0) });
+      }
+      return { title: formatChartDate(day.date), summary: `${formatNumber(day.verified || 0)} verified`, rows };
+    }),
   });
 }
 
@@ -922,6 +1053,7 @@ function renderSubscriptionChart(daily, windowDays) {
       const bar = svgNode("rect", {
         class: "chart-bar chart-bar-allowed", x, y: baseline - height, width: barWidth, height, rx: 2,
       });
+      bar.setAttribute("data-day", String(index));
       bar.append(svgNode("title", {}, `${formatChartDate(day.date)}: ${formatNumber(value)} active`));
       chart.append(bar);
     }
@@ -935,6 +1067,14 @@ function renderSubscriptionChart(daily, windowDays) {
         formatChartDate(day.date),
       ));
     }
+  });
+  addChartHover(chart, {
+    left, top, baseline, slotWidth,
+    entries: daily.map((day) => ({
+      title: formatChartDate(day.date),
+      summary: `${formatNumber(day.active || 0)} active`,
+      rows: [],
+    })),
   });
 }
 
@@ -2845,6 +2985,20 @@ systemThemeQuery.addEventListener("change", () => {
   if (themePreference === "system") {
     applyTheme(themePreference);
   }
+});
+
+document.querySelector("#toggle-sidebar").addEventListener("click", () => setSidebarCollapsed(!sidebarCollapsed));
+
+// Ctrl+B / Cmd+B toggles the sidebar unless the operator is typing.
+document.addEventListener("keydown", (event) => {
+  if (event.key.toLowerCase() !== "b" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) {
+    return;
+  }
+  if (elements.appShell.hidden || event.target.closest?.("input, textarea, select, [contenteditable]")) {
+    return;
+  }
+  event.preventDefault();
+  setSidebarCollapsed(!sidebarCollapsed);
 });
 
 clearLegacyBearerStorage();

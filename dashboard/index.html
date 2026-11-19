@@ -19,11 +19,11 @@
           <div class="auth-topbar">
             <div class="brand-lockup" aria-label="IAPStack">
               <span class="brand-mark" aria-hidden="true"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 21 7.5 12 12 3 7.5Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg></span>
-              <span><span class="brand-word">IAPStack</span><small class="brand-caption">Control plane</small></span>
+              <span><span class="brand-word">IAPStack</span><small class="brand-caption">Control panel</small></span>
             </div>
             <button class="secondary-button theme-toggle" type="button" aria-label="Color theme: System. Switch to Light"><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="system"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="light" hidden><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="dark" hidden><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg><span data-theme-label>System</span></button>
           </div>
-          <h1 id="auth-title">Every purchase.<br>One control plane.</h1>
+          <h1 id="auth-title">Every purchase.<br>One control panel.</h1>
           <p class="auth-copy">Connect with an admin bearer to configure store authority, inspect purchase verification, and monitor entitlement delivery.</p>
           <form id="auth-form" class="auth-form">
             <label for="admin-key">Admin bearer key</label>
@@ -49,10 +49,13 @@
     </main>
 
     <div class="app-shell" id="app-shell" hidden>
-      <aside class="sidebar">
-        <div class="brand-lockup compact" aria-label="IAPStack">
-          <span class="brand-mark" aria-hidden="true"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 21 7.5 12 12 3 7.5Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg></span>
-          <span><span class="brand-word">IAPStack</span><small class="brand-caption">Control plane</small></span>
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-brand-row">
+          <div class="brand-lockup compact" aria-label="IAPStack">
+            <span class="brand-mark" aria-hidden="true"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 21 7.5 12 12 3 7.5Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg></span>
+            <span><span class="brand-word">IAPStack</span><small class="brand-caption">Control panel</small></span>
+          </div>
+          <button class="icon-button" id="toggle-sidebar" type="button" aria-label="Collapse sidebar" aria-expanded="true" aria-controls="sidebar" title="Collapse sidebar (Ctrl+B)"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></button>
         </div>
         <div class="sidebar-heading">
           <span>Projects</span>
@@ -61,7 +64,7 @@
         <nav id="project-nav" class="project-nav" aria-label="Projects"></nav>
         <div class="sidebar-footer">
           <span class="system-dot" aria-hidden="true"></span>
-          <span>Self-hosted control plane</span>
+          <span>Self-hosted control panel</span>
         </div>
       </aside>
 

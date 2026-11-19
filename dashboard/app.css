@@ -1,4 +1,4 @@
-/* IAPStack operations dashboard: light and dark control plane, Linear/Vercel craft level. */
+/* IAPStack operations dashboard: light and dark control panel, Linear/Vercel craft level. */
 
 /* Theme tokens carry a light and a dark value side by side. The default
    follows the operating system; data-theme on <html> is the operator's
@@ -672,7 +672,7 @@ form[aria-busy="true"] button[type="submit"]::before {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   min-height: 100dvh;
 }
 
@@ -683,13 +683,88 @@ form[aria-busy="true"] button[type="submit"]::before {
   flex-direction: column;
   gap: 4px;
   height: 100dvh;
+  overflow-x: hidden;
   padding: 18px 12px 16px;
   position: sticky;
   top: 0;
+  transition: width var(--duration-base) var(--ease-out), padding var(--duration-base) var(--ease-out);
+  width: 248px;
 }
 
-.sidebar > .brand-lockup {
-  padding: 0 8px 18px;
+.sidebar .brand-lockup > span:last-child,
+.sidebar-footer > span:last-child {
+  white-space: nowrap;
+}
+
+.sidebar-brand-row {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 0 2px 18px 8px;
+}
+
+/* Collapsed, the project rail becomes a slim icon rail. The toggle stays
+   where it always is, so the way back can never be lost. The width
+   transition on .sidebar animates between the two widths; the global
+   reduced-motion rule turns it back into an instant swap. */
+:root[data-sidebar="collapsed"] .sidebar {
+  padding: 18px 8px 16px;
+  width: 60px;
+}
+
+:root[data-sidebar="collapsed"] .sidebar-brand-row {
+  flex-direction: column;
+  padding: 0 0 14px;
+}
+
+:root[data-sidebar="collapsed"] .sidebar .brand-lockup > span:last-child {
+  display: none;
+}
+
+:root[data-sidebar="collapsed"] .sidebar-heading {
+  justify-content: center;
+  padding: 8px 0 6px;
+}
+
+:root[data-sidebar="collapsed"] .sidebar-heading > span {
+  display: none;
+}
+
+:root[data-sidebar="collapsed"] .project-button {
+  align-items: center;
+  display: flex;
+  height: 40px;
+  justify-content: center;
+  justify-self: center;
+  padding: 0;
+  width: 40px;
+}
+
+:root[data-sidebar="collapsed"] .project-button strong,
+:root[data-sidebar="collapsed"] .project-button small,
+:root[data-sidebar="collapsed"] .project-nav .empty-state {
+  display: none;
+}
+
+.project-initials {
+  display: none;
+}
+
+:root[data-sidebar="collapsed"] .project-initials {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+:root[data-sidebar="collapsed"] .sidebar-footer {
+  justify-content: center;
+  padding: 14px 0 0;
+}
+
+:root[data-sidebar="collapsed"] .sidebar-footer > span:last-child {
+  display: none;
 }
 
 .sidebar-heading {
@@ -1113,6 +1188,93 @@ h2 {
   display: grid;
   gap: 2px;
   margin: 0;
+  position: relative;
+}
+
+/* Hover targets span the full day slot, so thin bars stay easy to inspect. */
+.activity-chart .chart-hit {
+  cursor: crosshair;
+  fill: transparent;
+  pointer-events: all;
+}
+
+.activity-chart .chart-guide {
+  pointer-events: none;
+  stroke: var(--border-hover);
+  stroke-width: 1;
+}
+
+.activity-chart .chart-bar.chart-bar-active {
+  opacity: 1;
+}
+
+.chart-tooltip {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  box-shadow: inset 0 1px 0 var(--highlight), var(--shadow-panel);
+  color: var(--muted);
+  display: grid;
+  font-size: 12px;
+  gap: 3px;
+  min-width: 132px;
+  opacity: 0;
+  padding: 8px 10px;
+  pointer-events: none;
+  position: absolute;
+  top: 4px;
+  transform: translateX(-50%);
+  transition: opacity var(--duration-fast) var(--ease-out);
+  z-index: 5;
+}
+
+.chart-tooltip.visible {
+  opacity: 1;
+}
+
+.chart-tooltip > strong {
+  color: var(--foreground);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.chart-tooltip-summary {
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.chart-tooltip-row {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+
+.chart-tooltip-row i {
+  border-radius: 3px;
+  display: inline-block;
+  height: 9px;
+  width: 9px;
+}
+
+.chart-tooltip-row i.allowed {
+  background: var(--chart-allowed);
+}
+
+.chart-tooltip-row i.denied {
+  background: var(--chart-denied);
+}
+
+.chart-tooltip-row i.unresolved {
+  background: var(--chart-unresolved);
+}
+
+.chart-tooltip-row strong {
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  margin-left: auto;
+  padding-left: 14px;
 }
 
 .activity-chart {
@@ -2960,10 +3122,32 @@ td code {
     height: auto;
     padding: 14px 16px;
     position: static;
+    width: auto;
   }
 
-  .sidebar > .brand-lockup {
+  .sidebar-brand-row {
     padding: 0 0 10px;
+  }
+
+  /* On narrow layouts the rail is a top bar; collapsed it becomes one row. */
+  :root[data-sidebar="collapsed"] .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  :root[data-sidebar="collapsed"] .sidebar {
+    align-items: center;
+    flex-direction: row;
+    gap: 10px;
+    padding: 10px 16px;
+  }
+
+  :root[data-sidebar="collapsed"] .sidebar-brand-row {
+    flex-direction: row;
+    padding: 0;
+  }
+
+  :root[data-sidebar="collapsed"] .sidebar-heading {
+    padding: 0;
   }
 
   .project-nav {
