@@ -209,7 +209,7 @@ func TestDashboardUsesEnglishInterface(t *testing.T) {
 	}
 }
 
-// TestDashboardProfessionalUIControls verifies the dashboard keeps its dark, accessible interaction baseline.
+// TestDashboardProfessionalUIControls verifies the dashboard keeps its accessible interaction baseline.
 func TestDashboardProfessionalUIControls(t *testing.T) {
 	t.Parallel()
 
@@ -225,7 +225,7 @@ func TestDashboardProfessionalUIControls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read embedded app.js: %v", err)
 	}
-	for _, required := range []string{`content="dark"`, `<svg aria-hidden="true"`, `aria-label="Close dialog"`} {
+	for _, required := range []string{`content="light dark"`, `<svg aria-hidden="true"`, `aria-label="Close dialog"`} {
 		if !strings.Contains(string(document), required) {
 			t.Fatalf("dashboard document does not contain UI control %q", required)
 		}
@@ -238,6 +238,63 @@ func TestDashboardProfessionalUIControls(t *testing.T) {
 	for _, required := range []string{`setAttribute("aria-busy", "true")`, "setFormBusy"} {
 		if !strings.Contains(string(script), required) {
 			t.Fatalf("dashboard script does not contain loading feedback %q", required)
+		}
+	}
+}
+
+// TestDashboardSupportsLightDarkAndSystemThemes keeps both color schemes, the system default, and the stored choice wired.
+func TestDashboardSupportsLightDarkAndSystemThemes(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	styles, err := fs.ReadFile(assets, "app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	for _, required := range []string{
+		`<meta name="color-scheme" content="light dark">`,
+		`<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f4f5">`,
+		`<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#09090b">`,
+		`aria-label="Color theme: System. Switch to Light"`, `data-theme-label`,
+	} {
+		if !strings.Contains(string(document), required) {
+			t.Fatalf("dashboard theme markup does not contain %q", required)
+		}
+	}
+	// The toggle stays reachable before sign-in and in the signed-in top bar.
+	if count := strings.Count(string(document), `class="secondary-button theme-toggle"`); count != 2 {
+		t.Fatalf("dashboard theme toggles = %d, want 2", count)
+	}
+	for _, icon := range []string{`data-theme-icon="system"`, `data-theme-icon="light"`, `data-theme-icon="dark"`} {
+		if count := strings.Count(string(document), icon); count != 2 {
+			t.Fatalf("dashboard theme icon %q count = %d, want 2", icon, count)
+		}
+	}
+	for _, required := range []string{
+		"color-scheme: light dark;", `--background: light-dark(#f4f4f5, #09090b);`,
+		`:root[data-theme="light"]`, "color-scheme: light;", `:root[data-theme="dark"]`, "color-scheme: dark;",
+		"--chart-grid:", "--inverted-foreground:", "@media (prefers-color-scheme: light)", "%2352525b",
+	} {
+		if !strings.Contains(string(styles), required) {
+			t.Fatalf("dashboard theme styles do not contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		`themeCookieName = "iapstack_dashboard_theme"`, `themeOrder = ["system", "light", "dark"]`,
+		"storedThemePreference", "resolvedTheme", "applyTheme", "persistThemePreference",
+		`window.matchMedia("(prefers-color-scheme: light)")`, `root.removeAttribute("data-theme")`,
+		`root.setAttribute("data-theme", preference)`, "Path=/dashboard/", "SameSite=Strict",
+		`systemThemeQuery.addEventListener("change"`,
+	} {
+		if !strings.Contains(string(script), required) {
+			t.Fatalf("dashboard theme script does not contain %q", required)
 		}
 	}
 }

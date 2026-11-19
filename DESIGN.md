@@ -1,6 +1,6 @@
 ---
 name: IAPStack Operations Dashboard
-description: Dark, dense control plane for a self-hosted in-app purchase verification server.
+description: Dense light and dark control plane for a self-hosted in-app purchase verification server.
 colors:
   background: "#09090b"
   sidebar: "#0c0c0e"
@@ -30,6 +30,35 @@ colors:
   chart-denied: "#f43f5e"
   chart-unresolved: "#f59e0b"
   scrim: "rgba(3, 3, 5, 0.72)"
+colors-light:
+  background: "#f4f4f5"
+  sidebar: "#fafafa"
+  surface: "#ffffff"
+  surface-raised: "#f4f4f5"
+  surface-hover: "#e9e9ec"
+  surface-inset: "#fafafa"
+  border: "rgba(9, 9, 11, 0.1)"
+  border-strong: "rgba(9, 9, 11, 0.18)"
+  highlight: "rgba(255, 255, 255, 0.55)"
+  foreground: "#18181b"
+  muted: "#52525b"
+  subtle: "#666670"
+  primary: "#5b5def"
+  primary-strong: "#4447d6"
+  primary-soft: "rgba(91, 93, 239, 0.12)"
+  focus: "#4f46e5"
+  accent: "#047857"
+  accent-soft: "rgba(4, 120, 87, 0.1)"
+  warning: "#b45309"
+  warning-soft: "rgba(180, 83, 9, 0.1)"
+  danger: "#e11d48"
+  danger-soft: "rgba(225, 29, 72, 0.08)"
+  danger-action: "#e11d48"
+  danger-action-hover: "#be123c"
+  chart-allowed: "#5b5def"
+  chart-denied: "#f43f5e"
+  chart-unresolved: "#d97706"
+  scrim: "rgba(24, 24, 27, 0.44)"
 typography:
   display:
     fontFamily: "-apple-system, BlinkMacSystemFont, \"SF Pro Text\", \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif"
@@ -184,23 +213,23 @@ components:
 
 **Creative North Star: "The Quiet Control Plane"**
 
-The dashboard is the category-standard dark developer console, built to Linear and Vercel craft rather than dressed as a terminal. A near-black ground holds a few raised panels, each separated by hairline white-alpha borders and lit by a 1px inner top highlight. One thing leads: the purchase route Store → Verify → Access → Deliver. Everything else is quiet, aligned and dense, so the operator sees route health first, then volume and revenue, then the evidence tables.
+The dashboard is the category-standard developer console, built to Linear and Vercel craft rather than dressed as a terminal, in matching dark and light themes. In dark a near-black ground holds a few raised panels; in light the same panels sit white on a pale zinc ground. Both separate surfaces with hairline alpha borders lit by a 1px inner top highlight. One thing leads: the purchase route Store → Verify → Access → Deliver. Everything else is quiet, aligned and dense, so the operator sees route health first, then volume and revenue, then the evidence tables.
 
-Colour is rationed. One indigo marks focus, selection and the active project. The primary action is a light button on dark. Green, amber and rose appear only where they carry state, and each always has a text label next to it (and on the route, a change of shape). The type is the platform's own sans with tabular figures. Monospace is reserved for identifiers, keys and code.
+Colour is rationed. One indigo marks focus, selection and the active project. The primary action is the inverted button (light on dark, dark on light). Green, amber and rose appear only where they carry state, and each always has a text label next to it (and on the route, a change of shape). The type is the platform's own sans with tabular figures. Monospace is reserved for identifiers, keys and code.
 
 Motion is limited to one load-in fade, a dialog rise and a slow pulse travelling along the route track. Reduced motion turns all of it off.
 
 **Key Characteristics:**
-- Near-black neutral ground with tonal panel layering, hairline alpha borders and a 1px top highlight
+- Tonal neutral ground in both schemes (near-black in dark, pale zinc in light) with panel layering, hairline alpha borders and a 1px top highlight
 - One indigo accent for focus, selection and the active state, never as decoration
-- Light-on-dark primary button, so the main action reads without colour
+- Inverted primary button, so the main action reads without colour in either theme
 - State colour only with a text label, and with a shape change where it matters
 - Joined panels (metric row, application tiles, commissioning steps) divided by 1px lines instead of floating cards
 - System sans with tabular figures; monospace only for identifiers
 
 ## Colors
 
-A neutral zinc-black palette with one cool indigo and three semantic state hues.
+A neutral zinc palette with one cool indigo and three semantic state hues. Every token carries a light and a dark value (`light-dark()`); the `colors` list above is the dark set and `colors-light` its pair. The theme follows the operating system by default (System), and the toggle on the sign-in screen and in the top bar cycles System → Light → Dark. The explicit choice is kept in a first-party cookie scoped to `/dashboard/`; nothing theme-related is written to browser storage.
 
 ### Primary
 - **Signal Indigo** (`primary`): focus ring family, the active-project indicator bar, the route pulse, field focus borders, info messages and the soft selection wash. Its stronger tint (`primary-strong`) is used for links, the caret and the route pulse highlight. `primary-soft` is the tinted wash behind selected or info content and entitlement tags.

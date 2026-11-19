@@ -3,8 +3,9 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="dark">
-    <meta name="theme-color" content="#09090b">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f4f5">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#09090b">
     <title>IAPStack Operations</title>
     <link rel="stylesheet" href="./app.css">
     <script src="./app.js" defer></script>
@@ -15,9 +16,12 @@
     <main class="auth-stage" id="auth-stage">
       <section class="auth-card" aria-labelledby="auth-title">
         <div class="auth-main">
-          <div class="brand-lockup" aria-label="IAPStack">
-            <span class="brand-mark" aria-hidden="true"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 21 7.5 12 12 3 7.5Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg></span>
-            <span><span class="brand-word">IAPStack</span><small class="brand-caption">Control plane</small></span>
+          <div class="auth-topbar">
+            <div class="brand-lockup" aria-label="IAPStack">
+              <span class="brand-mark" aria-hidden="true"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 21 7.5 12 12 3 7.5Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg></span>
+              <span><span class="brand-word">IAPStack</span><small class="brand-caption">Control plane</small></span>
+            </div>
+            <button class="secondary-button theme-toggle" type="button" aria-label="Color theme: System. Switch to Light"><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="system"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="light" hidden><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="dark" hidden><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg><span data-theme-label>System</span></button>
           </div>
           <h1 id="auth-title">Every purchase.<br>One control plane.</h1>
           <p class="auth-copy">Connect with an admin bearer to configure store authority, inspect purchase verification, and monitor entitlement delivery.</p>
@@ -71,6 +75,7 @@
             <button class="secondary-button" id="open-api-keys" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 7a5 5 0 1 0-4.6 5H12l2 2h2v2h2v2h3v-3l-6.1-6.1A5 5 0 0 0 15 7Z"/></svg><span>Access keys</span></button>
             <button class="secondary-button" id="refresh" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span>Refresh</span></button>
             <button class="primary-button" id="open-setup-primary" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>New catalog</span></button>
+            <button class="secondary-button theme-toggle" type="button" aria-label="Color theme: System. Switch to Light"><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="system"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="light" hidden><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="dark" hidden><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg><span data-theme-label>System</span></button>
             <button class="text-button" id="logout" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M14 4h5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5"/></svg><span>Sign out</span></button>
           </div>
         </header>
