@@ -24,7 +24,8 @@ type IdentityRepository interface {
 	ResolveCustomer(context.Context, core.ProjectID, string) (CustomerResolution, error)
 	// PutCustomerAlias attaches one external id to a canonical customer idempotently.
 	PutCustomerAlias(context.Context, CustomerAliasWrite) (CustomerResolution, error)
-	// MergeCustomers records one customer merge or returns the stored audit row.
+	// MergeCustomers records one customer merge or returns the stored audit row. It checks identity
+	// rules only; verification.MergeCustomers refuses merges that combine or end entitlement access.
 	MergeCustomers(context.Context, CustomerMergeWrite) (CustomerMergeResult, error)
 }
 

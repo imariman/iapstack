@@ -111,22 +111,11 @@ func (api *API) postAdminCustomerMerge(writer http.ResponseWriter, request *http
 	}
 	var merge persistence.CustomerMerge
 	err := api.store.Transact(request.Context(), func(repository persistence.Transaction) error {
-		result, mergeErr := repository.MergeCustomers(request.Context(), write)
-		if mergeErr != nil {
-			return mergeErr
-		}
-		merge = result.Merge
-		if result.Replay {
-			return nil
-		}
-		return verification.RefreshCustomerProjection(
-			request.Context(),
-			repository,
-			verification.NewDefaultProjector(),
-			write.ProjectID,
-			write.CanonicalCustomerID,
-			occurredAt,
+		result, mergeErr := verification.MergeCustomers(
+			request.Context(), repository, verification.NewDefaultProjector(), write, occurredAt,
 		)
+		merge = result.Merge
+		return mergeErr
 	})
 	if err != nil {
 		api.writeError(writer, request, err)

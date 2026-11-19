@@ -521,7 +521,8 @@ var (
 	ErrNotFound = errors.New("persistence record not found")
 	// ErrConflict indicates that an identity or idempotency key belongs to different data.
 	ErrConflict = errors.New("persistence conflict")
-	// ErrEntitlementConflict indicates that two customers both have allowed access to one entitlement.
+	// ErrEntitlementConflict indicates that a customer merge would combine two customers' current access to one
+	// entitlement, or end access to an entitlement that one of them can use now.
 	ErrEntitlementConflict = errors.New("the customers have conflicting active entitlements")
 	// ErrUnavailable indicates that durable storage could not complete a transient operation safely.
 	ErrUnavailable = errors.New("persistence unavailable")
