@@ -314,6 +314,153 @@ func TestDefaultProjectorStoreSupersedesEveryImportLineage(t *testing.T) {
 	}
 }
 
+// TestDefaultProjectorRanksStoreAndImportByAllowedEnd verifies store evidence does not
+// outrank an import of another product before their access ends are compared.
+func TestDefaultProjectorRanksStoreAndImportByAllowedEnd(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.November, 20, 12, 0, 0, 0, time.UTC)
+	lapsed := now.Add(-24 * time.Hour)
+	current := now.AddDate(0, 0, 13)
+	tests := map[string]struct {
+		storeEnd   *time.Time
+		importEnd  *time.Time
+		wantImport bool
+	}{
+		"lapsed store and current import":     {storeEnd: &lapsed, importEnd: &current, wantImport: true},
+		"current store and lapsed import":     {storeEnd: &current, importEnd: &lapsed},
+		"equal ends":                          {storeEnd: &current, importEnd: &current},
+		"store without end and ending import": {storeEnd: nil, importEnd: &current},
+		"ending store and import without end": {storeEnd: &lapsed, importEnd: nil, wantImport: true},
+		"store and import without end":        {},
+	}
+	for name, test := range tests {
+		store := endedCandidate(verification.ProjectionCandidate{
+			Projection:          projectionFor("product-store", "observation-store", core.AccessAllowed),
+			SourceApplicationID: verificationApplicationID,
+			SourceLineage:       "reference:1",
+			ObservedAt:          now.Add(-time.Hour),
+		}, now.AddDate(0, -1, 0), test.storeEnd)
+		imported := importCandidate("product-import", "imp-66666666666666666666666666666666", core.AccessAllowed, now)
+		imported.SourceLineage = "import:lineage-1"
+		imported = endedCandidate(imported, now.AddDate(0, -1, 0), test.importEnd)
+		want := store.Projection
+		if test.wantImport {
+			want = imported.Projection
+		}
+
+		for order, candidates := range map[string][]verification.ProjectionCandidate{
+			"store first":  {store, imported},
+			"import first": {imported, store},
+		} {
+			projections, err := verification.NewDefaultProjector().Project(nil, candidates)
+			if err != nil {
+				t.Fatalf("%s, %s: Project() error = %v", name, order, err)
+			}
+			if len(projections) != 1 || projections[0] != want {
+				t.Fatalf("%s, %s: Project() = %#v, want %#v", name, order, projections, want)
+			}
+		}
+
+		for currentName, currentCandidate := range map[string]verification.ProjectionCandidate{
+			"current store":  store,
+			"current import": imported,
+		} {
+			current := persistence.CustomerEntitlement{
+				Projection:          currentCandidate.Projection,
+				SourceApplicationID: currentCandidate.SourceApplicationID,
+				SourceLineage:       currentCandidate.SourceLineage,
+				Key:                 verificationEntitlementKey,
+				Version:             1,
+			}
+			projections, err := verification.NewDefaultProjector().Project(
+				[]persistence.CustomerEntitlement{current}, []verification.ProjectionCandidate{store, imported},
+			)
+			if err != nil {
+				t.Fatalf("%s, %s: Project() error = %v", name, currentName, err)
+			}
+			if len(projections) != 1 || projections[0] != want {
+				t.Fatalf("%s, %s: Project() = %#v, want %#v", name, currentName, projections, want)
+			}
+		}
+	}
+}
+
+// TestDefaultProjectorRanksEveryAllowedSourceByEndFirst verifies one deterministic winner when
+// store, manual, and import sources of different products end at different times.
+func TestDefaultProjectorRanksEveryAllowedSourceByEndFirst(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.November, 20, 12, 0, 0, 0, time.UTC)
+	storeEnd := now.AddDate(0, 0, 1)
+	importEnd := now.AddDate(0, 0, 30)
+	store := endedCandidate(verification.ProjectionCandidate{
+		Projection:          projectionFor("product-store", "observation-store", core.AccessAllowed),
+		SourceApplicationID: verificationApplicationID,
+		SourceLineage:       "reference:1",
+		ObservedAt:          now,
+	}, now.AddDate(0, -1, 0), &storeEnd)
+	manual := manualCandidate("product-manual", manualGrantIDOne, core.AccessAllowed, now, now.AddDate(0, 0, 10))
+	imported := importCandidate("product-import", "imp-77777777777777777777777777777777", core.AccessAllowed, now)
+	imported.SourceLineage = "import:lineage-1"
+	imported = endedCandidate(imported, now.AddDate(0, -1, 0), &importEnd)
+
+	// The selection loop walks a map, so repeat it to cover several iteration orders.
+	for attempt := range 64 {
+		projections, err := verification.NewDefaultProjector().Project(
+			nil, []verification.ProjectionCandidate{store, manual, imported},
+		)
+		if err != nil {
+			t.Fatalf("attempt %d: Project() error = %v", attempt, err)
+		}
+		if len(projections) != 1 || projections[0] != imported.Projection {
+			t.Fatalf("attempt %d: Project() = %#v, want the import that lasts longest", attempt, projections)
+		}
+	}
+}
+
+// TestDefaultProjectorStoreStillSupersedesImportOfItsProduct verifies a lapsed store row
+// still replaces a current import of the same application product.
+func TestDefaultProjectorStoreStillSupersedesImportOfItsProduct(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.November, 20, 12, 0, 0, 0, time.UTC)
+	lapsed := now.Add(-24 * time.Hour)
+	current := now.AddDate(0, 0, 13)
+	store := endedCandidate(verification.ProjectionCandidate{
+		Projection:          projectionFor(verificationProductID, "observation-store", core.AccessAllowed),
+		SourceApplicationID: verificationApplicationID,
+		SourceLineage:       "reference:1",
+		ObservedAt:          now.Add(-time.Hour),
+	}, now.AddDate(0, -1, 0), &lapsed)
+	imported := importCandidate(verificationProductID, "imp-66666666666666666666666666666666", core.AccessAllowed, now)
+	imported.SourceLineage = "import:lineage-1"
+	imported = endedCandidate(imported, now.AddDate(0, -1, 0), &current)
+
+	projections, err := verification.NewDefaultProjector().Project(nil, []verification.ProjectionCandidate{imported, store})
+	if err != nil {
+		t.Fatalf("Project() error = %v", err)
+	}
+	if len(projections) != 1 || projections[0] != store.Projection {
+		t.Fatalf("Project() = %#v, want the store observation of the same product", projections)
+	}
+}
+
+// endedCandidate returns candidate with an allowed period from startsAt to endsAt; a nil end has no expiry.
+func endedCandidate(
+	candidate verification.ProjectionCandidate,
+	startsAt time.Time,
+	endsAt *time.Time,
+) verification.ProjectionCandidate {
+	var end *time.Time
+	if endsAt != nil {
+		value := *endsAt
+		end = &value
+	}
+	candidate.Projection.EffectivePeriod = core.EffectivePeriod{StartsAt: startsAt, EndsAt: end}
+	return candidate
+}
+
 // lineageCandidate builds one store candidate for a purchase lineage of the shared product.
 // An allowed candidate starts a month before endsAt.
 func lineageCandidate(

@@ -50,9 +50,11 @@ func NewDefaultProjector() *DefaultProjector {
 
 // Project selects one candidate per entitlement without revoking an independent allowed source.
 // Each purchase lineage is its own source, so an expired lineage cannot revoke a later purchase
-// of the same product. A store observation still supersedes every import of its application product.
-// A manual grant is its own source too: store evidence never supersedes it, and it never supersedes
-// store evidence. Among allowed sources the one whose access lasts longest is projected.
+// of the same product. A store observation still supersedes every import of its application product,
+// whatever their ends. A manual grant is its own source too: store evidence never supersedes it, and
+// it never supersedes store evidence. Among the remaining allowed sources the one whose access lasts
+// longest is projected whatever its kind, so a lapsed store row cannot hide a current import of
+// another product. Equal ends prefer store evidence, then a manual grant, then an import.
 func (projector *DefaultProjector) Project(
 	current []persistence.CustomerEntitlement,
 	candidates []ProjectionCandidate,
@@ -222,18 +224,17 @@ func newerSourceCandidate(candidate, existing ProjectionCandidate) bool {
 }
 
 // candidatePreferred deterministically ranks competing new sources for one entitlement.
-// A store observation outranks an import before end times are compared. Otherwise the allowed
-// source whose access lasts longest wins, so a lapsed lineage that has not been refreshed yet
-// cannot hide a newer purchase, and a manual grant that outlasts store access stays projected
-// until its own end. Equal ends prefer store evidence, then a manual grant, then an import.
+// Stronger access wins first. Among allowed sources the one whose access lasts longest wins
+// before source kinds are compared, so a lapsed store row that has not been refreshed yet cannot
+// hide a current import, a lapsed lineage cannot hide a newer purchase, and a manual grant that
+// outlasts store access stays projected until its own end. Equal ends prefer store evidence, then
+// a manual grant, then an import; a later observation and then the smaller source id break ties.
+// The keys are compared in that fixed order, so the winner does not depend on candidate order.
 func candidatePreferred(candidate, existing ProjectionCandidate) bool {
 	candidateStrength := accessStrength(candidate.Projection.Access)
 	existingStrength := accessStrength(existing.Projection.Access)
 	if candidateStrength != existingStrength {
 		return candidateStrength > existingStrength
-	}
-	if storeAgainstImport(candidate.Projection, existing.Projection) {
-		return compareSourceKind(candidate.Projection, existing.Projection) > 0
 	}
 	if rank := compareAllowedEnd(candidate.Projection, existing.Projection); rank != 0 {
 		return rank > 0
@@ -286,14 +287,6 @@ func sourceKindRank(projection persistence.EntitlementProjection) int {
 	default:
 		return 3
 	}
-}
-
-// storeAgainstImport reports whether one projection is store evidence and the other an import grant.
-func storeAgainstImport(left, right persistence.EntitlementProjection) bool {
-	leftKind := left.Normalized().SourceKind
-	rightKind := right.Normalized().SourceKind
-	return (leftKind == persistence.SourceKindStoreObservation && rightKind == persistence.SourceKindImport) ||
-		(leftKind == persistence.SourceKindImport && rightKind == persistence.SourceKindStoreObservation)
 }
 
 // projectionSourceIdentity returns the stable id used to break equal observation times.
