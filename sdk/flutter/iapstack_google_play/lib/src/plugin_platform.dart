@@ -211,7 +211,8 @@ Future<List<ProductDetailsResponseWrapper>?> _queryRawProductDetails(
   }
   // The plugin exposes its live BillingClientManager only through this
   // testing-visible field; no supported route to billing codes exists.
-  // pubspec.yaml caps in_app_purchase_android at the verified releases.
+  // pubspec.yaml caps in_app_purchase_android at the verified releases, and
+  // test/in_app_purchase_android_drift_test.dart checks each bump.
   // ignore: invalid_use_of_visible_for_testing_member
   final manager = platform.billingClientManager;
   List<ProductWrapper> products(ProductType productType) => productIds
@@ -395,6 +396,8 @@ bool _isEmptyBillingResult(PurchaseDetails details) =>
 /// The plugin reports every non-OK result as `purchase_error` and keeps the
 /// response only as `BillingResponse.<name>` in [IAPError.message]. Other
 /// plugin codes, and messages that name no known response, pass through.
+/// test/in_app_purchase_android_drift_test.dart drives the plugin's own
+/// translation to catch a format change.
 String? _purchaseErrorCode(IAPError? error) {
   if (error == null || error.code != kPurchaseErrorCode) {
     return error?.code;
