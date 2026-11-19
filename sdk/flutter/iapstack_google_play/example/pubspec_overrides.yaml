@@ -1,0 +1,4 @@
+# The companion depends on the published core version; use this checkout instead.
+dependency_overrides:
+  iapstack:
+    path: ../../iapstack

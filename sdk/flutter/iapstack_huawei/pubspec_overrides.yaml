@@ -1,0 +1,5 @@
+# Local development resolves the core package from this checkout.
+# pub.dev resolves the exact `iapstack` version from pubspec.yaml instead.
+dependency_overrides:
+  iapstack:
+    path: ../iapstack

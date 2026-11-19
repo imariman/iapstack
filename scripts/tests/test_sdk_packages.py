@@ -72,6 +72,48 @@ class SDKPackageTests(unittest.TestCase):
         for value in ("v0.1.0", "0.1.0", "0.1.0-alpha.1", "0.1.0-sdk.0", "01.1.0-sdk.1", "0.1.0-sdk.01"):
             self.assertIsNone(checks.VERSION_PATTERN.fullmatch(value))
 
+    def check_flutter_tree(self, edit=None):
+        version = "0.1.0-sdk.2"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "LICENSE").write_text("Apache-2.0")
+            for name in checks.FLUTTER_PACKAGES:
+                folder = root / "sdk/flutter" / name
+                folder.mkdir(parents=True)
+                core = "" if name == "iapstack" else f"  iapstack: {version}\n"
+                (folder / "pubspec.yaml").write_text(
+                    f"name: {name}\nversion: {version}\n\nenvironment:\n  sdk: '>=3.4.0 <4.0.0'\n\n"
+                    f"dependencies:\n  # Runtime dependencies.\n{core}  http: ^1.5.0\n\n"
+                    "dev_dependencies:\n  test:\n    path: ../test\n"
+                )
+                (folder / "LICENSE").write_text("Apache-2.0")
+                (folder / "CHANGELOG.md").write_text(f"# Changelog\n\n## {version}\n\n- Initial release.\n")
+            if edit:
+                edit(root)
+            checks.check_flutter(root, version)
+
+    def test_valid_flutter_manifests_allow_dev_path_dependencies(self):
+        self.check_flutter_tree()
+
+    def test_unpublishable_flutter_manifests_are_rejected(self):
+        def rewrite(name, old, new, file="pubspec.yaml"):
+            def edit(root):
+                path = root / "sdk/flutter" / name / file
+                path.write_text(path.read_text().replace(old, new))
+            return edit
+
+        cases = {
+            "version differs": rewrite("iapstack", "version: 0.1.0-sdk.2", "version: 0.1.0-dev.1"),
+            "publish_to": rewrite("iapstack_huawei", "version:", "publish_to: none\nversion:"),
+            "path and git": rewrite("iapstack_apple", "  iapstack: 0.1.0-sdk.2\n", "  iapstack:\n    path: ../iapstack\n"),
+            "exact iapstack": rewrite("iapstack_google_play", "iapstack: 0.1.0-sdk.2", "iapstack: ^0.1.0-sdk.2"),
+            "LICENSE": rewrite("iapstack", "Apache-2.0", "MIT", file="LICENSE"),
+            "CHANGELOG": rewrite("iapstack_apple", "## 0.1.0-sdk.2", "## 0.1.0-sdk.1", file="CHANGELOG.md"),
+        }
+        for message, edit in cases.items():
+            with self.subTest(message), self.assertRaisesRegex(ValueError, message):
+                self.check_flutter_tree(edit)
+
     def test_runtime_dependency_versions_ignore_test_and_unversioned_libraries(self):
         groovy = "implementation 'com.facebook.react:react-android'\nimplementation 'com.squareup.okhttp3:okhttp:4.12.0'\ntestImplementation 'com.squareup.okhttp3:mockwebserver:5.0.0'\n"
         kotlin = '  api("com.squareup.okhttp3:okhttp:4.12.0")\n  implementation("com.huawei.hms:iap:6.13.0.300")\n'

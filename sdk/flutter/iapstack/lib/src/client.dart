@@ -10,7 +10,7 @@ import 'package:iapstack/src/errors.dart';
 import 'package:iapstack/src/models.dart';
 import 'package:iapstack/src/retry_after.dart';
 
-const String _sdkVersion = '0.1.0-dev.1';
+const String _sdkVersion = '0.1.0-sdk.3';
 
 /// Maximum purchases accepted by one `purchases:restore` request.
 const int maxRestoreBatchSize = 100;

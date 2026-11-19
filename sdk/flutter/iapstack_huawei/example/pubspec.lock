@@ -113,14 +113,14 @@ packages:
       path: "../../iapstack"
       relative: true
     source: path
-    version: "0.1.0-dev.1"
+    version: "0.1.0-sdk.3"
   iapstack_huawei:
     dependency: "direct main"
     description:
       path: ".."
       relative: true
     source: path
-    version: "0.1.0-dev.1"
+    version: "0.1.0-sdk.3"
   leak_tracker:
     dependency: transitive
     description:

@@ -20,7 +20,11 @@ CLIENT_FILES = (
     "sdk/android/core/src/main/kotlin/com/iapstack/core/IapStackClient.kt",
     "sdk/ios/Sources/IAPStackApple/IAPStackClient.swift",
     "sdk/react-native/src/client.ts",
+    "sdk/flutter/iapstack/lib/src/client.dart",
 )
+# Publication order matters: every companion pins the exact core version.
+FLUTTER_PACKAGES = ("iapstack", "iapstack_apple", "iapstack_google_play", "iapstack_huawei")
+PUBSPEC_DEPENDENCIES = re.compile(r"^dependencies:[ \t]*\n((?:[ \t#].*\n|[ \t]*\n)*)", re.M)
 RUNTIME_DEPENDENCY = re.compile(r"""^\s*(?:api|implementation)\s*\(?\s*['"]([\w.-]+):[\w.-]+:([\w.-]+)['"]""", re.M)
 
 
@@ -30,6 +34,30 @@ def dependency_versions(text):
     for group, version in RUNTIME_DEPENDENCY.findall(text):
         versions.setdefault(group, set()).add(version)
     return versions
+
+
+def check_flutter(root, version):
+    """Require publishable pub.dev manifests that match the SDK train."""
+    license_text = (root / "LICENSE").read_bytes()
+    for name in FLUTTER_PACKAGES:
+        folder = root / "sdk/flutter" / name
+        label = f"sdk/flutter/{name}"
+        pubspec = (folder / "pubspec.yaml").read_text()
+        if not re.search(rf"^name: {name}\s*$", pubspec, re.M) or not re.search(rf"^version: {re.escape(version)}\s*$", pubspec, re.M):
+            raise ValueError(f"{label}: pubspec name or version differs from sdk/version.txt")
+        if re.search(r"^publish_to:", pubspec, re.M):
+            raise ValueError(f"{label}: publish_to blocks pub.dev publication")
+        match = PUBSPEC_DEPENDENCIES.search(pubspec)
+        dependencies = match.group(1) if match else ""
+        if re.search(r"^\s+(?:path|git):", dependencies, re.M):
+            raise ValueError(f"{label}: pub.dev rejects path and git dependencies; use pubspec_overrides.yaml locally")
+        if name != "iapstack" and not re.search(rf"^  iapstack: ['\"]?{re.escape(version)}['\"]?\s*$", dependencies, re.M):
+            raise ValueError(f"{label}: must depend on the exact iapstack {version}")
+        if (folder / "LICENSE").read_bytes() != license_text:
+            raise ValueError(f"{label}: LICENSE differs from the repository license")
+        changelog = folder / "CHANGELOG.md"
+        if not changelog.is_file() or not re.search(rf"^## {re.escape(version)}\s*$", changelog.read_text(), re.M):
+            raise ValueError(f"{label}: CHANGELOG.md has no {version} entry")
 
 
 def check_metadata(root=ROOT):
@@ -44,6 +72,7 @@ def check_metadata(root=ROOT):
         config = package.get("publishConfig", {})
         if config.get("access") != "public" or config.get("tag") != "next":
             raise ValueError(f"{folder}: prereleases must use public access and next dist-tag")
+    check_flutter(root, version)
     if not (root / "Package.swift").is_file():
         raise ValueError("Swift distribution requires a root Package.swift")
     for path in CLIENT_FILES:

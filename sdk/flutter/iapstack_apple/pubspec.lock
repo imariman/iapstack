@@ -89,7 +89,7 @@ packages:
       path: "../iapstack"
       relative: true
     source: path
-    version: "0.1.0-dev.1"
+    version: "0.1.0-sdk.3"
   in_app_purchase:
     dependency: "direct main"
     description:

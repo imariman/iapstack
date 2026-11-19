@@ -5,6 +5,19 @@ keeps a short-lived customer bearer in memory, applies abortable per-attempt tim
 and full-jitter bounded retries,
 and exposes stable API error codes with request IDs.
 
+## Install
+
+```yaml
+dependencies:
+  iapstack: 0.1.0-sdk.3
+```
+
+Use the exact version: `^0.1.0` does not match an `-sdk.N` prerelease. Add
+`iapstack_apple`, `iapstack_google_play` or `iapstack_huawei` at the same version
+for each store the application sells through.
+
+## Usage
+
 ```dart
 final client = IapStackClient(
   IapStackConfig(
