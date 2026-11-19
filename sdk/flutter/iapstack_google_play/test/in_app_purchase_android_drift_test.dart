@@ -68,6 +68,17 @@ void main() {
       // The registered instance owns a live manager of its own.
       final BillingClientManager registeredManager =
           (registered as InAppPurchaseAndroidPlatform).billingClientManager;
+      // Disposes the manager registration created, so its BillingClient and
+      // purchase-update subscription do not outlive this test. Ending the
+      // real connection fails with a channel error too.
+      addTearDown(() async {
+        runZonedGuarded(
+          registeredManager.dispose,
+          (error, _) => connectionErrors.add(error),
+        );
+        await pumpEventQueue();
+        expect(connectionErrors, everyElement(isA<PlatformException>()));
+      });
       expect(registeredManager, isNot(same(manager)));
       expect(connectionErrors, everyElement(isA<PlatformException>()));
     });
