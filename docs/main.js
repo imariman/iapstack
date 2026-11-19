@@ -257,7 +257,19 @@ if (chart) {
   let activeIndex = -1;
   const legend = Object.fromEntries([...chart.querySelectorAll('.chart-legend span')].map((item) => [item.querySelector('.swatch').classList[1], item.textContent.trim()]));
   const numberFormat = new Intl.NumberFormat(dateLocale);
-  const row = (kind, value) => `<dt><i class="swatch ${kind}"></i>${legend[kind]}</dt><dd>${numberFormat.format(value)}</dd>`;
+  // The tooltip is built from DOM nodes and textContent only, so translated
+  // strings are never parsed as HTML.
+  const element = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const row = (kind, value) => {
+    const term = element('dt');
+    term.append(element('i', `swatch ${kind}`), legend[kind]);
+    return [term, element('dd', '', numberFormat.format(value))];
+  };
 
   const show = (index) => {
     if (index === activeIndex) return;
@@ -265,7 +277,13 @@ if (chart) {
     bars.forEach((bar, barIndex) => bar.classList.toggle('is-active', barIndex === index));
     barsHost.classList.add('has-active');
     const day = days[index];
-    tooltip.innerHTML = `<strong>${day.label}</strong><span class="total">${t('chart_verified', { count: numberFormat.format(day.total) })}</span><dl>${row('allowed', day.allowed)}${row('denied', day.denied)}${row('unresolved', day.unresolved)}</dl>`;
+    const values = element('dl');
+    values.append(...row('allowed', day.allowed), ...row('denied', day.denied), ...row('unresolved', day.unresolved));
+    tooltip.replaceChildren(
+      element('strong', '', day.label),
+      element('span', 'total', t('chart_verified', { count: numberFormat.format(day.total) })),
+      values,
+    );
     tooltip.hidden = false;
 
     const plotWidth = plot.clientWidth;
