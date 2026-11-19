@@ -494,11 +494,19 @@ func (repository *transaction) customerOwnsMerge(
 	return exists, nil
 }
 
-// customersHaveEntitlementConflict reports dual allowed access for one entitlement id.
-// Two stored-allowed rows conflict unless both have passed their effective end. A
-// merge of one current and one lapsed row stays refused: the projector ranks a store
-// observation above an import before it compares ends, so the lapsed row could
-// replace the current access.
+// customersHaveEntitlementConflict reports whether a merge would combine or lose allowed
+// access to one entitlement id. It compares the stored-allowed projections of both
+// customers. Current means the row is still allowed at the transaction clock, as
+// core.AccessAt reads it, ignoring the start.
+//
+// Two current rows conflict, and two lapsed rows never do. One current and one lapsed
+// row merge, because DefaultProjector keeps the allowed source whose access lasts
+// longest whatever its kind. The exceptions are the rows the projector never compares
+// by end, where the lapsed row could still replace the current access:
+//   - the current row is an import and the lapsed row a store observation of the same
+//     application product, which supersedes every import of that product; or
+//   - both rows cite one source, the same application product, source kind, and
+//     purchase lineage, where only the newest observation or grant counts.
 func (repository *transaction) customersHaveEntitlementConflict(
 	ctx context.Context,
 	projectID core.ProjectID,
@@ -507,18 +515,51 @@ func (repository *transaction) customersHaveEntitlementConflict(
 ) (bool, error) {
 	var conflict bool
 	err := repository.tx.QueryRow(ctx, `
+		WITH allowed AS (
+			SELECT
+				projection.customer_id,
+				projection.entitlement_id,
+				projection.source_kind,
+				projection.source_product_id,
+				COALESCE(po.application_id, ig.application_id, mg.application_id) AS application_id,
+				CASE
+					WHEN projection.source_kind = 'import' THEN `+importLineageSQL+`
+					WHEN projection.source_kind = 'manual' THEN `+manualLineageSQL+`
+					ELSE `+observationLineageSQL+`
+				END AS source_lineage,
+				`+unexpiredAllowedSQL("projection")+` AS current_access
+			FROM customer_entitlements AS projection
+			LEFT JOIN purchase_observations AS po
+				ON projection.source_kind = 'store_observation' AND po.id = projection.source_observation_id
+			LEFT JOIN import_grants AS ig
+				ON projection.source_kind = 'import' AND ig.id = projection.source_import_id
+			LEFT JOIN manual_grants AS mg
+				ON projection.source_kind = 'manual' AND mg.id = projection.source_manual_grant_id
+			WHERE projection.project_id = $1
+				AND projection.customer_id IN ($2, $3)
+				AND projection.access_status = 'allowed'
+		)
 		SELECT EXISTS (
 			SELECT 1
-			FROM customer_entitlements AS canonical
-			JOIN customer_entitlements AS source
-				ON source.project_id = canonical.project_id
-				AND source.entitlement_id = canonical.entitlement_id
-			WHERE canonical.project_id = $1
-				AND canonical.customer_id = $2
+			FROM allowed AS canonical
+			JOIN allowed AS source ON source.entitlement_id = canonical.entitlement_id
+			WHERE canonical.customer_id = $2
 				AND source.customer_id = $3
-				AND canonical.access_status = 'allowed'
-				AND source.access_status = 'allowed'
-				AND (`+unexpiredAllowedSQL("canonical")+` OR `+unexpiredAllowedSQL("source")+`)
+				AND (canonical.current_access OR source.current_access)
+				AND (
+					(canonical.current_access AND source.current_access)
+					OR (
+						canonical.application_id = source.application_id
+						AND canonical.source_product_id = source.source_product_id
+						AND (
+							(canonical.source_kind = source.source_kind AND canonical.source_lineage = source.source_lineage)
+							OR (canonical.current_access AND canonical.source_kind = 'import'
+								AND source.source_kind = 'store_observation')
+							OR (source.current_access AND source.source_kind = 'import'
+								AND canonical.source_kind = 'store_observation')
+						)
+					)
+				)
 		)
 	`, projectID, canonicalID, sourceID).Scan(&conflict)
 	if err != nil {
