@@ -1,23 +1,47 @@
 <p align="center">
-  <img src="assets/iapstack-gopher.png" alt="IAPStack Gopher mascot" width="360">
+  <img src="assets/iapstack-gopher.png" alt="IAPStack Gopher mascot" width="150">
 </p>
 
 <h1 align="center">IAPStack</h1>
 
 <p align="center">
-  Open-source, self-hosted in-app purchase verification and entitlement infrastructure.
+  <strong>Open-source, self-hosted in-app purchase verification and entitlements.</strong>
+  <br>
+  One backend-owned model for Apple App Store, Google Play, and Huawei AppGallery.
   <br>
   Built in Go. Store-agnostic. Deployable anywhere.
 </p>
 
 <p align="center">
   <a href="https://imariman.github.io/iapstack/"><strong>Website</strong></a>
+  ·
+  <a href="#quick-start"><strong>Quick start</strong></a>
+  ·
+  <a href="#deploy"><strong>Deploy</strong></a>
+  ·
+  <a href="#documentation"><strong>Documentation</strong></a>
+  ·
+  <a href="contracts/openapi/v1.yaml"><strong>OpenAPI</strong></a>
+  ·
+  <a href="CONTRIBUTING.md"><strong>Contributing</strong></a>
 </p>
 
 <p align="center">
+  <a href="https://github.com/imariman/iapstack/actions/workflows/ci.yml"><img src="https://github.com/imariman/iapstack/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache 2.0 License"></a>
-  <img src="https://img.shields.io/badge/status-early%20development-orange.svg" alt="Early development">
-  <img src="https://img.shields.io/badge/built%20with-Go-00ADD8.svg" alt="Built with Go">
+  <img src="https://img.shields.io/badge/Go-1.26-00ADD8.svg" alt="Go 1.26">
+  <img src="https://img.shields.io/badge/status-prerelease-orange.svg" alt="Prerelease">
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/dashboard-dark.png">
+    <img src="assets/dashboard-light.png" alt="IAPStack operations dashboard: purchase route health, verification activity with a hovered day, recognized store revenue, and sandbox test value for a demo project" width="100%">
+  </picture>
+</p>
+
+<p align="center">
+  <sub>The operations dashboard, following your system theme (System / Light / Dark in the product). Synthetic demo data shown.</sub>
 </p>
 
 > [!IMPORTANT]
@@ -26,10 +50,31 @@
 > fixes; they are not supported for production use. The default branch remains in
 > development, and its three-provider real-store lifecycle gate is not yet complete.
 
-IAPStack is a self-hosted control plane for validating in-app purchases and turning
-store transactions into durable application entitlements. It gives teams one
-backend-owned model across mobile stores while keeping credentials, purchase data,
-and access decisions in infrastructure they control.
+IAPStack is a self-hosted backend and control panel for validating in-app purchases
+and turning store transactions into durable application entitlements. It gives teams
+one backend-owned model across mobile stores while keeping credentials, purchase
+data, and access decisions in infrastructure they control.
+
+<p align="center">
+  <code>Store&nbsp;&nbsp;→&nbsp;&nbsp;Verify&nbsp;&nbsp;→&nbsp;&nbsp;Access&nbsp;&nbsp;→&nbsp;&nbsp;Deliver</code>
+</p>
+
+| Verify once, everywhere | Entitlements, not receipts | Yours to run |
+| --- | --- | --- |
+| Server-side verification for Apple App Store, Google Play, and Huawei AppGallery behind one store-neutral model. | Apps ask what a customer can access instead of interpreting raw receipts and store states. | Self-hosted by default: you own the infrastructure, credentials, purchase data, and access decisions. |
+
+## Contents
+
+- [Current scope](#current-scope)
+- [SDK roadmap](#sdk-roadmap)
+- [Quick start](#quick-start)
+- [Deploy](#deploy)
+- [Design principles](#design-principles)
+- [Documentation](#documentation)
+- [Development](#development)
+- [Repository layout](#repository-layout)
+- [Roadmap](#roadmap)
+- [License](#license)
 
 ## Current scope
 
@@ -37,7 +82,9 @@ and access decisions in infrastructure they control.
   from Apple App Store, Google Play, and Huawei AppGallery
 - A store-neutral transaction and entitlement model backed by PostgreSQL
 - Durable notification ingestion, lifecycle reconciliation, and signed outbound webhooks
-- An authenticated operations dashboard and versioned HTTP/OpenAPI contracts
+- An authenticated operations dashboard (System / Light / Dark themes, a collapsible
+  project rail, and inspectable activity and subscription charts) with versioned
+  HTTP/OpenAPI contracts
 - Provider-neutral and store-specific Flutter packages for all three current providers
 - Compact or split API/worker deployment with Docker and documented cloud targets
 
