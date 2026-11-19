@@ -45,6 +45,16 @@
   not a store purchase. Every SDK decodes it as a forward-compatible string and
   `grantsAccess` still checks only `access` and `effective_ends_at`.
 
+### Changed
+
+- Flutter Google Play requires `in_app_purchase_android` `>=0.5.2 <0.5.6`
+  (was `^0.5.2`). Product queries and purchase updates read Billing response
+  codes through plugin internals outside its semver, so the cap moves only
+  after drift tests pass against a new release. 0.5.5 is the newest release,
+  so no release is excluded yet. An app that needs a later release gets a pub
+  version conflict until the cap moves. See "Dependency on
+  in_app_purchase_android" in the package README.
+
 ## 0.1.0-sdk.3
 
 ### Breaking

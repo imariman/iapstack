@@ -15,7 +15,9 @@ dependencies:
     path: ../iapstack
   in_app_purchase: ^3.3.0
   # lib/ reads InAppPurchaseAndroidPlatform.billingClientManager, a
-  # @visibleForTesting member outside semver. Widen only after checking it.
+  # @visibleForTesting member outside semver, and parses IAPError.message.
+  # Cap just above the newest release that passes
+  # test/in_app_purchase_android_drift_test.dart. See README.md.
   in_app_purchase_android: ">=0.5.2 <0.5.6"
   in_app_purchase_platform_interface: ^1.4.1
 
