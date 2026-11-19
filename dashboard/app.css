@@ -672,7 +672,7 @@ form[aria-busy="true"] button[type="submit"]::before {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   min-height: 100dvh;
 }
 
@@ -683,9 +683,17 @@ form[aria-busy="true"] button[type="submit"]::before {
   flex-direction: column;
   gap: 4px;
   height: 100dvh;
+  overflow-x: hidden;
   padding: 18px 12px 16px;
   position: sticky;
   top: 0;
+  transition: width var(--duration-base) var(--ease-out), padding var(--duration-base) var(--ease-out);
+  width: 248px;
+}
+
+.sidebar .brand-lockup > span:last-child,
+.sidebar-footer > span:last-child {
+  white-space: nowrap;
 }
 
 .sidebar-brand-row {
@@ -697,13 +705,12 @@ form[aria-busy="true"] button[type="submit"]::before {
 }
 
 /* Collapsed, the project rail becomes a slim icon rail. The toggle stays
-   where it always is, so the way back can never be lost. */
-:root[data-sidebar="collapsed"] .app-shell {
-  grid-template-columns: 60px minmax(0, 1fr);
-}
-
+   where it always is, so the way back can never be lost. The width
+   transition on .sidebar animates between the two widths; the global
+   reduced-motion rule turns it back into an instant swap. */
 :root[data-sidebar="collapsed"] .sidebar {
   padding: 18px 8px 16px;
+  width: 60px;
 }
 
 :root[data-sidebar="collapsed"] .sidebar-brand-row {
@@ -3115,6 +3122,7 @@ td code {
     height: auto;
     padding: 14px 16px;
     position: static;
+    width: auto;
   }
 
   .sidebar-brand-row {

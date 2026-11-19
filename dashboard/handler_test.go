@@ -330,7 +330,8 @@ func TestDashboardSupportsSidebarToggleAndChartHover(t *testing.T) {
 	}
 	for _, required := range []string{
 		`:root[data-sidebar="collapsed"] .app-shell`, `:root[data-sidebar="collapsed"] .sidebar-brand-row`,
-		".sidebar-brand-row", ".project-initials", ".chart-tooltip", ".chart-hit", ".chart-guide", ".chart-bar-active",
+		".sidebar-brand-row", ".project-initials", "transition: width var(--duration-base)",
+		".chart-tooltip", ".chart-hit", ".chart-guide", ".chart-bar-active",
 	} {
 		if !strings.Contains(string(styles), required) {
 			t.Fatalf("dashboard shell styles do not contain %q", required)
