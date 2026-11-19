@@ -5,9 +5,6 @@ import android.content.Intent
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.iapstack.core.*
-// Internal to core: build.gradle compiles the core sources into this module.
-// The explicit import also picks it over the Google Play and Huawei copies.
-import com.iapstack.core.requireExternalCustomerId
 import com.iapstack.googleplay.*
 import com.iapstack.huawei.*
 import kotlinx.coroutines.*
@@ -90,6 +87,8 @@ class IAPStackModule(private val context: ReactApplicationContext) :
     }
   }
 
+  // requireExternalCustomerId is core's shared rule, opted in like the SDK modules.
+  @OptIn(InternalIapStackApi::class)
   @ReactMethod fun configure(config: ReadableMap, promise: Promise) {
     scope.launch {
       try {

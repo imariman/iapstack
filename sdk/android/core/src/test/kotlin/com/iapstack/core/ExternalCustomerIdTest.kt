@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
+@OptIn(InternalIapStackApi::class)
 class ExternalCustomerIdTest {
   @Test
   fun followsTheSharedServerIdentifierVectors() {
