@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -456,10 +458,17 @@ func utcTime(value *time.Time) *time.Time {
 	return &utc
 }
 
-// validateExternalCustomerID requires one non-empty identity without surrounding whitespace.
+// validateExternalCustomerID requires one non-empty customer identity in
+// valid UTF-8 without surrounding whitespace or control characters.
+//
+// It mirrors the server's validateIdentifier (internal/core/identifiers.go),
+// so an ID the server would reject fails here before any request is sent.
+// Every SDK copy of this rule is tested against the shared cases in
+// contracts/test-vectors/external-customer-ids.json.
 func validateExternalCustomerID(value string) error {
-	if value == "" || strings.TrimSpace(value) != value {
-		return fmt.Errorf("external customer ID must not be empty")
+	if value == "" || !utf8.ValidString(value) || strings.TrimSpace(value) != value ||
+		strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return errors.New("external customer ID must be non-empty valid UTF-8 without surrounding whitespace or control characters")
 	}
 	return nil
 }
