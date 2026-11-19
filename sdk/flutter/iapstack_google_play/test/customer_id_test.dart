@@ -7,7 +7,7 @@ import 'package:iapstack_google_play/iapstack_google_play.dart';
 import 'customer_id_vectors.dart';
 
 const String _customerIdMessage =
-    'must be non-empty valid Unicode of at most 64 characters without '
+    'must be non-empty valid Unicode without '
     'surrounding whitespace or control characters';
 
 void main() {
@@ -69,7 +69,14 @@ void main() {
           externalCustomerId: 'a' * 65,
           product: _lifetime,
         ),
-        throwsArgumentError,
+        throwsA(
+          isA<ArgumentError>().having(
+            (error) => error.message,
+            'message',
+            'must be at most 64 characters, the Google Play '
+                'obfuscatedAccountId limit',
+          ),
+        ),
       );
       expect(platform.launchedAccountId, isNull);
       await googlePlay.launchPurchase(
