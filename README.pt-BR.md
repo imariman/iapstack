@@ -253,9 +253,11 @@ dos testes de integração, uma visão geral da arquitetura e as convenções de
 - [x] Painel de operações e definições de implantação para nuvem, VM e Kubernetes
 - [x] SDKs Flutter, Swift, Kotlin, React Native, Go e TypeScript
 - [x] Migração de clientes, importações do RevenueCat, ofertas e relatórios financeiros da Apple (`v0.2.0-alpha.1`)
+- [x] Métricas de assinatura, ferramentas de suporte ao cliente e respostas de consumo para reembolsos da Apple (na `main`, ainda não lançadas)
 - [ ] Passar nos critérios com lojas reais para os três provedores e publicar `v0.1.0-rc.1`
 - [ ] Publicar a versão estável `v0.1.0`
 - [ ] Publicar pacotes versionados dos SDKs ([#141](https://github.com/imariman/iapstack/issues/141))
+- [ ] Endpoint MCP para que agentes de IA consultem e operem o IAPStack com chaves de privilégio mínimo ([#285](https://github.com/imariman/iapstack/issues/285))
 - [ ] Reconhecimento de relatórios financeiros do Google Play e da Huawei
 - [ ] Amazon Appstore e adaptadores para outras lojas
 

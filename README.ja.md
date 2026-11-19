@@ -245,9 +245,11 @@ go vet ./... && go test -race -count=1 ./...
 - [x] 運用ダッシュボードと、クラウド、VM、Kubernetes向けのデプロイ定義
 - [x] Flutter、Swift、Kotlin、React Native、Go、TypeScriptのSDK
 - [x] 顧客の移行、RevenueCatからのインポート、オファリング、Appleの財務レポート（`v0.2.0-alpha.1`）
+- [x] サブスクリプション指標、カスタマーサポートツール、Appleの返金に関する消費情報の回答（`main` に実装済み、未リリース）
 - [ ] 3プロバイダーの実ストアゲートを通過し、`v0.1.0-rc.1`を公開する
 - [ ] 安定版`v0.1.0`を公開する
 - [ ] バージョン付きのSDKパッケージを公開する（[#141](https://github.com/imariman/iapstack/issues/141)）
+- [ ] AIエージェントが最小権限のキーでIAPStackを照会・操作できるMCPエンドポイント（[#285](https://github.com/imariman/iapstack/issues/285)）
 - [ ] Google PlayとHuaweiの財務レポートによる収益認識
 - [ ] Amazon Appstoreおよびその他のストアアダプター
 

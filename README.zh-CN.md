@@ -214,9 +214,11 @@ go vet ./... && go test -race -count=1 ./...
 - [x] 运维仪表盘，以及面向云平台、VM 和 Kubernetes 的部署定义
 - [x] Flutter、Swift、Kotlin、React Native、Go 和 TypeScript SDK
 - [x] 客户迁移、RevenueCat 导入、产品方案和 Apple 财务报表（`v0.2.0-alpha.1`）
+- [x] 订阅指标、客户支持工具和 Apple 退款消耗信息响应（已在 `main` 中，尚未发布）
 - [ ] 通过三个提供方的真实商店门槛并发布 `v0.1.0-rc.1`
 - [ ] 发布稳定版 `v0.1.0`
 - [ ] 发布带版本的 SDK 包（[#141](https://github.com/imariman/iapstack/issues/141)）
+- [ ] MCP 端点，让 AI 智能体以最小权限密钥查询和操作 IAPStack（[#285](https://github.com/imariman/iapstack/issues/285)）
 - [ ] Google Play 和 Huawei 财务报表收入确认
 - [ ] Amazon Appstore 及更多商店适配器
 

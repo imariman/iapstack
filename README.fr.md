@@ -252,9 +252,11 @@ code.
 - [x] Tableau de bord d’exploitation et définitions de déploiement pour le cloud, les VM et Kubernetes
 - [x] SDK Flutter, Swift, Kotlin, React Native, Go et TypeScript
 - [x] Migration de clients, imports RevenueCat, offerings et rapports financiers Apple (`v0.2.0-alpha.1`)
+- [x] Métriques d'abonnement, outils de support client et réponses de consommation pour les remboursements Apple (sur `main`, pas encore publiés)
 - [ ] Valider les contrôles sur les vrais stores des trois fournisseurs et publier `v0.1.0-rc.1`
 - [ ] Publier la version stable `v0.1.0`
 - [ ] Publier des packages SDK versionnés ([#141](https://github.com/imariman/iapstack/issues/141))
+- [ ] Endpoint MCP permettant aux agents IA d'interroger et de piloter IAPStack avec des clés à privilèges minimaux ([#285](https://github.com/imariman/iapstack/issues/285))
 - [ ] Prise en compte des rapports financiers Google Play et Huawei
 - [ ] Amazon Appstore et d’autres adaptateurs de store
 

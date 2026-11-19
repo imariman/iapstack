@@ -251,9 +251,11 @@ convenzioni del codice.
 - [x] Dashboard operativa e definizioni di deployment per cloud, VM e Kubernetes
 - [x] SDK Flutter, Swift, Kotlin, React Native, Go e TypeScript
 - [x] Migrazione dei clienti, importazioni da RevenueCat, offering e report finanziari Apple (`v0.2.0-alpha.1`)
+- [x] Metriche degli abbonamenti, strumenti di assistenza clienti e risposte di consumo per i rimborsi Apple (su `main`, non ancora rilasciati)
 - [ ] Superare i gate con store reali per i tre provider e pubblicare `v0.1.0-rc.1`
 - [ ] Pubblicare la versione stabile `v0.1.0`
 - [ ] Pubblicare pacchetti SDK versionati ([#141](https://github.com/imariman/iapstack/issues/141))
+- [ ] Endpoint MCP con cui gli agenti AI possono interrogare e gestire IAPStack con chiavi a privilegi minimi ([#285](https://github.com/imariman/iapstack/issues/285))
 - [ ] Riconoscimento dei report finanziari di Google Play e Huawei
 - [ ] Amazon Appstore e altri adapter per store
 

@@ -243,9 +243,11 @@ go vet ./... && go test -race -count=1 ./...
 - [x] 운영 대시보드 및 클라우드, VM, Kubernetes용 배포 정의
 - [x] Flutter, Swift, Kotlin, React Native, Go, TypeScript SDK
 - [x] 고객 마이그레이션, RevenueCat 가져오기, 오퍼링, Apple 재무 보고서 (`v0.2.0-alpha.1`)
+- [x] 구독 지표, 고객 지원 도구, Apple 환불 소비 정보 응답 (`main`에 반영, 아직 미출시)
 - [ ] 세 프로바이더의 실제 스토어 게이트를 통과하고 `v0.1.0-rc.1` 게시
 - [ ] 안정 버전 `v0.1.0` 게시
 - [ ] 버전이 지정된 SDK 패키지 게시 ([#141](https://github.com/imariman/iapstack/issues/141))
+- [ ] AI 에이전트가 최소 권한 키로 IAPStack을 조회하고 운영할 수 있는 MCP 엔드포인트 ([#285](https://github.com/imariman/iapstack/issues/285))
 - [ ] Google Play 및 Huawei 재무 보고서 인식
 - [ ] Amazon Appstore 및 추가 스토어 어댑터
 

@@ -248,9 +248,11 @@ mimari genel bakışı ve kod kurallarını içerir.
 - [x] Operasyon paneli ve bulut, VM ve Kubernetes için dağıtım tanımları
 - [x] Flutter, Swift, Kotlin, React Native, Go ve TypeScript SDK'ları
 - [x] Müşteri taşıma, RevenueCat içe aktarma, teklifler ve Apple finansal raporları (`v0.2.0-alpha.1`)
+- [x] Abonelik metrikleri, müşteri destek araçları ve Apple iade tüketim yanıtları (`main` dalında, henüz yayımlanmadı)
 - [ ] Üç sağlayıcılı gerçek mağaza kapılarını geçmek ve `v0.1.0-rc.1` sürümünü yayımlamak
 - [ ] Kararlı `v0.1.0` sürümünü yayımlamak
 - [ ] Sürümlü SDK paketlerini yayımlamak ([#141](https://github.com/imariman/iapstack/issues/141))
+- [ ] Yapay zekâ ajanlarının IAPStack'i en az yetkili anahtarlarla sorgulayıp yönetebilmesi için MCP uç noktası ([#285](https://github.com/imariman/iapstack/issues/285))
 - [ ] Google Play ve Huawei finansal raporlarında gelir tanıma
 - [ ] Amazon Appstore ve ek mağaza adaptörleri
 
