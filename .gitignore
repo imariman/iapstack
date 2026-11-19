@@ -70,3 +70,15 @@ deploy/vps/backups/
 deploy/vps/backup.log
 deploy/oracle/.terraform/
 deploy/oracle/.terraform.lock.hcl
+# Website pages generated per language by docs/scripts/pages.mjs
+docs/index.html
+docs/de/
+docs/es/
+docs/fr/
+docs/it/
+docs/pt-br/
+docs/tr/
+docs/ru/
+docs/ja/
+docs/ko/
+docs/zh-cn/

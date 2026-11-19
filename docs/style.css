@@ -156,6 +156,20 @@ code { font-family: var(--font-data); }
 .brand-mark .icon { height: 17px; stroke-width: 2; width: 17px; }
 .brand-word { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 
+/* Languages. CJK scripts get their own font fallbacks, no negative tracking,
+   and line breaking that keeps words and punctuation together. */
+:lang(ja) { --font-body: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", "Noto Sans JP", system-ui, sans-serif; }
+:lang(ko) { --font-body: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif; }
+:lang(zh-CN) { --font-body: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif; }
+:lang(ja), :lang(ko), :lang(zh-CN) { --font-display: var(--font-body); line-break: strict; }
+:lang(ko) { word-break: keep-all; }
+:lang(ja) h1, :lang(ko) h1, :lang(zh-CN) h1 { letter-spacing: -0.02em; line-height: 1.18; max-width: 22em; }
+:lang(ja) h2, :lang(ko) h2, :lang(zh-CN) h2 { letter-spacing: -0.01em; line-height: 1.3; }
+:lang(ja) :is(h1, h2, h3), :lang(zh-CN) :is(h1, h2, h3) { word-break: auto-phrase; }
+:lang(ja) body, :lang(ko) body, :lang(zh-CN) body { line-height: 1.75; }
+h1, h2, h3 { overflow-wrap: break-word; }
+:lang(de) h1, :lang(de) h2, :lang(ru) h1, :lang(ru) h2 { hyphens: auto; }
+
 /* Header */
 .site-header {
   backdrop-filter: saturate(1.6) blur(16px);
@@ -187,6 +201,35 @@ code { font-family: var(--font-data); }
 .desktop-nav a.is-active { color: var(--foreground); }
 .icon-external { height: 12px; opacity: 0.7; width: 12px; }
 .nav-actions { align-items: center; display: flex; gap: 8px; margin-left: auto; }
+.lang-menu { position: relative; }
+.lang-button { gap: 6px; padding: 0 9px; width: auto; }
+.lang-button span { font-size: 12px; font-weight: 600; letter-spacing: 0.02em; }
+.lang-list {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
+  display: grid;
+  min-width: 200px;
+  padding: 6px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 120;
+}
+.lang-list a {
+  align-items: center;
+  border-radius: 6px;
+  color: var(--muted);
+  display: flex;
+  font-size: 14px;
+  justify-content: space-between;
+  min-height: 36px;
+  padding: 0 10px;
+}
+.lang-list a:hover, .lang-list a:focus-visible { background: var(--wash); color: var(--foreground); outline-offset: -2px; }
+.lang-list a[aria-current] { color: var(--foreground); font-weight: 600; }
+.lang-list a[aria-current]::after { background: var(--primary); border-radius: 50%; content: ""; height: 6px; width: 6px; }
 .menu-button { display: none; }
 .menu-button .menu-close { display: none; }
 .menu-button[aria-expanded="true"] .menu-open { display: none; }
@@ -589,6 +632,7 @@ h3 { font-size: 17px; font-weight: 600; letter-spacing: -0.015em; line-height: 1
   .github-link span { display: none; }
   .github-link { padding: 0; width: 36px; }
   .hero-copy { padding-bottom: 40px; padding-top: 56px; }
+  :lang(ja) h1, :lang(ko) h1, :lang(zh-CN) h1 { font-size: 34px; }
   .status-pill { font-size: 12px; }
   .hero-actions { width: 100%; }
   .hero-actions .button { flex: 1 1 auto; }

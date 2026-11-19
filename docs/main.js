@@ -1,10 +1,20 @@
 const root = document.documentElement;
 
+// Interface strings for the current language, rendered into the page by scripts/pages.mjs.
+const ui = (() => {
+  try {
+    return JSON.parse(document.getElementById('i18n-ui')?.textContent ?? '{}');
+  } catch {
+    return {};
+  }
+})();
+const t = (key, values = {}) => (ui[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? ''));
+
 // Color theme: System follows the operating system, Light and Dark are an
 // explicit choice. Same cycle and labels as the operations dashboard.
 const themeStorageKey = 'iapstack-site-theme';
 const themeOrder = ['system', 'light', 'dark'];
-const themeLabels = { system: 'System', light: 'Light', dark: 'Dark' };
+const themeLabels = { system: t('theme_system'), light: t('theme_light'), dark: t('theme_dark') };
 const themeBackgrounds = { light: '#fafafa', dark: '#09090b' };
 const systemThemeQuery = window.matchMedia('(prefers-color-scheme: light)');
 
@@ -47,8 +57,8 @@ const applyTheme = (preference) => {
 
   const next = themeOrder[(themeOrder.indexOf(preference) + 1) % themeOrder.length];
   document.querySelectorAll('[data-theme-toggle]').forEach((toggle) => {
-    toggle.setAttribute('aria-label', `Color theme: ${themeLabels[preference]}. Switch to ${themeLabels[next]}`);
-    toggle.setAttribute('title', `Theme: ${themeLabels[preference]}`);
+    toggle.setAttribute('aria-label', t('theme_label', { current: themeLabels[preference], next: themeLabels[next] }));
+    toggle.setAttribute('title', t('theme_title', { current: themeLabels[preference] }));
     toggle.querySelectorAll('[data-theme-icon]').forEach((icon) => {
       icon.toggleAttribute('hidden', icon.dataset.themeIcon !== preference);
     });
@@ -77,14 +87,50 @@ const mobileMenu = document.querySelector('[data-mobile-menu]');
 
 const setMenu = (open) => {
   menuButton.setAttribute('aria-expanded', String(open));
-  menuButton.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+  menuButton.setAttribute('aria-label', open ? t('menu_close') : t('menu_open'));
   mobileMenu.hidden = !open;
 };
 
 menuButton.addEventListener('click', () => setMenu(menuButton.getAttribute('aria-expanded') !== 'true'));
 mobileMenu.querySelectorAll('a').forEach((link) => link.addEventListener('click', () => setMenu(false)));
+// Language menu. Links are real per-language pages; the current section is kept.
+const langMenu = document.querySelector('[data-lang-menu]');
+const langButton = document.querySelector('[data-lang-button]');
+const langList = document.querySelector('[data-lang-list]');
+
+const setLangMenu = (open) => {
+  langButton.setAttribute('aria-expanded', String(open));
+  langList.hidden = !open;
+  if (open) (langList.querySelector('[aria-current]') ?? langList.querySelector('a'))?.focus();
+};
+
+langButton.addEventListener('click', () => setLangMenu(langButton.getAttribute('aria-expanded') !== 'true'));
+langList.querySelectorAll('a').forEach((link) => {
+  link.addEventListener('click', () => {
+    if (window.location.hash) link.href = `${link.href.split('#')[0]}${window.location.hash}`;
+  });
+});
+langList.addEventListener('keydown', (event) => {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  event.preventDefault();
+  const links = [...langList.querySelectorAll('a')];
+  const index = links.indexOf(document.activeElement);
+  const next = (index + (event.key === 'ArrowDown' ? 1 : -1) + links.length) % links.length;
+  links[next].focus();
+});
+document.addEventListener('click', (event) => {
+  if (!langMenu.contains(event.target)) setLangMenu(false);
+});
+langMenu.addEventListener('focusout', (event) => {
+  if (event.relatedTarget && !langMenu.contains(event.relatedTarget)) setLangMenu(false);
+});
+
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && menuButton.getAttribute('aria-expanded') === 'true') {
+  if (event.key !== 'Escape') return;
+  if (langButton.getAttribute('aria-expanded') === 'true') {
+    setLangMenu(false);
+    langButton.focus();
+  } else if (menuButton.getAttribute('aria-expanded') === 'true') {
     setMenu(false);
     menuButton.focus();
   }
@@ -101,6 +147,7 @@ updateHeader();
 const toast = document.querySelector('[data-toast]');
 document.querySelectorAll('[data-copy-target]').forEach((button) => {
   let resetTimer;
+  const copyLabel = button.querySelector('span').textContent;
   button.addEventListener('click', async () => {
     const target = document.getElementById(button.dataset.copyTarget);
     const command = target.innerText
@@ -125,14 +172,14 @@ document.querySelectorAll('[data-copy-target]').forEach((button) => {
     const label = button.querySelector('span');
     const iconUse = button.querySelector('use');
     button.classList.add('is-copied');
-    label.textContent = 'Copied';
+    label.textContent = t('copied');
     iconUse.setAttribute('href', '#i-check');
     toast.classList.add('is-visible');
 
     window.clearTimeout(resetTimer);
     resetTimer = window.setTimeout(() => {
       button.classList.remove('is-copied');
-      label.textContent = 'Copy';
+      label.textContent = copyLabel;
       iconUse.setAttribute('href', '#i-copy');
       toast.classList.remove('is-visible');
     }, 2200);
@@ -179,7 +226,8 @@ if (chart) {
   const barsHost = chart.querySelector('[data-chart-bars]');
   const tooltip = chart.querySelector('[data-chart-tooltip]');
   const live = chart.querySelector('[data-chart-live]');
-  const dayFormat = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const dateLocale = root.lang === 'en' ? 'en-GB' : root.lang;
+  const dayFormat = new Intl.DateTimeFormat(dateLocale, { day: 'numeric', month: 'short', timeZone: 'UTC' });
   const end = Date.UTC(2026, 10, 19);
 
   const days = Array.from({ length: 30 }, (_, index) => {
@@ -207,7 +255,9 @@ if (chart) {
   });
 
   let activeIndex = -1;
-  const row = (kind, label, value) => `<dt><i class="swatch ${kind}"></i>${label}</dt><dd>${value}</dd>`;
+  const legend = Object.fromEntries([...chart.querySelectorAll('.chart-legend span')].map((item) => [item.querySelector('.swatch').classList[1], item.textContent.trim()]));
+  const numberFormat = new Intl.NumberFormat(dateLocale);
+  const row = (kind, value) => `<dt><i class="swatch ${kind}"></i>${legend[kind]}</dt><dd>${numberFormat.format(value)}</dd>`;
 
   const show = (index) => {
     if (index === activeIndex) return;
@@ -215,7 +265,7 @@ if (chart) {
     bars.forEach((bar, barIndex) => bar.classList.toggle('is-active', barIndex === index));
     barsHost.classList.add('has-active');
     const day = days[index];
-    tooltip.innerHTML = `<strong>${day.label}</strong><span class="total">${day.total} verified</span><dl>${row('allowed', 'Allowed', day.allowed)}${row('denied', 'Denied', day.denied)}${row('unresolved', 'Unresolved', day.unresolved)}</dl>`;
+    tooltip.innerHTML = `<strong>${day.label}</strong><span class="total">${t('chart_verified', { count: numberFormat.format(day.total) })}</span><dl>${row('allowed', day.allowed)}${row('denied', day.denied)}${row('unresolved', day.unresolved)}</dl>`;
     tooltip.hidden = false;
 
     const plotWidth = plot.clientWidth;
@@ -224,7 +274,7 @@ if (chart) {
     const preferRight = barCenter + 14 + tipWidth <= plotWidth;
     const left = preferRight ? barCenter + 14 : Math.max(0, barCenter - 14 - tipWidth);
     tooltip.style.left = `${left}px`;
-    live.textContent = `${day.label}: ${day.total} verified, ${day.allowed} allowed, ${day.denied} denied, ${day.unresolved} unresolved.`;
+    live.textContent = t('chart_live', { date: day.label, total: day.total, allowed: day.allowed, denied: day.denied, unresolved: day.unresolved });
   };
 
   const hide = () => {
