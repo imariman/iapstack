@@ -318,6 +318,7 @@ func TestDashboardSupportsSidebarToggleAndChartHover(t *testing.T) {
 	for _, required := range []string{
 		`id="sidebar"`, `id="hide-sidebar"`, `id="show-sidebar"`, `aria-controls="sidebar"`,
 		`aria-label="Hide sidebar"`, `aria-label="Show sidebar"`, `id="show-sidebar" type="button" aria-label="Show sidebar" aria-expanded="false"`,
+		`<span>Show sidebar</span>`,
 	} {
 		if !strings.Contains(string(document), required) {
 			t.Fatalf("dashboard sidebar toggle markup does not contain %q", required)
