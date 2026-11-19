@@ -2,16 +2,16 @@
 /// surrounding whitespace or control characters.
 ///
 /// This mirrors the server's identifier rule (`validateIdentifier` in
-/// `internal/core/identifiers.go`): valid UTF-8, which for a Dart string
-/// means no unpaired surrogate (UTF-8 encoding would replace it with U+FFFD),
-/// no C0 (U+0000-U+001F), DEL, or C1 (U+0080-U+009F) control character, and
-/// no leading or trailing whitespace as Go's `strings.TrimSpace` defines it.
-/// It runs before the Huawei purchase UI opens: an id the server rejects
-/// would be charged as `developerPayload` and then never produce an
-/// entitlement, and a padded id on restore would never match the bound
-/// payload and silently skip rows. The shared cases in
-/// `contracts/test-vectors/external-customer-ids.json` pin this copy to the
-/// server.
+/// `internal/core/identifiers.go`), so an ID the server would reject fails
+/// before the store charges or a request is sent: valid UTF-8, which for a
+/// Dart string means no unpaired surrogate (UTF-8 encoding would replace it
+/// with U+FFFD), no C0 (U+0000-U+001F), DEL, or C1 (U+0080-U+009F) control
+/// character, and no leading or trailing whitespace as Go's
+/// `strings.TrimSpace` defines it. The shared cases in
+/// `contracts/test-vectors/external-customer-ids.json` pin it to the server.
+///
+/// The one Dart copy of the rule: this package and the Apple, Google Play,
+/// and Huawei companions call it through `package:iapstack/internal.dart`.
 void validateExternalCustomerId(String value) {
   if (value.isEmpty ||
       _isGoSpace(value.codeUnitAt(0)) ||

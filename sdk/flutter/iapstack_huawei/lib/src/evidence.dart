@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:iapstack/iapstack.dart';
-import 'package:iapstack_huawei/src/customer_id.dart';
+import 'package:iapstack/internal.dart';
 import 'package:iapstack_huawei/src/errors.dart';
 import 'package:iapstack_huawei/src/platform.dart';
 import 'package:iapstack_huawei/src/product_kind.dart';

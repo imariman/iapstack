@@ -35,7 +35,7 @@ final class GooglePlayPurchaseEvidence {
     required String externalCustomerId,
     required String productId,
   }) {
-    validateExternalCustomerId(externalCustomerId);
+    validateGooglePlayCustomerId(externalCustomerId);
     if (productId.trim().isEmpty) {
       throw ArgumentError('productId must not be empty');
     }

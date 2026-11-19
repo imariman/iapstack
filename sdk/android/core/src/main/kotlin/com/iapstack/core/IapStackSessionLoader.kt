@@ -141,6 +141,7 @@ class IapStackSessionLoader(httpClient: OkHttpClient? = null) {
     return bytes.toByteArray()
   }
 
+  @OptIn(InternalIapStackApi::class)
   private fun decode(body: ByteArray): IapStackCustomerSession {
     val session = try {
       val json = JsonParser.parseString(body.toString(Charsets.UTF_8)).asJsonObject

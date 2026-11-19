@@ -395,12 +395,42 @@ private enum IAPStackDateFormatter {
   }()
 }
 
-/// Requires one non-empty customer identity without surrounding whitespace; a
-/// padded ID would silently address a different customer server-side.
+/// Requires one non-empty customer identity in valid Unicode without
+/// surrounding whitespace or control characters.
+///
+/// This mirrors the server's identifier rule (`validateIdentifier` in
+/// `internal/core/identifiers.go`), so an ID the server would reject fails
+/// before any request is sent. A Swift string is always valid Unicode, so the
+/// unpaired surrogates the UTF-16 SDKs reject cannot occur here. Control
+/// characters are C0 (U+0000-U+001F), DEL, and C1 (U+0080-U+009F). Surrounding
+/// whitespace follows Go's `strings.TrimSpace` through an explicit set, not
+/// `CharacterSet.whitespacesAndNewlines`, whose members follow the runtime's
+/// Unicode tables. The shared cases in
+/// `contracts/test-vectors/external-customer-ids.json` pin this copy to the
+/// server.
 func validateExternalCustomerId(_ value: String) throws {
-  if value.isEmpty || value.trimmingCharacters(in: .whitespacesAndNewlines) != value {
+  let scalars = value.unicodeScalars
+  guard let first = scalars.first, let last = scalars.last,
+    !isGoSpace(first), !isGoSpace(last),
+    !scalars.contains(where: isControlCharacter)
+  else {
     throw IAPStackSDKError.configurationError(
-      message: "externalCustomerId must be non-empty without surrounding whitespace",
+      message: "externalCustomerId must be non-empty valid Unicode without surrounding whitespace or control characters",
     )
   }
+}
+
+/// Go's `unicode.IsSpace`, which the server's `strings.TrimSpace` strips.
+private func isGoSpace(_ scalar: Unicode.Scalar) -> Bool {
+  switch scalar.value {
+  case 0x09 ... 0x0D, 0x20, 0x85, 0xA0, 0x1680, 0x2000 ... 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000:
+    return true
+  default:
+    return false
+  }
+}
+
+/// Go's `unicode.IsControl`: C0, DEL, and C1.
+private func isControlCharacter(_ scalar: Unicode.Scalar) -> Bool {
+  scalar.value <= 0x1F || (0x7F ... 0x9F).contains(scalar.value)
 }

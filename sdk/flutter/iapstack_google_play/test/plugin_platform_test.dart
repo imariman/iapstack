@@ -10,6 +10,8 @@ import 'package:in_app_purchase_android/in_app_purchase_android.dart';
 import 'package:in_app_purchase_platform_interface/in_app_purchase_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
+import 'customer_id_vectors.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -67,6 +69,43 @@ void main() {
         (purchaseParam as GooglePlayPurchaseParam).offerToken,
         'monthly-base-plan-token',
       );
+    },
+  );
+
+  test(
+    'rejects customer IDs the server rejects before Play Billing opens',
+    () async {
+      officialPlatform.productResponse = ProductDetailsResponse(
+        productDetails: GooglePlayProductDetails.fromProductDetails(
+          _subscriptionDetails,
+        ),
+        notFoundIDs: const <String>[],
+      );
+      final product = (await bridge.queryProducts(<String>{
+        'premium_monthly',
+      })).products.single;
+      final rejected = <String>[
+        for (final vector in loadCustomerIdVectors())
+          if (!vector.accepted) vector.value,
+        'a' * 65,
+      ];
+
+      for (final obfuscatedAccountId in rejected) {
+        await expectLater(
+          bridge.launchPurchase(
+            product: product,
+            obfuscatedAccountId: obfuscatedAccountId,
+          ),
+          throwsA(
+            isA<ArgumentError>().having(
+              (error) => error.name,
+              'name',
+              'externalCustomerId',
+            ),
+          ),
+        );
+      }
+      expect(officialPlatform.purchaseParam, isNull);
     },
   );
 

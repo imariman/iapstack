@@ -117,7 +117,7 @@ final class GooglePlayIapStack {
     required String externalCustomerId,
     required GooglePlayProduct product,
   }) async {
-    validateExternalCustomerId(externalCustomerId);
+    validateGooglePlayCustomerId(externalCustomerId);
     final expectedKind = _productKinds[product.id];
     if (expectedKind == null || expectedKind != product.kind) {
       throw const GooglePlayIapStackException(
@@ -169,7 +169,7 @@ final class GooglePlayIapStack {
     required String externalCustomerId,
     String? requestId,
   }) async {
-    validateExternalCustomerId(externalCustomerId);
+    validateGooglePlayCustomerId(externalCustomerId);
     final purchases = await _platform.ownedPurchases(
       obfuscatedAccountId: externalCustomerId,
     );
@@ -226,7 +226,7 @@ final class GooglePlayIapStack {
     required String externalCustomerId,
     required GooglePlayPurchase purchase,
   }) {
-    validateExternalCustomerId(externalCustomerId);
+    validateGooglePlayCustomerId(externalCustomerId);
     // Pending is not canVerify. Calling verifyPurchase is the explicit submit.
     if (purchase.status != GooglePlayPurchaseStatus.pending &&
         !purchase.canVerify) {

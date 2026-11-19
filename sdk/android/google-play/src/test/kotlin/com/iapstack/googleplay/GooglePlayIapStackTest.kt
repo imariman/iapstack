@@ -62,12 +62,12 @@ class GooglePlayIapStackTest {
   @Test
   fun customerIdsFollowTheSharedServerIdentifierVectors() {
     val mismatches = customerIdVectors().filter { vector ->
-      runCatching { requireExternalCustomerId(vector.value) }.isSuccess != vector.accepted
+      runCatching { requireGooglePlayCustomerId(vector.value) }.isSuccess != vector.accepted
     }
     assertTrue(mismatches.isEmpty(), "Mismatched vectors: ${mismatches.joinToString { it.name }}")
     // Play's obfuscatedAccountId limit is not part of the shared rule.
-    requireExternalCustomerId("a".repeat(64))
-    assertFailsWith<IllegalArgumentException> { requireExternalCustomerId("a".repeat(65)) }
+    requireGooglePlayCustomerId("a".repeat(64))
+    assertFailsWith<IllegalArgumentException> { requireGooglePlayCustomerId("a".repeat(65)) }
   }
 
   @Test
