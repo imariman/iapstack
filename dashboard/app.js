@@ -69,6 +69,45 @@ function persistThemePreference(preference) {
 let themePreference = storedThemePreference();
 applyTheme(themePreference);
 
+// Sidebar visibility is a display preference kept the same way as the theme.
+const sidebarCookieName = "iapstack_dashboard_sidebar";
+
+function storedSidebarHidden() {
+  const row = document.cookie.split("; ").find((entry) => entry.startsWith(`${sidebarCookieName}=`));
+  return row ? row.slice(sidebarCookieName.length + 1) === "hidden" : false;
+}
+
+function applySidebar(hidden) {
+  const root = document.documentElement;
+  if (hidden) {
+    root.setAttribute("data-sidebar", "hidden");
+  } else {
+    root.removeAttribute("data-sidebar");
+  }
+  const hideButton = document.querySelector("#hide-sidebar");
+  const showButton = document.querySelector("#show-sidebar");
+  hideButton.setAttribute("aria-expanded", String(!hidden));
+  showButton.setAttribute("aria-expanded", String(!hidden));
+  showButton.hidden = !hidden;
+}
+
+function persistSidebar(hidden) {
+  const secure = window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${sidebarCookieName}=${hidden ? "hidden" : "visible"}; Path=/dashboard/; Max-Age=31536000; SameSite=Strict${secure}`;
+}
+
+function setSidebarHidden(hidden, moveFocus = false) {
+  sidebarHidden = hidden;
+  persistSidebar(hidden);
+  applySidebar(hidden);
+  if (moveFocus) {
+    document.querySelector(hidden ? "#show-sidebar" : "#hide-sidebar").focus();
+  }
+}
+
+let sidebarHidden = storedSidebarHidden();
+applySidebar(sidebarHidden);
+
 const state = {
   projects: [],
   selectedProject: "",
@@ -651,6 +690,72 @@ function renderSandboxValue(sandboxValue) {
   setText("sandbox-value-note", "Provider-signed test value, not real proceeds or accounting revenue.");
 }
 
+// addChartHover layers pointer inspection over a rendered bar chart: a guide
+// line snaps to the day under the pointer and a tooltip names its values.
+function addChartHover(chart, { left, top, baseline, slotWidth, entries }) {
+  const figure = chart.closest("figure");
+  if (!figure || !entries.length) return;
+  let tooltip = figure.querySelector(".chart-tooltip");
+  if (!tooltip) {
+    tooltip = node("div", "chart-tooltip");
+    tooltip.setAttribute("aria-hidden", "true");
+    figure.append(tooltip);
+  }
+  tooltip.classList.remove("visible");
+  const guide = svgNode("line", { class: "chart-guide", y1: top, y2: baseline, hidden: "" });
+  chart.append(guide);
+  const viewWidth = chart.viewBox.baseVal.width;
+  let activeIndex = -1;
+
+  const hide = () => {
+    activeIndex = -1;
+    tooltip.classList.remove("visible");
+    guide.setAttribute("hidden", "");
+    for (const bar of chart.querySelectorAll(".chart-bar-active")) {
+      bar.classList.remove("chart-bar-active");
+    }
+  };
+  const show = (index) => {
+    if (index === activeIndex) return;
+    activeIndex = index;
+    const entry = entries[index];
+    const children = [node("strong", "", entry.title)];
+    if (entry.summary) children.push(node("span", "chart-tooltip-summary", entry.summary));
+    for (const row of entry.rows) {
+      const line = node("span", "chart-tooltip-row");
+      const swatch = node("i", row.className);
+      swatch.setAttribute("aria-hidden", "true");
+      line.append(swatch, node("span", "", row.label), node("strong", "", row.value));
+      children.push(line);
+    }
+    tooltip.replaceChildren(...children);
+    const figureRect = figure.getBoundingClientRect();
+    const chartRect = chart.getBoundingClientRect();
+    const center = chartRect.left - figureRect.left
+      + ((left + index * slotWidth + slotWidth / 2) / viewWidth) * chartRect.width;
+    const half = tooltip.offsetWidth / 2;
+    tooltip.style.left = `${Math.min(Math.max(center, half + 4), Math.max(half + 4, figureRect.width - half - 4))}px`;
+    tooltip.style.top = `${chartRect.top - figureRect.top + 4}px`;
+    tooltip.classList.add("visible");
+    const x = left + index * slotWidth + slotWidth / 2;
+    guide.setAttribute("x1", String(x));
+    guide.setAttribute("x2", String(x));
+    guide.removeAttribute("hidden");
+    for (const bar of chart.querySelectorAll(".chart-bar")) {
+      bar.classList.toggle("chart-bar-active", bar.dataset.day === String(index));
+    }
+  };
+  entries.forEach((entry, index) => {
+    const hit = svgNode("rect", {
+      class: "chart-hit", x: left + index * slotWidth, y: top, width: slotWidth, height: baseline - top, "aria-hidden": "true",
+    });
+    hit.addEventListener("pointerenter", () => show(index));
+    hit.addEventListener("pointermove", () => show(index));
+    chart.append(hit);
+  });
+  chart.addEventListener("pointerleave", hide);
+}
+
 function renderActivityChart(activity, summary = summarizeActivity(activity)) {
   const chart = document.querySelector("#activity-chart");
   chart.replaceChildren();
@@ -703,6 +808,7 @@ function renderActivityChart(activity, summary = summarizeActivity(activity)) {
       const height = (value / maximum) * plotHeight;
       const bar = svgNode("rect", {
         class: `chart-bar ${className}`,
+        "data-day": index,
         x,
         y: baseline - stackedHeight - height,
         width: barWidth,
@@ -727,6 +833,19 @@ function renderActivityChart(activity, summary = summarizeActivity(activity)) {
         formatChartDate(day.date),
       ));
     }
+  });
+  addChartHover(chart, {
+    left, top, baseline, slotWidth,
+    entries: activity.map((day) => {
+      const rows = [
+        { className: "allowed", label: "Allowed", value: formatNumber(day.allowed || 0) },
+        { className: "denied", label: "Denied", value: formatNumber(day.denied || 0) },
+      ];
+      if (unresolved > 0) {
+        rows.push({ className: "unresolved", label: "Unresolved", value: formatNumber(day.unresolved || 0) });
+      }
+      return { title: formatChartDate(day.date), summary: `${formatNumber(day.verified || 0)} verified`, rows };
+    }),
   });
 }
 
@@ -922,6 +1041,7 @@ function renderSubscriptionChart(daily, windowDays) {
       const bar = svgNode("rect", {
         class: "chart-bar chart-bar-allowed", x, y: baseline - height, width: barWidth, height, rx: 2,
       });
+      bar.setAttribute("data-day", String(index));
       bar.append(svgNode("title", {}, `${formatChartDate(day.date)}: ${formatNumber(value)} active`));
       chart.append(bar);
     }
@@ -935,6 +1055,14 @@ function renderSubscriptionChart(daily, windowDays) {
         formatChartDate(day.date),
       ));
     }
+  });
+  addChartHover(chart, {
+    left, top, baseline, slotWidth,
+    entries: daily.map((day) => ({
+      title: formatChartDate(day.date),
+      summary: `${formatNumber(day.active || 0)} active`,
+      rows: [],
+    })),
   });
 }
 
@@ -2845,6 +2973,21 @@ systemThemeQuery.addEventListener("change", () => {
   if (themePreference === "system") {
     applyTheme(themePreference);
   }
+});
+
+document.querySelector("#hide-sidebar").addEventListener("click", () => setSidebarHidden(true, true));
+document.querySelector("#show-sidebar").addEventListener("click", () => setSidebarHidden(false, true));
+
+// Ctrl+B / Cmd+B toggles the sidebar unless the operator is typing.
+document.addEventListener("keydown", (event) => {
+  if (event.key.toLowerCase() !== "b" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) {
+    return;
+  }
+  if (elements.appShell.hidden || event.target.closest?.("input, textarea, select, [contenteditable]")) {
+    return;
+  }
+  event.preventDefault();
+  setSidebarHidden(!sidebarHidden, Boolean(document.activeElement?.closest("#sidebar")));
 });
 
 clearLegacyBearerStorage();

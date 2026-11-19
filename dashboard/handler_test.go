@@ -299,6 +299,50 @@ func TestDashboardSupportsLightDarkAndSystemThemes(t *testing.T) {
 	}
 }
 
+// TestDashboardSupportsSidebarToggleAndChartHover keeps the hideable rail and chart inspection wired.
+func TestDashboardSupportsSidebarToggleAndChartHover(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	styles, err := fs.ReadFile(assets, "app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	for _, required := range []string{
+		`id="sidebar"`, `id="hide-sidebar"`, `id="show-sidebar"`, `aria-controls="sidebar"`,
+		`aria-label="Hide sidebar"`, `aria-label="Show sidebar"`, `id="show-sidebar" type="button" aria-label="Show sidebar" aria-expanded="false"`,
+	} {
+		if !strings.Contains(string(document), required) {
+			t.Fatalf("dashboard sidebar toggle markup does not contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		`:root[data-sidebar="hidden"] .sidebar`, ":root[data-sidebar=\"hidden\"] .app-shell",
+		".sidebar-brand-row", ".topbar-left", ".chart-tooltip", ".chart-hit", ".chart-guide", ".chart-bar-active",
+	} {
+		if !strings.Contains(string(styles), required) {
+			t.Fatalf("dashboard shell styles do not contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		`sidebarCookieName = "iapstack_dashboard_sidebar"`, "storedSidebarHidden", "applySidebar",
+		"persistSidebar", "setSidebarHidden", `root.setAttribute("data-sidebar", "hidden")`,
+		"addChartHover", "chart-tooltip", `"data-day": index`, `bar.setAttribute("data-day", String(index))`,
+		`guide.removeAttribute("hidden")`,
+	} {
+		if !strings.Contains(string(script), required) {
+			t.Fatalf("dashboard shell script does not contain %q", required)
+		}
+	}
+}
+
 // TestDashboardRendersTruthfulCommerceAnalytics keeps charts separate from untrusted client pricing.
 func TestDashboardRendersTruthfulCommerceAnalytics(t *testing.T) {
 	t.Parallel()
