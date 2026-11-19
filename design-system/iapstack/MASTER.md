@@ -1,6 +1,6 @@
 # IAPStack Design System
 
-The visual system for the self-hosted IAPStack control plane now lives in [`DESIGN.md`](../../DESIGN.md) at the repository root. It replaced the earlier navy and monospace look in the November 2026 dashboard redesign. Colour, type, spacing, component and motion tokens are defined there and mirror `dashboard/app.css`.
+The visual system for the self-hosted IAPStack control plane now lives in [`DESIGN.md`](../../DESIGN.md) at the repository root. It replaced the earlier navy and monospace look in the November 2026 dashboard redesign. Colour, type, spacing, component and motion tokens are defined there and mirror `dashboard/app.css`. The project website in `docs/` (`docs/style.css`) uses the same tokens, theme toggle and purchase route vocabulary, so the site and the dashboard read as one product.
 
 ## Product direction (unchanged)
 
