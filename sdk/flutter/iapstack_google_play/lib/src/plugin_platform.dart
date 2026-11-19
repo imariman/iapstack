@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/services.dart' show PlatformException;
+import 'package:iapstack_google_play/src/customer_id.dart';
 import 'package:iapstack_google_play/src/errors.dart';
 import 'package:iapstack_google_play/src/platform.dart';
 import 'package:iapstack_google_play/src/product.dart';
@@ -150,31 +151,37 @@ final class GooglePlayPluginPlatform implements GooglePlayIapPlatform {
   Future<void> launchPurchase({
     required GooglePlayProduct product,
     required String obfuscatedAccountId,
-  }) => _guard(
-    operation: 'purchase',
-    callback: () async {
-      final details = _queriedProducts[product.selectionKey];
-      if (details == null) {
-        throw const GooglePlayIapStackException(
-          code: 'product_not_queried',
-          message: 'Query this Google Play product before purchase',
+  }) async {
+    // The same check and ArgumentError as GooglePlayIapStack.launchPurchase,
+    // for hosts that drive this platform directly. It runs outside _guard,
+    // which would report it as a Billing failure.
+    validateGooglePlayCustomerId(obfuscatedAccountId);
+    return _guard(
+      operation: 'purchase',
+      callback: () async {
+        final details = _queriedProducts[product.selectionKey];
+        if (details == null) {
+          throw const GooglePlayIapStackException(
+            code: 'product_not_queried',
+            message: 'Query this Google Play product before purchase',
+          );
+        }
+        final launched = await _plugin.buyNonConsumable(
+          purchaseParam: GooglePlayPurchaseParam(
+            productDetails: details,
+            applicationUserName: obfuscatedAccountId,
+            offerToken: product.offerToken,
+          ),
         );
-      }
-      final launched = await _plugin.buyNonConsumable(
-        purchaseParam: GooglePlayPurchaseParam(
-          productDetails: details,
-          applicationUserName: obfuscatedAccountId,
-          offerToken: product.offerToken,
-        ),
-      );
-      if (!launched) {
-        throw const GooglePlayIapStackException(
-          code: 'purchase_not_launched',
-          message: 'Google Play did not launch purchase UI',
-        );
-      }
-    },
-  );
+        if (!launched) {
+          throw const GooglePlayIapStackException(
+            code: 'purchase_not_launched',
+            message: 'Google Play did not launch purchase UI',
+          );
+        }
+      },
+    );
+  }
 
   @override
   Future<List<GooglePlayPurchase>> ownedPurchases({
