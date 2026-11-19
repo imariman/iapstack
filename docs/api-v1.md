@@ -446,11 +446,12 @@ Each purchase lineage is a separate entitlement source: the App Store original
 transaction, the Google Play purchase token, or the Huawei purchase token. Observation
 times are compared only inside one lineage. A customer who lets a subscription expire
 and buys the same product again keeps access from the new lineage when the old one is
-refreshed. When several sources allow access, a store observation is projected before
-an import, then the source whose access ends last. An administrator's manual grant is its
-own source: store evidence never supersedes it, it never supersedes store evidence, and
-among allowed sources the one whose access ends last is projected, with store evidence
-first on equal ends. The daily reconciliation of a
+refreshed. A store observation supersedes every RevenueCat import of its own
+application and product. An administrator's manual grant is its own source: store
+evidence never supersedes it, and it never supersedes store evidence. When several of
+the remaining sources allow access, the one whose access ends last is projected,
+whether it is a store observation, a manual grant, or an import. Equal ends prefer
+store evidence, then a manual grant, then an import. The daily reconciliation of a
 lineage stops once the provider reports every line item expired with automatic renewal
 off. A lineage the provider can still renew, such as one in billing retry, keeps its
 daily refresh. Refunded and revoked lineages keep their daily refresh too. A later resubscription is scheduled again when the
