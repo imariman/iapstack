@@ -207,6 +207,34 @@ func (transaction *identityAPITransaction) MergeCustomers(
 	return persistence.CustomerMergeResult{Merge: transaction.store.merge}, nil
 }
 
+// LockCustomer accepts the merge use case's customer lock.
+func (transaction *identityAPITransaction) LockCustomer(context.Context, core.ProjectID, core.CustomerID) error {
+	return nil
+}
+
+// LockCustomerClosure accepts the merge use case's closure lock.
+func (transaction *identityAPITransaction) LockCustomerClosure(context.Context, core.ProjectID, core.CustomerID) error {
+	return nil
+}
+
+// CustomerEntitlementSources reports no access sources, so merges compare empty access.
+func (transaction *identityAPITransaction) CustomerEntitlementSources(
+	context.Context,
+	core.ProjectID,
+	core.CustomerID,
+) ([]persistence.EntitlementSource, error) {
+	return nil, nil
+}
+
+// CustomerEntitlements reports an empty snapshot, so merges compare empty access.
+func (transaction *identityAPITransaction) CustomerEntitlements(
+	context.Context,
+	core.ProjectID,
+	core.CustomerID,
+) ([]persistence.CustomerEntitlement, error) {
+	return nil, nil
+}
+
 // identityRequest builds one JSON request with a bearer and optional body.
 func identityRequest(t *testing.T, method, path, bearer, body string) *http.Request {
 	t.Helper()

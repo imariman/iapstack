@@ -2,10 +2,12 @@ package com.iapstack.huawei
 
 import com.iapstack.core.EntitlementSnapshot
 import com.iapstack.core.IapStackClient
+import com.iapstack.core.InternalIapStackApi
 import com.iapstack.core.PurchaseSubmission
 import com.iapstack.core.RestoreResult
 import com.iapstack.core.RestoreSkipCounts
 import com.iapstack.core.VerificationResult
+import com.iapstack.core.requireExternalCustomerId
 
 /**
  * High-level Huawei purchase and restore flows backed by IAPStack.
@@ -97,6 +99,7 @@ class HuaweiIapStack(
   /**
    * Opens Huawei purchase UI and verifies the resulting signed evidence.
    */
+  @OptIn(InternalIapStackApi::class)
   suspend fun purchaseAndVerify(
     externalCustomerId: String,
     product: HuaweiProduct,
@@ -143,6 +146,7 @@ class HuaweiIapStack(
    * Unbound, different-customer, and unknown-product rows are counted on
    * [RestoreResult.skipped] and are not submitted.
    */
+  @OptIn(InternalIapStackApi::class)
   suspend fun restorePurchases(
     externalCustomerId: String,
     productKinds: Set<HuaweiProductKind> = setOf(

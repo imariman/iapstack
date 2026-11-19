@@ -1,6 +1,7 @@
 import 'dart:collection';
 
 import 'package:iapstack/iapstack.dart';
+import 'package:iapstack_google_play/src/customer_id.dart';
 import 'package:iapstack_google_play/src/errors.dart';
 import 'package:iapstack_google_play/src/evidence.dart';
 import 'package:iapstack_google_play/src/platform.dart';
@@ -116,7 +117,7 @@ final class GooglePlayIapStack {
     required String externalCustomerId,
     required GooglePlayProduct product,
   }) async {
-    _validateExternalCustomerId(externalCustomerId);
+    validateGooglePlayCustomerId(externalCustomerId);
     final expectedKind = _productKinds[product.id];
     if (expectedKind == null || expectedKind != product.kind) {
       throw const GooglePlayIapStackException(
@@ -168,7 +169,7 @@ final class GooglePlayIapStack {
     required String externalCustomerId,
     String? requestId,
   }) async {
-    _validateExternalCustomerId(externalCustomerId);
+    validateGooglePlayCustomerId(externalCustomerId);
     final purchases = await _platform.ownedPurchases(
       obfuscatedAccountId: externalCustomerId,
     );
@@ -225,7 +226,7 @@ final class GooglePlayIapStack {
     required String externalCustomerId,
     required GooglePlayPurchase purchase,
   }) {
-    _validateExternalCustomerId(externalCustomerId);
+    validateGooglePlayCustomerId(externalCustomerId);
     // Pending is not canVerify. Calling verifyPurchase is the explicit submit.
     if (purchase.status != GooglePlayPurchaseStatus.pending &&
         !purchase.canVerify) {
@@ -266,19 +267,6 @@ final class GooglePlayIapStack {
     ).toSubmission(
       externalCustomerId: externalCustomerId,
       productId: productId,
-    );
-  }
-}
-
-/// _validateExternalCustomerId enforces an exact non-empty obfuscated account identifier.
-void _validateExternalCustomerId(String externalCustomerId) {
-  if (externalCustomerId.trim().isEmpty ||
-      externalCustomerId.trim() != externalCustomerId ||
-      externalCustomerId.length > 64) {
-    throw ArgumentError.value(
-      externalCustomerId,
-      'externalCustomerId',
-      'must be non-empty, at most 64 characters, and have no surrounding whitespace',
     );
   }
 }

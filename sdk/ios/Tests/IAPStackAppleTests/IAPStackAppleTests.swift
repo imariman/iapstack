@@ -539,11 +539,14 @@ final class IAPStackAppleTests: XCTestCase {
       ),
       session: makeSession(),
     )
-    do {
-      _ = try await client.getEntitlements(" customer-id")
-      XCTFail("expected configuration error")
-    } catch IAPStackSDKError.configurationError {
-      // Expected.
+    // Padded, control-character, and Go-whitespace IDs, which the server rejects.
+    for customerId in [" customer-id", "customer\u{0}id", "customer\u{85}id", "customer-id\u{3000}"] {
+      do {
+        _ = try await client.getEntitlements(customerId)
+        XCTFail("expected configuration error for \(customerId.debugDescription)")
+      } catch IAPStackSDKError.configurationError {
+        // Expected.
+      }
     }
     XCTAssertThrowsError(
       try PurchaseSubmission(

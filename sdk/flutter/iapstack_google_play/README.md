@@ -31,6 +31,47 @@ dependencies:
 The Android host must use API level 24 or newer and complete the standard Play
 Console, product, testing-track, and Play Billing setup for its package.
 
+## Dependency on in_app_purchase_android
+
+This package requires `in_app_purchase_android` `>=0.5.2 <0.5.6`, every release
+from 0.5.2 to 0.5.5. The cap exists because two things the package needs are
+outside the plugin's semver:
+
+- Product queries read Play Billing response codes through
+  `InAppPurchaseAndroidPlatform.billingClientManager`, a `@visibleForTesting`
+  field. The plugin's own `queryProductDetails` turns a non-OK result into an
+  empty catalog.
+- Purchase updates recover the Billing result from `IAPError.message`, which
+  the plugin sets to `BillingResponse.<name>` for a failed purchase.
+
+What host apps can expect: pub always resolves a release this package was
+tested against. An app that needs a later `in_app_purchase_android` gets a pub
+version conflict until the cap moves, instead of a build against a release
+nobody checked. Raising the cap keeps the 0.5.2 lower bound.
+
+How a bump is verified:
+
+1. When a release ships, Dependabot opens a pull request for this directory.
+   Because the package is `publish_to: none`, Dependabot rewrites the
+   constraint as a caret range, for example `^0.5.6`.
+2. CI resolves the new release (the package has no lockfile) and runs
+   `test/in_app_purchase_android_drift_test.dart` with the rest of the suite.
+   These tests drive the real plugin: `registerPlatform` must install an
+   `InAppPurchaseAndroidPlatform`, `billingClientManager` must be the manager
+   the plugin queries Play with, and every non-OK purchase result must reach
+   `GooglePlayPurchase.errorCode` as the Android SDK code. A guard test fails
+   while the constraint is a caret range or ends on a minor boundary.
+3. If the drift tests pass, read the plugin changelog for behaviour changes and
+   cap just above the checked release in the same pull request, for example
+   `>=0.5.2 <0.5.7` after checking 0.5.6. Run the suite once after
+   `flutter pub downgrade` in a scratch copy to confirm the lower bound still
+   works.
+4. If they fail, keep the cap and adapt `lib/src/plugin_platform.dart` before
+   the next bump.
+
+A supported route to Billing codes, either an upstream plugin API or a small
+native plugin like the Kotlin SDK's, would remove the need for the cap.
+
 ## Initialize and listen early
 
 Create one backend client, define the expected Play product kind for every
@@ -162,5 +203,8 @@ acknowledged until Google reports a completed purchase.
 
 The package tests the high-level catalog, account-binding, evidence, batching,
 and redaction rules as well as the production bridge to Flutter's official
-plugin models. The Android app under [`example`](example/README.md) is the
-manual Play Console internal-testing harness.
+plugin models. `test/in_app_purchase_android_drift_test.dart` checks the plugin
+internals described under
+[Dependency on in_app_purchase_android](#dependency-on-in_app_purchase_android).
+The Android app under [`example`](example/README.md) is the manual Play Console
+internal-testing harness.

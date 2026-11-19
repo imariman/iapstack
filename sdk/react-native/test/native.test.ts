@@ -45,7 +45,9 @@ test('customer session bootstrap returns validated configuration with expiry', a
 });
 test('customer session bootstrap rejects expired, malformed, or insecure sessions', async () => {
   for (const invalid of [{expires_at: '2000-01-01T00:00:00Z'}, {expires_at: 'invalid'}, {token: 123},
-    {base_url: 'http://insecure.test'}, {external_customer_id: ' surrounded '}]) {
+    {base_url: 'http://insecure.test'}, {external_customer_id: ' surrounded '},
+    {external_customer_id: 'customer\u0000id'}, {external_customer_id: 'customer\u0085id'},
+    {external_customer_id: 'customer\ud800id'}, {external_customer_id: 'customer　'}]) {
     sessionResponse = {...sessionWire, ...invalid};
     await expect(IapStackStore.requestCustomerSession('https://host.test/session', 'login-token')).rejects.toThrow('contract');
   }
@@ -62,6 +64,20 @@ test('Apple rejects Android and invalid customer binding', async () => {
   platform.OS = 'ios';
   await expect(IapStackStore.configure({...config, externalCustomerId: 'not-a-uuid'})).rejects.toThrow('UUID');
   expect(calls).toHaveLength(0);
+});
+test('Android configure rejects customer IDs the server rejects before touching native module', async () => {
+  platform.OS = 'android';
+  for (const storefront of ['google_play', 'huawei'] as const) {
+    for (const externalCustomerId of ['', ' customer', 'customer\u0000id', 'customer\u007fid', 'customer\u009fid',
+      'customer\ud800id', 'customer\udc00id', 'customer ']) {
+      await expect(IapStackStore.configure({...config, storefront, externalCustomerId}))
+        .rejects.toThrow('without surrounding whitespace or control characters');
+    }
+  }
+  expect(calls).toHaveLength(0);
+  // Go's strings.TrimSpace keeps U+FEFF, so the server accepts it at the edge.
+  await IapStackStore.configure({...config, storefront: 'google_play', externalCustomerId: '﻿customer-😀'});
+  expect(calls).toHaveLength(1);
 });
 test('configure rejects malformed kinds and passes an isolated catalog snapshot', async () => {
   await expect(IapStackStore.configure({...config, productKinds: {}})).rejects.toThrow('productKinds');

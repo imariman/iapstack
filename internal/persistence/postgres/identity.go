@@ -112,7 +112,8 @@ func (repository *transaction) PutCustomerAlias(
 	return customerResolution(write.ProjectID, write.ExternalID, write.CanonicalCustomerID, persistence.CustomerMatchAlias), nil
 }
 
-// MergeCustomers records one customer merge or returns the stored audit row.
+// MergeCustomers records one customer merge or returns the stored audit row. It checks identity
+// rules only; verification.MergeCustomers compares entitlement access before the merge commits.
 func (repository *transaction) MergeCustomers(
 	ctx context.Context,
 	write persistence.CustomerMergeWrite,
@@ -170,13 +171,6 @@ func (repository *transaction) MergeCustomers(
 	}
 	if ownsAlias || ownsMerge {
 		return persistence.CustomerMergeResult{}, fmt.Errorf("merge customers: %w", persistence.ErrConflict)
-	}
-	conflict, err := repository.customersHaveEntitlementConflict(ctx, write.ProjectID, write.CanonicalCustomerID, write.SourceCustomerID)
-	if err != nil {
-		return persistence.CustomerMergeResult{}, err
-	}
-	if conflict {
-		return persistence.CustomerMergeResult{}, fmt.Errorf("merge customers: %w", persistence.ErrEntitlementConflict)
 	}
 
 	command, err := repository.tx.Exec(ctx, `
@@ -492,39 +486,6 @@ func (repository *transaction) customerOwnsMerge(
 		return false, classifyError("load customer merge ownership", err)
 	}
 	return exists, nil
-}
-
-// customersHaveEntitlementConflict reports dual allowed access for one entitlement id.
-// Two stored-allowed rows conflict unless both have passed their effective end. A
-// merge of one current and one lapsed row stays refused: the projector ranks a store
-// observation above an import before it compares ends, so the lapsed row could
-// replace the current access.
-func (repository *transaction) customersHaveEntitlementConflict(
-	ctx context.Context,
-	projectID core.ProjectID,
-	canonicalID core.CustomerID,
-	sourceID core.CustomerID,
-) (bool, error) {
-	var conflict bool
-	err := repository.tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM customer_entitlements AS canonical
-			JOIN customer_entitlements AS source
-				ON source.project_id = canonical.project_id
-				AND source.entitlement_id = canonical.entitlement_id
-			WHERE canonical.project_id = $1
-				AND canonical.customer_id = $2
-				AND source.customer_id = $3
-				AND canonical.access_status = 'allowed'
-				AND source.access_status = 'allowed'
-				AND (`+unexpiredAllowedSQL("canonical")+` OR `+unexpiredAllowedSQL("source")+`)
-		)
-	`, projectID, canonicalID, sourceID).Scan(&conflict)
-	if err != nil {
-		return false, classifyError("compare customer entitlements", err)
-	}
-	return conflict, nil
 }
 
 // customerMergeByIdempotencyKey loads one audit row by its project-scoped key.

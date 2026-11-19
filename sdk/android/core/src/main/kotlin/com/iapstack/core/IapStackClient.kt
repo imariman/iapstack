@@ -225,6 +225,7 @@ class IapStackClient(
   /**
    * Loads the current entitlement snapshot without provider interaction.
    */
+  @OptIn(InternalIapStackApi::class)
   suspend fun getEntitlements(
     externalCustomerId: String,
     requestId: String? = null,
@@ -463,6 +464,7 @@ class IapStackClient(
     )
   }
 
+  @OptIn(InternalIapStackApi::class)
   private fun validatePurchase(purchase: PurchaseSubmission) {
     requireExternalCustomerId(purchase.externalCustomerId)
     if (purchase.claimedProducts.isEmpty() || purchase.evidence.isEmpty()) {
@@ -474,16 +476,6 @@ class IapStackClient(
     if (purchase.claimedProducts.size != purchase.claimedProducts.toSet().size) {
       throw IllegalArgumentException("claimed products must be unique")
     }
-  }
-}
-
-/**
- * Requires one non-empty customer identity without surrounding whitespace; a
- * padded ID would silently address a different customer server-side.
- */
-private fun requireExternalCustomerId(value: String) {
-  if (value.isEmpty() || value.trim() != value) {
-    throw IllegalArgumentException("externalCustomerId must be non-empty without surrounding whitespace")
   }
 }
 

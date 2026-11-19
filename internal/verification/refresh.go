@@ -15,6 +15,12 @@ type ProjectionRefreshResult struct {
 	WebhooksEnqueued   int
 }
 
+// projectionPlan is what one refresh read for a canonical customer and the projections it would write.
+type projectionPlan struct {
+	current     []persistence.CustomerEntitlement
+	projections []persistence.EntitlementProjection
+}
+
 // RefreshCustomerProjection recomputes one canonical customer's entitlements and emits change events.
 func RefreshCustomerProjection(
 	ctx context.Context,
@@ -40,12 +46,28 @@ func RefreshCustomerProjectionWithOptions(
 	occurredAt time.Time,
 	enqueueWebhooks bool,
 ) (ProjectionRefreshResult, error) {
+	plan, err := planCustomerProjection(ctx, repository, projector, projectID, customerID)
+	if err != nil {
+		return ProjectionRefreshResult{}, err
+	}
+	return applyCustomerProjection(ctx, repository, projectID, customerID, plan, occurredAt, enqueueWebhooks)
+}
+
+// planCustomerProjection loads every access source and the current snapshot of one customer's
+// closure and projects them without writing anything.
+func planCustomerProjection(
+	ctx context.Context,
+	repository persistence.Transaction,
+	projector Projector,
+	projectID core.ProjectID,
+	customerID core.CustomerID,
+) (projectionPlan, error) {
 	if projector == nil {
-		return ProjectionRefreshResult{}, fmt.Errorf("entitlement projector is not initialized")
+		return projectionPlan{}, fmt.Errorf("entitlement projector is not initialized")
 	}
 	sources, err := repository.CustomerEntitlementSources(ctx, projectID, customerID)
 	if err != nil {
-		return ProjectionRefreshResult{}, err
+		return projectionPlan{}, err
 	}
 	candidates := make([]ProjectionCandidate, 0, len(sources))
 	for _, source := range sources {
@@ -58,14 +80,27 @@ func RefreshCustomerProjectionWithOptions(
 	}
 	current, err := repository.CustomerEntitlements(ctx, projectID, customerID)
 	if err != nil {
-		return ProjectionRefreshResult{}, err
+		return projectionPlan{}, err
 	}
 	projections, err := projector.Project(current, candidates)
 	if err != nil {
-		return ProjectionRefreshResult{}, err
+		return projectionPlan{}, err
 	}
+	return projectionPlan{current: current, projections: projections}, nil
+}
+
+// applyCustomerProjection writes one plan's projections and optionally enqueues change events.
+func applyCustomerProjection(
+	ctx context.Context,
+	repository persistence.Transaction,
+	projectID core.ProjectID,
+	customerID core.CustomerID,
+	plan projectionPlan,
+	occurredAt time.Time,
+	enqueueWebhooks bool,
+) (ProjectionRefreshResult, error) {
 	result := ProjectionRefreshResult{}
-	for _, projection := range projections {
+	for _, projection := range plan.projections {
 		if projection.SourceCustomerID == "" {
 			projection.SourceCustomerID = projection.CustomerID
 		}
@@ -92,4 +127,41 @@ func RefreshCustomerProjectionWithOptions(
 		result.WebhooksEnqueued++
 	}
 	return result, nil
+}
+
+// accessAfter returns the access the plan leaves for each entitlement at one instant: a planned
+// projection replaces the current row, and an entitlement the plan does not touch keeps it.
+func (plan projectionPlan) accessAfter(at time.Time) map[core.EntitlementID]core.AccessStatus {
+	access := make(map[core.EntitlementID]core.AccessStatus, len(plan.current)+len(plan.projections))
+	for _, entitlement := range plan.current {
+		access[entitlement.Projection.EntitlementID] = accessAt(entitlement.Projection, at)
+	}
+	for _, projection := range plan.projections {
+		access[projection.EntitlementID] = accessAt(projection, at)
+	}
+	return access
+}
+
+// usableAt returns the entitlements a customer can use at one instant, either from the stored
+// snapshot or from what a refresh of the customer's own sources would project. Reading both keeps
+// a snapshot that an earlier projector ranked differently from hiding current access.
+func (plan projectionPlan) usableAt(at time.Time) map[core.EntitlementID]struct{} {
+	usable := make(map[core.EntitlementID]struct{}, len(plan.current))
+	for _, entitlement := range plan.current {
+		if accessAt(entitlement.Projection, at) == core.AccessAllowed {
+			usable[entitlement.Projection.EntitlementID] = struct{}{}
+		}
+	}
+	for entitlementID, access := range plan.accessAfter(at) {
+		if access == core.AccessAllowed {
+			usable[entitlementID] = struct{}{}
+		}
+	}
+	return usable
+}
+
+// accessAt applies the effective end to one projection, as the public read path does.
+func accessAt(projection persistence.EntitlementProjection, at time.Time) core.AccessStatus {
+	access, _ := core.AccessAt(projection.Access, projection.AccessReason, projection.EffectivePeriod.EndsAt, at)
+	return access
 }

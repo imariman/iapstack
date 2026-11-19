@@ -9,6 +9,7 @@ import {
   VerificationResult,
 } from './models';
 import { IapStackConfig } from './config';
+import { validateExternalCustomerId } from './customer_id';
 import { parseRetryAfter } from './retry_after';
 import {
   IapStackApiError,
@@ -294,13 +295,6 @@ export class IapStackClient {
       .join('/');
     base.pathname = `${basePath || ''}/${appendedPath}`;
     return base;
-  }
-}
-
-/** Rejects empty or padded customer IDs, which would address a different customer. */
-function validateExternalCustomerId(value: unknown): void {
-  if (typeof value !== 'string' || !value || value.trim() !== value) {
-    throw new TypeError('externalCustomerId must be non-empty without surrounding whitespace');
   }
 }
 

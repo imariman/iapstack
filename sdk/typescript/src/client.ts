@@ -292,10 +292,69 @@ export function setRetrySeamsForTesting(client: Client, seams: RetrySeams): void
   installRetrySeams(client, seams);
 }
 
+/**
+ * Requires one non-empty customer identity in valid Unicode without
+ * surrounding whitespace or control characters.
+ *
+ * This mirrors the server's identifier rule (`validateIdentifier` in
+ * `internal/core/identifiers.go`), so an ID the server would reject fails
+ * before any request is sent. Valid UTF-8 means no unpaired surrogate here:
+ * UTF-8 encoding would replace it with U+FFFD. Control characters are C0
+ * (U+0000-U+001F), DEL, and C1 (U+0080-U+009F). The shared cases in
+ * `contracts/test-vectors/external-customer-ids.json` pin this copy to the
+ * server.
+ */
 function validateExternalCustomerId(value: string): void {
-  if (!value || value.trim() !== value) {
-    throw new TypeError('external customer ID must not be empty');
+  if (
+    !value ||
+    isGoSpace(value.charCodeAt(0)) ||
+    isGoSpace(value.charCodeAt(value.length - 1)) ||
+    hasControlOrUnpairedSurrogate(value)
+  ) {
+    throw new TypeError(
+      'external customer ID must be non-empty valid Unicode without surrounding whitespace or control characters',
+    );
   }
+}
+
+/**
+ * Go's `unicode.IsSpace`, which the server's `strings.TrimSpace` strips.
+ * `String.prototype.trim` differs: it also strips U+FEFF, which the server
+ * keeps. Every member is one UTF-16 code unit.
+ */
+function isGoSpace(unit: number): boolean {
+  return (
+    (unit >= 0x09 && unit <= 0x0d) ||
+    unit === 0x20 ||
+    unit === 0x85 ||
+    unit === 0xa0 ||
+    unit === 0x1680 ||
+    (unit >= 0x2000 && unit <= 0x200a) ||
+    unit === 0x2028 ||
+    unit === 0x2029 ||
+    unit === 0x202f ||
+    unit === 0x205f ||
+    unit === 0x3000
+  );
+}
+
+function hasControlOrUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const unit = value.charCodeAt(index);
+    if (unit <= 0x1f || (unit >= 0x7f && unit <= 0x9f)) {
+      return true;
+    }
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index++;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function resolveUrl(base: URL, segments: string[]): URL {

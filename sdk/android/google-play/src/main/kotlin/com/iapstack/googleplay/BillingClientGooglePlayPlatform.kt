@@ -131,8 +131,7 @@ class BillingClientGooglePlayPlatform internal constructor(
   override suspend fun launchPurchase(product: GooglePlayProduct, obfuscatedAccountId: String) =
     withContext(Dispatchers.Main.immediate) {
       selectionOperations.withLock {
-        require(obfuscatedAccountId.isNotBlank() && obfuscatedAccountId == obfuscatedAccountId.trim() &&
-          obfuscatedAccountId.length <= 64)
+        requireGooglePlayCustomerId(obfuscatedAccountId)
         connect()
         val selected = selections[product.selectionKey]
         if (selected?.first != product) throw GooglePlayIapStackException(

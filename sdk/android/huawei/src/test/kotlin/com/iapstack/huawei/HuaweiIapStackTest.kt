@@ -169,6 +169,19 @@ class HuaweiIapStackTest {
   }
 
   @Test
+  fun evidenceFollowsTheSharedServerIdentifierVectors() {
+    val mismatches = customerIdVectors().filter { vector ->
+      // Accepted values hold no quote, backslash, or control character, so they embed as-is.
+      val payload = if (vector.accepted) vector.value else "customer-1"
+      val evidence = HuaweiPurchaseEvidence(purchaseData("premium_monthly", payload), "sig", HuaweiProductKind.SUBSCRIPTION)
+      val submission = runCatching { evidence.toSubmission(vector.value) }
+      val rejected = submission.exceptionOrNull()
+      if (vector.accepted) submission.isFailure else rejected?.message != CUSTOMER_ID_MESSAGE
+    }
+    assertTrue(mismatches.isEmpty(), "Mismatched vectors: ${mismatches.joinToString { it.name }}")
+  }
+
+  @Test
   fun evidenceAcceptsIdsTheServerAccepts() {
     for (customerId in listOf("customer 1", "müşteri-1", "user@example.com", "顧客-1", "customer-\ud83d\ude00")) {
       val evidence = HuaweiPurchaseEvidence(

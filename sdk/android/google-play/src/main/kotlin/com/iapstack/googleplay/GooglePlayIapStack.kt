@@ -111,7 +111,7 @@ class GooglePlayIapStack(
     externalCustomerId: String,
     product: GooglePlayProduct,
   ) {
-    validateExternalCustomerId(externalCustomerId)
+    requireGooglePlayCustomerId(externalCustomerId)
     val expectedKind = productKinds[product.id]
     if (expectedKind == null || expectedKind != product.kind) {
       throw GooglePlayIapStackException(
@@ -164,7 +164,7 @@ class GooglePlayIapStack(
     externalCustomerId: String,
     requestId: String? = null,
   ): RestoreResult {
-    validateExternalCustomerId(externalCustomerId)
+    requireGooglePlayCustomerId(externalCustomerId)
     val ownedPurchases = platform.ownedPurchases(obfuscatedAccountId = externalCustomerId)
     val submissions = mutableListOf<PurchaseSubmission>()
     val observedTokens = mutableSetOf<String>()
@@ -229,7 +229,7 @@ class GooglePlayIapStack(
     externalCustomerId: String,
     purchase: GooglePlayPurchase,
   ): PurchaseSubmission {
-    validateExternalCustomerId(externalCustomerId)
+    requireGooglePlayCustomerId(externalCustomerId)
     // Pending is not canVerify. Calling verifyPurchase is the explicit submit.
     if (purchase.status != GooglePlayPurchaseStatus.PENDING && !purchase.canVerify) {
       val failedStatusCode = if (purchase.status == GooglePlayPurchaseStatus.CANCELLED) {
@@ -272,17 +272,6 @@ class GooglePlayIapStack(
       externalCustomerId = externalCustomerId,
       productId = productId,
     )
-  }
-
-  private fun validateExternalCustomerId(externalCustomerId: String) {
-    if (externalCustomerId.trim().isEmpty() ||
-      externalCustomerId.trim() != externalCustomerId ||
-      externalCustomerId.length > 64
-    ) {
-      throw IllegalArgumentException(
-        "externalCustomerId must be non-empty, at most 64 characters, and have no surrounding whitespace",
-      )
-    }
   }
 
   private fun normalizedProductKinds(productKinds: Map<String, GooglePlayProductKind>): Map<String, GooglePlayProductKind> {

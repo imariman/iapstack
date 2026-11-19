@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:iapstack/src/config.dart';
+import 'package:iapstack/src/customer_id.dart';
 import 'package:iapstack/src/errors.dart';
 import 'package:iapstack/src/models.dart';
 import 'package:iapstack/src/retry_after.dart';
@@ -147,7 +148,7 @@ final class IapStackClient {
     String externalCustomerId, {
     String? requestId,
   }) async {
-    _validateExternalCustomerId(externalCustomerId);
+    validateExternalCustomerId(externalCustomerId);
     final json = await _request(
       method: 'GET',
       path: <String>[
@@ -423,7 +424,7 @@ final class IapStackClient {
   }
 
   void _validatePurchase(PurchaseSubmission purchase) {
-    _validateExternalCustomerId(purchase.externalCustomerId);
+    validateExternalCustomerId(purchase.externalCustomerId);
     if (purchase.claimedProducts.isEmpty ||
         purchase.claimedProducts.any((product) => product.trim().isEmpty) ||
         purchase.evidence.isEmpty) {
@@ -435,15 +436,6 @@ final class IapStackClient {
       throw ArgumentError.value(purchase.claimedProducts, 'claimedProducts',
           'must not contain duplicates');
     }
-  }
-}
-
-/// Requires one non-empty customer identity without surrounding whitespace; a
-/// padded ID would silently address a different customer server-side.
-void _validateExternalCustomerId(String value) {
-  if (value.isEmpty || value.trim() != value) {
-    throw ArgumentError.value(value, 'externalCustomerId',
-        'must be non-empty without surrounding whitespace');
   }
 }
 

@@ -87,6 +87,8 @@ class IAPStackModule(private val context: ReactApplicationContext) :
     }
   }
 
+  // requireExternalCustomerId is core's shared rule, opted in like the SDK modules.
+  @OptIn(InternalIapStackApi::class)
   @ReactMethod fun configure(config: ReadableMap, promise: Promise) {
     scope.launch {
       try {
@@ -94,7 +96,8 @@ class IAPStackModule(private val context: ReactApplicationContext) :
         val storefront = config.getString("storefront")
         require(storefront == "google_play" || storefront == "huawei") { "Unsupported storefront on Android" }
         val customer = requireNotNull(config.getString("externalCustomerId"))
-        require(customer.isNotBlank() && customer.trim() == customer)
+        // The server's identifier rule, before any store purchase can start.
+        requireExternalCustomerId(customer)
         val kinds = requireNotNull(config.getMap("productKinds")).toHashMap().mapValues { (_, value) ->
           when (value) { "non_consumable" -> false; "subscription" -> true; else -> error("Unsupported product kind") }
         }

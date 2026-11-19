@@ -176,8 +176,8 @@ Rank inside one `(application_id, product_id)`:
 
 Across different products that grant one entitlement:
 
-- An import never replaces a current projection whose source kind is `store_observation` when that store source is still present and its access is equal or stronger.
-- An allowed store observation may replace a current import, including when observed times would otherwise keep the import. Do not apply the "strengths are equal, keep the current source" shortcut when the current source is an import and the challenger is a store observation.
+- An import never replaces a current projection whose source kind is `store_observation` when that store source is still present and its access is stronger, or equally strong and lasting at least as long. When both allow access, the one whose access ends last wins (since #274; before, store won before ends were compared), so a lapsed stored-`allowed` store row cannot hide a current import.
+- A store observation of the same application and product replaces a current import whatever their ends. An allowed store observation of another product replaces a current import only when its access lasts at least as long; equal ends prefer the store observation. Do not apply the "strengths are equal, keep the current source" shortcut when the current source is an import and the challenger is a store observation.
 - A denied store observation for a different product does not revoke an allowed import. `preserveIndependentSource` still protects that case.
 - A store observation for the same application and product replaces the import even when the observation denies access. The customer loses the imported allowance for that product.
 

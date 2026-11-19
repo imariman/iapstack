@@ -1,5 +1,5 @@
 import 'package:iapstack/iapstack.dart';
-import 'package:iapstack_huawei/src/customer_id.dart';
+import 'package:iapstack/internal.dart';
 import 'package:iapstack_huawei/src/errors.dart';
 import 'package:iapstack_huawei/src/evidence.dart';
 import 'package:iapstack_huawei/src/platform.dart';

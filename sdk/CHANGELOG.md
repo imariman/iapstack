@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Breaking
+
+- Huawei (Flutter and Kotlin): `purchaseAndVerify`, `restorePurchases`, and
+  `HuaweiPurchaseEvidence.toSubmission` reject an `externalCustomerId` that is
+  empty, has surrounding whitespace, or contains a control character or an
+  unpaired surrogate. The check runs before the purchase UI opens and before
+  restore reads any page. A padded ID on restore used to skip every owned row
+  and return an empty success; it now throws `ArgumentError` (Flutter) or
+  `IllegalArgumentException` (Kotlin).
+- Every other client SDK now applies the server's identifier rule to
+  `externalCustomerId` before the store charges or a request is sent: Flutter
+  core, Google Play, and Apple, Kotlin core and Google Play, Swift, TypeScript
+  host, React Native (JavaScript and the Android bridge), and Go host. Besides
+  empty and padded IDs, they reject an ID with a C0 control character, DEL, or
+  a C1 control character, and an unpaired UTF-16 surrogate (Go: invalid
+  UTF-8), which the server refused only after the charge. Google Play's
+  `launchPurchase` rejects such an ID before Play Billing opens, in
+  `GooglePlayIapStack` and in the exported platforms (Flutter
+  `GooglePlayPluginPlatform`, Kotlin `BillingClientGooglePlayPlatform`).
+  Surrounding whitespace follows Go's `strings.TrimSpace` in every SDK, Huawei
+  and Swift included, so a leading or trailing U+FEFF is now accepted. Error
+  types are unchanged; the messages now read "must be non-empty valid Unicode
+  without surrounding whitespace or control characters" (Go says "valid
+  UTF-8"). Google Play keeps its 64-character `obfuscatedAccountId` limit,
+  now with its own message ("must be at most 64 characters"), and its
+  `GooglePlayPurchaseEvidence.toSubmission` applies the same checks. The
+  Kotlin and Swift session loaders and the React Native session bootstrap
+  reject a session whose `external_customer_id` breaks the rule. Apple: Swift
+  `IAPStackClient.getEntitlements`, `PurchaseSubmission`, and Flutter
+  `ApplePurchaseEvidence.toSubmission` apply the rule; the Apple purchase and
+  restore paths still require a lowercase UUID. The shared cases are in
+  `contracts/test-vectors/external-customer-ids.json`.
+
 ### Added
 
 - Go and TypeScript host webhook verifiers accept `entitlement.changed`
@@ -16,6 +49,16 @@
 - Entitlement `reason` can be `manual_grant`: an administrator's audited grant,
   not a store purchase. Every SDK decodes it as a forward-compatible string and
   `grantsAccess` still checks only `access` and `effective_ends_at`.
+
+### Changed
+
+- Flutter Google Play requires `in_app_purchase_android` `>=0.5.2 <0.5.6`
+  (was `^0.5.2`). Product queries and purchase updates read Billing response
+  codes through plugin internals outside its semver, so the cap moves only
+  after drift tests pass against a new release. 0.5.5 is the newest release,
+  so no release is excluded yet. An app that needs a later release gets a pub
+  version conflict until the cap moves. See "Dependency on
+  in_app_purchase_android" in the package README.
 
 ## 0.1.0-sdk.3
 
