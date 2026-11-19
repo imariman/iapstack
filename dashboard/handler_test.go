@@ -299,7 +299,7 @@ func TestDashboardSupportsLightDarkAndSystemThemes(t *testing.T) {
 	}
 }
 
-// TestDashboardSupportsSidebarToggleAndChartHover keeps the hideable rail and chart inspection wired.
+// TestDashboardSupportsSidebarToggleAndChartHover keeps the collapsible rail and chart inspection wired.
 func TestDashboardSupportsSidebarToggleAndChartHover(t *testing.T) {
 	t.Parallel()
 
@@ -316,25 +316,30 @@ func TestDashboardSupportsSidebarToggleAndChartHover(t *testing.T) {
 		t.Fatalf("read embedded app.js: %v", err)
 	}
 	for _, required := range []string{
-		`id="sidebar"`, `id="hide-sidebar"`, `id="show-sidebar"`, `aria-controls="sidebar"`,
-		`aria-label="Hide sidebar"`, `aria-label="Show sidebar"`, `id="show-sidebar" type="button" aria-label="Show sidebar" aria-expanded="false"`,
-		`<span>Show sidebar</span>`,
+		`id="sidebar"`, `id="toggle-sidebar"`, `aria-controls="sidebar"`, `aria-label="Collapse sidebar"`,
+		`aria-expanded="true" aria-controls="sidebar" title="Collapse sidebar (Ctrl+B)"`,
 	} {
 		if !strings.Contains(string(document), required) {
 			t.Fatalf("dashboard sidebar toggle markup does not contain %q", required)
 		}
 	}
+	// The rail collapses to an icon rail; it is never removed from the layout,
+	// so the toggle that reopens it cannot disappear with it.
+	if strings.Contains(string(document), `id="show-sidebar"`) || strings.Contains(string(styles), `data-sidebar="hidden"`) {
+		t.Fatal("dashboard still uses the fully-hiding sidebar whose reopen control vanished with the rail")
+	}
 	for _, required := range []string{
-		`:root[data-sidebar="hidden"] .sidebar`, ":root[data-sidebar=\"hidden\"] .app-shell",
-		".sidebar-brand-row", ".topbar-left", ".chart-tooltip", ".chart-hit", ".chart-guide", ".chart-bar-active",
+		`:root[data-sidebar="collapsed"] .app-shell`, `:root[data-sidebar="collapsed"] .sidebar-brand-row`,
+		".sidebar-brand-row", ".project-initials", ".chart-tooltip", ".chart-hit", ".chart-guide", ".chart-bar-active",
 	} {
 		if !strings.Contains(string(styles), required) {
 			t.Fatalf("dashboard shell styles do not contain %q", required)
 		}
 	}
 	for _, required := range []string{
-		`sidebarCookieName = "iapstack_dashboard_sidebar"`, "storedSidebarHidden", "applySidebar",
-		"persistSidebar", "setSidebarHidden", `root.setAttribute("data-sidebar", "hidden")`,
+		`sidebarCookieName = "iapstack_dashboard_sidebar"`, "storedSidebarCollapsed", "applySidebar",
+		"persistSidebar", "setSidebarCollapsed", `root.setAttribute("data-sidebar", "collapsed")`,
+		`value === "collapsed" || value === "hidden"`, "projectInitials", `"project-initials"`,
 		"addChartHover", "chart-tooltip", `"data-day": index`, `bar.setAttribute("data-day", String(index))`,
 		`guide.removeAttribute("hidden")`,
 	} {

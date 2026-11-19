@@ -55,7 +55,7 @@
             <span class="brand-mark" aria-hidden="true"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 21 7.5 12 12 3 7.5Z"/><path d="m3 12 9 4.5 9-4.5"/><path d="m3 16.5 9 4.5 9-4.5"/></svg></span>
             <span><span class="brand-word">IAPStack</span><small class="brand-caption">Control plane</small></span>
           </div>
-          <button class="icon-button" id="hide-sidebar" type="button" aria-label="Hide sidebar" aria-expanded="true" aria-controls="sidebar" title="Hide sidebar (Ctrl+B)"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></button>
+          <button class="icon-button" id="toggle-sidebar" type="button" aria-label="Collapse sidebar" aria-expanded="true" aria-controls="sidebar" title="Collapse sidebar (Ctrl+B)"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></button>
         </div>
         <div class="sidebar-heading">
           <span>Projects</span>
@@ -70,11 +70,8 @@
 
       <main class="workspace" id="workspace" tabindex="-1">
         <header class="topbar">
-          <div class="topbar-left">
-            <button class="secondary-button" id="show-sidebar" type="button" aria-label="Show sidebar" aria-expanded="false" aria-controls="sidebar" title="Show sidebar (Ctrl+B)" hidden><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg><span>Show sidebar</span></button>
-            <div class="topbar-title">
-              <div class="project-title-row"><h1 id="project-title">—</h1><span class="control-badge"><i aria-hidden="true"></i>Live</span></div>
-            </div>
+          <div class="topbar-title">
+            <div class="project-title-row"><h1 id="project-title">—</h1><span class="control-badge"><i aria-hidden="true"></i>Live</span></div>
           </div>
           <div class="topbar-actions">
             <span id="updated-at" class="updated-at">Not refreshed yet</span>

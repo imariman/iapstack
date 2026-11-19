@@ -69,44 +69,44 @@ function persistThemePreference(preference) {
 let themePreference = storedThemePreference();
 applyTheme(themePreference);
 
-// Sidebar visibility is a display preference kept the same way as the theme.
+// Sidebar collapse is a display preference kept the same way as the theme.
+// Collapsed, the rail stays on screen as an icon rail and the toggle never
+// moves, so the way back is always where the operator left it.
 const sidebarCookieName = "iapstack_dashboard_sidebar";
 
-function storedSidebarHidden() {
+function storedSidebarCollapsed() {
   const row = document.cookie.split("; ").find((entry) => entry.startsWith(`${sidebarCookieName}=`));
-  return row ? row.slice(sidebarCookieName.length + 1) === "hidden" : false;
+  const value = row ? row.slice(sidebarCookieName.length + 1) : "";
+  // "hidden" was the value written by the first, fully-hiding version.
+  return value === "collapsed" || value === "hidden";
 }
 
-function applySidebar(hidden) {
+function applySidebar(collapsed) {
   const root = document.documentElement;
-  if (hidden) {
-    root.setAttribute("data-sidebar", "hidden");
+  if (collapsed) {
+    root.setAttribute("data-sidebar", "collapsed");
   } else {
     root.removeAttribute("data-sidebar");
   }
-  const hideButton = document.querySelector("#hide-sidebar");
-  const showButton = document.querySelector("#show-sidebar");
-  hideButton.setAttribute("aria-expanded", String(!hidden));
-  showButton.setAttribute("aria-expanded", String(!hidden));
-  showButton.hidden = !hidden;
+  const toggle = document.querySelector("#toggle-sidebar");
+  toggle.setAttribute("aria-expanded", String(!collapsed));
+  toggle.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+  toggle.setAttribute("title", collapsed ? "Expand sidebar (Ctrl+B)" : "Collapse sidebar (Ctrl+B)");
 }
 
-function persistSidebar(hidden) {
+function persistSidebar(collapsed) {
   const secure = window.location.protocol === "https:" ? "; Secure" : "";
-  document.cookie = `${sidebarCookieName}=${hidden ? "hidden" : "visible"}; Path=/dashboard/; Max-Age=31536000; SameSite=Strict${secure}`;
+  document.cookie = `${sidebarCookieName}=${collapsed ? "collapsed" : "visible"}; Path=/dashboard/; Max-Age=31536000; SameSite=Strict${secure}`;
 }
 
-function setSidebarHidden(hidden, moveFocus = false) {
-  sidebarHidden = hidden;
-  persistSidebar(hidden);
-  applySidebar(hidden);
-  if (moveFocus) {
-    document.querySelector(hidden ? "#show-sidebar" : "#hide-sidebar").focus();
-  }
+function setSidebarCollapsed(collapsed) {
+  sidebarCollapsed = collapsed;
+  persistSidebar(collapsed);
+  applySidebar(collapsed);
 }
 
-let sidebarHidden = storedSidebarHidden();
-applySidebar(sidebarHidden);
+let sidebarCollapsed = storedSidebarCollapsed();
+applySidebar(sidebarCollapsed);
 
 const state = {
   projects: [],
@@ -370,6 +370,14 @@ async function loadOverview(projectID, focusWorkspace = false) {
   }
 }
 
+// projectInitials is the collapsed-rail mark for a project: the first
+// letters of its first two words, or its first two letters when it is one word.
+function projectInitials(projectID) {
+  const parts = String(projectID).split(/[-_\s]+/).filter(Boolean);
+  const letters = (parts[0]?.[0] || "") + (parts[1]?.[0] || parts[0]?.[1] || "");
+  return letters.toUpperCase();
+}
+
 function renderProjectNavigation() {
   elements.projectNav.replaceChildren();
   for (const project of state.projects) {
@@ -377,9 +385,13 @@ function renderProjectNavigation() {
     button.type = "button";
     button.classList.toggle("active", project.id === state.selectedProject);
     button.setAttribute("aria-current", project.id === state.selectedProject ? "page" : "false");
+    const counts = `${countLabel(project.application_count, "app")} · ${countLabel(project.customer_count, "customer")}`;
+    button.setAttribute("aria-label", `${project.id}, ${counts}`);
+    button.setAttribute("title", `${project.id} · ${counts}`);
     button.append(
       node("strong", "", project.id),
-      node("small", "", `${countLabel(project.application_count, "app")} · ${countLabel(project.customer_count, "customer")}`),
+      node("small", "", counts),
+      node("span", "project-initials", projectInitials(project.id)),
     );
     button.addEventListener("click", () => loadOverview(project.id, true));
     elements.projectNav.append(button);
@@ -2975,8 +2987,7 @@ systemThemeQuery.addEventListener("change", () => {
   }
 });
 
-document.querySelector("#hide-sidebar").addEventListener("click", () => setSidebarHidden(true, true));
-document.querySelector("#show-sidebar").addEventListener("click", () => setSidebarHidden(false, true));
+document.querySelector("#toggle-sidebar").addEventListener("click", () => setSidebarCollapsed(!sidebarCollapsed));
 
 // Ctrl+B / Cmd+B toggles the sidebar unless the operator is typing.
 document.addEventListener("keydown", (event) => {
@@ -2987,7 +2998,7 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   event.preventDefault();
-  setSidebarHidden(!sidebarHidden, Boolean(document.activeElement?.closest("#sidebar")));
+  setSidebarCollapsed(!sidebarCollapsed);
 });
 
 clearLegacyBearerStorage();
