@@ -5,46 +5,45 @@
 <h1 align="center">IAPStack</h1>
 
 <p align="center">
-  <strong>Verifica degli acquisti in-app ed entitlement, open source e self-hosted.</strong>
+  <strong>Verifica degli acquisti in-app ed entitlement, self-hosted.</strong>
   <br>
   Un unico modello gestito dal backend per Apple App Store, Google Play e Huawei AppGallery.
-  <br>
-  Scritto in Go. Indipendente dagli store. Installabile ovunque.
 </p>
 
 <p align="center">
-  <a href="https://imariman.github.io/iapstack/it/"><strong>Sito web</strong></a>
+  <a href="https://imariman.github.io/iapstack/it/">Sito web</a>
   ·
-  <a href="#quick-start"><strong>Avvio rapido</strong></a>
+  <a href="#quick-start">Avvio rapido</a>
   ·
-  <a href="#deploy"><strong>Deployment</strong></a>
+  <a href="#deploy">Deployment</a>
   ·
-  <a href="#documentation"><strong>Documentazione</strong></a>
+  <a href="#documentation">Documentazione</a>
   ·
-  <a href="contracts/openapi/v1.yaml"><strong>OpenAPI</strong></a>
-  ·
-  <a href="CONTRIBUTING.md"><strong>Contribuire</strong></a>
-</p>
-
-<p align="center">
-  <a href="README.md">English</a>
-  · <a href="README.de.md">Deutsch</a>
-  · <a href="README.es.md">Español</a>
-  · <a href="README.fr.md">Français</a>
-  · <strong>Italiano</strong>
-  · <a href="README.pt-BR.md">Português (Brasil)</a>
-  · <a href="README.tr.md">Türkçe</a>
-  · <a href="README.ru.md">Русский</a>
-  · <a href="README.ja.md">日本語</a>
-  · <a href="README.ko.md">한국어</a>
-  · <a href="README.zh-CN.md">简体中文</a>
+  <a href="contracts/openapi/v1.yaml">OpenAPI</a>
 </p>
 
 <p align="center">
   <a href="https://github.com/imariman/iapstack/actions/workflows/ci.yml"><img src="https://github.com/imariman/iapstack/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/imariman/iapstack/actions/workflows/codeql.yml"><img src="https://github.com/imariman/iapstack/actions/workflows/codeql.yml/badge.svg" alt="CodeQL status"></a>
+  <a href="https://github.com/imariman/iapstack/releases"><img src="https://img.shields.io/github/v/release/imariman/iapstack?include_prereleases&amp;sort=semver&amp;color=orange" alt="Latest prerelease"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache 2.0 License"></a>
-  <img src="https://img.shields.io/badge/Go-1.26-00ADD8.svg" alt="Go 1.26">
-  <img src="https://img.shields.io/badge/status-prerelease-orange.svg" alt="Prerelease">
+  <a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/imariman/iapstack" alt="Go version from go.mod"></a>
+</p>
+
+<p align="center">
+  <sub>
+    <a href="README.md">English</a>
+    · <a href="README.de.md">Deutsch</a>
+    · <a href="README.es.md">Español</a>
+    · <a href="README.fr.md">Français</a>
+    · <strong>Italiano</strong>
+    · <a href="README.pt-BR.md">Português (Brasil)</a>
+    · <a href="README.tr.md">Türkçe</a>
+    · <a href="README.ru.md">Русский</a>
+    · <a href="README.ja.md">日本語</a>
+    · <a href="README.ko.md">한국어</a>
+    · <a href="README.zh-CN.md">简体中文</a>
+  </sub>
 </p>
 
 <p align="center">
@@ -54,82 +53,55 @@
   </picture>
 </p>
 
-<p align="center">
-  <sub>La dashboard operativa segue il tema del tuo sistema (nel prodotto: Sistema / Chiaro / Scuro). Sono mostrati dati demo sintetici.</sub>
-</p>
-
 > [!NOTE]
-> Questa è una traduzione del [README in inglese](README.md). In caso di differenze, fa fede la versione inglese. Sviluppo, struttura del repository e istruzioni di deployment passo passo sono mantenuti solo in inglese.
+> Questo documento è una traduzione del [README in inglese](README.md). In caso di differenze, fa fede la versione inglese.
 
-> [!IMPORTANT]
-> IAPStack è software in pre-release. Le release esistenti `v0.1.0-rc1` e `v0.1.0-rc2`
-> sono anteprime legacy precedenti all'attuale release gate e alle correzioni di
-> sicurezza; non sono supportate per l'uso in produzione. Il branch predefinito resta in
-> sviluppo e il suo gate sul ciclo di vita con store reali per i tre provider non è ancora completo.
-
-IAPStack è un backend self-hosted con pannello di controllo per convalidare gli acquisti
-in-app e trasformare le transazioni degli store in entitlement applicativi durevoli. Offre
-ai team un unico modello gestito dal backend per tutti gli store mobili, mantenendo
-credenziali, dati di acquisto e decisioni di accesso su un'infrastruttura che controllano.
-
-<p align="center">
-  <code>Store&nbsp;&nbsp;→&nbsp;&nbsp;Verify&nbsp;&nbsp;→&nbsp;&nbsp;Access&nbsp;&nbsp;→&nbsp;&nbsp;Deliver</code>
-</p>
+IAPStack è un backend con pannello di controllo che verifica gli acquisti in-app lato
+server e trasforma le transazioni degli store in entitlement durevoli. Le tue app pongono
+una sola domanda, *a cosa può accedere questo cliente?*, e la risposta è la stessa
+qualunque sia lo store da cui proviene l'acquisto. Credenziali, dati di acquisto e
+decisioni di accesso restano su un'infrastruttura gestita da te.
 
 | Verifica una volta, ovunque | Entitlement, non ricevute | Lo gestisci tu |
 | --- | --- | --- |
-| Verifica lato server per Apple App Store, Google Play e Huawei AppGallery dietro un unico modello indipendente dagli store. | Le app chiedono a cosa può accedere un cliente invece di interpretare ricevute grezze e stati degli store. | Self-hosted per impostazione predefinita: infrastruttura, credenziali, dati di acquisto e decisioni di accesso sono tuoi. |
+| Verifica lato server per tre store dietro un unico modello indipendente dagli store. Le API degli store restano isolate negli adapter. | Le app leggono lo stato di accesso invece di interpretare ricevute grezze e stati specifici di ogni store. | Un unico binario Go e PostgreSQL. Gira in Docker su qualsiasi cloud o su una VM che hai già. |
 
-<a id="current-scope"></a>
+> [!IMPORTANT]
+> IAPStack è software in pre-release e non è ancora supportato per la produzione. Le
+> release `v0.1.0-rc1` e `v0.1.0-rc2` sono anteprime legacy; la prima release candidate
+> supportata uscirà quando i gate sul ciclo di vita con store reali saranno superati per
+> tutti e tre i provider.
 
-## Ambito attuale
+<a id="features"></a>
 
-- Verifica lato server di abbonamenti e acquisti a vita non consumabili
-  da Apple App Store, Google Play e Huawei AppGallery
-- Un modello di transazioni ed entitlement indipendente dagli store, basato su PostgreSQL
-- Acquisizione durevole delle notifiche, riconciliazione del ciclo di vita e webhook in uscita firmati
-- Una dashboard operativa autenticata (temi Sistema / Chiaro / Scuro, una barra laterale
-  dei progetti comprimibile e grafici di attività e abbonamenti consultabili) con
-  contratti HTTP/OpenAPI versionati
-- Pacchetti Flutter neutrali rispetto al provider e specifici per store per tutti e tre i provider attuali
-- Deployment compatto o con API/worker separati, con Docker e target cloud documentati
+## Funzionalità
 
-L'evasione degli acquisti consumabili, la migrazione dei clienti e il consolidamento degli
-alias, l'operatività in hosting e gli store oltre i tre indicati sono fuori dall'ambito della
-v0.1. Consulta l'[ambito della v0.1](docs/v0.1-scope.md) per il perimetro completo.
+- **Verifica** di abbonamenti e acquisti a vita non consumabili da Apple
+  App Store, Google Play e Huawei AppGallery
+- **Monitoraggio del ciclo di vita** tramite acquisizione durevole delle notifiche degli
+  store e riconciliazione pianificata
+- **Webhook in uscita firmati**, così il tuo backend viene informato di ogni modifica
+  agli entitlement
+- **Dashboard operativa** per applicazioni, clienti, code e consegne dei webhook,
+  con tema chiaro e scuro
+- **API HTTP versionata** con un [contratto OpenAPI](contracts/openapi/v1.yaml) leggibile dalle macchine
+- **SDK client** per Flutter, iOS, Android e React Native, oltre a SDK Go e TypeScript
+  per il tuo backend
+- **Topologia flessibile**: un unico processo compatto, oppure servizi API e worker separati
 
-<a id="sdk-roadmap"></a>
-
-## Roadmap degli SDK
-
-Flutter resta l'unico client mobile nell'ambito della release v0.1: un client HTTP
-neutrale rispetto al provider più i companion per Apple, Google Play e Huawei. Altro
-codice SDK è già presente nel repository, secondo il piano di espansione in
-[#85](https://github.com/imariman/iapstack/issues/85). La sua presenza non estende il
-release gate della v0.1 né rende questi pacchetti release di produzione.
-
-| SDK | Implementato nel repository | Lavoro rimanente |
-| --- | --- | --- |
-| [Go per host attendibile](sdk/go/README.md) | Sessioni cliente, consultazione degli entitlement lato server e gestione dei webhook firmati | Prima pubblicazione di un modulo versionato ([#141](https://github.com/imariman/iapstack/issues/141)) |
-| [TypeScript per host attendibile](sdk/typescript/README.md) | Sessioni cliente, consultazione degli entitlement, webhook firmati e archivi ESM/tipi installabili | Prima pubblicazione su npm ([#141](https://github.com/imariman/iapstack/issues/141)) |
-| [iOS (Swift)](sdk/ios/README.md) | Client HTTP, companion StoreKit 2, esempio eseguibile con configurazione StoreKit, manifest SwiftPM nella root | Primo tag di versione dell'SDK ([#141](https://github.com/imariman/iapstack/issues/141)) |
-| [Android (Kotlin)](sdk/android/README.md) | Client HTTP, adapter Play Billing/HMS, esempio per host attendibile e binari Maven/jar dei sorgenti preparati | Prima pubblicazione su GitHub Maven ([#141](https://github.com/imariman/iapstack/issues/141)) |
-| [React Native](sdk/react-native/README.md) | Client HTTP, bridge nativo StoreKit/Play/Huawei, app di esempio nativa e sorgenti dei companion impacchettati | Prima pubblicazione su npm ([#141](https://github.com/imariman/iapstack/issues/141)) |
-
-La [guida alle release degli SDK](docs/sdk-releases.md) documenta installazione, versioni
-pre-release indipendenti, controlli dei pacchetti e configurazione dei registry. Il codice
-in questo repository non implica l'esistenza di una release su un registry.
-
-Il bearer durevole dell'applicazione resta su un backend host attendibile e non deve mai
-essere incluso in un binario mobile o in un bundle per browser. I client mobili usano
-sessioni cliente di breve durata.
+L'evasione degli acquisti consumabili, l'operatività in hosting e gli store oltre questi
+tre sono fuori dall'ambito della v0.1. Migrazione dei clienti, importazioni da RevenueCat,
+offering e report finanziari Apple esistono già su `main` e sono disponibili in anteprima in
+[`v0.2.0-alpha.1`](https://github.com/imariman/iapstack/releases/tag/v0.2.0-alpha.1),
+ma non fanno parte del release gate della v0.1. Consulta l'[ambito della v0.1](docs/v0.1-scope.md)
+per il perimetro completo.
 
 <a id="quick-start"></a>
 
 ## Avvio rapido
 
 Ti servono Docker con Compose e OpenSSL. Da un clone di questo repository, genera
-segreti solo locali e avvia lo stack completo:
+segreti locali e avvia lo stack:
 
 ```sh
 export IAPSTACK_POSTGRES_PASSWORD="$(openssl rand -base64 32)"
@@ -142,73 +114,64 @@ docker compose -f deploy/compose.yaml up --build -d --wait
 curl --fail http://127.0.0.1:8080/readyz
 ```
 
-Conserva i valori generati in modo sicuro e riutilizzali con questo volume Compose.
-Rigenerarli non ruota la password del database né le chiavi di protezione esistenti.
+Conserva questi valori: il volume Compose dipende da essi, e rigenerarli non ruota la
+password del database né le chiavi di protezione esistenti.
 
-Poi apri `http://127.0.0.1:8080/dashboard/` e connettiti con la chiave di bootstrap
-dell'amministratore. Crea e conserva una chiave di amministratore durevole, rimuovi
-`IAPSTACK_BOOTSTRAP_ADMIN_KEY` dall'ambiente e ricrea il container dell'API.
-La [guida operativa](docs/operations.md) spiega bootstrap, rotazione delle chiavi,
-arresto, backup, aggiornamenti e la baseline di sicurezza per la produzione.
+Apri `http://127.0.0.1:8080/dashboard/` e accedi con la chiave di bootstrap
+dell'amministratore. Crea una chiave di amministratore durevole, poi rimuovi
+`IAPSTACK_BOOTSTRAP_ADMIN_KEY` e ricrea il container dell'API. La
+[guida operativa](docs/operations.md) copre il resto: rotazione delle chiavi, backup,
+aggiornamenti e la baseline di sicurezza per la produzione.
 
 <a id="deploy"></a>
 
 ## Deployment
 
-Confronta requisiti dell'account, limiti dei piani gratuiti e costi dello stack completo
-nella [matrice dei target di deployment](deploy/README.md) prima di creare risorse presso
-un provider.
-
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/imariman/iapstack)
 [![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://www.heroku.com/deploy?template=https://github.com/imariman/iapstack)
 [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://imariman.github.io/iapstack/deploy/iapstack-oracle-stack.zip)
+[![Open in Cloud Shell](https://www.gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/imariman/iapstack&cloudshell_git_branch=main&cloudshell_tutorial=deploy/gcp/tutorial.md&show=terminal)
+
+Ogni target esegue la stessa immagine container con PostgreSQL, una fase di migrazione,
+l'API e un worker che deve restare in esecuzione. Confronta requisiti dell'account, limiti
+dei piani gratuiti e costi dello stack completo nella
+[matrice dei target di deployment](deploy/README.md) prima di creare risorse.
 
 | Target | Configurazione | Guida |
 | --- | --- | --- |
-| Render | Un web service gratuito che esegue API e worker, un database PostgreSQL gratuito per i test e Blueprint a pagamento compatti o separati | [Guida Render](deploy/render/README.md) |
-| Heroku | API, worker e PostgreSQL gestito su due dyno Basic sempre attivi; nessun runtime gratuito | [Guida Heroku](deploy/heroku/README.md) |
-| DigitalOcean | App Platform con un worker e un job di migrazione, oppure un Droplet più economico | [Guida App Platform](deploy/digitalocean/README.md) · [Guida Droplet](deploy/digitalocean/droplet.md) |
-| Fly.io | Process group con Managed Postgres privato; solo una breve prova gratuita | [Guida Fly.io](deploy/fly/README.md) |
-| Koyeb | Database gestito, API HTTPS e worker privato tramite la CLI ufficiale | [Guida Koyeb](deploy/koyeb/README.md) |
-| Railway | PostgreSQL e un servizio che esegue API e worker; circa USD 5 al mese con il piano Hobby | [Guida Railway](deploy/railway/README.md) |
-| Coolify | Lo stack completo da una definizione Docker Compose inclusa nel repository, sul tuo server | [Guida Coolify](deploy/coolify/README.md) |
-| VM singola | L'opzione continua più economica: PostgreSQL, migrazioni, API e worker su una macchina Linux dietro un Cloudflare Tunnel | [Guida VM singola](deploy/vps/README.md) |
+| **VM singola** (Oracle, Google Cloud, Hetzner, DigitalOcean, il tuo server) | L'opzione continua più economica: lo stack completo su una macchina Linux dietro un Cloudflare Tunnel, senza porte in ingresso aperte. Da USD 0 al mese su Oracle Cloud Always Free. | [Guida VM singola](deploy/vps/README.md) |
+| Render | Servizio compatto gratuito e PostgreSQL usa e getta per la valutazione; Blueprint a pagamento compatti o separati | [Render](deploy/render/README.md) |
+| Railway | PostgreSQL e un unico servizio API/worker; di solito rientra nel piano Hobby da USD 5 | [Railway](deploy/railway/README.md) |
+| Heroku | API, worker e PostgreSQL gestito su due dyno Basic; nessun piano gratuito | [Heroku](deploy/heroku/README.md) |
+| DigitalOcean App Platform | API, worker e job di migrazione da una App Spec | [DigitalOcean](deploy/digitalocean/README.md) |
+| Fly.io | Process group con Managed Postgres privato | [Fly.io](deploy/fly/README.md) |
+| Koyeb | Database gestito, API HTTPS e worker privato tramite la CLI | [Koyeb](deploy/koyeb/README.md) |
+| Coolify | Lo stack completo dalla definizione Compose del repository, sul tuo server | [Coolify](deploy/coolify/README.md) |
+| Kubernetes | Manifest semplici per API, worker e job di migrazione; PostgreSQL a carico tuo | [Kubernetes](deploy/k8s/README.md) |
 
-### Opzione più economica: una VM singola
+Le piattaforme scale-to-zero e serverless non sono adatte: il worker acquisisce le
+notifiche degli store, consegna i webhook ed esegue la riconciliazione ogni minuto.
 
-Una macchina Linux esegue tutto a partire da
-[`deploy/vps/compose.yaml`](deploy/vps/compose.yaml): PostgreSQL su una rete Docker
-privata, un container di migrazione one-shot, un unico processo compatto con l'API e il
-worker durevole, e un connettore Cloudflare Tunnel, quindi la VM non ha bisogno di porte
-in ingresso aperte. Il worker richiede un processo sempre in esecuzione, ed è per questo
-che una piccola VM sempre attiva è più adatta delle piattaforme scale-to-zero.
+<a id="sdks"></a>
 
-| Host | Costo tipico | Adatto per |
+## SDK
+
+Le app mobili comunicano con IAPStack tramite sessioni cliente di breve durata. La chiave
+durevole dell'applicazione resta sul tuo backend e non deve mai essere inclusa in un
+binario mobile o in un bundle per browser.
+
+| Piattaforma | Pacchetto | Stato |
 | --- | --- | --- |
-| Oracle Cloud Always Free, Ampere A1 | USD 0 | Fino a 4 OCPU Arm e 24 GB di RAM; stack Resource Manager con un clic. |
-| Google Cloud e2-micro (Free Tier, regioni USA) | USD 0–4/mese | 1 GB di RAM per traffico ridotto; procedura guidata in Cloud Shell. |
-| Hetzner Cloud CAX11 / CX22 | Circa EUR 4–5/mese | Fatturazione prevedibile; installazione da un unico file cloud-init. |
-| DigitalOcean Droplet `s-1vcpu-1gb` / `s-1vcpu-2gb` | USD 6 / 12 al mese | IPv4 pubblico incluso; stesso file cloud-init di Hetzner. |
-| Un server che gestisci già | USD 0 | Funziona dietro NAT, ma le notifiche degli store richiedono un uptime continuo. |
+| Flutter | [Client neutrale rispetto al provider](sdk/flutter/iapstack/README.md) con companion per [Apple](sdk/flutter/iapstack_apple/README.md), [Google Play](sdk/flutter/iapstack_google_play/README.md) e [Huawei](sdk/flutter/iapstack_huawei/README.md) | Ambito della release v0.1 |
+| iOS (Swift) | [Client HTTP e companion StoreKit 2](sdk/ios/README.md) | Implementato, non ancora pubblicato |
+| Android (Kotlin) | [Client HTTP con adapter Play Billing e HMS](sdk/android/README.md) | Implementato, non ancora pubblicato |
+| React Native | [Client HTTP e bridge nativo StoreKit/Play/Huawei](sdk/react-native/README.md) | Implementato, non ancora pubblicato |
+| Go (backend) | [Sessioni cliente, consultazione degli entitlement, verifica dei webhook](sdk/go/README.md) | Implementato, non ancora pubblicato |
+| TypeScript (backend) | [Sessioni cliente, consultazione degli entitlement, verifica dei webhook](sdk/typescript/README.md) | Implementato, non ancora pubblicato |
 
-Ti serve anche un dominio con DNS sul piano gratuito di Cloudflare. Verifica le condizioni
-aggiornate di ogni provider prima di creare risorse. I passaggi di installazione, i backup
-e gli aggiornamenti sono descritti nella [sezione Deploy del README in inglese](README.md#deploy)
-e nella [guida alla VM singola](deploy/vps/README.md).
-
-<a id="design-principles"></a>
-
-## Principi di progettazione
-
-**Self-hosted per impostazione predefinita.** Infrastruttura, credenziali, dati di acquisto e decisioni di accesso sono tuoi.
-
-**Gli store sono adapter.** Le API specifiche di ogni store restano isolate dietro contratti condivisi; il dominio centrale non dipende da un singolo marketplace.
-
-**Gli entitlement sono il confine del prodotto.** Le applicazioni chiedono a cosa può accedere un cliente invece di interpretare ricevute grezze o stati degli store.
-
-**Deployment ovunque.** L'obiettivo è un semplice deployment basato su container, senza dipendere da una specifica piattaforma cloud.
-
-**Implementazione indipendente.** La documentazione ufficiale degli store definisce comportamento e requisiti di sicurezza. Altri progetti open source possono essere studiati per l'interoperabilità e i casi limite, mentre il codice di IAPStack è implementato in modo indipendente.
+La pubblicazione sui registry è tracciata in [#141](https://github.com/imariman/iapstack/issues/141).
+La [guida alle release degli SDK](docs/sdk-releases.md) copre l'installazione dai sorgenti,
+il versionamento e l'automazione delle release.
 
 <a id="documentation"></a>
 
@@ -216,54 +179,101 @@ e nella [guida alla VM singola](deploy/vps/README.md).
 
 La documentazione è scritta in inglese.
 
-- [Ambito e architettura della v0.1](docs/v0.1-scope.md)
-- [Architecture Decision Records](docs/adr/README.md)
-- [API HTTP v1 e contratti delle notifiche dei provider](docs/api-v1.md)
-- [Contratto OpenAPI v1 leggibile dalle macchine](contracts/openapi/v1.yaml)
-- [Guida operativa e alla dashboard](docs/operations.md)
-- [Threat model della v0.1 e checklist di sicurezza per le release](docs/security.md)
-- [Policy di sicurezza e segnalazione delle vulnerabilità](SECURITY.md)
-- [Guida per contribuire](CONTRIBUTING.md)
-- [Guida al supporto](SUPPORT.md)
-- [SDK Flutter neutrale rispetto al provider](sdk/flutter/iapstack/README.md)
-- [SDK Swift nativo per iOS e companion StoreKit](sdk/ios/README.md)
-- [SDK Go per host attendibile](sdk/go/README.md)
-- [SDK TypeScript per host attendibile](sdk/typescript/README.md)
+| Guida | Contenuto |
+| --- | --- |
+| [Operatività](docs/operations.md) | Segreti, configurazione, dashboard, configurazione delle notifiche degli store, backup, aggiornamenti, release |
+| [API HTTP v1](docs/api-v1.md) | Endpoint, credenziali dei provider, notifiche, verifica dei webhook |
+| [Ambito e architettura della v0.1](docs/v0.1-scope.md) | Contesto del sistema, invarianti fondamentali, slice per provider |
+| [Sicurezza](docs/security.md) | Threat model e checklist di sicurezza per le release |
+| [Decisioni architetturali](docs/adr/README.md) | Perché esistono i confini principali |
+| [Target di deployment](deploy/README.md) | Confronto tra provider e guide per ciascun provider |
+| [Runbook di release](docs/releases/v0.1.0-rc.1.md) | Il release gate con store reali per i tre provider |
 
 <a id="development"></a>
 
 ## Sviluppo
 
-Build dai sorgenti, configurazione, test e struttura del repository sono descritti nella
-[sezione Development del README in inglese](README.md#development). Leggi la
-[guida per contribuire](CONTRIBUTING.md) prima di aprire una pull request.
+Usa la toolchain Go dichiarata in `go.mod`. Avvia PostgreSQL, applica le migrazioni ed
+esegui API e worker in un unico processo:
+
+```sh
+docker compose -f deploy/compose.yaml up -d postgres
+export IAPSTACK_DATABASE_URL='postgres://iapstack:iapstack@localhost:5432/iapstack?sslmode=disable'
+go run ./cmd/iapstack migrate
+go run ./cmd/iapstack server
+```
+
+Il server richiede anche le chiavi di protezione dell'[avvio rapido](#quick-start); ogni
+impostazione è elencata nel [riferimento di configurazione](docs/operations.md#configuration-reference).
+L'API è in ascolto su `:8080`, espone `/healthz` e `/readyz` e integra la dashboard
+in `/dashboard/`.
+
+Esegui i controlli del server e il release gate end-to-end:
+
+```sh
+go vet ./... && go test -race -count=1 ./...
+./deploy/e2e/run.sh
+```
+
+La [guida per contribuire](CONTRIBUTING.md) contiene i controlli degli SDK, la
+configurazione dei test di integrazione, una panoramica dell'architettura e le
+convenzioni del codice.
+
+<a id="repository-layout"></a>
+
+### Struttura del repository
+
+```text
+.
+├── cmd/iapstack/       # Entrypoint di API, worker e migrazioni
+├── internal/
+│   ├── core/           # Clienti, transazioni, prodotti ed entitlement
+│   ├── verification/   # Verifica degli acquisti indipendente dal provider
+│   ├── stores/         # Adapter per Apple, Google Play e Huawei
+│   ├── credentials/    # Credenziali protette delle applicazioni
+│   ├── protection/     # Port per la protezione dei dati sensibili
+│   ├── persistence/    # Repository PostgreSQL
+│   └── platform/       # Implementazioni di configurazione, logging e keyring
+├── dashboard/          # Dashboard operativa integrata
+├── contracts/          # Contratti OpenAPI e dei webhook
+├── sdk/                # SDK Flutter, iOS, Android, React Native, Go e TypeScript
+├── deploy/             # Definizioni per Compose, cloud, VM e Kubernetes
+└── docs/               # Guide, ADR e runbook di release
+```
 
 <a id="roadmap"></a>
 
 ## Roadmap
 
-- [x] Definire il dominio centrale, i contratti delle API pubbliche e il modello di persistenza
-- [x] Implementare i primi adapter per Apple App Store, Google Play e Huawei AppGallery
-- [x] Aggiungere le migrazioni PostgreSQL e una configurazione Docker pensata per la produzione
-- [x] Realizzare l'SDK Flutter neutrale rispetto al provider, i tre SDK Flutter specifici per provider e la dashboard
-- [x] Supportare la riconciliazione del ciclo di vita e i webhook in uscita firmati
-- [x] Pubblicare un contratto API v1 leggibile dalle macchine con controlli di compatibilità dei client
-- [x] Implementare gli SDK Go, TypeScript, Swift, Kotlin e React Native
-- [x] Supportare la migrazione dei clienti, il consolidamento degli alias, le importazioni da RevenueCat e le importazioni dei report finanziari
-- [x] Aggiungere i manifest di deployment per Kubernetes
-- [ ] Completare i release gate del ciclo di vita per Apple App Store, Google Play e Huawei e pubblicare `v0.1.0-rc.1`
-- [ ] Risolvere il feedback sulla release candidate e pubblicare la versione stabile `v0.1.0`
-- [ ] Pubblicare pacchetti versionati per host, Android, iOS e React Native ([#141](https://github.com/imariman/iapstack/issues/141))
-- [ ] Aggiungere Amazon Appstore e altri adapter per store
+- [x] Dominio indipendente dagli store, persistenza PostgreSQL e contratto OpenAPI versionato
+- [x] Adapter per Apple App Store, Google Play e Huawei AppGallery
+- [x] Riconciliazione del ciclo di vita e webhook in uscita firmati
+- [x] Dashboard operativa e definizioni di deployment per cloud, VM e Kubernetes
+- [x] SDK Flutter, Swift, Kotlin, React Native, Go e TypeScript
+- [x] Migrazione dei clienti, importazioni da RevenueCat, offering e report finanziari Apple (`v0.2.0-alpha.1`)
+- [x] Metriche degli abbonamenti, strumenti di assistenza clienti e risposte di consumo per i rimborsi Apple (su `main`, non ancora rilasciati)
+- [ ] Superare i gate con store reali per i tre provider e pubblicare `v0.1.0-rc.1`
+- [ ] Pubblicare la versione stabile `v0.1.0`
+- [ ] Pubblicare pacchetti SDK versionati ([#141](https://github.com/imariman/iapstack/issues/141))
+- [ ] Endpoint MCP con cui gli agenti AI possono interrogare e gestire IAPStack con chiavi a privilegi minimi ([#285](https://github.com/imariman/iapstack/issues/285))
+- [ ] Riconoscimento dei report finanziari di Google Play e Huawei
+- [ ] Amazon Appstore e altri adapter per store
 
-Gli elementi completati descrivono implementazioni presenti nel repository, non la prontezza per una release di produzione.
+Gli elementi spuntati sono implementati nel repository; non implicano che siano pronti
+per la produzione.
+
+<a id="contributing"></a>
+
+## Contribuire
+
+Segnalazioni di bug, correzioni ed esperienza con gli store sono benvenute. Leggi la
+[guida per contribuire](CONTRIBUTING.md) prima di aprire una pull request, la
+[guida al supporto](SUPPORT.md) per le domande e la [policy di sicurezza](SECURITY.md)
+per segnalare una vulnerabilità. La partecipazione è regolata dal
+[Codice di condotta](CODE_OF_CONDUCT.md).
 
 <a id="license"></a>
 
 ## Licenza
 
-Distribuito con licenza [Apache License 2.0](LICENSE).
-
-Partecipando a questo progetto accetti di rispettare il
-[Codice di condotta](CODE_OF_CONDUCT.md). Per contribuire e ricevere supporto, consulta
-[CONTRIBUTING.md](CONTRIBUTING.md) e [SUPPORT.md](SUPPORT.md).
+[Apache License 2.0](LICENSE)

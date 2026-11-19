@@ -71,6 +71,35 @@ docker build --tag iapstack:local .
 ./deploy/e2e/run.sh
 ```
 
+## Architecture at a glance
+
+- **Process modes.** The compact `server` mode runs the API and worker in one process.
+  The split `api` and `worker` modes remain available for independent scaling. The
+  worker handles the protected store notification inbox, scheduled reconciliation, and
+  the signed application webhook outbox with bounded concurrency, River-managed
+  stale-job recovery, and exponential retry scheduling.
+- **Verification.** Purchase verification is coordinated by the provider-neutral
+  `internal/verification` use case. Provider network calls and protection of sensitive
+  evidence happen before the durable transaction. Catalog validation, evidence and
+  observation persistence, entitlement projection, and outbox insertion then commit or
+  roll back together. The use case depends only on adapter, protector, clock, and
+  persistence ports.
+- **Protection.** Sensitive data crosses the private-plaintext `internal/protection`
+  port. The platform keyring uses versioned AES-256-GCM envelopes with random nonces,
+  scope-bound authenticated data, HKDF-derived encryption subkeys, and a separate
+  project/application/purpose-scoped HMAC-SHA-256 fingerprint. Persistence receives
+  only ciphertext, fingerprint, and `key_id`; it never receives plaintext.
+- **Credentials.** Provider adapters obtain application credentials through the opaque,
+  versioned `stores.CredentialSource` port. `internal/credentials` validates the
+  application scope and opens protected values only for the requesting provider
+  configuration. Shared configuration never acquires store-shaped credential fields.
+  Credential payload rotation uses optimistic durable revisions; encryption-key rotation
+  stays independent and preserves fingerprints.
+
+The [v0.1 scope](docs/v0.1-scope.md) describes the system context and core invariants,
+and the [architecture decision records](docs/adr/README.md) explain why each boundary
+exists.
+
 ## Make a change
 
 - Add or update tests for behavior changes and bug fixes where a regression can be
@@ -80,6 +109,9 @@ docker build --tag iapstack:local .
 - Preserve application and project scoping, idempotency, and the protected-data
   boundary described in the [architecture decisions](docs/adr/README.md).
 - Keep provider-specific types and behavior inside the relevant store adapter.
+- Treat official store documentation as the source of truth for behavior and security
+  requirements. Other open-source projects may be studied for interoperability and edge
+  cases, but IAPStack code is implemented independently.
 - In Go source files, place constants first, type and struct declarations second,
   and executable code last. Keep related constants together, separate unrelated
   constant groups with a blank line, and give every constant, function, and method

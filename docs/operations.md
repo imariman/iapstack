@@ -25,6 +25,73 @@ from the runtime environment and recreate the API container. The default Compose
 and migration services never receive this secret. Store every durable bearer outside
 the database because IAPStack returns it only once.
 
+## Configuration reference
+
+IAPStack is configured entirely through environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `IAPSTACK_HTTP_ADDRESS` | `:$PORT` or `:8080` | API listen address in `host:port` form; takes precedence over a platform-provided `PORT` |
+| `IAPSTACK_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline |
+| `IAPSTACK_READINESS_TIMEOUT` | `2s` | Deadline for one dependency readiness probe |
+| `IAPSTACK_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
+| `IAPSTACK_DATABASE_URL` | none | PostgreSQL connection string required by database-backed modes |
+| `IAPSTACK_AUTO_MIGRATE` | `false` | Apply migrations at compact `server` startup; use only for one-instance disposable environments that cannot run a pre-deploy command |
+| `IAPSTACK_BOOTSTRAP_ADMIN_KEY` | none | Installation-only administrator bearer; when set it must contain at least 32 bytes |
+| `IAPSTACK_METRICS_BEARER_TOKEN` | none | Dedicated 32+ character bearer for `/metrics`; the endpoint is disabled when absent |
+| `IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS` | `4` | Fail-fast concurrency bound for memory-hard API-key creation and verification; maximum `32` |
+| `IAPSTACK_PROTECTION_ACTIVE_KEY_ID` | none | Encryption key ID used for new protected values |
+| `IAPSTACK_PROTECTION_KEY` | none | Base64-encoded or 64-character hexadecimal 32-byte encryption root key for an initial single-key deployment |
+| `IAPSTACK_PROTECTION_KEYS` | none | JSON object mapping key IDs to base64-encoded 32-byte encryption root keys |
+| `IAPSTACK_PROTECTION_FINGERPRINT_KEY` | none | Base64-encoded or 64-character hexadecimal 32-byte stable fingerprint root key |
+| `IAPSTACK_WORKER_ID` | automatic | Optional River client identity; leave empty unless the deployment guarantees uniqueness |
+| `IAPSTACK_WORKER_HTTP_ADDRESS` | `:8081` | Worker health, readiness, and metrics listen address |
+| `IAPSTACK_WORKER_POLL_INTERVAL` | `1s` | Interval between idle durable-queue polls |
+| `IAPSTACK_WORKER_JOB_TIMEOUT` | `30s` | Deadline for one durable job attempt |
+| `IAPSTACK_WORKER_CONCURRENCY` | `4` | Maximum concurrent River jobs per queue and worker process |
+| `IAPSTACK_WORKER_MAX_ATTEMPTS` | `12` | Attempts before River discards a retryable job |
+| `IAPSTACK_QUEUE_RETENTION` | `720h` | Retention period for terminal River jobs and durable queue audit records |
+| `IAPSTACK_HTTP_BODY_LIMIT` | `1048576` | Maximum request body size in bytes for JSON and provider notifications |
+| `IAPSTACK_OFFERING_DIRECTORY` | none | Directory of one `{application_id}.json` offering file per application; empty answers `GET /v1/applications/{application_id}/offering` with not-found |
+| `IAPSTACK_PROVIDER_TIMEOUT` | `15s` | Deadline for one outbound store-provider request |
+| `IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS` | `false` | Explicitly permit Huawei provider endpoints on private, loopback, link-local, CGNAT, or benchmark addresses |
+| `IAPSTACK_WEBHOOK_TIMEOUT` | `10s` | Deadline for one outbound application webhook request |
+| `IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS` | `false` | Explicitly permit webhook delivery to private, loopback, link-local, CGNAT, or benchmark addresses |
+| `IAPSTACK_ENVIRONMENT` | `development` | Bounded deployment label exported with metrics |
+| `IAPSTACK_GRAFANA_OTLP_ENDPOINT` | none | Grafana Cloud HTTPS OTLP base URL; all three Grafana settings are optional together |
+| `IAPSTACK_GRAFANA_OTLP_USERNAME` | none | Grafana Cloud OTLP instance ID used for Basic authentication |
+| `IAPSTACK_GRAFANA_OTLP_TOKEN` | none | 32+ character metrics-write-only Grafana Cloud access-policy token |
+| `IAPSTACK_GRAFANA_EXPORT_INTERVAL` | `1m` | Direct OTLP metric export interval |
+| `IAPSTACK_GRAFANA_EXPORT_TIMEOUT` | `10s` | Deadline for one direct OTLP export attempt |
+
+The local Compose files publish PostgreSQL and the API on `127.0.0.1`. Set
+`IAPSTACK_POSTGRES_BIND_ADDRESS` or `IAPSTACK_HTTP_BIND_ADDRESS` only when an explicit
+network boundary requires a different host address; keep production exposure behind
+authenticated TLS ingress and network policy.
+
+### Protection keys
+
+Modes that handle provider evidence initialize the protection keyring before serving
+work and fail fast when any protection variable is missing or malformed. Generate every
+root key with a cryptographically secure generator such as `openssl rand -base64 32`.
+
+Configure exactly one of `IAPSTACK_PROTECTION_KEY` or `IAPSTACK_PROTECTION_KEYS`. The
+single-key form works with managed-platform secret generators for an initial
+deployment; switch to the JSON keyring before rotating encryption keys. To rotate, add
+the new key to `IAPSTACK_PROTECTION_KEYS`, select it with
+`IAPSTACK_PROTECTION_ACTIVE_KEY_ID`, and retain old keys until every value written with
+them has been re-encrypted or expired.
+
+Keep the fingerprint key stable across ordinary encryption-key rotations. Changing it
+alters idempotency fingerprints and requires an explicit data migration.
+
+### Outbound network policy
+
+Webhook delivery and configurable Huawei provider calls resolve and validate every
+A/AAAA destination at connection time, do not follow redirects, and permit only public
+network addresses by default. The private-network opt-ins are described in the
+[production security baseline](#production-security-baseline).
+
 ## Production security baseline
 
 - Terminate TLS at a trusted reverse proxy or load balancer. Never expose PostgreSQL
