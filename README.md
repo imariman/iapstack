@@ -27,6 +27,20 @@
 </p>
 
 <p align="center">
+  <strong>English</strong>
+  · <a href="README.de.md">Deutsch</a>
+  · <a href="README.es.md">Español</a>
+  · <a href="README.fr.md">Français</a>
+  · <a href="README.it.md">Italiano</a>
+  · <a href="README.pt-BR.md">Português (Brasil)</a>
+  · <a href="README.tr.md">Türkçe</a>
+  · <a href="README.ru.md">Русский</a>
+  · <a href="README.ja.md">日本語</a>
+  · <a href="README.ko.md">한국어</a>
+  · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
   <a href="https://github.com/imariman/iapstack/actions/workflows/ci.yml"><img src="https://github.com/imariman/iapstack/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="Apache 2.0 License"></a>
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8.svg" alt="Go 1.26">
