@@ -12,7 +12,7 @@ import (
 	"github.com/imariman/iapstack/internal/verification"
 )
 
-// mergeSide describes the only allowed projection one customer holds before a merge.
+// mergeSide describes one allowed access source a customer holds before a merge.
 type mergeSide struct {
 	// imported stores an import grant; otherwise the fixture store observation is stored.
 	imported bool
@@ -22,6 +22,9 @@ type mergeSide struct {
 	lineage string
 	// lapsed ends the access a day before the merge instead of 13 days after it.
 	lapsed bool
+	// unprojected stores an import grant without refreshing the customer's projection, so the
+	// stored row stays the one an earlier projector chose.
+	unprojected bool
 }
 
 // TestCustomerResolutionFollowsOneHop verifies alias, merged, chain, and cross-project lookup.
@@ -413,7 +416,9 @@ func TestMergeCustomersEnforcesConflictIdempotencyAndAliasOwnership(t *testing.T
 		if _, putErr := repository.PutEntitlement(database.ctx, canonicalWrites.projection); putErr != nil {
 			return putErr
 		}
-		_, mergeErr := repository.MergeCustomers(database.ctx, conflictWrite)
+		_, mergeErr := verification.MergeCustomers(
+			database.ctx, repository, verification.NewDefaultProjector(), conflictWrite, time.Now().UTC(),
+		)
 		return mergeErr
 	})
 	if !errors.Is(err, persistence.ErrEntitlementConflict) {
@@ -438,7 +443,9 @@ func TestMergeCustomersEnforcesConflictIdempotencyAndAliasOwnership(t *testing.T
 	write.IdempotencyKey = "merge-auth-user-42"
 	var first persistence.CustomerMerge
 	err = store.Transact(database.ctx, func(repository persistence.Transaction) error {
-		result, mergeErr := repository.MergeCustomers(database.ctx, write)
+		result, mergeErr := verification.MergeCustomers(
+			database.ctx, repository, verification.NewDefaultProjector(), write, time.Now().UTC(),
+		)
 		if mergeErr != nil {
 			return mergeErr
 		}
@@ -446,10 +453,7 @@ func TestMergeCustomersEnforcesConflictIdempotencyAndAliasOwnership(t *testing.T
 		if result.Replay {
 			t.Fatal("first merge was reported as a replay")
 		}
-		return verification.RefreshCustomerProjection(
-			database.ctx, repository, verification.NewDefaultProjector(),
-			projectID, write.CanonicalCustomerID, time.Date(2026, time.October, 26, 0, 0, 0, 0, time.UTC),
-		)
+		return nil
 	})
 	if err != nil {
 		t.Fatalf("merge error = %v", err)
@@ -570,43 +574,58 @@ func TestMergeCustomersIgnoresExpiredAllowedRows(t *testing.T) {
 	}
 }
 
-// TestMergeCustomersRefusesLapsedRowOfTheSameSource verifies one current and one
-// lapsed stored-allowed row still conflict when both cite one source. The fixture
-// observations share the application product and carry no lineage reference, so
-// after a merge only the newest observation counts and the lapsed row could replace
-// current access. A not-yet-started allowed row is current here because reads
-// ignore its start.
-func TestMergeCustomersRefusesLapsedRowOfTheSameSource(t *testing.T) {
-	database := openTestDatabase(t, postgres.LatestVersion)
-	fixture := seedCatalog(t, database)
-	store := openRepositoryStore(t, database.ctx)
-	persistAllowedCustomer(t, database, store, fixture, fixture.customerID)
-	persistAllowedCustomer(t, database, store, fixture, "customer-source")
-
-	cases := []struct {
-		key            string
+// TestMergeCustomersChecksTheSurvivingRowOfASharedSource verifies a merge of one
+// current and one lapsed row that cite one source. The fixture observations share the
+// application product, carry no lineage reference, and were observed at the same
+// instant, so the merged closure keeps only the source customer's observation. The
+// merge is refused when that observation is the lapsed one, because current access
+// would end, and proceeds when it is the current one. A not-yet-started allowed row is
+// current here because reads ignore its start.
+func TestMergeCustomersChecksTheSurvivingRowOfASharedSource(t *testing.T) {
+	tests := map[string]struct {
 		canonicalStart string
 		canonicalEnd   string
 		sourceStart    string
 		sourceEnd      string
+		wantConflict   bool
 	}{
-		{key: "merge-canonical-lapsed", canonicalStart: "-2 hours", canonicalEnd: "-1 hour", sourceStart: "-2 hours", sourceEnd: "1 hour"},
-		{key: "merge-source-lapsed", canonicalStart: "-2 hours", canonicalEnd: "1 hour", sourceStart: "-2 hours", sourceEnd: "-1 hour"},
-		{key: "merge-canonical-not-started", canonicalStart: "1 hour", canonicalEnd: "2 hours", sourceStart: "-2 hours", sourceEnd: "-1 hour"},
-		{key: "merge-canonical-durable", canonicalStart: "-2 hours", canonicalEnd: "", sourceStart: "-2 hours", sourceEnd: "-1 hour"},
+		"source lapsed":         {canonicalStart: "-2 hours", canonicalEnd: "1 hour", sourceStart: "-2 hours", sourceEnd: "-1 hour", wantConflict: true},
+		"canonical not started": {canonicalStart: "1 hour", canonicalEnd: "2 hours", sourceStart: "-2 hours", sourceEnd: "-1 hour", wantConflict: true},
+		"canonical durable":     {canonicalStart: "-2 hours", canonicalEnd: "", sourceStart: "-2 hours", sourceEnd: "-1 hour", wantConflict: true},
+		"canonical lapsed":      {canonicalStart: "-2 hours", canonicalEnd: "-1 hour", sourceStart: "-2 hours", sourceEnd: "1 hour"},
 	}
-	for _, test := range cases {
-		setStoredProjectionPeriod(t, database, fixture.customerID, test.canonicalStart, test.canonicalEnd)
-		setStoredProjectionPeriod(t, database, "customer-source", test.sourceStart, test.sourceEnd)
-		if err := mergeIntoFixtureCustomer(t, database, store, fixture, test.key); !errors.Is(err, persistence.ErrEntitlementConflict) {
-			t.Fatalf("%s error = %v, want ErrEntitlementConflict", test.key, err)
-		}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			database := openTestDatabase(t, postgres.LatestVersion)
+			fixture := seedCatalog(t, database)
+			store := openRepositoryStore(t, database.ctx)
+			persistAllowedCustomer(t, database, store, fixture, fixture.customerID)
+			persistAllowedCustomer(t, database, store, fixture, "customer-source")
+			setStoredProjectionPeriod(t, database, fixture.customerID, test.canonicalStart, test.canonicalEnd)
+			setStoredProjectionPeriod(t, database, "customer-source", test.sourceStart, test.sourceEnd)
+
+			err := mergeIntoFixtureCustomer(t, database, store, fixture, "merge-shared-source")
+			if test.wantConflict {
+				if !errors.Is(err, persistence.ErrEntitlementConflict) {
+					t.Fatalf("merge error = %v, want ErrEntitlementConflict", err)
+				}
+				assertTableCount(t, database, "customer_merges", 0)
+				return
+			}
+			if err != nil {
+				t.Fatalf("merge error = %v, want success", err)
+			}
+			entitlement, access := customerAccessNow(t, database, store, fixture, fixture.customerID)
+			if access != core.AccessAllowed || entitlement.Projection.SourceObservationID != "observation-customer-source" {
+				t.Fatalf("canonical access after merge = %s from %#v, want the source's current row",
+					access, entitlement.Projection)
+			}
+		})
 	}
-	assertTableCount(t, database, "customer_merges", 0)
 }
 
 // TestMergeCustomersKeepsCurrentAccessWhenOneAllowedRowLapsed verifies a merge of one
-// current and one lapsed stored-allowed row proceeds and the canonical customer keeps
+// current and one lapsed stored-allowed row proceeds when the merged projection keeps
 // the current access, whichever customer and source kind holds it. The projector
 // compares rows of different sources by end, and a current store observation also
 // supersedes a lapsed import of its own product.
@@ -669,9 +688,10 @@ func TestMergeCustomersKeepsCurrentAccessWhenOneAllowedRowLapsed(t *testing.T) {
 }
 
 // TestMergeCustomersRefusesLapsedStoreRowOfTheImportProduct verifies a current import
-// and a lapsed store observation of the same application product still conflict. The
-// observation supersedes every import of its product whatever their ends, so the merge
-// would replace current access with the lapsed row. The import customer keeps access.
+// and a lapsed store observation of the same application product conflict. The
+// observation supersedes every import of its product whatever their ends, so the merged
+// projection would be the lapsed row and current access would end. The import customer
+// keeps access.
 func TestMergeCustomersRefusesLapsedStoreRowOfTheImportProduct(t *testing.T) {
 	tests := map[string]struct {
 		canonical mergeSide
@@ -705,8 +725,70 @@ func TestMergeCustomersRefusesLapsedStoreRowOfTheImportProduct(t *testing.T) {
 	}
 }
 
-// persistMergeSide stores side as the only allowed projection of customerID and
-// creates that customer when it is not the fixture customer.
+// TestMergeCustomersRefusesUnprojectedStoreObservationOfTheImportProduct verifies a merge
+// is refused when a store observation the other customer does not project would supersede
+// current imported access. The source customer projects a lapsed import of another product;
+// only its sources show the denied store observation of the canonical import's product.
+func TestMergeCustomersRefusesUnprojectedStoreObservationOfTheImportProduct(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	persistMergeSide(t, database, store, fixture, fixture.customerID, mergeSide{imported: true})
+	persistAllowedCustomerWrites(t, database, store, fixture, "customer-source", func(writes *purchaseWrites) {
+		writes.observation.Observation.State = core.LifecycleExpired
+		writes.observation.Observation.Access = core.AccessDenied
+		writes.observation.Observation.AccessReason = core.AccessReasonExpired
+		writes.projection.Access = core.AccessDenied
+		writes.projection.AccessReason = core.AccessReasonExpired
+	})
+	persistMergeSide(t, database, store, fixture, "customer-source",
+		mergeSide{imported: true, productID: "product-other", lapsed: true})
+	sourceEntitlement, sourceAccess := customerAccessNow(t, database, store, fixture, "customer-source")
+	if sourceAccess == core.AccessAllowed || sourceEntitlement.Projection.SourceProductID != "product-other" {
+		t.Fatalf("source projection = %s from %#v, want the lapsed import of product-other",
+			sourceAccess, sourceEntitlement.Projection)
+	}
+
+	err := mergeIntoFixtureCustomer(t, database, store, fixture, "merge-unprojected-store")
+	if !errors.Is(err, persistence.ErrEntitlementConflict) {
+		t.Fatalf("merge error = %v, want ErrEntitlementConflict", err)
+	}
+	assertTableCount(t, database, "customer_merges", 0)
+	entitlement, access := customerAccessNow(t, database, store, fixture, fixture.customerID)
+	if access != core.AccessAllowed || entitlement.Projection.Normalized().SourceKind != persistence.SourceKindImport {
+		t.Fatalf("canonical access = %s from %#v, want the allowed import", access, entitlement.Projection)
+	}
+}
+
+// TestMergeCustomersRefusesCurrentAccessHiddenByAStaleProjection verifies a merge reads
+// each customer's sources and not only its stored projection. The source customer's row is
+// a lapsed store observation that the earlier store-first order chose over its current
+// import of another product, so both customers can use the entitlement now.
+func TestMergeCustomersRefusesCurrentAccessHiddenByAStaleProjection(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	persistMergeSide(t, database, store, fixture, fixture.customerID,
+		mergeSide{imported: true, productID: "product-third"})
+	persistMergeSide(t, database, store, fixture, "customer-source", mergeSide{lapsed: true})
+	persistMergeSide(t, database, store, fixture, "customer-source",
+		mergeSide{imported: true, productID: "product-other", unprojected: true})
+	sourceEntitlement, sourceAccess := customerAccessNow(t, database, store, fixture, "customer-source")
+	if sourceAccess == core.AccessAllowed ||
+		sourceEntitlement.Projection.Normalized().SourceKind != persistence.SourceKindStoreObservation {
+		t.Fatalf("source projection = %s from %#v, want the stale lapsed store row",
+			sourceAccess, sourceEntitlement.Projection)
+	}
+
+	err := mergeIntoFixtureCustomer(t, database, store, fixture, "merge-stale-projection")
+	if !errors.Is(err, persistence.ErrEntitlementConflict) {
+		t.Fatalf("merge error = %v, want ErrEntitlementConflict", err)
+	}
+	assertTableCount(t, database, "customer_merges", 0)
+}
+
+// persistMergeSide stores side for customerID, creating that customer when it is not
+// the fixture customer, and projects it unless side is unprojected.
 func persistMergeSide(
 	t *testing.T,
 	database *testDatabase,
@@ -741,6 +823,7 @@ func persistMergeSide(
 		mustExec(t, database, `
 			INSERT INTO customers (id, project_id, external_id)
 			VALUES ($1, $2, $3)
+			ON CONFLICT DO NOTHING
 		`, customerID, fixture.projectID, customerID+"-external")
 	}
 	productID := side.productID
@@ -781,7 +864,7 @@ func persistMergeSide(
 		if !ok {
 			return errors.New("import grant writer is unavailable")
 		}
-		if _, err := writer.UpsertImportGrant(database.ctx, grant); err != nil {
+		if _, err := writer.UpsertImportGrant(database.ctx, grant); err != nil || side.unprojected {
 			return err
 		}
 		return verification.RefreshCustomerProjection(
@@ -820,8 +903,9 @@ func customerAccessNow(
 	return entitlements[0], access
 }
 
-// mergeIntoFixtureCustomer merges customer-source into the fixture customer and
-// refreshes the canonical projection in the same transaction, as the merge route does.
+// mergeIntoFixtureCustomer merges customer-source into the fixture customer through the
+// merge use case, which compares access and refreshes the canonical projection, as the
+// merge route does.
 func mergeIntoFixtureCustomer(
 	t *testing.T,
 	database *testDatabase,
@@ -830,19 +914,13 @@ func mergeIntoFixtureCustomer(
 	idempotencyKey string,
 ) error {
 	t.Helper()
-	projectID := core.ProjectID(fixture.projectID)
-	canonicalID := core.CustomerID(fixture.customerID)
 	return store.Transact(database.ctx, func(repository persistence.Transaction) error {
-		result, err := repository.MergeCustomers(database.ctx, persistence.CustomerMergeWrite{
-			ProjectID: projectID, CanonicalCustomerID: canonicalID, SourceCustomerID: "customer-source",
-			IdempotencyKey: idempotencyKey, ActorKeyID: "admin-key",
-		})
-		if err != nil || result.Replay {
-			return err
-		}
-		return verification.RefreshCustomerProjection(
-			database.ctx, repository, verification.NewDefaultProjector(), projectID, canonicalID, time.Now().UTC(),
-		)
+		_, err := verification.MergeCustomers(database.ctx, repository, verification.NewDefaultProjector(),
+			persistence.CustomerMergeWrite{
+				ProjectID: core.ProjectID(fixture.projectID), CanonicalCustomerID: core.CustomerID(fixture.customerID),
+				SourceCustomerID: "customer-source", IdempotencyKey: idempotencyKey, ActorKeyID: "admin-key",
+			}, time.Now().UTC())
+		return err
 	})
 }
 
