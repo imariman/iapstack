@@ -169,6 +169,14 @@ class HuaweiIapStackTest {
   }
 
   @Test
+  fun customerIdsFollowTheSharedServerIdentifierVectors() {
+    val mismatches = customerIdVectors().filter { vector ->
+      runCatching { requireExternalCustomerId(vector.value) }.isSuccess != vector.accepted
+    }
+    assertTrue(mismatches.isEmpty(), "Mismatched vectors: ${mismatches.joinToString { it.name }}")
+  }
+
+  @Test
   fun evidenceAcceptsIdsTheServerAccepts() {
     for (customerId in listOf("customer 1", "müşteri-1", "user@example.com", "顧客-1", "customer-\ud83d\ude00")) {
       val evidence = HuaweiPurchaseEvidence(

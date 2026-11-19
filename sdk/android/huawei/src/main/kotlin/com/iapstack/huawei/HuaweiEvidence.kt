@@ -15,14 +15,18 @@ private val huaweiGson = Gson()
  * `internal/core/identifiers.go`): valid UTF-8, which for a Kotlin string
  * means no unpaired surrogate (UTF-8 encoding would replace it), and no C0
  * (U+0000-U+001F), DEL, or C1 (U+0080-U+009F) control character, the same set
- * as [Char.isISOControl]. It runs before the Huawei purchase UI opens: an id
- * the server rejects would be charged as `developerPayload` and then never
- * produce an entitlement, and a padded id on restore would never match the
- * bound payload and silently skip rows.
+ * as [Char.isISOControl], and no leading or trailing whitespace as Go's
+ * `strings.TrimSpace` defines it. It runs before the Huawei purchase UI opens:
+ * an id the server rejects would be charged as `developerPayload` and then
+ * never produce an entitlement, and a padded id on restore would never match
+ * the bound payload and silently skip rows. The shared cases in
+ * `contracts/test-vectors/external-customer-ids.json` pin this copy to the
+ * server.
  */
 internal fun requireExternalCustomerId(value: String) {
   if (value.isEmpty() ||
-    value.trim() != value ||
+    isGoSpace(value.first()) ||
+    isGoSpace(value.last()) ||
     value.any { it.isISOControl() } ||
     hasUnpairedSurrogate(value)
   ) {
@@ -30,6 +34,16 @@ internal fun requireExternalCustomerId(value: String) {
       "externalCustomerId must be non-empty valid Unicode without surrounding whitespace or control characters",
     )
   }
+}
+
+/**
+ * Go's `unicode.IsSpace`, which the server's `strings.TrimSpace` strips. An
+ * explicit set keeps the edge check independent of the runtime's Unicode
+ * tables, which [String.trim] depends on. Every member is one UTF-16 unit.
+ */
+private fun isGoSpace(char: Char): Boolean = when (char.code) {
+  in 0x09..0x0d, 0x20, 0x85, 0xa0, 0x1680, in 0x2000..0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000 -> true
+  else -> false
 }
 
 private fun hasUnpairedSurrogate(value: String): Boolean {

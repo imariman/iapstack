@@ -60,6 +60,46 @@ class GooglePlayIapStackTest {
   }
 
   @Test
+  fun customerIdsFollowTheSharedServerIdentifierVectors() {
+    val mismatches = customerIdVectors().filter { vector ->
+      runCatching { requireExternalCustomerId(vector.value) }.isSuccess != vector.accepted
+    }
+    assertTrue(mismatches.isEmpty(), "Mismatched vectors: ${mismatches.joinToString { it.name }}")
+    // Play's obfuscatedAccountId limit is not part of the shared rule.
+    requireExternalCustomerId("a".repeat(64))
+    assertFailsWith<IllegalArgumentException> { requireExternalCustomerId("a".repeat(65)) }
+  }
+
+  @Test
+  fun launchPurchaseRejectsIdsTheServerRejectsBeforeBillingOpens() = runBlocking {
+    for (vector in customerIdVectors()) {
+      val product = monthlyProduct()
+      val platform = FakePlatform(productQuery = GooglePlayProductQuery(listOf(product), emptySet()))
+      val googlePlay = googlePlay(platform = platform)
+      googlePlay.queryProducts(setOf("premium_monthly"))
+      val launch = runCatching { googlePlay.launchPurchase(externalCustomerId = vector.value, product = product) }
+      if (vector.accepted) {
+        assertTrue(launch.isSuccess, vector.name)
+        assertEquals(vector.value, platform.launchedAccountId, vector.name)
+      } else {
+        assertTrue(launch.exceptionOrNull() is IllegalArgumentException, vector.name)
+        assertNull(platform.launchedProduct, vector.name)
+      }
+    }
+  }
+
+  @Test
+  fun restoreAndEvidenceRejectIdsTheServerRejects() = runBlocking {
+    for (vector in customerIdVectors().filterNot { it.accepted }) {
+      assertFailsWith<IllegalArgumentException>(vector.name) { googlePlay().restorePurchases(vector.value) }
+      assertFailsWith<IllegalArgumentException>(vector.name) {
+        GooglePlayPurchaseEvidence("token", GooglePlayProductKind.SUBSCRIPTION)
+          .toSubmission(externalCustomerId = vector.value, productId = "premium_monthly")
+      }
+    }
+  }
+
+  @Test
   fun queriesConfiguredProductsAndLaunchesWithCustomerBinding() = runBlocking {
     val product = monthlyProduct()
     val platform = FakePlatform(

@@ -152,7 +152,7 @@ class IapStackSessionLoader(httpClient: OkHttpClient? = null) {
       IapStackCustomerSession(
         baseUri = URI(field("base_url")),
         applicationId = field("application_id"),
-        externalCustomerId = field("external_customer_id").also { require(it.trim() == it) },
+        externalCustomerId = field("external_customer_id").also(::requireExternalCustomerId),
         customerToken = field("token"),
         expiresAt = Instant.parse(field("expires_at")),
       ).also { it.config.validate() }
