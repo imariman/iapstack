@@ -5,6 +5,9 @@ import android.content.Intent
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.iapstack.core.*
+// Internal to core: build.gradle compiles the core sources into this module.
+// The explicit import also picks it over the Google Play and Huawei copies.
+import com.iapstack.core.requireExternalCustomerId
 import com.iapstack.googleplay.*
 import com.iapstack.huawei.*
 import kotlinx.coroutines.*
@@ -94,7 +97,8 @@ class IAPStackModule(private val context: ReactApplicationContext) :
         val storefront = config.getString("storefront")
         require(storefront == "google_play" || storefront == "huawei") { "Unsupported storefront on Android" }
         val customer = requireNotNull(config.getString("externalCustomerId"))
-        require(customer.isNotBlank() && customer.trim() == customer)
+        // The server's identifier rule, before any store purchase can start.
+        requireExternalCustomerId(customer)
         val kinds = requireNotNull(config.getMap("productKinds")).toHashMap().mapValues { (_, value) ->
           when (value) { "non_consumable" -> false; "subscription" -> true; else -> error("Unsupported product kind") }
         }

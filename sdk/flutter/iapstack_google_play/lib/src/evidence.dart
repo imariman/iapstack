@@ -1,4 +1,5 @@
 import 'package:iapstack/iapstack.dart';
+import 'package:iapstack_google_play/src/customer_id.dart';
 import 'package:iapstack_google_play/src/errors.dart';
 import 'package:iapstack_google_play/src/product_kind.dart';
 
@@ -34,8 +35,9 @@ final class GooglePlayPurchaseEvidence {
     required String externalCustomerId,
     required String productId,
   }) {
-    if (externalCustomerId.trim().isEmpty || productId.trim().isEmpty) {
-      throw ArgumentError('externalCustomerId and productId must not be empty');
+    validateExternalCustomerId(externalCustomerId);
+    if (productId.trim().isEmpty) {
+      throw ArgumentError('productId must not be empty');
     }
     return PurchaseSubmission(
       externalCustomerId: externalCustomerId,

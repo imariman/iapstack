@@ -66,6 +66,11 @@ class IapStackSessionLoaderTest {
     val cases = listOf(
       session(baseUrl = "http://insecure.example") to "invalid_session_response",
       session(customer = " customer-1") to "invalid_session_response",
+      // JSON escapes: the server's identifier rule rejects these after decoding.
+      session(customer = "customer\\u0000id") to "invalid_session_response",
+      session(customer = "customer\\u0085id") to "invalid_session_response",
+      session(customer = "customer\\ud800id") to "invalid_session_response",
+      session(customer = "customer-1\\u3000") to "invalid_session_response",
       session(token = "") to "invalid_session_response",
       session(expiry = "tomorrow") to "invalid_session_response",
       """{"token":123}""" to "invalid_session_response",

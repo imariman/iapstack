@@ -1,5 +1,6 @@
 import {NativeEventEmitter, NativeModules, Platform} from 'react-native';
 import {IapStackConfig} from './config';
+import {isValidExternalCustomerId, validateExternalCustomerId} from './customer_id';
 import {IapStackIncompleteRestoreError, IapStackProtocolError} from './errors';
 import {
   decodeEntitlementSnapshot, decodeRestoreResult, decodeVerificationResult,
@@ -93,7 +94,8 @@ export const IapStackStore = {
         applicationId: raw.application_id as string, customerToken: raw.token as string});
       const customer = raw.external_customer_id as string;
       const expiresAt = new Date(raw.expires_at as string);
-      if (customer.trim() !== customer || !Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
+      if (!isValidExternalCustomerId(customer) || !Number.isFinite(expiresAt.getTime()) ||
+          expiresAt.getTime() <= Date.now()) {
         throw new TypeError('Invalid or expired customer session');
       }
       return {baseUri: config.baseUri, applicationId: config.applicationId, customerToken: config.customerToken,
@@ -110,9 +112,8 @@ export const IapStackStore = {
       throw new Error('Unknown storefront');
     }
     new IapStackConfig(config);
-    if (!config.externalCustomerId || config.externalCustomerId.trim() !== config.externalCustomerId) {
-      throw new TypeError('externalCustomerId must be non-empty without surrounding whitespace');
-    }
+    // Rejects before the native store can charge for an ID the server would refuse.
+    validateExternalCustomerId(config.externalCustomerId);
     if (config.storefront === 'apple' &&
         !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(config.externalCustomerId)) {
       throw new TypeError('Apple externalCustomerId must be a lowercase UUID');

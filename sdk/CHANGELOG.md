@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Breaking
+
+- Huawei (Flutter and Kotlin): `purchaseAndVerify`, `restorePurchases`, and
+  `HuaweiPurchaseEvidence.toSubmission` reject an `externalCustomerId` that is
+  empty, has surrounding whitespace, or contains a control character or an
+  unpaired surrogate. The check runs before the purchase UI opens and before
+  restore reads any page. A padded ID on restore used to skip every owned row
+  and return an empty success; it now throws `ArgumentError` (Flutter) or
+  `IllegalArgumentException` (Kotlin).
+- Every other client SDK now applies the server's identifier rule to
+  `externalCustomerId` before the store charges or a request is sent: Flutter
+  core and Google Play, Kotlin core and Google Play, TypeScript host, React
+  Native (JavaScript and the Android bridge), and Go host. Besides empty and
+  padded IDs, they reject an ID with a C0 control character, DEL, or a C1
+  control character, and an unpaired UTF-16 surrogate (Go: invalid UTF-8),
+  which the server refused only after the charge. Google Play's
+  `launchPurchase` rejects such an ID before Play Billing opens. Surrounding
+  whitespace follows Go's `strings.TrimSpace` in every SDK, Huawei included,
+  so a leading or trailing U+FEFF is now accepted. Error types are unchanged;
+  the messages now read "must be non-empty valid Unicode without surrounding
+  whitespace or control characters" (Go says "valid UTF-8", Google Play adds
+  "of at most 64 characters"). Google Play keeps its 64-character
+  `obfuscatedAccountId` limit, and its `GooglePlayPurchaseEvidence.toSubmission`
+  applies the same check. The Kotlin session loader and the React Native
+  session bootstrap reject a session whose `external_customer_id` breaks the
+  rule. Apple SDKs are unchanged: they require a UUID. The shared cases are in
+  `contracts/test-vectors/external-customer-ids.json`.
+
 ### Added
 
 - Go and TypeScript host webhook verifiers accept `entitlement.changed`
