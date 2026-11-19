@@ -40,7 +40,7 @@ Self-hosted and open source (Apache-2.0), written in Go, backed by PostgreSQL. U
 - Name: IAPStack. A Go gopher mascot exists (`assets/iapstack-gopher.png`), used in the README.
 - Logo explorations exist in the untracked `brand/` folder (`brand/logo/kose.svg`, `deste.svg`); not yet adopted, so not binding.
 - No confirmed voice guide; existing copy is plain, precise and technical.
-- Visual preference (user decision, 2026-11-18): for the operations dashboard the user chose the category standard, a polished dark developer-SaaS look, over themed directions, asking for it to be executed better than the first sketch. Craft references: Linear, Vercel, Stripe.
+- Visual preference (user decision, 2026-11-18): for the operations dashboard the user chose the category standard, a polished dark developer-SaaS look, over themed directions, asking for it to be executed better than the first sketch. Craft references: Linear, Vercel, Stripe. Later extended at the user's request with an equivalent light theme; the dashboard follows the operating system by default and offers System / Light / Dark from the sign-in screen and the top bar.
 
 ## Evidence on Hand
 

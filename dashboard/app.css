@@ -1,43 +1,75 @@
-/* IAPStack operations dashboard: dark control plane, Linear/Vercel craft level. */
+/* IAPStack operations dashboard: light and dark control plane, Linear/Vercel craft level. */
 
+/* Theme tokens carry a light and a dark value side by side. The default
+   follows the operating system; data-theme on <html> is the operator's
+   explicit choice and only narrows color-scheme, so every light-dark()
+   pair below resolves to that side. */
 :root {
-  color-scheme: dark;
-  --background: #09090b;
-  --sidebar: #0c0c0e;
-  --surface: #111113;
-  --surface-raised: #17171a;
-  --surface-hover: #1c1c20;
-  --surface-inset: #0d0d0f;
-  --border: rgba(255, 255, 255, 0.075);
-  --border-strong: rgba(255, 255, 255, 0.13);
-  --highlight: rgba(255, 255, 255, 0.045);
-  --foreground: #ededef;
-  --muted: #a1a1aa;
-  --subtle: #8b8b94;
-  --primary: #7b7ff6;
-  --primary-strong: #9a9dff;
-  --primary-soft: rgba(123, 127, 246, 0.14);
-  --accent: #34d399;
-  --accent-soft: rgba(52, 211, 153, 0.12);
-  --warning: #fbbf24;
-  --warning-soft: rgba(251, 191, 36, 0.12);
-  --danger: #fb7185;
-  --danger-soft: rgba(251, 113, 133, 0.12);
-  --chart-allowed: #6f73f2;
+  color-scheme: light dark;
+  --background: light-dark(#f4f4f5, #09090b);
+  --sidebar: light-dark(#fafafa, #0c0c0e);
+  --surface: light-dark(#ffffff, #111113);
+  --surface-raised: light-dark(#f4f4f5, #17171a);
+  --surface-hover: light-dark(#e9e9ec, #1c1c20);
+  --surface-inset: light-dark(#fafafa, #0d0d0f);
+  --border: light-dark(rgba(9, 9, 11, 0.1), rgba(255, 255, 255, 0.075));
+  --border-strong: light-dark(rgba(9, 9, 11, 0.18), rgba(255, 255, 255, 0.13));
+  --border-hover: light-dark(rgba(9, 9, 11, 0.28), rgba(255, 255, 255, 0.2));
+  --highlight: light-dark(rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.045));
+  --wash: light-dark(rgba(9, 9, 11, 0.05), rgba(255, 255, 255, 0.05));
+  --wash-soft: light-dark(rgba(9, 9, 11, 0.035), rgba(255, 255, 255, 0.035));
+  --wash-strong: light-dark(rgba(9, 9, 11, 0.07), rgba(255, 255, 255, 0.06));
+  --foreground: light-dark(#18181b, #ededef);
+  --inverted-foreground: light-dark(#ffffff, #09090b);
+  --primary-button-hover: light-dark(#2b2b30, #ffffff);
+  --brand-mark-from: light-dark(#2b2b30, #f4f4f5);
+  --brand-mark-to: light-dark(#17171a, #c9c9d1);
+  --muted: light-dark(#52525b, #a1a1aa);
+  --subtle: light-dark(#666670, #8b8b94);
+  --primary: light-dark(#5b5def, #7b7ff6);
+  --primary-strong: light-dark(#4447d6, #9a9dff);
+  --primary-text: light-dark(#3730a3, #c7c8ff);
+  --primary-soft: light-dark(rgba(91, 93, 239, 0.12), rgba(123, 127, 246, 0.14));
+  --primary-border: light-dark(rgba(91, 93, 239, 0.32), rgba(123, 127, 246, 0.3));
+  --accent: light-dark(#047857, #34d399);
+  --accent-text: light-dark(#065f46, #bbf7d0);
+  --accent-soft: light-dark(rgba(4, 120, 87, 0.1), rgba(52, 211, 153, 0.12));
+  --accent-border: light-dark(rgba(4, 120, 87, 0.28), rgba(52, 211, 153, 0.25));
+  --warning: light-dark(#b45309, #fbbf24);
+  --warning-soft: light-dark(rgba(180, 83, 9, 0.1), rgba(251, 191, 36, 0.12));
+  --warning-border: light-dark(rgba(180, 83, 9, 0.28), rgba(251, 191, 36, 0.25));
+  --danger: light-dark(#e11d48, #fb7185);
+  --danger-text: light-dark(#9f1239, #fecdd3);
+  --danger-soft: light-dark(rgba(225, 29, 72, 0.08), rgba(251, 113, 133, 0.12));
+  --danger-border: light-dark(rgba(225, 29, 72, 0.28), rgba(251, 113, 133, 0.25));
+  --chart-allowed: light-dark(#5b5def, #6f73f2);
   --chart-denied: #f43f5e;
-  --chart-unresolved: #f59e0b;
-  --focus: #8b8ef8;
-  --scrim: rgba(3, 3, 5, 0.72);
+  --chart-unresolved: light-dark(#d97706, #f59e0b);
+  --chart-grid: light-dark(rgba(9, 9, 11, 0.09), rgba(255, 255, 255, 0.07));
+  --focus: light-dark(#4f46e5, #8b8ef8);
+  --scrim: light-dark(rgba(24, 24, 27, 0.44), rgba(3, 3, 5, 0.72));
+  --scrollbar: light-dark(#c9c9d1, #2a2a30);
+  --selection: light-dark(rgba(91, 93, 239, 0.25), rgba(123, 127, 246, 0.35));
   --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-data: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-  --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px -18px rgba(0, 0, 0, 0.7);
-  --shadow-dialog: 0 24px 64px -12px rgba(0, 0, 0, 0.7), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-panel: 0 1px 2px light-dark(rgba(9, 9, 11, 0.06), rgba(0, 0, 0, 0.4)), 0 12px 32px -18px light-dark(rgba(9, 9, 11, 0.18), rgba(0, 0, 0, 0.7));
+  --shadow-dialog: 0 24px 64px -12px light-dark(rgba(9, 9, 11, 0.25), rgba(0, 0, 0, 0.7)), 0 2px 8px light-dark(rgba(9, 9, 11, 0.08), rgba(0, 0, 0, 0.4));
+  --shadow-button-primary: inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.5)), 0 1px 2px light-dark(rgba(9, 9, 11, 0.22), rgba(0, 0, 0, 0.4));
   --radius-control: 8px;
   --radius-panel: 12px;
   --radius-dialog: 16px;
   --duration-fast: 120ms;
   --duration-base: 200ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* An explicit theme choice wins over the operating system preference. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 * {
@@ -52,7 +84,7 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   scroll-behavior: smooth;
-  scrollbar-color: #2a2a30 transparent;
+  scrollbar-color: var(--scrollbar) transparent;
 }
 
 body {
@@ -66,8 +98,8 @@ body {
 }
 
 ::selection {
-  background: rgba(123, 127, 246, 0.35);
-  color: #fff;
+  background: var(--selection);
+  color: var(--foreground);
 }
 
 ::-webkit-scrollbar {
@@ -76,7 +108,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2a2a30;
+  background: var(--scrollbar);
   background-clip: padding-box;
   border: 3px solid transparent;
   border-radius: 10px;
@@ -169,10 +201,10 @@ a {
 
 .brand-mark {
   align-items: center;
-  background: linear-gradient(180deg, #f4f4f5, #c9c9d1);
+  background: linear-gradient(180deg, var(--brand-mark-from), var(--brand-mark-to));
   border-radius: 8px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 1px 2px rgba(0, 0, 0, 0.5);
-  color: #09090b;
+  box-shadow: var(--shadow-button-primary);
+  color: var(--inverted-foreground);
   display: inline-flex;
   height: 28px;
   justify-content: center;
@@ -221,13 +253,13 @@ textarea {
 
 input::placeholder,
 textarea::placeholder {
-  color: #84848e;
+  color: var(--subtle);
 }
 
 input:hover,
 select:hover,
 textarea:hover {
-  border-color: rgba(255, 255, 255, 0.2);
+  border-color: var(--border-hover);
 }
 
 input:focus,
@@ -255,6 +287,18 @@ select {
   background-repeat: no-repeat;
   background-size: 16px;
   padding-right: 34px;
+}
+
+/* The chevron is a data URI, so it cannot read a theme token; restate it
+   with a dark stroke wherever the light theme resolves. */
+:root[data-theme="light"] select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2352525b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2352525b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  }
 }
 
 input[type="file"] {
@@ -326,13 +370,13 @@ label {
 
 .primary-button {
   background: var(--foreground);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 1px 2px rgba(0, 0, 0, 0.4);
-  color: #09090b;
+  box-shadow: var(--shadow-button-primary);
+  color: var(--inverted-foreground);
   font-weight: 600;
 }
 
 .primary-button:hover:not(:disabled) {
-  background: #ffffff;
+  background: var(--primary-button-hover);
 }
 
 .secondary-button {
@@ -344,12 +388,12 @@ label {
 
 .secondary-button:hover:not(:disabled) {
   background: var(--surface-hover);
-  border-color: rgba(255, 255, 255, 0.2);
+  border-color: var(--border-hover);
 }
 
 .danger-button {
   background: #e11d48;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 1px 2px light-dark(rgba(9, 9, 11, 0.22), rgba(0, 0, 0, 0.4));
   color: #fff;
   font-weight: 600;
 }
@@ -364,7 +408,7 @@ label {
 }
 
 .text-button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--wash);
   color: var(--foreground);
 }
 
@@ -377,7 +421,7 @@ label {
 }
 
 .icon-button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--wash);
   border-color: var(--border-strong);
   color: var(--foreground);
 }
@@ -466,7 +510,11 @@ form[aria-busy="true"] button[type="submit"]::before {
   padding: 48px;
 }
 
-.auth-main .brand-lockup {
+.auth-topbar {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
   margin-bottom: 36px;
 }
 
@@ -532,7 +580,7 @@ form[aria-busy="true"] button[type="submit"]::before {
 .control-badge {
   align-items: center;
   background: var(--accent-soft);
-  border: 1px solid rgba(52, 211, 153, 0.2);
+  border: 1px solid var(--accent-border);
   border-radius: 999px;
   color: var(--accent);
   display: inline-flex;
@@ -604,7 +652,7 @@ form[aria-busy="true"] button[type="submit"]::before {
 }
 
 .preview-route code {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--wash-soft);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--muted);
@@ -681,7 +729,7 @@ form[aria-busy="true"] button[type="submit"]::before {
 }
 
 .project-button:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--wash-soft);
   color: var(--foreground);
 }
 
@@ -699,7 +747,7 @@ form[aria-busy="true"] button[type="submit"]::before {
 }
 
 .project-button.active {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--wash-strong);
   border-color: var(--border);
   box-shadow: inset 0 1px 0 var(--highlight);
   color: var(--foreground);
@@ -788,9 +836,9 @@ form[aria-busy="true"] button[type="submit"]::before {
 
 .global-message {
   background: var(--danger-soft);
-  border: 1px solid rgba(251, 113, 133, 0.25);
+  border: 1px solid var(--danger-border);
   border-radius: var(--radius-control);
-  color: #fecdd3;
+  color: var(--danger-text);
   font-size: 13px;
   padding: 10px 14px;
 }
@@ -801,14 +849,14 @@ form[aria-busy="true"] button[type="submit"]::before {
 
 .global-message.success {
   background: var(--accent-soft);
-  border-color: rgba(52, 211, 153, 0.25);
-  color: #bbf7d0;
+  border-color: var(--accent-border);
+  color: var(--accent-text);
 }
 
 .global-message.info {
   background: var(--primary-soft);
-  border-color: rgba(123, 127, 246, 0.28);
-  color: #dcdcff;
+  border-color: var(--primary-border);
+  color: var(--primary-text);
 }
 
 /* Shared panel surface */
@@ -1013,7 +1061,7 @@ h2 {
 }
 
 .commerce-window {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--wash-soft);
   border: 1px solid var(--border);
   border-radius: 999px;
   color: var(--muted);
@@ -1075,7 +1123,7 @@ h2 {
 }
 
 .activity-chart .chart-grid-line {
-  stroke: rgba(255, 255, 255, 0.07);
+  stroke: var(--chart-grid);
   stroke-dasharray: 2 4;
 }
 
@@ -1156,7 +1204,7 @@ h2 {
 }
 
 .revenue-card {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 40%);
+  background: linear-gradient(180deg, var(--wash-soft), transparent 40%);
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -1178,7 +1226,7 @@ h2 {
 }
 
 .revenue-badge {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--wash);
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   color: var(--muted);
@@ -1190,13 +1238,13 @@ h2 {
 
 .revenue-badge.reports-required {
   background: var(--warning-soft);
-  border-color: rgba(251, 191, 36, 0.25);
+  border-color: var(--warning-border);
   color: var(--warning);
 }
 
 .revenue-badge.reports-imported {
   background: var(--accent-soft);
-  border-color: rgba(52, 211, 153, 0.25);
+  border-color: var(--accent-border);
   color: var(--accent);
 }
 
@@ -1420,7 +1468,7 @@ h2 {
 }
 
 .segmented-control button[aria-pressed="true"] {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--wash-strong);
   border-color: var(--border);
   box-shadow: inset 0 1px 0 var(--highlight);
   color: var(--foreground);
@@ -1665,7 +1713,7 @@ h2 {
 }
 
 .application-card:hover {
-  background: #141417;
+  background: var(--surface-raised);
 }
 
 .application-card-head {
@@ -1708,7 +1756,7 @@ h2 {
 .revision-badge,
 .match-badge,
 .source-badge {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--wash);
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   color: var(--muted);
@@ -1829,7 +1877,7 @@ h2 {
 .entitlement-tags span {
   background: var(--primary-soft);
   border-radius: 5px;
-  color: #c7c8ff;
+  color: var(--primary-text);
   font-family: var(--font-data);
   font-size: 11px;
   padding: 1px 6px;
@@ -1903,7 +1951,7 @@ table {
 }
 
 th {
-  background: #0f0f11;
+  background: var(--surface-inset);
   border-bottom: 1px solid var(--border);
   color: var(--subtle);
   font-size: 12px;
@@ -1940,7 +1988,7 @@ tbody tr {
 }
 
 tbody tr:hover {
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--wash-soft);
 }
 
 tbody tr:last-child td {
@@ -1960,7 +2008,7 @@ td code {
 
 .status-badge {
   align-items: center;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--wash);
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   color: var(--muted);
@@ -2002,7 +2050,7 @@ td code {
 .status-badge.processed,
 .status-badge.sent {
   background: var(--accent-soft);
-  border-color: rgba(52, 211, 153, 0.22);
+  border-color: var(--accent-border);
   color: var(--accent);
 }
 
@@ -2014,7 +2062,7 @@ td code {
 .status-badge.unresolved,
 .status-badge.billing-issue {
   background: var(--warning-soft);
-  border-color: rgba(251, 191, 36, 0.22);
+  border-color: var(--warning-border);
   color: var(--warning);
 }
 
@@ -2023,7 +2071,7 @@ td code {
 .status-badge.refunded,
 .status-badge.revoked {
   background: var(--danger-soft);
-  border-color: rgba(251, 113, 133, 0.22);
+  border-color: var(--danger-border);
   color: var(--danger);
 }
 
@@ -2116,7 +2164,7 @@ td code {
 
 .dialog-flag {
   background: var(--warning-soft);
-  border: 1px solid rgba(251, 191, 36, 0.25);
+  border: 1px solid var(--warning-border);
   border-radius: 999px;
   color: var(--warning);
   font-size: 11.5px;
@@ -2126,7 +2174,7 @@ td code {
 
 .dialog-flag.danger {
   background: var(--danger-soft);
-  border-color: rgba(251, 113, 133, 0.25);
+  border-color: var(--danger-border);
   color: var(--danger);
 }
 
@@ -2148,7 +2196,7 @@ td code {
 }
 
 .credential-note {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--wash-soft);
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   color: var(--muted);
@@ -2234,7 +2282,7 @@ td code {
 
 .commissioning-route li.complete > span {
   background: var(--accent-soft);
-  border-color: rgba(52, 211, 153, 0.35);
+  border-color: var(--accent-border);
   color: var(--accent);
 }
 
@@ -2443,7 +2491,7 @@ td code {
 .grant-item .revoke-grant-button:hover:not(:disabled),
 .grant-item .revoke-grant-button:focus-visible {
   background: var(--danger-soft);
-  border-color: rgba(251, 113, 133, 0.35);
+  border-color: var(--danger-border);
 }
 
 .api-key-card .text-button:disabled {
@@ -2453,9 +2501,9 @@ td code {
 
 .current-key-badge {
   background: var(--primary-soft);
-  border: 1px solid rgba(123, 127, 246, 0.3);
+  border: 1px solid var(--primary-border);
   border-radius: 999px;
-  color: #c7c8ff;
+  color: var(--primary-text);
   font-size: 11.5px;
   font-weight: 500;
   padding: 0 8px;
@@ -2635,7 +2683,7 @@ td code {
 
 .detail-note {
   align-items: center;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--wash-soft);
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   color: var(--muted);
@@ -2982,7 +3030,7 @@ td code {
     padding: 32px 24px;
   }
 
-  .auth-main .brand-lockup {
+  .auth-topbar {
     margin-bottom: 16px;
   }
 

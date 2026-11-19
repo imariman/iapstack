@@ -7,6 +7,68 @@ const maximumCredentialFileBytes = 1024 * 1024;
 const customerPageSize = 25;
 const customerSearchMaxBytes = 512;
 const customerSearchDelayMs = 350;
+
+// Color theme: System follows the operating system, Light and Dark are
+// explicit choices. The choice is a non-secret display preference, so it
+// lives in a first-party cookie scoped to the dashboard path instead of
+// any browser storage API, which the dashboard keeps free of state.
+const themeCookieName = "iapstack_dashboard_theme";
+const themeOrder = ["system", "light", "dark"];
+const themeLabels = { system: "System", light: "Light", dark: "Dark" };
+const themeBackgrounds = { light: "#f4f4f5", dark: "#09090b" };
+const systemThemeQuery = window.matchMedia("(prefers-color-scheme: light)");
+
+function storedThemePreference() {
+  const row = document.cookie.split("; ").find((entry) => entry.startsWith(`${themeCookieName}=`));
+  const value = row ? row.slice(themeCookieName.length + 1) : "";
+  return themeOrder.includes(value) ? value : "system";
+}
+
+function resolvedTheme(preference) {
+  if (preference !== "system") {
+    return preference;
+  }
+  return systemThemeQuery.matches ? "light" : "dark";
+}
+
+function applyTheme(preference) {
+  const root = document.documentElement;
+  if (preference === "system") {
+    root.removeAttribute("data-theme");
+  } else {
+    root.setAttribute("data-theme", preference);
+  }
+  const resolved = resolvedTheme(preference);
+  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
+    if (preference === "system") {
+      const lightMeta = (meta.getAttribute("media") || "").includes("light");
+      meta.setAttribute("content", lightMeta ? themeBackgrounds.light : themeBackgrounds.dark);
+    } else {
+      meta.setAttribute("content", themeBackgrounds[resolved]);
+    }
+  }
+  const next = themeOrder[(themeOrder.indexOf(preference) + 1) % themeOrder.length];
+  for (const toggle of document.querySelectorAll(".theme-toggle")) {
+    toggle.setAttribute("aria-label", `Color theme: ${themeLabels[preference]}. Switch to ${themeLabels[next]}`);
+    toggle.querySelector("[data-theme-label]").textContent = themeLabels[preference];
+    for (const icon of toggle.querySelectorAll("[data-theme-icon]")) {
+      if (icon.dataset.themeIcon === preference) {
+        icon.removeAttribute("hidden");
+      } else {
+        icon.setAttribute("hidden", "");
+      }
+    }
+  }
+}
+
+function persistThemePreference(preference) {
+  const secure = window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${themeCookieName}=${preference}; Path=/dashboard/; Max-Age=31536000; SameSite=Strict${secure}`;
+}
+
+let themePreference = storedThemePreference();
+applyTheme(themePreference);
+
 const state = {
   projects: [],
   selectedProject: "",
@@ -2770,6 +2832,20 @@ for (const button of document.querySelectorAll(".segmented-control [data-window-
     }
   });
 }
+
+for (const toggle of document.querySelectorAll(".theme-toggle")) {
+  toggle.addEventListener("click", () => {
+    themePreference = themeOrder[(themeOrder.indexOf(themePreference) + 1) % themeOrder.length];
+    persistThemePreference(themePreference);
+    applyTheme(themePreference);
+  });
+}
+
+systemThemeQuery.addEventListener("change", () => {
+  if (themePreference === "system") {
+    applyTheme(themePreference);
+  }
+});
 
 clearLegacyBearerStorage();
 syncSetupProvider();
