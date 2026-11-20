@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -40,6 +41,12 @@ type reprojectionDatabase struct {
 	ctx   context.Context
 	conn  *pgx.Conn
 	store *postgres.Store
+}
+
+// failingProjector fails the refresh of one customer and projects every other one by default.
+type failingProjector struct {
+	customerID core.CustomerID
+	projector  verification.Projector
 }
 
 // TestRunFixesAStaleStoreRowThatHidesACurrentImport verifies the dry run, the apply, the event,
@@ -161,6 +168,60 @@ func TestRunSkipsACustomerMergedAfterItWasListed(t *testing.T) {
 	}
 	if summary.CustomersScanned != 2 || summary.CustomersChanged != 2 {
 		t.Fatalf("summary = %#v, want the stale customer and the new canonical customer", summary)
+	}
+}
+
+// TestRunContinuesPastAFailedCustomerAndResumes verifies that a failing customer is recorded
+// while later customers are still fixed, that a run resumes after a customer id, that a report
+// failure records where the run stopped, and that a missing project is refused.
+func TestRunContinuesPastAFailedCustomerAndResumes(t *testing.T) {
+	database := openReprojectionDatabase(t)
+	now := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	database.seed(t, now)
+	options := Options{
+		ProjectID: reprojectionProject, BatchSize: 1, Apply: true, AllCustomers: true,
+		Projector: failingProjector{customerID: currentCustomer, projector: verification.NewDefaultProjector()},
+		Clock:     func() time.Time { return now },
+	}
+
+	summary, err := Run(database.ctx, database.store, options, nil)
+	if !errors.Is(err, ErrCustomersFailed) {
+		t.Fatalf("Run() error = %v, want ErrCustomersFailed", err)
+	}
+	if summary.CustomersScanned != 3 || summary.CustomersFailed != 1 || summary.CustomersChanged != 1 ||
+		summary.Stopped != nil || len(summary.FailedCustomers) != 1 ||
+		summary.FailedCustomers[0] != (CustomerFailure{ProjectID: reprojectionProject, CustomerID: currentCustomer, Error: "failed"}) {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if source := database.sourceKind(t, staleCustomer); source != persistence.SourceKindImport {
+		t.Fatalf("stale source = %s, want import although an earlier customer failed", source)
+	}
+
+	options.Projector = verification.NewDefaultProjector()
+	options.AfterCustomerID = importOnlyCustomer
+	resumed, err := Run(database.ctx, database.store, options, nil)
+	if err != nil || resumed.CustomersScanned != 1 || resumed.CustomersChanged != 0 {
+		t.Fatalf("resumed Run() = %#v, %v; want only customer-stale scanned", resumed, err)
+	}
+
+	database.exec(t, `
+		UPDATE customer_entitlements
+		SET source_kind = 'store_observation', source_import_id = NULL,
+			source_observation_id = 'observation-stale', source_product_id = 'product-store',
+			effective_starts_at = $1, effective_ends_at = $2
+		WHERE customer_id = 'customer-stale'
+	`, time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC))
+	options.AfterCustomerID = ""
+	errReport := errors.New("report failed")
+	stopped, err := Run(database.ctx, database.store, options, func(CustomerReport) error { return errReport })
+	if !errors.Is(err, errReport) || stopped.Stopped == nil ||
+		*stopped.Stopped != (StopPoint{ProjectID: reprojectionProject, AfterCustomerID: staleCustomer, Error: "failed"}) {
+		t.Fatalf("stopped Run() = %#v, %v", stopped, err)
+	}
+
+	options.ProjectID = "project-missing"
+	if _, err := Run(database.ctx, database.store, options, nil); !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("missing project Run() error = %v, want ErrProjectNotFound", err)
 	}
 }
 
@@ -457,4 +518,17 @@ func (database *reprojectionDatabase) outboxPayload(t *testing.T) map[string]any
 		t.Fatalf("decode outbox: %v", err)
 	}
 	return decoded
+}
+
+// Project fails for the configured customer and delegates every other customer.
+func (projector failingProjector) Project(
+	current []persistence.CustomerEntitlement,
+	candidates []verification.ProjectionCandidate,
+) ([]persistence.EntitlementProjection, error) {
+	for _, candidate := range candidates {
+		if candidate.Projection.CustomerID == projector.customerID {
+			return nil, errors.New("projector failure fixture")
+		}
+	}
+	return projector.projector.Project(current, candidates)
 }

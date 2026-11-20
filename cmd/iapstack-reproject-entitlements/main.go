@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -41,7 +42,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	flags.SetOutput(stderr)
 	project := flags.String("project", "", "reproject one IAPStack project id")
 	allProjects := flags.Bool("all-projects", false, "reproject every project instead of one")
-	batchSize := flags.Int("batch-size", reprojection.DefaultBatchSize, fmt.Sprintf("canonical customers per keyset page, 1 to %d", persistence.MaxReprojectionPageSize))
+	afterCustomer := flags.String("after-customer", "", "with --project, resume after this canonical customer id (the summary's stopped.after_customer_id)")
+	batchSize := flags.Int("batch-size", reprojection.DefaultBatchSize, fmt.Sprintf("canonical customers each keyset page examines, 1 to %d", persistence.MaxReprojectionPageSize))
 	apply := flags.Bool("apply", false, "commit the refreshes and their entitlement events")
 	dryRun := flags.Bool("dry-run", true, "report what would change and roll every refresh back (the default)")
 	allCustomers := flags.Bool("all-customers", false, "refresh every canonical customer, not only those with an allowed import and an allowed store observation of another product for one entitlement")
@@ -78,6 +80,17 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 			return 2
 		}
 	}
+	resumeAfter := strings.TrimSpace(*afterCustomer)
+	if resumeAfter != "" {
+		if projectID == "" {
+			fmt.Fprintln(stderr, "--after-customer requires --project")
+			return 2
+		}
+		if err := core.CustomerID(resumeAfter).Validate(); err != nil {
+			fmt.Fprintln(stderr, "after-customer id is invalid")
+			return 2
+		}
+	}
 	if *batchSize < 1 || *batchSize > persistence.MaxReprojectionPageSize {
 		fmt.Fprintf(stderr, "batch-size must be between 1 and %d\n", persistence.MaxReprojectionPageSize)
 		return 2
@@ -88,19 +101,6 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return 2
 	}
 
-	output := stdout
-	if *reportPath != "" {
-		file, err := os.OpenFile(*reportPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) // #nosec G304 -- the operator chooses the local report path.
-		if err != nil {
-			fmt.Fprintln(stderr, "report file could not be opened")
-			return 1
-		}
-		defer file.Close()
-		output = file
-	}
-	writer := bufio.NewWriter(output)
-	encoder := json.NewEncoder(writer)
-
 	store, err := postgres.OpenStore(ctx, databaseURL)
 	if err != nil {
 		fmt.Fprintln(stderr, "database could not be opened")
@@ -108,12 +108,26 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	}
 	defer store.Close()
 
+	output := stdout
+	var reportFile *os.File
+	if *reportPath != "" {
+		reportFile, err = os.OpenFile(*reportPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) // #nosec G304 -- the operator chooses the local report path.
+		if err != nil {
+			fmt.Fprintln(stderr, "report file could not be opened")
+			return 1
+		}
+		output = reportFile
+	}
+	writer := bufio.NewWriter(output)
+	encoder := json.NewEncoder(writer)
+
 	summary, runErr := reprojection.Run(ctx, store, reprojection.Options{
-		ProjectID:    core.ProjectID(projectID),
-		BatchSize:    *batchSize,
-		Apply:        *apply,
-		AllCustomers: *allCustomers,
-		Projector:    verification.NewDefaultProjector(),
+		ProjectID:       core.ProjectID(projectID),
+		AfterCustomerID: core.CustomerID(resumeAfter),
+		BatchSize:       *batchSize,
+		Apply:           *apply,
+		AllCustomers:    *allCustomers,
+		Projector:       verification.NewDefaultProjector(),
 	}, func(customer reprojection.CustomerReport) error {
 		if err := encoder.Encode(reportLine{Customer: &customer}); err != nil {
 			return err
@@ -124,13 +138,43 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if writeErr == nil {
 		writeErr = writer.Flush()
 	}
+	if reportFile != nil {
+		writeErr = errors.Join(writeErr, reportFile.Close())
+	}
 	if writeErr != nil {
 		fmt.Fprintln(stderr, "report could not be written")
 		return 1
 	}
-	if runErr != nil {
-		fmt.Fprintln(stderr, "reprojection stopped; customers reported above were already processed and a rerun is safe")
+	return reportRunError(stderr, runErr, summary)
+}
+
+// reportRunError writes one secret-free line about a failed run and returns the exit code.
+func reportRunError(stderr io.Writer, runErr error, summary reprojection.Summary) int {
+	switch {
+	case runErr == nil:
+		return 0
+	case errors.Is(runErr, reprojection.ErrProjectNotFound):
+		fmt.Fprintln(stderr, "project does not exist")
+		return 2
+	case errors.Is(runErr, reprojection.ErrCustomersFailed):
+		fmt.Fprintf(stderr, "%d customer refreshes failed; failed_customers in the summary lists them with an error class, and a rerun is safe\n", summary.CustomersFailed)
+		return 1
+	case summary.Stopped != nil && summary.Stopped.AfterCustomerID == "":
+		fmt.Fprintf(
+			stderr, "reprojection stopped (%s) in project %q before finishing any customer; rerun with --project %s\n",
+			summary.Stopped.Error, summary.Stopped.ProjectID, summary.Stopped.ProjectID,
+		)
+		return 1
+	case summary.Stopped != nil:
+		fmt.Fprintf(
+			stderr,
+			"reprojection stopped (%s) in project %q after customer %q; resume with --project %s --after-customer %s, or rerun from the start\n",
+			summary.Stopped.Error, summary.Stopped.ProjectID, summary.Stopped.AfterCustomerID,
+			summary.Stopped.ProjectID, summary.Stopped.AfterCustomerID,
+		)
+		return 1
+	default:
+		fmt.Fprintf(stderr, "reprojection stopped (%s); a rerun is safe\n", reprojection.ErrorClass(runErr))
 		return 1
 	}
-	return 0
 }

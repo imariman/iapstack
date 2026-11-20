@@ -3,6 +3,7 @@ package reprojection
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +15,11 @@ import (
 // unavailableStore runs callbacks with a transaction that lacks the reprojection methods.
 type unavailableStore struct{}
 
+// plainTransaction implements persistence.Transaction without the reprojection methods.
+type plainTransaction struct {
+	persistence.Transaction
+}
+
 // TestRunValidatesOptions verifies invalid options fail before any transaction starts.
 func TestRunValidatesOptions(t *testing.T) {
 	t.Parallel()
@@ -24,6 +30,8 @@ func TestRunValidatesOptions(t *testing.T) {
 		{ProjectID: "project-1", BatchSize: persistence.MaxReprojectionPageSize + 1, Projector: projector},
 		{ProjectID: "project-1"},
 		{ProjectID: "bad\tproject", Projector: projector},
+		{AfterCustomerID: "customer-1", Projector: projector},
+		{ProjectID: "project-1", AfterCustomerID: "bad\tcustomer", Projector: projector},
 	}
 	for _, options := range cases {
 		if _, err := Run(context.Background(), nil, options, nil); err == nil {
@@ -90,7 +98,31 @@ func TestNewCustomerReportDescribesSourcesAndAccessAtTheEvaluationTime(t *testin
 	}
 }
 
-// Transact runs the callback with a transaction that does not implement the reprojection methods.
+// TestErrorClassIsStableAndSecretFree verifies the classes the summary and stderr report.
+func TestErrorClassIsStableAndSecretFree(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]error{
+		"":                       nil,
+		"canceled":               fmt.Errorf("wrapped: %w", context.Canceled),
+		"deadline_exceeded":      context.DeadlineExceeded,
+		"project_not_found":      ErrProjectNotFound,
+		"customers_failed":       ErrCustomersFailed,
+		"unavailable":            fmt.Errorf("lock customer: %w", persistence.ErrUnavailable),
+		"conflict":               persistence.ErrConflict,
+		"not_found":              persistence.ErrNotFound,
+		"repository_unavailable": errRepositoryUnavailable,
+		"failed":                 errors.New("postgres://operator:secret@db/iapstack"),
+	}
+	for want, err := range cases {
+		if got := ErrorClass(err); got != want {
+			t.Fatalf("ErrorClass(%v) = %q, want %q", err, got, want)
+		}
+	}
+}
+
+// Transact runs the callback with a real transaction value that does not implement the
+// reprojection methods.
 func (unavailableStore) Transact(_ context.Context, operation persistence.TransactionFunc) error {
-	return operation(nil)
+	return operation(plainTransaction{})
 }

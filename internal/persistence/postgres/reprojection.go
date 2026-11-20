@@ -30,68 +30,84 @@ func (repository *transaction) ReprojectionProjects(ctx context.Context) ([]core
 	return projects, nil
 }
 
-// ReprojectionCustomers returns one keyset page of canonical customer ids in id order. Unless the
-// page selects every customer, it keeps only customers whose closure holds an allowed import grant
-// and an allowed store observation of another application product that grants the same
-// entitlement. That pair is the only one the projector ranks differently since the allowed end is
-// compared before the source kind, so other customers cannot hold a stale projection from it.
+// ReprojectionCustomers examines one keyset page of canonical customers in id order and returns
+// the ones it selects. Unless the page selects every customer, it keeps only customers whose
+// closure holds an allowed import grant and an allowed store observation of another application
+// product that grants the same entitlement. That pair is the only one the projector ranks
+// differently since the allowed end is compared before the source kind, so other customers cannot
+// hold a stale projection from it. The filter runs only on the page's examined customers, so a
+// page costs the same however few customers match.
 func (repository *transaction) ReprojectionCustomers(
 	ctx context.Context,
 	page persistence.ReprojectionPage,
-) ([]core.CustomerID, error) {
+) (persistence.ReprojectionPageResult, error) {
 	if err := page.Validate(); err != nil {
-		return nil, err
+		return persistence.ReprojectionPageResult{}, err
 	}
 	rows, err := repository.tx.Query(ctx, `
-		SELECT c.id
-		FROM customers AS c
-		WHERE c.project_id = $1
-			AND c.merged_into_customer_id IS NULL
-			AND c.id > $2
-			AND (
-				$4::boolean
-				OR EXISTS (
-					SELECT 1
-					FROM customers AS import_member
-					JOIN import_grants AS ig
-						ON ig.project_id = import_member.project_id
-						AND ig.customer_id = import_member.id
-						AND ig.access_status = 'allowed'
-					JOIN product_entitlements AS pe
-						ON pe.project_id = ig.project_id
-						AND pe.entitlement_id = ig.entitlement_id
-					JOIN customers AS store_member
-						ON store_member.project_id = c.project_id
-						AND (store_member.id = c.id OR store_member.merged_into_customer_id = c.id)
-					JOIN purchase_observations AS po
-						ON po.project_id = pe.project_id
-						AND po.customer_id = store_member.id
-						AND po.product_id = pe.product_id
-						AND po.access_status = 'allowed'
-					WHERE import_member.project_id = c.project_id
-						AND (import_member.id = c.id OR import_member.merged_into_customer_id = c.id)
-						AND (po.application_id <> ig.application_id OR po.product_id <> ig.product_id)
-				)
+		WITH examined AS (
+			SELECT c.id, c.project_id
+			FROM customers AS c
+			WHERE c.project_id = $1
+				AND c.merged_into_customer_id IS NULL
+				AND c.id > $2
+			ORDER BY c.id
+			LIMIT $3
+		)
+		SELECT examined.id, (
+			$4::boolean
+			OR EXISTS (
+				SELECT 1
+				FROM customers AS import_member
+				JOIN import_grants AS ig
+					ON ig.project_id = import_member.project_id
+					AND ig.customer_id = import_member.id
+					AND ig.access_status = 'allowed'
+				JOIN product_entitlements AS pe
+					ON pe.project_id = ig.project_id
+					AND pe.entitlement_id = ig.entitlement_id
+				JOIN customers AS store_member
+					ON store_member.project_id = examined.project_id
+					AND (store_member.id = examined.id OR store_member.merged_into_customer_id = examined.id)
+				JOIN purchase_observations AS po
+					ON po.project_id = pe.project_id
+					AND po.customer_id = store_member.id
+					AND po.product_id = pe.product_id
+					AND po.access_status = 'allowed'
+				WHERE import_member.project_id = examined.project_id
+					AND (import_member.id = examined.id OR import_member.merged_into_customer_id = examined.id)
+					AND (po.application_id <> ig.application_id OR po.product_id <> ig.product_id)
 			)
-		ORDER BY c.id
-		LIMIT $3
+		) AS selected
+		FROM examined
+		ORDER BY examined.id
 	`, page.ProjectID, string(page.AfterCustomerID), page.Limit, page.AllCustomers)
 	if err != nil {
-		return nil, classifyError("list reprojection customers", err)
+		return persistence.ReprojectionPageResult{}, classifyError("list reprojection customers", err)
 	}
 	defer rows.Close()
-	customers := make([]core.CustomerID, 0, page.Limit)
+	result := persistence.ReprojectionPageResult{CustomerIDs: make([]core.CustomerID, 0, page.Limit)}
+	examined := 0
+	var last core.CustomerID
 	for rows.Next() {
 		var id core.CustomerID
-		if err := rows.Scan(&id); err != nil {
-			return nil, classifyError("scan reprojection customer", err)
+		var selected bool
+		if err := rows.Scan(&id, &selected); err != nil {
+			return persistence.ReprojectionPageResult{}, classifyError("scan reprojection customer", err)
 		}
-		customers = append(customers, id)
+		examined++
+		last = id
+		if selected {
+			result.CustomerIDs = append(result.CustomerIDs, id)
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, classifyError("iterate reprojection customers", err)
+		return persistence.ReprojectionPageResult{}, classifyError("iterate reprojection customers", err)
 	}
-	return customers, nil
+	if examined == page.Limit {
+		result.NextAfterCustomerID = last
+	}
+	return result, nil
 }
 
 // CustomerIsCanonical reports whether one customer exists and has not been merged into another.
