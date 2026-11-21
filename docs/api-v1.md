@@ -35,12 +35,14 @@ Administrator key rotation uses three endpoints:
 
 Rotate a key by creating its replacement, storing the new bearer in the deployment
 secret manager, connecting with the replacement, and only then revoking the old key.
-Bootstrap authentication has no stored key identity, so it never appears as `current`;
-remove the bootstrap secret from the runtime after durable administrator provisioning.
+Bootstrap authentication has no stored key identity, so it never appears as `current`.
+It works only while no active stored administrator key exists: creating the first one
+retires the bootstrap bearer and every bootstrap dashboard session immediately, without
+a restart. Clearing the bootstrap secret from the runtime afterwards is optional.
 
 ## Bootstrap sequence
 
-1. Use `IAPSTACK_BOOTSTRAP_ADMIN_KEY` to create a stored admin key with `POST /v1/admin/api-keys` and `{"role":"admin"}`.
+1. Use `IAPSTACK_BOOTSTRAP_ADMIN_KEY` to create a stored admin key with `POST /v1/admin/api-keys` and `{"role":"admin"}`. The bootstrap key stops working at that moment, so use the returned stored admin key for every later step.
 2. Create the project, provider application, entitlement, product, provider-product mapping, and customer using the idempotent `/v1/admin/projects/...` PUT endpoints.
 3. Store the provider's versioned credential package and an HTTPS webhook configuration.
 4. Create an application key with `{"role":"application","project_id":"...","application_id":"..."}`.
@@ -115,7 +117,10 @@ The dashboard exchanges an explicit administrator bearer through
 `POST /v1/admin/dashboard-session` for a protected 12-hour browser session. The
 encrypted session value is returned only as a `Secure`, `HttpOnly`,
 `SameSite=Strict` cookie scoped to `/v1/admin`; it is never exposed to dashboard
-JavaScript. `DELETE /v1/admin/dashboard-session` clears the cookie. Existing API
+JavaScript. `GET /v1/admin/dashboard-session` reads only that cookie (a request that
+also sends `Authorization` gets `401`) and reports its `expires_at` plus whether it was
+issued by the bootstrap credential (`bootstrap`, `has_durable_admin`).
+`DELETE /v1/admin/dashboard-session` clears the cookie. Existing API
 clients may continue using administrator bearer authentication directly. Dashboard
 cookie mutations additionally require the same-origin browser marker and `Origin`.
 
@@ -215,7 +220,8 @@ shows that coverage. The response has no money figure. The definitions are in
   with a required `reason` and `idempotency_key`. The application must map the product to
   a store product; otherwise the grant is refused with `422 product_not_mapped`.
   `POST .../manual-grants/{grant_id}:revoke` ends it early with a required reason. Both
-  require a stored administrator key; the bootstrap credential gets `403 forbidden`.
+  require a stored administrator key. Before the first stored administrator key exists,
+  the bootstrap credential gets `403 forbidden`; after that it gets `401 unauthorized`.
 
 A manual grant is an audited access source of kind `manual`. While it allows access, the
 public entitlement and the webhook report `reason` `manual_grant`; after revocation they report

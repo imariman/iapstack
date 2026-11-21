@@ -215,7 +215,9 @@ func (authOperationsStore) Operate(_ context.Context, operation persistence.Oper
 	return operation(authOperationsTransaction{})
 }
 
-// TestAdminAPIKeyLifecycleListsAndSafelyRevokes verifies secret-free rotation and current/final-admin guards.
+// TestAdminAPIKeyLifecycleListsAndSafelyRevokes verifies secret-free rotation, the current-key guard, and
+// bootstrap retirement. Once a stored administrator exists, only another active administrator can
+// call revocation, so the final-administrator conflict is covered by the PostgreSQL repository tests.
 func TestAdminAPIKeyLifecycleListsAndSafelyRevokes(t *testing.T) {
 	store := &keyLifecycleStore{
 		records: make(map[string]persistence.APIKeyRecord), revokedAt: make(map[string]time.Time),

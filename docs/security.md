@@ -133,8 +133,9 @@ The following conditions are release-blocking:
 - [ ] Ingress rate limits and maximum connection counts are configured.
 - [ ] Protection roots, PostgreSQL credentials, provider credentials, webhook secrets,
   and bearers come from a secret manager rather than committed environment files.
-- [ ] The bootstrap admin key is at least 32 random bytes and is removed after durable
-  administrator/application keys are stored.
+- [ ] The bootstrap admin key is at least 32 random bytes, a stored administrator key
+  exists (which retires it), and it is either cleared from the runtime or kept
+  deliberately as a dormant break-glass credential.
 - [ ] `IAPSTACK_WEBHOOK_ALLOW_PRIVATE_NETWORKS` is `false`, or an approved egress
   allowlist documents every permitted internal destination.
 - [ ] `IAPSTACK_HUAWEI_ALLOW_PRIVATE_NETWORKS` is `false`, or an approved egress
