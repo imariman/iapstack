@@ -350,3 +350,12 @@ func signedRequest(t *testing.T, timestamp time.Time, body []byte, eventID strin
 	request.Header.Set("IAPStack-Signature", signaturePrefix+hex.EncodeToString(mac.Sum(nil)))
 	return request
 }
+
+func TestLogSafeStripsLineBreaks(t *testing.T) {
+	if got := logSafe("evt_1\r\nforged=entry\n"); got != "evt_1forged=entry" {
+		t.Fatalf("logSafe() = %q", got)
+	}
+	if got := logSafe("app_1"); got != "app_1" {
+		t.Fatalf("logSafe() changed a clean value: %q", got)
+	}
+}

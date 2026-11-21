@@ -226,8 +226,8 @@ func (receiver *Receiver) serveWebhook(writer http.ResponseWriter, request *http
 		return
 	}
 	receiver.logger.Info("iapstack webhook accepted",
-		"event_id", eventID,
-		"application_id", envelope.ApplicationID,
+		"event_id", logSafe(eventID),
+		"application_id", logSafe(envelope.ApplicationID),
 		"event_type", entitlementChangedEventType,
 		"delivery", string(result),
 		"signed_at", timestamp.UTC().Format(time.RFC3339),
@@ -302,6 +302,12 @@ func validIdentity(value string) bool {
 		}
 	}
 	return true
+}
+
+// logSafe strips line breaks from request-derived log values. validIdentity and the core
+// identifier rules already reject them; this keeps the guarantee local to the log call.
+func logSafe(value string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(value, "\n", ""), "\r", "")
 }
 
 // setSecurityHeaders applies browser-safe defaults even though the receiver has no HTML UI.
