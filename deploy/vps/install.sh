@@ -195,6 +195,9 @@ set_env() {
 env_value() { sed -n "s/^$1=//p" .env | tail -n 1; }
 
 configure_env() {
+  mkdir -p offerings
+  chmod 755 offerings
+  find offerings -maxdepth 1 -type f -name '*.json' -exec chmod 644 {} +
   if [ ! -e .env ]; then
     ./init-env.sh
     if small_host; then

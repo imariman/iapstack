@@ -164,6 +164,11 @@ continue with steps 6–8 afterwards.
    - Add a rate-limiting rule for `/v1/providers/` paths. Huawei order notifications
      are not independently signed, so the operations guide asks for a bounded rate
      limit at the public proxy. Do not enable features that rewrite request bodies.
+   - If you serve public offering documents under `deploy/vps/offerings/`, also
+     rate-limit or edge-cache `/v1/applications/*/offering`. The route is
+     unauthenticated, reads from disk, and queries `store_products` per request;
+     while IAPStack returns `Cache-Control: public, max-age=300` and an `ETag`,
+     Cloudflare does not cache `application/json` responses by default.
    - Optionally put `/dashboard*` behind Cloudflare Access so only your identity can
      reach the dashboard login.
 
@@ -188,7 +193,9 @@ survive losing the VM, so also configure an off-server target:
 
 Rehearse a restore into a separate database as described in
 [Backup and restore rehearsal](../../docs/operations.md#backup-and-restore-rehearsal)
-before relying on the backups.
+before relying on the backups. Keep copies of `.env` and any
+`deploy/vps/offerings/*.json` files off-server (or in your own repository), because
+database dumps do not include them.
 
 ## Monitoring
 
@@ -197,6 +204,20 @@ before relying on the backups.
 - `docker compose ps` and `docker compose logs --tail=200 iapstack` show local state.
 - Set the optional `IAPSTACK_GRAFANA_OTLP_*` values to export metrics to Grafana Cloud
   and import the [dashboard and alerts](../grafana/README.md).
+
+## Application offerings
+
+The `iapstack` service mounts `deploy/vps/offerings` read-only at
+`/etc/iapstack/offerings` (`IAPSTACK_OFFERING_DIRECTORY`). To serve a public offering
+document at `GET /v1/applications/<application_id>/offering`, place a matching
+`<application_id>.json` file in `deploy/vps/offerings/` with traversable directory and
+world-readable file permissions (`chmod 755 deploy/vps/offerings` and `chmod 644`, since
+the container runs as UID `65532`; `install.sh` repairs both automatically). The route
+is unauthenticated and queries `store_products` per request, so cover
+`/v1/applications/*/offering` in Cloudflare rate-limiting or cache rules alongside Step 8,
+and back up `deploy/vps/offerings/*.json` off-server with `.env`. See
+[`offerings/README.md`](offerings/README.md) for the full validation rules and JSON
+schema.
 
 ## Upgrades
 

@@ -64,10 +64,11 @@ scripts/__pycache__/
 scripts/tests/__pycache__/
 sdk/flutter/**/coverage/
 
-# Single-VM deployment secrets and local backups
+# Single-VM deployment secrets, local backups, and operator offering documents
 deploy/vps/.env
 deploy/vps/backups/
 deploy/vps/backup.log
+deploy/vps/offerings/*.json
 deploy/oracle/.terraform/
 deploy/oracle/.terraform.lock.hcl
 # Website pages generated per language by docs/scripts/pages.mjs
