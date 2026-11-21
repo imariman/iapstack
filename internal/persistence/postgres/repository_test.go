@@ -199,8 +199,10 @@ func TestAPIKeyLifecycleListsAndRevokesWithoutLosingFinalAdmin(t *testing.T) {
 	}
 }
 
-// breakGlassRevokeAdministratorsSQL mirrors the documented recovery in docs/operations.md.
-const breakGlassRevokeAdministratorsSQL = `
+// TestHasActiveAdminAPIKeyIgnoresApplicationAndRevokedKeys verifies the predicate that retires bootstrap credentials.
+func TestHasActiveAdminAPIKeyIgnoresApplicationAndRevokedKeys(t *testing.T) {
+	// breakGlassRevokeAdministratorsSQL mirrors the documented recovery in docs/operations.md.
+	const breakGlassRevokeAdministratorsSQL = `
 BEGIN;
 SELECT pg_advisory_xact_lock(5278588522471178564);
 UPDATE api_keys
@@ -210,9 +212,6 @@ WHERE role = 'admin'
 RETURNING id, revoked_at;
 COMMIT;
 `
-
-// TestHasActiveAdminAPIKeyIgnoresApplicationAndRevokedKeys verifies the predicate that retires bootstrap credentials.
-func TestHasActiveAdminAPIKeyIgnoresApplicationAndRevokedKeys(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)
 	fixture := seedCatalog(t, database)
 	store := openRepositoryStore(t, database.ctx)
