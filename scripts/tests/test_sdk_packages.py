@@ -86,6 +86,14 @@ class SDKPackageTests(unittest.TestCase):
                     f"dependencies:\n  # Runtime dependencies.\n{core}  http: ^1.5.0\n\n"
                     "dev_dependencies:\n  test:\n    path: ../test\n"
                 )
+                if name != "iapstack":
+                    example = folder / "example"
+                    example.mkdir()
+                    (example / "pubspec.yaml").write_text(
+                        f"name: {name}_example\npublish_to: none\n\n"
+                        f"dependencies:\n  iapstack: {version}\n  {name}:\n    path: ..\n"
+                    )
+                    (folder / ".pubignore").write_text("/example/pubspec_overrides.yaml\n")
                 (folder / "LICENSE").write_text("Apache-2.0")
                 (folder / "CHANGELOG.md").write_text(f"# Changelog\n\n## {version}\n\n- Initial release.\n")
             if edit:
@@ -107,12 +115,34 @@ class SDKPackageTests(unittest.TestCase):
             "publish_to": rewrite("iapstack_huawei", "version:", "publish_to: none\nversion:"),
             "path and git": rewrite("iapstack_apple", "  iapstack: 0.1.0-sdk.2\n", "  iapstack:\n    path: ../iapstack\n"),
             "exact iapstack": rewrite("iapstack_google_play", "iapstack: 0.1.0-sdk.2", "iapstack: ^0.1.0-sdk.2"),
+            "iapstack_apple/example: must depend on the exact iapstack": rewrite(
+                "iapstack_apple",
+                "  iapstack: 0.1.0-sdk.2\n",
+                "  iapstack:\n    path: ../../iapstack\n",
+                file="example/pubspec.yaml",
+            ),
+            "iapstack_huawei/example: must depend on the exact iapstack": rewrite(
+                "iapstack_huawei",
+                "iapstack: 0.1.0-sdk.2",
+                "iapstack: 0.1.0-sdk.1",
+                file="example/pubspec.yaml",
+            ),
+            r"iapstack_google_play: \.pubignore must exclude": rewrite(
+                "iapstack_google_play",
+                "/example/pubspec_overrides.yaml\n",
+                "",
+                file=".pubignore",
+            ),
             "LICENSE": rewrite("iapstack", "Apache-2.0", "MIT", file="LICENSE"),
             "CHANGELOG": rewrite("iapstack_apple", "## 0.1.0-sdk.2", "## 0.1.0-sdk.1", file="CHANGELOG.md"),
         }
         for message, edit in cases.items():
             with self.subTest(message), self.assertRaisesRegex(ValueError, message):
                 self.check_flutter_tree(edit)
+
+    def test_missing_companion_pubignore_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, r"\.pubignore must exclude"):
+            self.check_flutter_tree(lambda root: (root / "sdk/flutter/iapstack_apple/.pubignore").unlink())
 
     def test_runtime_dependency_versions_ignore_test_and_unversioned_libraries(self):
         groovy = "implementation 'com.facebook.react:react-android'\nimplementation 'com.squareup.okhttp3:okhttp:4.12.0'\ntestImplementation 'com.squareup.okhttp3:mockwebserver:5.0.0'\n"

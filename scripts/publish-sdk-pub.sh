@@ -60,7 +60,7 @@ validate() {
   fi
   output="$(pub "$name" publish --dry-run 2>&1)" || status=$?
   # Exit 65 also covers warnings, such as the deliberate exact core pin.
-  if [[ "$status" -ne 0 && "$status" -ne 65 ]] || grep -q "found the following error" <<< "$output"; then
+  if [[ "$status" -ne 0 && "$status" -ne 65 ]] || grep -Eq 'found the following ([0-9]+ )?errors?:|Sorry, your package is missing some requirements' <<< "$output"; then
     echo "$output" >&2
     echo "$name: pub.dev would reject this package" >&2
     return 1

@@ -1,0 +1,25 @@
+# Exclude local development overrides and build/editor artifacts from pub.dev archives.
+# Keep this in sync with .gitignore because pub uses .pubignore instead of .gitignore
+# in the same directory.
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+migrate_working_dir/
+*.iml
+*.ipr
+*.iws
+.idea/
+**/doc/api/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+/build/
+/coverage/
+/pubspec.lock
+/example/pubspec_overrides.yaml

@@ -133,8 +133,10 @@ so undeclared public dependencies cannot be masked by the monorepo examples.
 fails on any validation error or on an untracked, unignored file that pub would
 upload. Its expected warnings are the exact `iapstack` and `huawei_iap` pins.
 In the repository, companions and examples resolve `iapstack` from the checkout
-through committed `pubspec_overrides.yaml` files; pub leaves the package-level one
-out of the archive. `check-sdk-packages.py` requires matching pubspec versions,
+through committed `pubspec_overrides.yaml` files; pub leaves the package-level
+override out automatically, and each companion's `.pubignore` excludes
+`example/pubspec_overrides.yaml` while `example/pubspec.yaml` declares the
+matching `iapstack` version. `check-sdk-packages.py` requires matching pubspec versions,
 the exact core pin, no path or git dependencies, the repository `LICENSE` and a
 `CHANGELOG.md` entry for the version in every Flutter package. Swift
 checks cover both manifests and the native sample; React Native native checks build

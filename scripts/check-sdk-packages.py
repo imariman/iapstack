@@ -51,8 +51,17 @@ def check_flutter(root, version):
         dependencies = match.group(1) if match else ""
         if re.search(r"^\s+(?:path|git):", dependencies, re.M):
             raise ValueError(f"{label}: pub.dev rejects path and git dependencies; use pubspec_overrides.yaml locally")
-        if name != "iapstack" and not re.search(rf"^  iapstack: ['\"]?{re.escape(version)}['\"]?\s*$", dependencies, re.M):
-            raise ValueError(f"{label}: must depend on the exact iapstack {version}")
+        if name != "iapstack":
+            if not re.search(rf"^  iapstack: ['\"]?{re.escape(version)}['\"]?\s*$", dependencies, re.M):
+                raise ValueError(f"{label}: must depend on the exact iapstack {version}")
+            example_pubspec = (folder / "example/pubspec.yaml").read_text()
+            example_match = PUBSPEC_DEPENDENCIES.search(example_pubspec)
+            example_dependencies = example_match.group(1) if example_match else ""
+            if not re.search(rf"^  iapstack: ['\"]?{re.escape(version)}['\"]?\s*$", example_dependencies, re.M):
+                raise ValueError(f"{label}/example: must depend on the exact iapstack {version}")
+            pubignore = folder / ".pubignore"
+            if not pubignore.is_file() or not re.search(r"^/?example/pubspec_overrides\.yaml\s*$", pubignore.read_text(), re.M):
+                raise ValueError(f"{label}: .pubignore must exclude example/pubspec_overrides.yaml")
         if (folder / "LICENSE").read_bytes() != license_text:
             raise ValueError(f"{label}: LICENSE differs from the repository license")
         changelog = folder / "CHANGELOG.md"

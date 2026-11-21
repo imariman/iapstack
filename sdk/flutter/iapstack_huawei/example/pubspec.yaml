@@ -10,8 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_bloc: ^9.1.1
-  iapstack:
-    path: ../../iapstack
+  iapstack: 0.1.0-sdk.3
   iapstack_huawei:
     path: ..
 
