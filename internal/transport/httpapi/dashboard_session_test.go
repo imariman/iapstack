@@ -52,6 +52,20 @@ func TestDashboardSessionExchangesBearerForSecureCookie(t *testing.T) {
 		!statusResponse.Bootstrap || statusResponse.HasDurableAdmin || !statusResponse.ExpiresAt.Equal(response.ExpiresAt) {
 		t.Fatalf("get dashboard session response = %#v, %v", statusResponse, err)
 	}
+	// The session read describes the cookie only, so a bearer is rejected with or without a cookie.
+	for _, withCookie := range []bool{false, true} {
+		bearerStatusRequest := httptest.NewRequest(http.MethodGet, "/v1/admin/dashboard-session", nil)
+		bearerStatusRequest.Header.Set("Authorization", "Bearer "+testBootstrapAdminKey)
+		if withCookie {
+			bearerStatusRequest.AddCookie(cookie)
+		}
+		bearerStatusRecorder := httptest.NewRecorder()
+		api.getDashboardSession(bearerStatusRecorder, bearerStatusRequest)
+		if bearerStatusRecorder.Code != http.StatusUnauthorized {
+			t.Fatalf("bearer get dashboard session (cookie %t) status = %d, want %d",
+				withCookie, bearerStatusRecorder.Code, http.StatusUnauthorized)
+		}
+	}
 
 	projectsRequest := httptest.NewRequest(http.MethodGet, "/v1/admin/projects", nil)
 	projectsRequest.AddCookie(cookie)

@@ -24,9 +24,9 @@ paths:
       tags: [Administration]
       operationId: getAdminDashboardSession
       summary: Inspect the active administrator dashboard session and bootstrap handover state
+      description: Reads only the dashboard session cookie. A request that also sends an Authorization header is rejected with 401.
       security:
         - dashboardSession: []
-        - adminBearer: []
       responses:
         '200':
           description: Current administrator session metadata
