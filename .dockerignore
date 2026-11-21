@@ -1,8 +1,11 @@
 .git
 .github
 .env
+**/.env
 *.log
 coverage.out
+deploy/vps/backups
+deploy/vps/offerings
 sdk/flutter/**/.dart_tool
 sdk/flutter/**/build
 sdk/flutter/**/.gradle

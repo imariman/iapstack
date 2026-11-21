@@ -55,6 +55,14 @@ jobs:
             sh -n "$script"
           done
           git check-ignore -q deploy/vps/.env
+          test -s deploy/vps/offerings/README.md
+          git check-ignore -q deploy/vps/offerings/example.json
+          ruby -ryaml -e '
+            c = YAML.safe_load_file("deploy/vps/compose.yaml", aliases: true)
+            s = c.fetch("services").fetch("iapstack")
+            abort("missing IAPSTACK_OFFERING_DIRECTORY") unless s.dig("environment", "IAPSTACK_OFFERING_DIRECTORY") == "/etc/iapstack/offerings"
+            abort("missing offerings mount") unless Array(s["volumes"]).include?("./offerings:/etc/iapstack/offerings:ro")
+          '
           test -x deploy/gcp/deploy.sh
           bash -n deploy/gcp/deploy.sh
           ruby -ryaml -e 'YAML.load_file("deploy/vps/cloud-init.yaml")'
