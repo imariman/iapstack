@@ -13,6 +13,16 @@ import (
 type ProjectionRefreshResult struct {
 	ProjectionsChanged int
 	WebhooksEnqueued   int
+	// Changes lists every projection the refresh wrote, in the projector's entitlement order.
+	Changes []ProjectionChange
+}
+
+// ProjectionChange is one current projection a refresh created or replaced.
+type ProjectionChange struct {
+	// Before is the stored projection the refresh read, or nil when the entitlement had none.
+	Before *persistence.CustomerEntitlement
+	// After is the stored projection the refresh wrote.
+	After persistence.CustomerEntitlement
 }
 
 // projectionPlan is what one refresh read for a canonical customer and the projections it would write.
@@ -100,6 +110,10 @@ func applyCustomerProjection(
 	enqueueWebhooks bool,
 ) (ProjectionRefreshResult, error) {
 	result := ProjectionRefreshResult{}
+	before := make(map[core.EntitlementID]persistence.CustomerEntitlement, len(plan.current))
+	for _, entitlement := range plan.current {
+		before[entitlement.Projection.EntitlementID] = entitlement
+	}
 	for _, projection := range plan.projections {
 		if projection.SourceCustomerID == "" {
 			projection.SourceCustomerID = projection.CustomerID
@@ -114,6 +128,11 @@ func applyCustomerProjection(
 			continue
 		}
 		result.ProjectionsChanged++
+		change := ProjectionChange{After: writeResult.Entitlement}
+		if previous, exists := before[projection.EntitlementID]; exists {
+			change.Before = &previous
+		}
+		result.Changes = append(result.Changes, change)
 		if !enqueueWebhooks {
 			continue
 		}

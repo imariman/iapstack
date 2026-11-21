@@ -396,6 +396,99 @@ rollback. Fresh installations initialize the PostgreSQL 18 layout automatically.
 
 Never remove an encryption key until all rows written with that key ID have been re-encrypted or expired.
 
+## Reproject stored entitlements
+
+`customer_entitlements` stores the projection the projector chose at the last refresh of each
+customer. A refresh runs on verify, restore, store notifications, reconciliation, RevenueCat
+import, customer merges, and manual grants. When a release changes how the projector ranks
+sources, rows chosen by the old order stay in place until that customer's next refresh, and the
+public read path keeps returning them.
+
+The projector now compares when allowed access ends before it compares the source kind. Before
+that change a store observation outranked an import before ends were compared, so a customer
+whose store purchase of one product had lapsed could stay denied although a current import of
+another product granted the same entitlement. `iapstack-reproject-entitlements` refreshes those
+customers at once instead of waiting for their next refresh.
+
+The command is a separate binary that is not in the container image. Build it from a checkout of
+the release you deployed and run it against the same database, after the new API and worker
+processes are live. Run the built binary rather than `go run`: `go run` reports exit status 1 for
+any failure, so a script could not tell a usage error from a failed run.
+
+```bash
+go build -o iapstack-reproject-entitlements ./cmd/iapstack-reproject-entitlements
+```
+
+```bash
+IAPSTACK_DATABASE_URL='postgres://...' ./iapstack-reproject-entitlements --all-projects --report reproject-dry-run.jsonl
+```
+
+```bash
+IAPSTACK_DATABASE_URL='postgres://...' ./iapstack-reproject-entitlements --all-projects --apply --report reproject-apply.jsonl
+```
+
+- Select the scope with exactly one of `--project <id>` or `--all-projects`. A `--project` that
+  does not exist is refused.
+- The default is a dry run (`--dry-run`). `--apply` commits the refreshes. The two cannot be combined.
+- Each keyset page examines `--batch-size` canonical customers in id order (default 100, at most
+  1000). By default a page keeps only the examined customers whose closure holds an allowed import
+  grant and an allowed store observation of another application product that grants the same
+  entitlement. That is the only pair the new order ranks differently. The filter runs only on the
+  examined customers, so one page stays cheap however few customers match. `--all-customers`
+  refreshes every canonical customer instead, for a later projector change that affects other
+  sources.
+- Each customer is refreshed in its own serializable transaction. It locks the customer and every
+  customer merged into it before reading, as verification, import, merges, and manual grants do,
+  and then runs the same refresh with the default projector. A concurrent request for the same
+  customer waits or retries, so the command can run while the server is live.
+- A changed projection enqueues the same `entitlement.changed` outbox event as any other refresh.
+  A customer whose rows already match their sources writes nothing and enqueues nothing, so the
+  command is safe to rerun and to stop with Ctrl-C between customers.
+- A customer that is merged into another after its page was read is skipped. The merge already
+  refreshed its canonical customer.
+- A customer whose refresh fails, for example because a long request holds its lock past the
+  retries, is recorded in the summary and the run continues with the next customer.
+- A dry run performs the same locks and writes and then rolls each customer transaction back. It
+  reports exactly what an apply at the same moment would write, including the events, but nothing
+  is committed. It still holds each customer's lock for the length of one refresh.
+
+The report is JSON Lines on stdout, or in the `--report` file (mode 0600). The file is opened only
+after the database is, so a run that cannot connect leaves an earlier report in place. Each
+customer whose projections changed, or would change, is one `{"customer": ...}` line with `mode`,
+`project_id`, `customer_id`, `evaluated_at`, `projections_changed`, `webhooks_enqueued`, and one
+entry in `changes` per entitlement. Each entry has `entitlement_id`, `entitlement_key`, and the
+`before` and `after` stored projection: `source_kind`, `source_id`, `source_application_id`,
+`source_product_id`, `source_customer_id` (the merged customer that owns the source, or the
+customer itself), `stored_access`, `access` and `access_reason` as the public read path returns
+them at `evaluated_at`, `ends_at`, and `version`. `before` is `null` when the customer had no row
+for that entitlement. The report holds no purchase evidence or secrets.
+
+The last line is `{"summary": ...}` with `mode`, the `projects` walked, and these counts:
+`customers_scanned` (every selected customer the run tried, including skipped and failed ones),
+`customers_skipped`, `customers_failed`, `customers_changed`, `projections_changed`, and
+`webhooks_enqueued`. `failed_customers` lists each failed customer with its `project_id`,
+`customer_id`, and an `error` class such as `unavailable`, `conflict`, or `failed`. `stopped` is
+set when the run ended early, with the `project_id`, the last `after_customer_id` it finished
+there, and the `error` class.
+
+A customer line is written right after its transaction commits. If the process is killed at the
+moment of a commit, that customer's change and event can be committed without a report line, and
+a rerun finds nothing left to change for it. Treat the report as the list of changes the command
+saw, not as a complete audit; the outbox and each row's `version` are the record of what was
+written.
+
+The command exits 0 when every selected customer was refreshed, 2 for invalid usage or a missing
+project, and 1 otherwise, with one line on stderr that names the cause without secrets:
+
+- If some customers failed, the run still walked every other customer. Rerun the same command to
+  retry them; customers already fixed write nothing.
+- If the run stopped early (Ctrl-C, a page that could not be read, or a report that could not be
+  written), stderr and `stopped` name the project and the last finished customer. Resume with
+  `--project <project_id> --after-customer <after_customer_id>`, or rerun from the start.
+
+Review the dry-run report before applying. Webhook receivers get one event per changed
+entitlement, so a large apply can raise outbox depth for a while.
+
 ## Queue incident response
 
 - `iapstack_queue_depth` shows River's available, scheduled, retryable, running, completed, cancelled, and discarded states.
