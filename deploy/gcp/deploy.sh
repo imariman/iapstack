@@ -132,13 +132,15 @@ while ((SECONDS < deadline)); do
 done
 ((SECONDS < deadline)) || fail "installation did not finish within 45 minutes; check the serial port output"
 
+# ssh_command is only printed; ssh_args runs the same command without word-splitting a string.
 ssh_command="gcloud compute ssh $instance --zone $zone --project $project --tunnel-through-iap"
+ssh_args=(gcloud compute ssh "$instance" --zone "$zone" --project "$project" --tunnel-through-iap)
 printed_bootstrap=0
 if [[ -t 0 ]]; then
   printf '\nRead the one-time bootstrap administrator key now? [y/N]: '
-  read -r answer
+  read -r answer || answer=""
   if [[ "$answer" =~ ^[Yy]$ ]]; then
-    if "$ssh_command" --command 'sudo grep ^IAPSTACK_BOOTSTRAP_ADMIN_KEY= /opt/iapstack/deploy/vps/.env'; then
+    if "${ssh_args[@]}" --command 'sudo grep ^IAPSTACK_BOOTSTRAP_ADMIN_KEY= /opt/iapstack/deploy/vps/.env'; then
       printed_bootstrap=1
     fi
   fi
