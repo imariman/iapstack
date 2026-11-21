@@ -23,8 +23,7 @@ jobs:
     timeout-minutes: 30
     environment: stable-release
     permissions:
-      # write: dispatch the pub.dev workflow on the new tag.
-      actions: write
+      actions: read
       contents: write
       packages: write
       id-token: write
@@ -150,12 +149,21 @@ jobs:
             cmp "$artifact" "$RUNNER_TEMP/sdk-download-check/$(basename "$artifact")"
           done
           gh release edit "$VERSION" --draft=false --prerelease --latest=false
-      - name: Start pub.dev publication on the new tag
-        # pub.dev only accepts the first version of a package from a manual
-        # upload. Set this variable after that and the admin setup in
-        # docs/sdk-releases.md.
-        if: vars.PUB_DEV_AUTOMATED_PUBLISHING == 'true'
+
+  dispatch-pub-dev:
+    name: Start pub.dev publication
+    needs: publish
+    # pub.dev only accepts the first version of a package from a manual
+    # upload. Set this variable after that and the admin setup in
+    # docs/sdk-releases.md.
+    if: vars.PUB_DEV_AUTOMATED_PUBLISHING == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch pub.dev release on the new tag
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
-        run: gh workflow run sdk-release-pub.yml --ref "$VERSION" -f version="$VERSION"
+        run: gh workflow run sdk-release-pub.yml --repo "$GITHUB_REPOSITORY" --ref "$VERSION" -f version="$VERSION"

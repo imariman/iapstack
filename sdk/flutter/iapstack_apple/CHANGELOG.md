@@ -11,7 +11,7 @@ the repository.
 
 ### Breaking
 
-- Requires `in_app_purchase_storekit` 0.4.16 or later, Dart 3.11 and
+- Requires `in_app_purchase_storekit` 0.4.17 or later, Dart 3.11 and
   Flutter 3.41.
 - `completePurchase` and `verifyPurchase` throw `AppleIapStackException` with
   code `transaction_not_finishable` for a purchase that is pending completion

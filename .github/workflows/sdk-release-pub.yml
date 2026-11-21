@@ -24,7 +24,7 @@ jobs:
     name: Publish Flutter SDK packages
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: stable-release
+    environment: pub-dev-release
     permissions:
       contents: read
       id-token: write
@@ -42,13 +42,6 @@ jobs:
           # The SDK release verified CI for this commit before it created the tag.
           gh release view "$VERSION" --json isDraft,tagName |
             jq -e --arg version "$VERSION" '.isDraft == false and .tagName == $version'
-      - name: Cache Flutter SDK and packages
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ runner.temp }}/flutter
-            ~/.pub-cache
-          key: flutter-${{ runner.os }}-${{ runner.arch }}-3.47.1
       - name: Set up Flutter
         env:
           FLUTTER_VERSION: 3.47.1

@@ -163,11 +163,14 @@ the example against the packed companion sources.
    as the account that should own the packages, check out the new SDK tag, and run
    `scripts/publish-sdk-pub.sh --publish`. It validates all four archives, uploads
    `iapstack` first, waits for pub.dev to serve it, then uploads the companions;
-   pub asks before each upload. Then, on each package's pub.dev **Admin** page,
-   optionally transfer it to a verified publisher, and enable automated publishing
-   from GitHub Actions with repository `imariman/iapstack`, tag pattern
-   `{{version}}`, **publishing from `workflow_dispatch` events** enabled, and
-   required environment `stable-release`. Finally set the repository variable
+   pub asks before each upload. Then create a dedicated `pub-dev-release` GitHub
+   environment (no secrets, maintainer review required, custom deployment policy
+   allowing tags matching `*-sdk.*`) so `stable-release` stays restricted to
+   `main`. On each package's pub.dev **Admin** page, optionally transfer it to a
+   verified publisher, and enable automated publishing from GitHub Actions with
+   repository `imariman/iapstack`, tag pattern `{{version}}`, **publishing from
+   `workflow_dispatch` events** enabled, and required environment
+   `pub-dev-release`. Finally set the repository variable
    `PUB_DEV_AUTOMATED_PUBLISHING` to `true`.
 6. Merge tested code, wait for `CI`, `Swift SDK checks`, `SDK package checks`, and
    `React Native native checks` on the **same main commit**, then dispatch `SDK release`
