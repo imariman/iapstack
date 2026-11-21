@@ -51,9 +51,12 @@ type gateClient struct {
 	workerBaseURL  string
 	fixtureBaseURL string
 	bootstrapAdmin string
-	metricsBearer  string
-	webhookSecret  string
-	client         *http.Client
+	// adminKeyFile hands the stored administrator bearer to later phases because the
+	// bootstrap credential retires as soon as that key exists.
+	adminKeyFile  string
+	metricsBearer string
+	webhookSecret string
+	client        *http.Client
 }
 
 // fixtureScenario contains safe provider configuration and current signed evidence.
@@ -132,16 +135,21 @@ func run() error {
 // newGateClient loads host origins and the two test-only secrets without printing them.
 func newGateClient() (*gateClient, error) {
 	bootstrapAdmin := strings.TrimSpace(os.Getenv("IAPSTACK_BOOTSTRAP_ADMIN_KEY"))
+	adminKeyFile := strings.TrimSpace(os.Getenv("IAPSTACK_E2E_ADMIN_KEY_FILE"))
 	metricsBearer := strings.TrimSpace(os.Getenv("IAPSTACK_METRICS_BEARER_TOKEN"))
 	webhookSecret := strings.TrimSpace(os.Getenv("IAPSTACK_E2E_WEBHOOK_SECRET"))
 	if bootstrapAdmin == "" || len(metricsBearer) < 32 || len(webhookSecret) < 16 {
 		return nil, errors.New("bootstrap admin, metrics bearer, and E2E webhook secrets are required")
+	}
+	if adminKeyFile == "" {
+		return nil, errors.New("IAPSTACK_E2E_ADMIN_KEY_FILE is required to hand the stored administrator key between phases")
 	}
 	return &gateClient{
 		apiBaseURL:     valueOrDefault(os.Getenv("IAPSTACK_E2E_API_BASE_URL"), defaultAPIBaseURL),
 		workerBaseURL:  valueOrDefault(os.Getenv("IAPSTACK_E2E_WORKER_BASE_URL"), defaultWorkerBaseURL),
 		fixtureBaseURL: valueOrDefault(os.Getenv("IAPSTACK_E2E_FIXTURE_BASE_URL"), defaultFixtureBaseURL),
 		bootstrapAdmin: bootstrapAdmin,
+		adminKeyFile:   adminKeyFile,
 		metricsBearer:  metricsBearer,
 		webhookSecret:  webhookSecret,
 		client: &http.Client{
@@ -174,6 +182,13 @@ func (client *gateClient) bootstrap(ctx context.Context) error {
 	adminKey, err := client.createKey(ctx, client.bootstrapAdmin, map[string]any{"role": "admin"})
 	if err != nil {
 		return err
+	}
+	if err := client.saveAdminKey(adminKey); err != nil {
+		return err
+	}
+	if _, err := client.request(ctx, http.MethodPost, client.apiBaseURL+"/v1/admin/api-keys",
+		client.bootstrapAdmin, map[string]any{"role": "admin"}, nil, http.StatusUnauthorized); err != nil {
+		return fmt.Errorf("bootstrap administrator did not retire after the first stored key: %w", err)
 	}
 	mutations := []struct {
 		path string
@@ -210,7 +225,7 @@ func (client *gateClient) bootstrap(ctx context.Context) error {
 			return err
 		}
 	}
-	applicationKey, err := client.createApplicationKey(ctx)
+	applicationKey, err := client.createApplicationKey(ctx, adminKey)
 	if err != nil {
 		return err
 	}
@@ -269,7 +284,11 @@ func (client *gateClient) enqueueNotification(ctx context.Context) error {
 			return err
 		}
 	}
-	applicationKey, err := client.createApplicationKey(ctx)
+	adminKey, err := client.loadAdminKey()
+	if err != nil {
+		return err
+	}
+	applicationKey, err := client.createApplicationKey(ctx, adminKey)
 	if err != nil {
 		return err
 	}
@@ -294,7 +313,11 @@ func (client *gateClient) assertRecovery(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	applicationKey, err := client.createApplicationKey(ctx)
+	adminKey, err := client.loadAdminKey()
+	if err != nil {
+		return err
+	}
+	applicationKey, err := client.createApplicationKey(ctx, adminKey)
 	if err != nil {
 		return err
 	}
@@ -362,8 +385,8 @@ func (client *gateClient) scenario(ctx context.Context) (fixtureScenario, error)
 }
 
 // createApplicationKey creates one fresh application bearer without persisting it between gate phases.
-func (client *gateClient) createApplicationKey(ctx context.Context) (string, error) {
-	return client.createKey(ctx, client.bootstrapAdmin, map[string]any{
+func (client *gateClient) createApplicationKey(ctx context.Context, adminKey string) (string, error) {
+	return client.createKey(ctx, adminKey, map[string]any{
 		"role": "application", "project_id": projectID, "application_id": applicationID,
 	})
 }
@@ -392,6 +415,27 @@ func (client *gateClient) createCustomerSession(
 		return "", errors.New("customer session response was invalid")
 	}
 	return response.Token, nil
+}
+
+// saveAdminKey stores the stored administrator bearer in the harness-owned private file for later phases.
+func (client *gateClient) saveAdminKey(adminKey string) error {
+	if err := os.WriteFile(client.adminKeyFile, []byte(adminKey), 0o600); err != nil {
+		return fmt.Errorf("store administrator key for later phases: %w", err)
+	}
+	return nil
+}
+
+// loadAdminKey reads the stored administrator bearer written by the bootstrap phase.
+func (client *gateClient) loadAdminKey() (string, error) {
+	content, err := os.ReadFile(client.adminKeyFile)
+	if err != nil {
+		return "", fmt.Errorf("load administrator key from the bootstrap phase: %w", err)
+	}
+	adminKey := strings.TrimSpace(string(content))
+	if adminKey == "" {
+		return "", errors.New("administrator key file from the bootstrap phase is empty")
+	}
+	return adminKey, nil
 }
 
 // createKey calls the one-time key creation contract and returns the bearer only in memory.

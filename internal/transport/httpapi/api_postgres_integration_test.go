@@ -660,14 +660,18 @@ func TestCustomerAliasResolveAndMergeHTTP(t *testing.T) {
 		"/v1/admin/projects/"+apiIntegrationProjectID+"/customers/http-customer-2",
 		adminBearer, customerRequest{ExternalID: "http-external-customer-2"}, http.StatusOK, nil,
 	)
+	aliasPath := "/v1/admin/projects/" + apiIntegrationProjectID + "/customers/" + apiIntegrationCustomerID + "/aliases/auth-user-new"
+	// The bootstrap credential still authenticates here, but identity changes need a durable actor.
+	fixture.requestJSON(t, http.MethodPut, aliasPath, adminBearer, map[string]string{}, http.StatusForbidden, nil)
 	var adminKey map[string]string
 	fixture.requestJSON(t, http.MethodPost, "/v1/admin/api-keys", adminBearer, keyRequest{Role: persistence.APIKeyRoleAdmin}, http.StatusCreated, &adminKey)
+	// The first stored administrator key retires the bootstrap credential.
+	fixture.requestJSON(t, http.MethodPut, aliasPath, adminBearer, map[string]string{}, http.StatusUnauthorized, nil)
 	var applicationKey map[string]string
-	fixture.requestJSON(t, http.MethodPost, "/v1/admin/api-keys", adminBearer, keyRequest{
+	fixture.requestJSON(t, http.MethodPost, "/v1/admin/api-keys", adminKey["key"], keyRequest{
 		Role: persistence.APIKeyRoleApplication, ProjectID: apiIntegrationProjectID, ApplicationID: apiIntegrationApplicationID,
 	}, http.StatusCreated, &applicationKey)
 
-	aliasPath := "/v1/admin/projects/" + apiIntegrationProjectID + "/customers/" + apiIntegrationCustomerID + "/aliases/auth-user-new"
 	var created customerResolutionResponse
 	fixture.requestJSON(t, http.MethodPut, aliasPath, adminKey["key"], map[string]string{}, http.StatusOK, &created)
 	if created.Match != persistence.CustomerMatchAlias || created.CanonicalCustomerID != apiIntegrationCustomerID || created.ExternalID != "auth-user-new" {
@@ -694,7 +698,6 @@ func TestCustomerAliasResolveAndMergeHTTP(t *testing.T) {
 	if resolved.Match != persistence.CustomerMatchAlias || resolved.CanonicalCustomerID != apiIntegrationCustomerID {
 		t.Fatalf("application resolution = %#v", resolved)
 	}
-	fixture.requestJSON(t, http.MethodPut, aliasPath, adminBearer, map[string]string{}, http.StatusForbidden, nil)
 	fixture.requestJSON(t, http.MethodPost, "/v1/admin/projects/"+apiIntegrationProjectID+"/customer-merges", applicationKey["key"], customerMergeRequest{
 		IdempotencyKey: "merge-http", CanonicalCustomerID: apiIntegrationCustomerID, SourceCustomerID: "http-customer-2",
 	}, http.StatusUnauthorized, nil)
@@ -728,7 +731,7 @@ func TestCustomerAliasResolveAndMergeHTTP(t *testing.T) {
 		t.Fatalf("merged resolution = %#v", mergedResolution)
 	}
 	var overview adminOverviewResponse
-	fixture.requestJSON(t, http.MethodGet, "/v1/admin/projects/"+apiIntegrationProjectID+"/overview", adminBearer, nil, http.StatusOK, &overview)
+	fixture.requestJSON(t, http.MethodGet, "/v1/admin/projects/"+apiIntegrationProjectID+"/overview", adminKey["key"], nil, http.StatusOK, &overview)
 	var canonical adminCustomerResponse
 	for _, customer := range overview.Customers {
 		if customer.ID == apiIntegrationCustomerID {

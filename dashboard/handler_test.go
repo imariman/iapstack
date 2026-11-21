@@ -574,3 +574,43 @@ func TestDashboardCustomerSupportWorkflow(t *testing.T) {
 		}
 	}
 }
+
+// TestDashboardBootstrapHandoverAndPasswordManagerSupport verifies guided first-run upgrade and password-manager hints.
+func TestDashboardBootstrapHandoverAndPasswordManagerSupport(t *testing.T) {
+	t.Parallel()
+
+	document, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	script, err := fs.ReadFile(assets, "app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	styles, err := fs.ReadFile(assets, "app.css")
+	if err != nil {
+		t.Fatalf("read embedded app.css: %v", err)
+	}
+	for _, required := range []string{
+		`autocomplete="username"`, `autocomplete="current-password"`,
+		`id="bootstrap-banner"`, `id="bootstrap-create-admin-key"`,
+		`id="revealed-key-flag"`, `id="revealed-key-copy"`,
+	} {
+		if !strings.Contains(string(document), required) {
+			t.Fatalf("dashboard onboarding markup does not contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		"renderBootstrapBanner", "secureCookieBlockedOnHTTP",
+		`apiRequest("/v1/admin/dashboard-session")`, "Bootstrap retired",
+	} {
+		if !strings.Contains(string(script), required) {
+			t.Fatalf("dashboard onboarding script does not contain %q", required)
+		}
+	}
+	for _, required := range []string{".sr-only", ".bootstrap-banner"} {
+		if !strings.Contains(string(styles), required) {
+			t.Fatalf("dashboard onboarding styles do not contain %q", required)
+		}
+	}
+}

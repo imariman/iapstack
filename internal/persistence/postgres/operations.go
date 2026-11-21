@@ -143,6 +143,17 @@ func validateAPIKeyPageToken(pageToken string) error {
 	return nil
 }
 
+// HasActiveAdminAPIKey reports whether at least one non-revoked stored administrator key exists.
+func (repository *transaction) HasActiveAdminAPIKey(ctx context.Context) (bool, error) {
+	var exists bool
+	if err := repository.tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM api_keys WHERE role = 'admin' AND revoked_at IS NULL)
+	`).Scan(&exists); err != nil {
+		return false, classifyError("check active administrator API keys", err)
+	}
+	return exists, nil
+}
+
 // PutAPIKey creates one API key verifier without storing its bearer secret.
 func (repository *transaction) PutAPIKey(ctx context.Context, record persistence.APIKeyRecord) error {
 	if err := record.Validate(); err != nil {

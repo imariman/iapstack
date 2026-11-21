@@ -30,13 +30,24 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 	project := "/v1/admin/projects/" + apiIntegrationProjectID
 	seedCustomerSupportCatalog(t, fixture, bootstrap)
 
+	grantPath := project + "/customers/" + apiIntegrationCustomerID + "/manual-grants"
+	duration := 30
+	bonusGrant := manualGrantRequest{
+		IdempotencyKey: "grant-bonus-1", EntitlementID: supportBonusEntitlementID, ProductID: supportBonusProductID,
+		ApplicationID: apiIntegrationApplicationID, Reason: "Support ticket 1042: store outage", DurationDays: &duration,
+	}
+	// The bootstrap credential still authenticates here, but manual grants need a durable actor.
+	fixture.requestJSON(t, http.MethodPost, grantPath, bootstrap, bonusGrant, http.StatusForbidden, nil)
+
 	var adminKey map[string]string
 	fixture.requestJSON(t, http.MethodPost, "/v1/admin/api-keys", bootstrap, keyRequest{Role: persistence.APIKeyRoleAdmin}, http.StatusCreated, &adminKey)
 	admin := adminKey["key"]
+	// The first stored administrator key retires the bootstrap credential.
+	fixture.requestJSON(t, http.MethodPost, grantPath, bootstrap, bonusGrant, http.StatusUnauthorized, nil)
 	fixture.requestJSON(t, http.MethodPut, project+"/customers/"+apiIntegrationCustomerID+"/aliases/legacy-support-user",
 		admin, map[string]string{}, http.StatusOK, nil)
 	fixture.requestJSON(t, http.MethodPut, project+"/customers/http-customer-2",
-		bootstrap, customerRequest{ExternalID: "http-external-customer-2"}, http.StatusOK, nil)
+		admin, customerRequest{ExternalID: "http-external-customer-2"}, http.StatusOK, nil)
 
 	search := func(query string, extra string) adminCustomerSearchResponse {
 		t.Helper()
@@ -92,13 +103,6 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 		t.Fatalf("listing = %#v", listing)
 	}
 
-	grantPath := project + "/customers/" + apiIntegrationCustomerID + "/manual-grants"
-	duration := 30
-	bonusGrant := manualGrantRequest{
-		IdempotencyKey: "grant-bonus-1", EntitlementID: supportBonusEntitlementID, ProductID: supportBonusProductID,
-		ApplicationID: apiIntegrationApplicationID, Reason: "Support ticket 1042: store outage", DurationDays: &duration,
-	}
-	fixture.requestJSON(t, http.MethodPost, grantPath, bootstrap, bonusGrant, http.StatusForbidden, nil)
 	unmapped := bonusGrant
 	unmapped.IdempotencyKey, unmapped.ApplicationID = "grant-unmapped", supportUnmappedApplicationID
 	unmappedBody := fixture.requestJSON(t, http.MethodPost, grantPath, admin, unmapped, http.StatusUnprocessableEntity, nil)
@@ -133,7 +137,7 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 
 	var session customerSessionResponse
 	var applicationKey map[string]string
-	fixture.requestJSON(t, http.MethodPost, "/v1/admin/api-keys", bootstrap, keyRequest{
+	fixture.requestJSON(t, http.MethodPost, "/v1/admin/api-keys", admin, keyRequest{
 		Role: persistence.APIKeyRoleApplication, ProjectID: apiIntegrationProjectID, ApplicationID: apiIntegrationApplicationID,
 	}, http.StatusCreated, &applicationKey)
 	fixture.requestJSON(t, http.MethodPost, "/v1/applications/"+apiIntegrationApplicationID+"/customer-sessions",

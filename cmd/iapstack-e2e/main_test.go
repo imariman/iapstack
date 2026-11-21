@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -39,9 +41,46 @@ func TestNewGateClientValidatesSecretsAndNormalizesOrigins(t *testing.T) {
 		t.Fatalf("CheckRedirect() error = %v, want %v", err, http.ErrUseLastResponse)
 	}
 
+	t.Setenv("IAPSTACK_E2E_ADMIN_KEY_FILE", " ")
+	if _, err := newGateClient(); err == nil {
+		t.Fatal("newGateClient() accepted a missing administrator key file")
+	}
+
+	setGateEnvironment(t)
 	t.Setenv("IAPSTACK_METRICS_BEARER_TOKEN", "short")
 	if _, err := newGateClient(); err == nil {
 		t.Fatal("newGateClient() accepted a short metrics bearer")
+	}
+}
+
+// TestGateAdminKeyHandoffRoundTripsPrivately verifies the stored administrator bearer survives between phases.
+func TestGateAdminKeyHandoffRoundTripsPrivately(t *testing.T) {
+	t.Parallel()
+
+	client := &gateClient{adminKeyFile: filepath.Join(t.TempDir(), "admin-key")}
+	if _, err := client.loadAdminKey(); err == nil {
+		t.Fatal("loadAdminKey() accepted a missing bootstrap-phase file")
+	}
+	if err := client.saveAdminKey("iap_stored-admin"); err != nil {
+		t.Fatalf("saveAdminKey() error = %v", err)
+	}
+	info, err := os.Stat(client.adminKeyFile)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("administrator key file mode = %v, %v; want 0600", info, err)
+	}
+	adminKey, err := client.loadAdminKey()
+	if err != nil || adminKey != "iap_stored-admin" {
+		t.Fatalf("loadAdminKey() = (%q, %v)", adminKey, err)
+	}
+	if err := os.WriteFile(client.adminKeyFile, []byte(" \n"), 0o600); err != nil {
+		t.Fatalf("truncate administrator key file: %v", err)
+	}
+	if _, err := client.loadAdminKey(); err == nil {
+		t.Fatal("loadAdminKey() accepted an empty administrator key")
+	}
+	missingDirectory := &gateClient{adminKeyFile: filepath.Join(t.TempDir(), "missing", "admin-key")}
+	if err := missingDirectory.saveAdminKey("iap_stored-admin"); err == nil {
+		t.Fatal("saveAdminKey() succeeded without a writable directory")
 	}
 }
 
@@ -145,7 +184,7 @@ func TestGateIdentityResponsesValidateRequiredFields(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch {
-		case request.URL.Path == "/v1/admin/api-keys" && request.Header.Get("Authorization") == "Bearer bootstrap-key":
+		case request.URL.Path == "/v1/admin/api-keys" && request.Header.Get("Authorization") == "Bearer stored-admin-key":
 			writer.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(writer, `{"key":"application-key"}`)
 		case request.URL.Path == "/v1/admin/api-keys":
@@ -166,7 +205,7 @@ func TestGateIdentityResponsesValidateRequiredFields(t *testing.T) {
 	defer server.Close()
 	client := &gateClient{apiBaseURL: server.URL, client: server.Client(), bootstrapAdmin: "bootstrap-key"}
 
-	key, err := client.createApplicationKey(context.Background())
+	key, err := client.createApplicationKey(context.Background(), "stored-admin-key")
 	if err != nil || key != "application-key" {
 		t.Fatalf("createApplicationKey() = (%q, %v)", key, err)
 	}
@@ -257,6 +296,7 @@ func TestValueOrDefaultTrimsOverrides(t *testing.T) {
 func setGateEnvironment(t *testing.T) {
 	t.Helper()
 	t.Setenv("IAPSTACK_BOOTSTRAP_ADMIN_KEY", " bootstrap-admin ")
+	t.Setenv("IAPSTACK_E2E_ADMIN_KEY_FILE", filepath.Join(t.TempDir(), "admin-key"))
 	t.Setenv("IAPSTACK_METRICS_BEARER_TOKEN", strings.Repeat("m", 32))
 	t.Setenv("IAPSTACK_E2E_WEBHOOK_SECRET", strings.Repeat("w", 16))
 }

@@ -154,6 +154,19 @@ func (service *AdminSessions) Authenticate(ctx context.Context, token string) (A
 			return AdminPrincipal{}, ErrUnauthorized
 		}
 		principal.KeyID = issuer.ID
+	} else {
+		var hasAdmin bool
+		err = service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+			var checkErr error
+			hasAdmin, checkErr = repository.HasActiveAdminAPIKey(ctx)
+			return checkErr
+		})
+		if err != nil {
+			return AdminPrincipal{}, fmt.Errorf("check active administrator keys for bootstrap session: %w", err)
+		}
+		if hasAdmin {
+			return AdminPrincipal{}, ErrUnauthorized
+		}
 	}
 	result := AdminPrincipal{Principal: principal, ExpiresAt: claims.ExpiresAt}
 	if err := result.Validate(); err != nil {

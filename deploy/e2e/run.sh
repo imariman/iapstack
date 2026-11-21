@@ -6,9 +6,13 @@ cd "$repository_root"
 
 compose_project="${IAPSTACK_E2E_COMPOSE_PROJECT:-iapstack-e2e-${GITHUB_RUN_ID:-$$}}"
 certificate_directory="$(mktemp -d "${TMPDIR:-/tmp}/iapstack-e2e.XXXXXX")"
+# The bootstrap credential retires once the gate creates a stored administrator key, so the
+# gate phases hand that key over through this private directory, which is never mounted.
+state_directory="$(mktemp -d "${TMPDIR:-/tmp}/iapstack-e2e-state.XXXXXX")"
 compose_files=(-f deploy/compose.yaml -f deploy/compose.e2e.yaml)
 
 export IAPSTACK_E2E_CERT_DIR="$certificate_directory"
+export IAPSTACK_E2E_ADMIN_KEY_FILE="$state_directory/admin-key"
 export IAPSTACK_POSTGRES_DB="iapstack_e2e"
 export IAPSTACK_POSTGRES_USER="iapstack"
 export IAPSTACK_POSTGRES_PASSWORD="${IAPSTACK_POSTGRES_PASSWORD:-$(openssl rand -hex 24)}"
@@ -33,7 +37,7 @@ cleanup() {
     docker compose -p "$compose_project" "${compose_files[@]}" logs --no-color || true
   fi
   docker compose -p "$compose_project" "${compose_files[@]}" down --volumes --remove-orphans || true
-  rm -r -- "$certificate_directory"
+  rm -r -- "$certificate_directory" "$state_directory"
   exit "$status"
 }
 trap cleanup EXIT

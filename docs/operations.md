@@ -19,11 +19,16 @@ If you assemble `IAPSTACK_DATABASE_URL` yourself, percent-encode credentials use
 a URL-form connection string or use the libpq key/value form.
 
 The fingerprint key must remain stable across encryption-key rotation. The bootstrap
-admin key is an installation credential and must contain at least 32 bytes: use it to
-create stored admin/application keys through `POST /v1/admin/api-keys`, then remove it
-from the runtime environment and recreate the API container. The default Compose worker
-and migration services never receive this secret. Store every durable bearer outside
-the database because IAPStack returns it only once.
+admin key is an installation credential and must contain at least 32 bytes. Use it to
+create the first stored administrator key through `/dashboard/` or
+`POST /v1/admin/api-keys`. From then on the bootstrap key and every bootstrap dashboard
+session are rejected, with no restart. A bootstrap key left in the environment is a
+dormant credential: it only works again when no active stored administrator key remains
+(see the break-glass procedure under Production security baseline). Clearing
+`IAPSTACK_BOOTSTRAP_ADMIN_KEY` afterwards is optional; clear it if you do not want to
+keep that dormant credential. The default Compose worker and migration services never
+receive this secret. Store every durable bearer outside the database because IAPStack
+returns it only once.
 
 ## Configuration reference
 
@@ -37,7 +42,7 @@ IAPStack is configured entirely through environment variables:
 | `IAPSTACK_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `IAPSTACK_DATABASE_URL` | none | PostgreSQL connection string required by database-backed modes |
 | `IAPSTACK_AUTO_MIGRATE` | `false` | Apply migrations at compact `server` startup; use only for one-instance disposable environments that cannot run a pre-deploy command |
-| `IAPSTACK_BOOTSTRAP_ADMIN_KEY` | none | Installation-only administrator bearer; when set it must contain at least 32 bytes |
+| `IAPSTACK_BOOTSTRAP_ADMIN_KEY` | none | Installation-only administrator bearer; when set it must contain at least 32 bytes, and it is rejected while any active stored administrator key exists |
 | `IAPSTACK_METRICS_BEARER_TOKEN` | none | Dedicated 32+ character bearer for `/metrics`; the endpoint is disabled when absent |
 | `IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS` | `4` | Fail-fast concurrency bound for memory-hard API-key creation and verification; maximum `32` |
 | `IAPSTACK_PROTECTION_ACTIVE_KEY_ID` | none | Encryption key ID used for new protected values |
@@ -129,12 +134,32 @@ The API rejects revocation of the key authenticating the current request and pre
 the final active administrator. Rotate by creating the replacement, storing it, signing
 in with it, and then revoking the old key.
 
-If every administrator bearer is unavailable during an incident, temporarily restore
-the bootstrap administrator through the runtime secret configuration and use the API.
-The following restricted database operation is break-glass only. It uses the same
-lifecycle lock and final-administrator predicate as the repository, but bypasses the
-API's current-session safeguard. Confirm the exact public key ID and an active
-replacement before running it:
+If every stored administrator bearer is lost, the bootstrap key cannot help on its own:
+it authenticates only while no active stored administrator key exists. Recover with this
+restricted, break-glass database operation, which revokes every active administrator key
+(and therefore every dashboard session they issued) under the repository's lifecycle
+lock:
+
+```sql
+BEGIN;
+SELECT pg_advisory_xact_lock(5278588522471178564);
+UPDATE api_keys
+SET revoked_at = now()
+WHERE role = 'admin'
+  AND revoked_at IS NULL
+RETURNING id, revoked_at;
+COMMIT;
+```
+
+Then make sure `IAPSTACK_BOOTSTRAP_ADMIN_KEY` is set (restore it and recreate the API
+container if you cleared it), sign in at `/dashboard/` with it, and create a new
+permanent administrator key. The bootstrap key retires again as soon as that key exists.
+Application keys are not affected.
+
+The following restricted database operation revokes one specific key and is also
+break-glass only. It uses the same lifecycle lock and final-administrator predicate as
+the repository, but bypasses the API's current-session safeguard. Confirm the exact
+public key ID and an active replacement before running it:
 
 ```sql
 BEGIN;
@@ -168,7 +193,9 @@ The migration container must complete successfully before API and worker process
 ## Operations dashboard
 
 Open `http://127.0.0.1:8080/dashboard/` after the API becomes ready. Connect with a
-bootstrap or stored administrator bearer. The server exchanges it once for an
+stored administrator bearer, or with the bootstrap key before the first stored
+administrator key exists. A bootstrap session shows a setup banner that creates the
+first permanent administrator key and switches the browser session to it. The server exchanges it once for an
 encrypted 12-hour dashboard session in a `Secure`, `HttpOnly`, `SameSite=Strict`
 cookie scoped to `/v1/admin`; the page never stores the bearer in browser storage.
 The session survives refreshes and browser restarts until expiry, while signing out
@@ -526,7 +553,7 @@ The harness creates an isolated Compose project and temporary TLS certificate, t
 The gate verifies:
 
 1. Migration ordering and API/worker readiness from an empty volume.
-2. Stored admin and application key creation plus full Huawei application configuration.
+2. Stored admin and application key creation, bootstrap credential retirement once the first stored admin key exists, and full Huawei application configuration. The harness hands the stored admin key to later phases through a private temporary file.
 3. Authoritative signed lifetime verification and idempotent duplicate submission.
 4. HMAC-SHA-256 webhook headers and one logical delivery per entitlement version.
 5. Duplicate signed Huawei notification persistence while the worker is stopped.

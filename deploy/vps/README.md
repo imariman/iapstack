@@ -147,12 +147,11 @@ continue with steps 6–8 afterwards.
    ```
 
 6. **Create a durable administrator.** Open `https://iapstack.example.com/dashboard/`,
-   connect with `IAPSTACK_BOOTSTRAP_ADMIN_KEY`, and create and store a durable
-   administrator key. Then empty `IAPSTACK_BOOTSTRAP_ADMIN_KEY` in `.env` and apply it:
-
-   ```sh
-   docker compose up -d --wait
-   ```
+   connect with `IAPSTACK_BOOTSTRAP_ADMIN_KEY`, and click **Create permanent admin key**
+   in the setup banner. Your browser session upgrades automatically and the bootstrap key
+   retires immediately without restarting the stack (you can still clear
+   `IAPSTACK_BOOTSTRAP_ADMIN_KEY=` in `.env` later as cleanup). Store the new key in
+   your password manager.
 
 7. **Configure stores.** Create the project and application in the dashboard, then
    register the notification URLs described in the

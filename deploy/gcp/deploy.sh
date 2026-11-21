@@ -132,17 +132,41 @@ while ((SECONDS < deadline)); do
 done
 ((SECONDS < deadline)) || fail "installation did not finish within 45 minutes; check the serial port output"
 
+# ssh_command is only printed; ssh_args runs the same command without word-splitting a string.
 ssh_command="gcloud compute ssh $instance --zone $zone --project $project --tunnel-through-iap"
+ssh_args=(gcloud compute ssh "$instance" --zone "$zone" --project "$project" --tunnel-through-iap)
+printed_bootstrap=0
+if [[ -t 0 ]]; then
+  printf '\nRead the one-time bootstrap administrator key now? [y/N]: '
+  read -r answer || answer=""
+  if [[ "$answer" =~ ^[Yy]$ ]]; then
+    if "${ssh_args[@]}" --command 'sudo grep ^IAPSTACK_BOOTSTRAP_ADMIN_KEY= /opt/iapstack/deploy/vps/.env'; then
+      printed_bootstrap=1
+    fi
+  fi
+fi
+
 cat <<EOF
 
 Next steps:
 
-1. Read the bootstrap administrator key:
-   $ssh_command --command 'sudo grep ^IAPSTACK_BOOTSTRAP_ADMIN_KEY= /opt/iapstack/deploy/vps/.env'
-2. Open https://<your-tunnel-hostname>/dashboard/, connect with that key, and create a
-   durable administrator key.
-3. Remove the bootstrap key and apply the change:
-   $ssh_command --command "cd /opt/iapstack/deploy/vps && sudo sed -i 's/^IAPSTACK_BOOTSTRAP_ADMIN_KEY=.*/IAPSTACK_BOOTSTRAP_ADMIN_KEY=/' .env && sudo docker compose up -d --wait"
-4. Copy /opt/iapstack/deploy/vps/.env to your password manager and configure off-server
-   backups (deploy/vps/README.md).
 EOF
+if [[ "$printed_bootstrap" == "0" ]]; then
+  cat <<EOF
+1. Read the one-time bootstrap administrator key:
+   $ssh_command --command 'sudo grep ^IAPSTACK_BOOTSTRAP_ADMIN_KEY= /opt/iapstack/deploy/vps/.env'
+2. Open https://<your-tunnel-hostname>/dashboard/, sign in with that key, and follow the
+   banner to create your permanent admin key (your session switches automatically and the
+   bootstrap key retires immediately with no server restart).
+3. Save the permanent key in your password manager and back up /opt/iapstack/deploy/vps/.env
+   (deploy/vps/README.md).
+EOF
+else
+  cat <<EOF
+1. Open https://<your-tunnel-hostname>/dashboard/, sign in with the bootstrap key above, and
+   follow the banner to create your permanent admin key (your session switches automatically
+   and the bootstrap key retires immediately with no server restart).
+2. Save the permanent key in your password manager and back up /opt/iapstack/deploy/vps/.env
+   (deploy/vps/README.md).
+EOF
+fi

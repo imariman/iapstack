@@ -199,6 +199,81 @@ func TestAPIKeyLifecycleListsAndRevokesWithoutLosingFinalAdmin(t *testing.T) {
 	}
 }
 
+// TestHasActiveAdminAPIKeyIgnoresApplicationAndRevokedKeys verifies the predicate that retires bootstrap credentials.
+func TestHasActiveAdminAPIKeyIgnoresApplicationAndRevokedKeys(t *testing.T) {
+	// breakGlassRevokeAdministratorsSQL mirrors the documented recovery in docs/operations.md.
+	const breakGlassRevokeAdministratorsSQL = `
+BEGIN;
+SELECT pg_advisory_xact_lock(5278588522471178564);
+UPDATE api_keys
+SET revoked_at = now()
+WHERE role = 'admin'
+  AND revoked_at IS NULL
+RETURNING id, revoked_at;
+COMMIT;
+`
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	hasActiveAdmin := func() bool {
+		t.Helper()
+		var active bool
+		if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+			var err error
+			active, err = repository.HasActiveAdminAPIKey(database.ctx)
+			return err
+		}); err != nil {
+			t.Fatalf("HasActiveAdminAPIKey() error = %v", err)
+		}
+		return active
+	}
+	putKey := func(record persistence.APIKeyRecord) {
+		t.Helper()
+		if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+			return repository.PutAPIKey(database.ctx, record)
+		}); err != nil {
+			t.Fatalf("PutAPIKey(%s) error = %v", record.ID, err)
+		}
+	}
+	createdAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+
+	if hasActiveAdmin() {
+		t.Fatal("HasActiveAdminAPIKey() = true for an empty key table")
+	}
+	putKey(apiKeyRecord("application-key-1", persistence.APIKeyRoleApplication,
+		core.ProjectID(fixture.projectID), core.ApplicationID(fixture.applicationID), createdAt))
+	if hasActiveAdmin() {
+		t.Fatal("HasActiveAdminAPIKey() = true with only an application key")
+	}
+	putKey(apiKeyRecord("admin-key-1", persistence.APIKeyRoleAdmin, "", "", createdAt.Add(time.Minute)))
+	putKey(apiKeyRecord("admin-key-2", persistence.APIKeyRoleAdmin, "", "", createdAt.Add(2*time.Minute)))
+	if !hasActiveAdmin() {
+		t.Fatal("HasActiveAdminAPIKey() = false with two active administrator keys")
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		_, err := repository.RevokeAPIKey(database.ctx, "admin-key-1", time.Now().UTC())
+		return err
+	}); err != nil {
+		t.Fatalf("RevokeAPIKey() first admin error = %v", err)
+	}
+	if !hasActiveAdmin() {
+		t.Fatal("HasActiveAdminAPIKey() = false while one administrator key is still active")
+	}
+
+	if _, err := database.conn.Exec(database.ctx, breakGlassRevokeAdministratorsSQL); err != nil {
+		t.Fatalf("documented break-glass revocation error = %v", err)
+	}
+	if hasActiveAdmin() {
+		t.Fatal("HasActiveAdminAPIKey() = true after every administrator key was revoked")
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		_, err := repository.APIKey(database.ctx, "application-key-1")
+		return err
+	}); err != nil {
+		t.Fatalf("break-glass revocation changed the application key: %v", err)
+	}
+}
+
 // TestConcurrentAPIKeyRevocationPreservesOneAdmin verifies advisory locking across competing requests.
 func TestConcurrentAPIKeyRevocationPreservesOneAdmin(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)

@@ -21,9 +21,27 @@ const (
 	dashboardRequestHeaderValue = "1"
 )
 
-// dashboardSessionResponse reports browser-session expiry without exposing the protected cookie value.
+// dashboardSessionResponse reports browser-session expiry and bootstrap handover state without exposing the cookie value.
 type dashboardSessionResponse struct {
-	ExpiresAt time.Time `json:"expires_at"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	Bootstrap       bool      `json:"bootstrap"`
+	HasDurableAdmin bool      `json:"has_durable_admin"`
+}
+
+// getDashboardSession reports the browser session expiry and whether bootstrap handover is still required.
+func (api *API) getDashboardSession(writer http.ResponseWriter, request *http.Request) {
+	// The response describes the cookie session itself, so an explicit bearer is rejected rather than ignored.
+	if request.Header.Get("Authorization") != "" {
+		api.writeAuthenticationFailure(writer, request, auth.ErrUnauthorized)
+		return
+	}
+	session, err := api.authenticateDashboardCookie(request)
+	if err != nil {
+		api.writeAuthenticationFailure(writer, request, err)
+		return
+	}
+	writer.Header().Set("Cache-Control", "no-store")
+	writeJSON(writer, http.StatusOK, dashboardSessionResponseFromPrincipal(session))
 }
 
 // createDashboardSession exchanges one administrator bearer for a protected HttpOnly browser cookie.
@@ -40,7 +58,9 @@ func (api *API) createDashboardSession(writer http.ResponseWriter, request *http
 	}
 	setDashboardSessionCookie(writer, session)
 	writer.Header().Set("Cache-Control", "no-store")
-	writeJSON(writer, http.StatusCreated, dashboardSessionResponse{ExpiresAt: session.ExpiresAt})
+	writeJSON(writer, http.StatusCreated, dashboardSessionResponseFromPrincipal(auth.AdminPrincipal{
+		Principal: principal, ExpiresAt: session.ExpiresAt,
+	}))
 }
 
 // deleteDashboardSession authenticates the current administrator and expires its browser cookie.
@@ -59,15 +79,31 @@ func (api *API) authenticateAdmin(request *http.Request) (auth.Principal, bool, 
 		principal, err := api.authenticate(request)
 		return principal, false, err
 	}
-	cookie, err := request.Cookie(dashboardSessionCookieName)
-	if err != nil || cookie.Value == "" {
-		return auth.Principal{}, true, auth.ErrUnauthorized
-	}
-	principal, err := api.adminSessions.Authenticate(request.Context(), cookie.Value)
+	session, err := api.authenticateDashboardCookie(request)
 	if err != nil {
 		return auth.Principal{}, true, err
 	}
-	return principal.Principal, true, nil
+	return session.Principal, true, nil
+}
+
+// authenticateDashboardCookie opens the encrypted dashboard cookie together with its expiry metadata.
+func (api *API) authenticateDashboardCookie(request *http.Request) (auth.AdminPrincipal, error) {
+	cookie, err := request.Cookie(dashboardSessionCookieName)
+	if err != nil || cookie.Value == "" {
+		return auth.AdminPrincipal{}, auth.ErrUnauthorized
+	}
+	return api.adminSessions.Authenticate(request.Context(), cookie.Value)
+}
+
+// dashboardSessionResponseFromPrincipal builds the secret-free session status payload.
+func dashboardSessionResponseFromPrincipal(session auth.AdminPrincipal) dashboardSessionResponse {
+	// Bootstrap credentials authenticate only when zero active stored administrator keys exist.
+	bootstrap := session.KeyID == ""
+	return dashboardSessionResponse{
+		ExpiresAt:       session.ExpiresAt,
+		Bootstrap:       bootstrap,
+		HasDurableAdmin: !bootstrap,
+	}
 }
 
 // setDashboardSessionCookie writes a persistent, origin-bound browser cookie without exposing its token to JavaScript.

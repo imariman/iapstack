@@ -29,6 +29,11 @@ type fakeAdminQueryStore struct{}
 // authOperationsStore satisfies authentication construction for bootstrap-only tests.
 type authOperationsStore struct{}
 
+// authOperationsTransaction satisfies read-only bootstrap checks for bootstrap-only tests.
+type authOperationsTransaction struct {
+	persistence.OperationsTransaction
+}
+
 // keyLifecycleStore retains active and revoked API keys for HTTP lifecycle tests.
 type keyLifecycleStore struct {
 	records      map[string]persistence.APIKeyRecord
@@ -200,12 +205,19 @@ func (fakeAdminQueryStore) AdminSubscriptionMetrics(
 	return fakeSubscriptionMetrics(query), nil
 }
 
-// Operate rejects durable work because bootstrap authentication does not require it.
-func (authOperationsStore) Operate(context.Context, persistence.OperationsFunc) error {
-	return persistence.ErrUnavailable
+// HasActiveAdminAPIKey reports zero stored administrators in bootstrap-only stubs.
+func (authOperationsTransaction) HasActiveAdminAPIKey(context.Context) (bool, error) {
+	return false, nil
 }
 
-// TestAdminAPIKeyLifecycleListsAndSafelyRevokes verifies secret-free rotation and current/final-admin guards.
+// Operate runs a read-only stub transaction for bootstrap-only tests.
+func (authOperationsStore) Operate(_ context.Context, operation persistence.OperationsFunc) error {
+	return operation(authOperationsTransaction{})
+}
+
+// TestAdminAPIKeyLifecycleListsAndSafelyRevokes verifies secret-free rotation, the current-key guard, and
+// bootstrap retirement. Once a stored administrator exists, only another active administrator can
+// call revocation, so the final-administrator conflict is covered by the PostgreSQL repository tests.
 func TestAdminAPIKeyLifecycleListsAndSafelyRevokes(t *testing.T) {
 	store := &keyLifecycleStore{
 		records: make(map[string]persistence.APIKeyRecord), revokedAt: make(map[string]time.Time),
@@ -286,13 +298,13 @@ func TestAdminAPIKeyLifecycleListsAndSafelyRevokes(t *testing.T) {
 		t.Fatalf("revoked Authenticate() error = %v, want ErrUnauthorized", err)
 	}
 
-	finalRequest := httptest.NewRequest(http.MethodDelete, "/v1/admin/api-keys/"+firstAdminID, nil)
-	finalRequest.SetPathValue("key_id", firstAdminID)
-	finalRequest.Header.Set("Authorization", "Bearer "+testBootstrapAdminKey)
-	finalRecorder := httptest.NewRecorder()
-	api.revokeAPIKey(finalRecorder, finalRequest)
-	if finalRecorder.Code != http.StatusConflict {
-		t.Fatalf("final admin revoke status = %d, want %d", finalRecorder.Code, http.StatusConflict)
+	retiredBootstrapRequest := httptest.NewRequest(http.MethodDelete, "/v1/admin/api-keys/"+firstAdminID, nil)
+	retiredBootstrapRequest.SetPathValue("key_id", firstAdminID)
+	retiredBootstrapRequest.Header.Set("Authorization", "Bearer "+testBootstrapAdminKey)
+	retiredBootstrapRecorder := httptest.NewRecorder()
+	api.revokeAPIKey(retiredBootstrapRecorder, retiredBootstrapRequest)
+	if retiredBootstrapRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("retired bootstrap revoke status = %d, want %d", retiredBootstrapRecorder.Code, http.StatusUnauthorized)
 	}
 }
 
@@ -572,6 +584,16 @@ func (transaction *keyLifecycleTransaction) APIKeys(
 		page = []persistence.APIKeySummary{}
 	}
 	return persistence.APIKeyPage{Keys: page, NextPageToken: next}, nil
+}
+
+// HasActiveAdminAPIKey reports whether at least one non-revoked stored administrator key exists.
+func (transaction *keyLifecycleTransaction) HasActiveAdminAPIKey(_ context.Context) (bool, error) {
+	for id, record := range transaction.store.records {
+		if _, revoked := transaction.store.revokedAt[id]; !revoked && record.Role == persistence.APIKeyRoleAdmin {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // PutAPIKey retains one verifier and rejects duplicate identities.

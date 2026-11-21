@@ -928,10 +928,53 @@ form[aria-busy="true"] button[type="submit"]::before {
   color: var(--accent-text);
 }
 
+.sr-only {
+  border: 0;
+  clip: rect(0, 0, 0, 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
 .global-message.info {
   background: var(--primary-soft);
   border-color: var(--primary-border);
   color: var(--primary-text);
+}
+
+.bootstrap-banner {
+  align-items: center;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-panel);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  justify-content: space-between;
+  padding: 14px 16px;
+}
+
+.bootstrap-banner[hidden] {
+  display: none;
+}
+
+.bootstrap-banner-copy {
+  display: grid;
+  gap: 4px;
+  max-width: 66ch;
+}
+
+.bootstrap-banner-copy h2 {
+  color: var(--foreground);
+}
+
+.bootstrap-banner-copy p {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 /* Shared panel surface */

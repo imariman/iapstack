@@ -20,6 +20,26 @@ tags:
   - name: Google Play notifications
 paths:
   /v1/admin/dashboard-session:
+    get:
+      tags: [Administration]
+      operationId: getAdminDashboardSession
+      summary: Inspect the active administrator dashboard session and bootstrap handover state
+      description: Reads only the dashboard session cookie. A request that also sends an Authorization header is rejected with 401.
+      security:
+        - dashboardSession: []
+      responses:
+        '200':
+          description: Current administrator session metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardSession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
     post:
       tags: [Administration]
       operationId: createAdminDashboardSession
@@ -1748,6 +1768,12 @@ components:
         expires_at:
           type: string
           format: date-time
+        bootstrap:
+          type: boolean
+          description: True when authenticated with the temporary bootstrap credential rather than a stored administrator key.
+        has_durable_admin:
+          type: boolean
+          description: True when at least one non-revoked stored administrator key exists.
     ApiKeyCollection:
       type: object
       additionalProperties: false

@@ -175,6 +175,8 @@ type OperationsRepository interface {
 	// An empty page token selects the newest page. A token must be the public id of a stored key
 	// and selects the next older page after that key.
 	APIKeys(context.Context, string) (APIKeyPage, error)
+	// HasActiveAdminAPIKey reports whether at least one non-revoked stored administrator key exists.
+	HasActiveAdminAPIKey(context.Context) (bool, error)
 	// PutAPIKey creates one API key verifier without storing the bearer secret.
 	PutAPIKey(context.Context, APIKeyRecord) error
 	// RevokeAPIKey idempotently disables one key while preserving the final active administrator.

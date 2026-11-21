@@ -114,6 +114,7 @@ const state = {
   managedApplication: null,
   overview: null,
   apiKeys: [],
+  sessionBootstrap: false,
   pendingRevokeKey: null,
   consumption: null,
   customerSearch: { query: "", nextToken: "", count: 0, sequence: 0, timer: 0 },
@@ -140,6 +141,9 @@ const elements = {
   projectTitle: document.querySelector("#project-title"),
   updatedAt: document.querySelector("#updated-at"),
   globalMessage: document.querySelector("#global-message"),
+  bootstrapBanner: document.querySelector("#bootstrap-banner"),
+  bootstrapCreateAdminKey: document.querySelector("#bootstrap-create-admin-key"),
+  bootstrapBannerMessage: document.querySelector("#bootstrap-banner-message"),
   refresh: document.querySelector("#refresh"),
   openAPIKeys: document.querySelector("#open-api-keys"),
   logout: document.querySelector("#logout"),
@@ -200,6 +204,8 @@ const elements = {
   revokeGrantMessage: document.querySelector("#revoke-grant-message"),
   keyDialog: document.querySelector("#key-dialog"),
   revealedKeyTitle: document.querySelector("#revealed-key-title"),
+  revealedKeyFlag: document.querySelector("#revealed-key-flag"),
+  revealedKeyCopy: document.querySelector("#revealed-key-copy"),
   revealedKeyLabel: document.querySelector("#revealed-key-label"),
   revealedKey: document.querySelector("#revealed-key"),
   copyMessage: document.querySelector("#copy-message"),
@@ -280,17 +286,54 @@ function setFormBusy(form, busy) {
   if (submit) submit.disabled = busy;
 }
 
+function renderBootstrapBanner() {
+  if (!elements.bootstrapBanner) return;
+  elements.bootstrapBanner.hidden = !state.sessionBootstrap;
+  if (!state.sessionBootstrap) {
+    if (elements.bootstrapBannerMessage) elements.bootstrapBannerMessage.textContent = "";
+    if (elements.bootstrapCreateAdminKey) elements.bootstrapCreateAdminKey.hidden = false;
+  }
+}
+
+// rememberAdminCredential offers a permanent administrator key to the browser password manager
+// through the Credential Management API where it exists; other browsers rely on the dialog copy.
+async function rememberAdminCredential(key) {
+  if (typeof window.PasswordCredential !== "function" || !navigator.credentials?.store) return;
+  try {
+    const username = elements.authForm?.querySelector("input[autocomplete='username']")?.value || "iapstack-admin";
+    await navigator.credentials.store(new window.PasswordCredential({ id: username, password: key }));
+  } catch (_) {
+    // Declined or unsupported prompts leave the copy instructions as the fallback.
+  }
+}
+
+function secureCookieBlockedOnHTTP() {
+  const host = window.location.hostname;
+  const loopback = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  return !window.isSecureContext && !loopback;
+}
+
 async function connect(adminKey) {
   elements.authMessage.textContent = "";
   setFormBusy(elements.authForm, true);
+  let sessionCreated = false;
   try {
-    await createDashboardSession(adminKey.trim());
+    const session = await createDashboardSession(adminKey.trim());
+    sessionCreated = true;
+    state.sessionBootstrap = Boolean(session?.bootstrap);
     elements.adminKey.value = "";
     await loadProjects();
+    renderBootstrapBanner();
     showAuthenticated(true);
   } catch (error) {
     elements.adminKey.value = "";
-    elements.authMessage.textContent = errorMessage(error);
+    state.sessionBootstrap = false;
+    renderBootstrapBanner();
+    if (sessionCreated && error.status === 401 && secureCookieBlockedOnHTTP()) {
+      elements.authMessage.textContent = "This browser rejected the secure session cookie over plain HTTP. Open the dashboard over HTTPS (for example via Cloudflare Tunnel) or localhost.";
+    } else {
+      elements.authMessage.textContent = errorMessage(error);
+    }
     showAuthenticated(false);
   } finally {
     setFormBusy(elements.authForm, false);
@@ -1647,10 +1690,25 @@ async function createApplicationKey() {
 }
 
 // revealKey presents a newly generated bearer once with role-specific language.
-function revealKey(value, role) {
+function revealKey(value, role, options = {}) {
   if (elements.applicationDialog.open) closeApplicationManager();
   if (elements.apiKeyDialog.open) elements.apiKeyDialog.close();
-  elements.revealedKeyTitle.textContent = role === "admin" ? "Admin key ready" : "Application key ready";
+  const upgraded = Boolean(options.upgraded);
+  const upgradeFailed = Boolean(options.upgradeFailed);
+  const handover = upgraded || upgradeFailed;
+  elements.revealedKeyTitle.textContent = role === "admin"
+    ? (handover ? "Permanent admin key ready" : "Admin key ready")
+    : "Application key ready";
+  elements.revealedKeyFlag.textContent = upgradeFailed
+    ? "Sign in again"
+    : (upgraded ? "Bootstrap retired" : "Shown once");
+  if (upgradeFailed) {
+    elements.revealedKeyCopy.textContent = "The temporary bootstrap key is now retired, but this browser session could not switch to the new key. Save this key in your password manager (replacing any saved bootstrap key), then sign out and sign in with it. It cannot be shown again.";
+  } else if (upgraded) {
+    elements.revealedKeyCopy.textContent = "Your browser session now uses this permanent key, and the temporary bootstrap key is retired. Save this key in your password manager, replacing any saved bootstrap key, before closing. It cannot be shown again.";
+  } else {
+    elements.revealedKeyCopy.textContent = "This value cannot be retrieved again. Copy it to your secure secret store before closing this dialog.";
+  }
   elements.revealedKeyLabel.textContent = role === "admin" ? "Administrator bearer" : "Application bearer";
   elements.revealedKey.value = value;
   elements.copyMessage.textContent = "";
@@ -1752,20 +1810,50 @@ function renderAPIKeys() {
   }
 }
 
-// createAdministratorKey creates a replacement administrator bearer without revoking existing access.
+// createAdministratorKey creates a replacement administrator bearer and upgrades bootstrap sessions automatically.
 async function createAdministratorKey() {
   elements.createAdminKey.disabled = true;
+  if (elements.bootstrapCreateAdminKey) elements.bootstrapCreateAdminKey.disabled = true;
   setFormMessage(elements.apiKeyMessage, "Creating administrator key…", "working");
+  if (state.sessionBootstrap && elements.bootstrapBannerMessage) {
+    setFormMessage(elements.bootstrapBannerMessage, "Creating permanent admin key…", "working");
+  }
   try {
     const response = await apiRequest("/v1/admin/api-keys", {
       method: "POST",
       body: JSON.stringify({ role: "admin" }),
     });
-    revealKey(response.key, "admin");
+    const handover = state.sessionBootstrap;
+    let upgraded = false;
+    if (handover) {
+      try {
+        const session = await createDashboardSession(response.key);
+        state.sessionBootstrap = Boolean(session?.bootstrap);
+        upgraded = !state.sessionBootstrap;
+      } catch (_) {
+        upgraded = false;
+      }
+      renderBootstrapBanner();
+      if (!upgraded) {
+        // The new key already retired the bootstrap cookie, so this session cannot do anything else.
+        if (elements.bootstrapCreateAdminKey) elements.bootstrapCreateAdminKey.hidden = true;
+        if (elements.bootstrapBannerMessage) {
+          setFormMessage(elements.bootstrapBannerMessage, "The permanent key was created and the bootstrap key is retired, but this browser session could not switch to it. Save the key, sign out, and sign in with it.");
+        }
+      }
+    }
+    revealKey(response.key, "admin", { upgraded, upgradeFailed: handover && !upgraded });
+    // A guided handover never types the new key into the sign-in form, so offer it to the
+    // password manager directly; otherwise the saved entry keeps the retired bootstrap key.
+    if (handover) rememberAdminCredential(response.key);
   } catch (error) {
     setFormMessage(elements.apiKeyMessage, errorMessage(error));
+    if (elements.bootstrapBannerMessage) {
+      setFormMessage(elements.bootstrapBannerMessage, errorMessage(error));
+    }
   } finally {
     elements.createAdminKey.disabled = false;
+    if (elements.bootstrapCreateAdminKey) elements.bootstrapCreateAdminKey.disabled = false;
   }
 }
 
@@ -2549,6 +2637,8 @@ async function logout() {
   state.managedApplication = null;
   state.overview = null;
   state.apiKeys = [];
+  state.sessionBootstrap = false;
+  renderBootstrapBanner();
   state.pendingRevokeKey = null;
   state.customerDetail = null;
   state.customerDetailID = "";
@@ -2650,6 +2740,9 @@ elements.refresh.addEventListener("click", () => {
 elements.openAPIKeys.addEventListener("click", openAPIKeyManager);
 document.querySelector("#close-api-keys").addEventListener("click", () => elements.apiKeyDialog.close());
 elements.createAdminKey.addEventListener("click", createAdministratorKey);
+if (elements.bootstrapCreateAdminKey) {
+  elements.bootstrapCreateAdminKey.addEventListener("click", createAdministratorKey);
+}
 document.querySelector("#close-revoke-key").addEventListener("click", closeRevokeKeyConfirmation);
 document.querySelector("#cancel-revoke-key").addEventListener("click", closeRevokeKeyConfirmation);
 elements.confirmRevokeKey.addEventListener("click", revokePendingAPIKey);
@@ -3007,9 +3100,16 @@ resumeDashboardSession();
 
 async function resumeDashboardSession() {
   try {
-    await loadProjects();
+    const [session] = await Promise.all([
+      apiRequest("/v1/admin/dashboard-session"),
+      loadProjects(),
+    ]);
+    state.sessionBootstrap = Boolean(session?.bootstrap);
+    renderBootstrapBanner();
     showAuthenticated(true);
   } catch (error) {
+    state.sessionBootstrap = false;
+    renderBootstrapBanner();
     showAuthenticated(false);
     if (error.status !== 401) {
       elements.authMessage.textContent = errorMessage(error);

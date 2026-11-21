@@ -26,12 +26,13 @@
           <h1 id="auth-title">Every purchase.<br>One control panel.</h1>
           <p class="auth-copy">Connect with an admin bearer to configure store authority, inspect purchase verification, and monitor entitlement delivery.</p>
           <form id="auth-form" class="auth-form">
+            <input class="sr-only" type="text" name="username" value="iapstack-admin" autocomplete="username" readonly tabindex="-1" aria-hidden="true">
             <label for="admin-key">Admin bearer key</label>
             <div class="key-row">
-              <input id="admin-key" name="admin-key" type="password" autocomplete="off" spellcheck="false" required placeholder="iap_… or bootstrap key">
+              <input id="admin-key" name="admin-key" type="password" autocomplete="current-password" spellcheck="false" required placeholder="iap_… or bootstrap key">
               <button type="submit" class="primary-button">Connect</button>
             </div>
-            <p class="field-note">Exchanged once for a protected 12-hour browser session. The key is never stored by the page.</p>
+            <p class="field-note">Exchanged once for a protected 12-hour browser session. Save your permanent <code>iap_…</code> key in a password manager to autofill future sign-ins.</p>
             <p class="form-message" id="auth-message" role="alert"></p>
           </form>
         </div>
@@ -84,6 +85,15 @@
         </header>
 
         <div class="global-message" id="global-message" role="status" aria-live="polite"></div>
+
+        <section class="bootstrap-banner" id="bootstrap-banner" aria-labelledby="bootstrap-banner-title" hidden>
+          <div class="bootstrap-banner-copy">
+            <h2 id="bootstrap-banner-title">Finish setup: create your permanent admin key</h2>
+            <p>You signed in with the temporary bootstrap key. Create a permanent admin key below—your browser session switches to it automatically and the bootstrap key retires immediately with no server restart.</p>
+            <p class="form-message" id="bootstrap-banner-message" role="status"></p>
+          </div>
+          <button type="button" class="primary-button" id="bootstrap-create-admin-key">Create permanent admin key</button>
+        </section>
 
         <section class="signal-line" aria-labelledby="signal-title">
           <div class="signal-heading">
@@ -501,8 +511,8 @@
 
     <dialog id="key-dialog" class="setup-dialog small-dialog key-dialog">
       <div class="key-reveal">
-        <div class="dialog-heading"><div><h2 id="revealed-key-title">Application key ready</h2><span class="dialog-flag">Shown once</span></div><button class="icon-button" id="close-key" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
-        <p class="dialog-copy">This value cannot be retrieved again. Copy it to your secure secret store before closing this dialog.</p>
+        <div class="dialog-heading"><div><h2 id="revealed-key-title">Application key ready</h2><span class="dialog-flag" id="revealed-key-flag">Shown once</span></div><button class="icon-button" id="close-key" type="button" aria-label="Close dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        <p class="dialog-copy" id="revealed-key-copy">This value cannot be retrieved again. Copy it to your secure secret store before closing this dialog.</p>
         <label class="revealed-key-label"><span id="revealed-key-label">Application bearer</span><textarea id="revealed-key" rows="4" readonly spellcheck="false"></textarea></label>
         <p class="form-message" id="copy-message" role="status"></p>
         <div class="dialog-actions"><button type="button" class="secondary-button" id="copy-key">Copy key</button><button type="button" class="primary-button" id="done-key">Done</button></div>

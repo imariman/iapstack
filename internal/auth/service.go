@@ -155,13 +155,34 @@ func (service *Service) Revoke(ctx context.Context, id string) (persistence.APIK
 	return summary, nil
 }
 
+// HasActiveAdmin reports whether at least one non-revoked stored administrator key exists.
+func (service *Service) HasActiveAdmin(ctx context.Context) (bool, error) {
+	var hasAdmin bool
+	err := service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+		var checkErr error
+		hasAdmin, checkErr = repository.HasActiveAdminAPIKey(ctx)
+		return checkErr
+	})
+	if err != nil {
+		return false, fmt.Errorf("check active administrator API keys: %w", err)
+	}
+	return hasAdmin, nil
+}
+
 // Authenticate verifies a bootstrap administrator or stored scoped bearer key.
 func (service *Service) Authenticate(ctx context.Context, bearer string) (Principal, error) {
 	bearer = strings.TrimSpace(bearer)
 	if service.hasBootstrapAdmin {
 		digest := sha256.Sum256([]byte(bearer))
 		if subtle.ConstantTimeCompare(digest[:], service.bootstrapAdminHash[:]) == 1 {
-			return Principal{Role: persistence.APIKeyRoleAdmin}, nil
+			hasAdmin, err := service.HasActiveAdmin(ctx)
+			if err != nil {
+				return Principal{}, err
+			}
+			if !hasAdmin {
+				return Principal{Role: persistence.APIKeyRoleAdmin}, nil
+			}
+			return Principal{}, ErrUnauthorized
 		}
 	}
 	id, secret, err := parseBearer(bearer)
