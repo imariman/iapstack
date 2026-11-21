@@ -195,6 +195,8 @@ set_env() {
 env_value() { sed -n "s/^$1=//p" .env | tail -n 1; }
 
 configure_env() {
+  mkdir -p "$IAPSTACK_DIR/deploy/vps/offerings"
+  chmod 755 "$IAPSTACK_DIR/deploy/vps/offerings"
   if [ ! -e .env ]; then
     ./init-env.sh
     if small_host; then

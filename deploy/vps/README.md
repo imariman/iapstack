@@ -198,6 +198,10 @@ before relying on the backups.
 - Set the optional `IAPSTACK_GRAFANA_OTLP_*` values to export metrics to Grafana Cloud
   and import the [dashboard and alerts](../grafana/README.md).
 
+## Application offerings
+
+The `iapstack` service mounts `deploy/vps/offerings` read-only at `/etc/iapstack/offerings` (`IAPSTACK_OFFERING_DIRECTORY`). To serve a public offering document at `GET /v1/applications/<application_id>/offering`, place a matching `<application_id>.json` file in `deploy/vps/offerings/` with world-readable permissions (`chmod 644`, since the container runs as UID `65532`). See [`offerings/README.md`](offerings/README.md) for the expected JSON schema.
+
 ## Upgrades
 
 Review the release notes, then re-run the installer with the new tag. It backs up the
