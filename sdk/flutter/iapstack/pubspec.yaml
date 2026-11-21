@@ -1,8 +1,12 @@
 name: iapstack
 description: Provider-neutral Flutter and Dart client for the IAPStack v1 API.
-version: 0.1.0-dev.1
+version: 0.1.0-sdk.3
 repository: https://github.com/imariman/iapstack/tree/main/sdk/flutter/iapstack
-publish_to: none
+issue_tracker: https://github.com/imariman/iapstack/issues
+topics:
+  - in-app-purchase
+  - subscriptions
+  - payments
 
 environment:
   sdk: ">=3.4.0 <4.0.0"

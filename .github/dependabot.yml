@@ -36,6 +36,9 @@ updates:
       - /sdk/flutter/iapstack_google_play/example
       - /sdk/flutter/iapstack_huawei
       - /sdk/flutter/iapstack_huawei/example
+    ignore:
+      # Companions pin the exact core version of the SDK release train.
+      - dependency-name: iapstack
     schedule:
       interval: weekly
     cooldown:

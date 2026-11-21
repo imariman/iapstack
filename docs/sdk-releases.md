@@ -1,8 +1,8 @@
 # SDK installation and releases
 
-The Go, TypeScript, Swift, Kotlin and React Native SDKs implement IAPStack HTTP API
-v1. They are post-v0.1 SDKs and remain prerelease. Flutter is still the only mobile
-client in the server's v0.1 release gate. Publishing an SDK neither certifies a
+The Go, TypeScript, Swift, Kotlin, React Native and Flutter SDKs implement IAPStack
+HTTP API v1 and remain prerelease. Flutter is still the only mobile client in the
+server's v0.1 release gate; the others are post-v0.1 SDKs. Publishing an SDK neither certifies a
 server release nor changes its three-provider evidence requirements.
 
 ## Version policy
@@ -12,7 +12,7 @@ version is `0.1.0-sdk.3`; it is **not published merely because it appears here**
 Check the [GitHub SDK release](https://github.com/imariman/iapstack/releases) and
 registry availability before using registry install commands.
 
-All five SDK families share `X.Y.Z-sdk.N` prerelease versions for now. Breaking API
+All six SDK families share `X.Y.Z-sdk.N` prerelease versions for now. Breaking API
 changes increment the minor version while major is zero; fixes increment the patch
 or the numbered prerelease while a release is being qualified. The supported server
 contract is `/v1`, independently of the server's release number. A stable SDK policy
@@ -24,6 +24,7 @@ will be introduced explicitly when compatibility commitments are ready.
 | Go module | Tag `sdk/go/v0.1.0-sdk.3` |
 | npm | `@iapstack/host` and `@iapstack/react-native`, version `0.1.0-sdk.3`, dist-tag `next` |
 | Maven | `io.github.imariman.iapstack`, artifacts `iapstack-core`, `iapstack-google-play`, `iapstack-huawei`, version `0.1.0-sdk.3` |
+| pub.dev | `iapstack`, `iapstack_apple`, `iapstack_google_play`, `iapstack_huawei`, version `0.1.0-sdk.3` |
 
 The root `Package.swift` points at the canonical sources in `sdk/ios`. Semantic SDK
 tags deliberately omit the server's `v` prefix and use the `sdk.N` prerelease label;
@@ -91,6 +92,22 @@ implementation("io.github.imariman.iapstack:iapstack-huawei:0.1.0-sdk.3")
 Include only the store companions the application uses. Both depend on the same
 version of `iapstack-core` through their published POM/Gradle module metadata.
 
+### Flutter
+
+```sh
+flutter pub add iapstack:0.1.0-sdk.3
+# Add only the store companions the application uses:
+flutter pub add iapstack_apple:0.1.0-sdk.3
+flutter pub add iapstack_google_play:0.1.0-sdk.3
+flutter pub add iapstack_huawei:0.1.0-sdk.3
+```
+
+Name the exact SDK version: `^0.1.0` does not match `0.1.0-sdk.3`, which sorts
+before `0.1.0`. Each companion depends on the **exact** same
+`iapstack` version, because prerelease trains may break the companion-to-core API;
+upgrade all IAPStack packages together. Huawei consumers also need the HMS setup in
+the `iapstack_huawei` README.
+
 ## Verify packages locally
 
 ```sh
@@ -102,6 +119,7 @@ scripts/pack-sdk-npm.sh "$PWD/tmp/sdk-packages"
   :huawei:publishAllPublicationsToStagingRepository)
 python3 scripts/check-sdk-packages.py --maven-dir sdk/android/build/maven
 scripts/check-sdk-android-consumer.sh
+scripts/publish-sdk-pub.sh --check
 swift test
 ```
 
@@ -110,7 +128,17 @@ plain Node consumer. Maven checks inspect all three binaries, source jars, versi
 and companion-to-core dependencies. Independent JVM and Android consumers compile
 against the staged artifacts, using both Gradle metadata and POM-only resolution,
 so undeclared public dependencies cannot be masked by the monorepo examples.
-`SDK package checks` runs these in CI. Swift
+`SDK package checks` runs these in CI. `scripts/publish-sdk-pub.sh --check` runs
+`pub publish --dry-run` for all four Flutter packages in the `CI` Flutter job and
+fails on any validation error or on an untracked, unignored file that pub would
+upload. Its expected warnings are the exact `iapstack` and `huawei_iap` pins.
+In the repository, companions and examples resolve `iapstack` from the checkout
+through committed `pubspec_overrides.yaml` files; pub leaves the package-level
+override out automatically, and each companion's `.pubignore` excludes
+`example/pubspec_overrides.yaml` while `example/pubspec.yaml` declares the
+matching `iapstack` version. `check-sdk-packages.py` requires matching pubspec versions,
+the exact core pin, no path or git dependencies, the repository `LICENSE` and a
+`CHANGELOG.md` entry for the version in every Flutter package. Swift
 checks cover both manifests and the native sample; React Native native checks build
 the example against the packed companion sources.
 
@@ -130,7 +158,21 @@ the example against the packed companion sources.
    visibility on first publication. Consumers require `read:packages` credentials.
 4. Protect SDK tags (`*-sdk.*` and `sdk/go/v*`) against updates/deletion, in addition
    to the existing server `v*` tag rules. Never force-update a published version.
-5. Merge tested code, wait for `CI`, `Swift SDK checks`, `SDK package checks`, and
+5. pub.dev accepts only a **manual** first upload of a new package, so the first
+   Flutter release follows the `SDK release` run below. Sign in with `dart pub login`
+   as the account that should own the packages, check out the new SDK tag, and run
+   `scripts/publish-sdk-pub.sh --publish`. It validates all four archives, uploads
+   `iapstack` first, waits for pub.dev to serve it, then uploads the companions;
+   pub asks before each upload. Then create a dedicated `pub-dev-release` GitHub
+   environment (no secrets, maintainer review required, custom deployment policy
+   allowing tags matching `*-sdk.*`) so `stable-release` stays restricted to
+   `main`. On each package's pub.dev **Admin** page, optionally transfer it to a
+   verified publisher, and enable automated publishing from GitHub Actions with
+   repository `imariman/iapstack`, tag pattern `{{version}}`, **publishing from
+   `workflow_dispatch` events** enabled, and required environment
+   `pub-dev-release`. Finally set the repository variable
+   `PUB_DEV_AUTOMATED_PUBLISHING` to `true`.
+6. Merge tested code, wait for `CI`, `Swift SDK checks`, `SDK package checks`, and
    `React Native native checks` on the **same main commit**, then dispatch `SDK release`
    with the exact value in `sdk/version.txt`. The workflow uses the existing protected
    `stable-release` environment but never invokes the server release workflow.
@@ -139,6 +181,10 @@ The workflow rebuilds and inspects the archives, publishes npm with provenance a
 Maven with matching staged bytes, creates Swift/Go tags atomically, verifies the Go
 module through the public proxy, attests the downloadable archives and creates a
 GitHub prerelease. It never marks the release as latest or changes npm's latest tag.
+When `PUB_DEV_AUTOMATED_PUBLISHING` is `true`, it then dispatches `SDK pub.dev
+release` on the new tag. That workflow checks that the tag's GitHub release is
+published and publishes with the job's OIDC token; pub.dev rejects the upload from
+any other tag or environment.
 
 Publication across registries is not atomic. If a run stops partway through, rerun
 the failed job at the **same commit**: identical npm/Maven versions are skipped,
@@ -149,6 +195,9 @@ and downloaded for comparison while the release is still a draft, then published
 Never delete a partial version to replace
 its contents; inspect the failure and publish a new version if code needs changing.
 Maven metadata retains prior versions and does not move latest backwards on a rerun.
+pub.dev uploads are permanent: a version can be retracted for 7 days but never
+deleted or replaced. To resume a partial Flutter upload, run `SDK pub.dev release`
+on the same tag; versions pub.dev already serves are skipped.
 
 ## Shared client behavior
 
@@ -165,4 +214,5 @@ Maven metadata retains prior versions and does not move latest backwards on a re
 
 Registry references: [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/),
 [GitHub Gradle registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-gradle-registry),
-[Android library publication](https://developer.android.com/build/publish-library/upload-library).
+[Android library publication](https://developer.android.com/build/publish-library/upload-library),
+[pub.dev automated publishing](https://dart.dev/tools/pub/automated-publishing).

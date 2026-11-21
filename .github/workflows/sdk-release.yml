@@ -133,7 +133,8 @@ jobs:
               f'- npm: `@iapstack/host@{version}`, `@iapstack/react-native@{version}` (next channel)\n'
               f'- Go: `github.com/imariman/iapstack/sdk/go@v{version}`\n'
               f'- SwiftPM: repository root, exact version `{version}`\n'
-              f'- Maven: `io.github.imariman.iapstack:iapstack-core|iapstack-google-play|iapstack-huawei:{version}` on GitHub Packages\n\n'
+              f'- Maven: `io.github.imariman.iapstack:iapstack-core|iapstack-google-play|iapstack-huawei:{version}` on GitHub Packages\n'
+              f'- pub.dev: `iapstack`, `iapstack_apple`, `iapstack_google_play`, `iapstack_huawei` `{version}`, published from this tag by the SDK pub.dev release workflow\n\n'
               'See docs/sdk-releases.md for installation, registry authentication and compatibility.\n'
           )
           PY
@@ -148,3 +149,21 @@ jobs:
             cmp "$artifact" "$RUNNER_TEMP/sdk-download-check/$(basename "$artifact")"
           done
           gh release edit "$VERSION" --draft=false --prerelease --latest=false
+
+  dispatch-pub-dev:
+    name: Start pub.dev publication
+    needs: publish
+    # pub.dev only accepts the first version of a package from a manual
+    # upload. Set this variable after that and the admin setup in
+    # docs/sdk-releases.md.
+    if: vars.PUB_DEV_AUTOMATED_PUBLISHING == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch pub.dev release on the new tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: gh workflow run sdk-release-pub.yml --repo "$GITHUB_REPOSITORY" --ref "$VERSION" -f version="$VERSION"

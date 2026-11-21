@@ -1,0 +1,50 @@
+name: SDK pub.dev release
+
+# pub.dev accepts OIDC uploads only from a run on a tag that matches each
+# package's tag pattern ({{version}}). The SDK release workflow dispatches this
+# on its new tag once automated publishing is configured; it can also be run by
+# hand on an existing SDK tag to resume a partial upload.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SDK prerelease version; run this workflow on the tag with the same name
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-release-pub
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish Flutter SDK packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: pub-dev-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify the published SDK release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/tags/$VERSION"
+          test "$VERSION" = "$(cat sdk/version.txt)"
+          # The SDK release verified CI for this commit before it created the tag.
+          gh release view "$VERSION" --json isDraft,tagName |
+            jq -e --arg version "$VERSION" '.isDraft == false and .tagName == $version'
+      - name: Set up Flutter
+        env:
+          FLUTTER_VERSION: 3.47.1
+        run: .github/scripts/install-flutter.sh
+      - name: Publish to pub.dev, core first
+        run: scripts/publish-sdk-pub.sh --publish

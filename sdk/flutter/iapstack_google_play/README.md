@@ -22,11 +22,13 @@ Use the provider-neutral package and this companion together:
 
 ```yaml
 dependencies:
-  iapstack:
-    path: ../iapstack
-  iapstack_google_play:
-    path: ../iapstack_google_play
+  iapstack: 0.1.0-sdk.3
+  iapstack_google_play: 0.1.0-sdk.3
 ```
+
+Use the exact version: `^0.1.0` does not match an `-sdk.N` prerelease.
+Upgrade all IAPStack packages together, because each companion depends on the
+exact same `iapstack` version.
 
 The Android host must use API level 24 or newer and complete the standard Play
 Console, product, testing-track, and Play Billing setup for its package.

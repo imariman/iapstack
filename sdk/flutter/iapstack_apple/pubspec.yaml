@@ -1,8 +1,12 @@
 name: iapstack_apple
 description: Apple StoreKit 2 companion for the provider-neutral IAPStack Flutter SDK.
-version: 0.1.0-dev.1
+version: 0.1.0-sdk.3
 repository: https://github.com/imariman/iapstack/tree/main/sdk/flutter/iapstack_apple
-publish_to: none
+issue_tracker: https://github.com/imariman/iapstack/issues
+topics:
+  - in-app-purchase
+  - subscriptions
+  - payments
 
 environment:
   sdk: ">=3.11.0 <4.0.0"
@@ -11,8 +15,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  iapstack:
-    path: ../iapstack
+  iapstack: 0.1.0-sdk.3
   in_app_purchase: ^3.3.1
   in_app_purchase_storekit: ^0.4.17
 

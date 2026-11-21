@@ -12,6 +12,21 @@ counted on `skipped` and are not submitted. A later batch failure, after an
 earlier batch succeeded, keeps `committedRestoreResults` on the original
 IAPStack error.
 
+## Install
+
+```yaml
+dependencies:
+  iapstack: 0.1.0-sdk.3
+  iapstack_huawei: 0.1.0-sdk.3
+```
+
+Use the exact version: `^0.1.0` does not match an `-sdk.N` prerelease.
+Upgrade all IAPStack packages together, because each companion depends on the
+exact same `iapstack` version. Complete the HMS and AppGallery Connect setup
+described below before testing purchases.
+
+## Usage
+
 ```dart
 final backend = IapStackClient(
   IapStackConfig(

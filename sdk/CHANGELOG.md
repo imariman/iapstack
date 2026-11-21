@@ -146,6 +146,10 @@
 
 ### Added
 
+- Flutter: `iapstack`, `iapstack_apple`, `iapstack_google_play` and
+  `iapstack_huawei` join the SDK release train and are published to pub.dev.
+  They move from `0.1.0-dev.1` to `0.1.0-sdk.3`, and the companions depend on
+  the exact same `iapstack` version instead of a repository path.
 - `committedRestoreResults` and `restoreSkips` on Kotlin and Flutter
   `IapStackException`, set only after a restore batch has already succeeded.
   `restorePageLimitReached` is set on that same error when Huawei had already

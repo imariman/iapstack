@@ -9,6 +9,18 @@ The companion requires the IAPStack external customer ID to be a canonical
 lowercase UUID. The same UUID is sent to StoreKit as `appAccountToken` and to
 IAPStack as `external_customer_id`.
 
+## Install
+
+```yaml
+dependencies:
+  iapstack: 0.1.0-sdk.3
+  iapstack_apple: 0.1.0-sdk.3
+```
+
+Use the exact version: `^0.1.0` does not match an `-sdk.N` prerelease.
+Upgrade all IAPStack packages together, because each companion depends on the
+exact same `iapstack` version.
+
 ## Purchase flow
 
 Create the listener before querying products so unfinished transactions are not

@@ -169,6 +169,9 @@ jobs:
           FLUTTER_VERSION: 3.47.1
         run: .github/scripts/install-flutter.sh
 
+      - name: Validate pub.dev archives
+        run: scripts/publish-sdk-pub.sh --check
+
       - name: Check provider-neutral SDK
         working-directory: sdk/flutter/iapstack
         run: |
