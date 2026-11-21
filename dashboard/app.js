@@ -289,8 +289,21 @@ function setFormBusy(form, busy) {
 function renderBootstrapBanner() {
   if (!elements.bootstrapBanner) return;
   elements.bootstrapBanner.hidden = !state.sessionBootstrap;
-  if (!state.sessionBootstrap && elements.bootstrapBannerMessage) {
-    elements.bootstrapBannerMessage.textContent = "";
+  if (!state.sessionBootstrap) {
+    if (elements.bootstrapBannerMessage) elements.bootstrapBannerMessage.textContent = "";
+    if (elements.bootstrapCreateAdminKey) elements.bootstrapCreateAdminKey.hidden = false;
+  }
+}
+
+// rememberAdminCredential offers a permanent administrator key to the browser password manager
+// through the Credential Management API where it exists; other browsers rely on the dialog copy.
+async function rememberAdminCredential(key) {
+  if (typeof window.PasswordCredential !== "function" || !navigator.credentials?.store) return;
+  try {
+    const username = elements.authForm?.querySelector("input[autocomplete='username']")?.value || "iapstack-admin";
+    await navigator.credentials.store(new window.PasswordCredential({ id: username, password: key }));
+  } catch (_) {
+    // Declined or unsupported prompts leave the copy instructions as the fallback.
   }
 }
 
@@ -1681,13 +1694,21 @@ function revealKey(value, role, options = {}) {
   if (elements.applicationDialog.open) closeApplicationManager();
   if (elements.apiKeyDialog.open) elements.apiKeyDialog.close();
   const upgraded = Boolean(options.upgraded);
+  const upgradeFailed = Boolean(options.upgradeFailed);
+  const handover = upgraded || upgradeFailed;
   elements.revealedKeyTitle.textContent = role === "admin"
-    ? (upgraded ? "Permanent admin key ready" : "Admin key ready")
+    ? (handover ? "Permanent admin key ready" : "Admin key ready")
     : "Application key ready";
-  elements.revealedKeyFlag.textContent = upgraded ? "Bootstrap retired" : "Shown once";
-  elements.revealedKeyCopy.textContent = upgraded
-    ? "Your browser session is already switched to this permanent key, and the temporary bootstrap key is now retired. Save this key in your password manager before closing—it cannot be shown again."
-    : "This value cannot be retrieved again. Copy it to your secure secret store before closing this dialog.";
+  elements.revealedKeyFlag.textContent = upgradeFailed
+    ? "Sign in again"
+    : (upgraded ? "Bootstrap retired" : "Shown once");
+  if (upgradeFailed) {
+    elements.revealedKeyCopy.textContent = "The temporary bootstrap key is now retired, but this browser session could not switch to the new key. Save this key in your password manager (replacing any saved bootstrap key), then sign out and sign in with it. It cannot be shown again.";
+  } else if (upgraded) {
+    elements.revealedKeyCopy.textContent = "Your browser session now uses this permanent key, and the temporary bootstrap key is retired. Save this key in your password manager, replacing any saved bootstrap key, before closing. It cannot be shown again.";
+  } else {
+    elements.revealedKeyCopy.textContent = "This value cannot be retrieved again. Copy it to your secure secret store before closing this dialog.";
+  }
   elements.revealedKeyLabel.textContent = role === "admin" ? "Administrator bearer" : "Application bearer";
   elements.revealedKey.value = value;
   elements.copyMessage.textContent = "";
@@ -1802,18 +1823,29 @@ async function createAdministratorKey() {
       method: "POST",
       body: JSON.stringify({ role: "admin" }),
     });
+    const handover = state.sessionBootstrap;
     let upgraded = false;
-    if (state.sessionBootstrap) {
+    if (handover) {
       try {
         const session = await createDashboardSession(response.key);
         state.sessionBootstrap = Boolean(session?.bootstrap);
-        renderBootstrapBanner();
         upgraded = !state.sessionBootstrap;
       } catch (_) {
         upgraded = false;
       }
+      renderBootstrapBanner();
+      if (!upgraded) {
+        // The new key already retired the bootstrap cookie, so this session cannot do anything else.
+        if (elements.bootstrapCreateAdminKey) elements.bootstrapCreateAdminKey.hidden = true;
+        if (elements.bootstrapBannerMessage) {
+          setFormMessage(elements.bootstrapBannerMessage, "The permanent key was created and the bootstrap key is retired, but this browser session could not switch to it. Save the key, sign out, and sign in with it.");
+        }
+      }
     }
-    revealKey(response.key, "admin", { upgraded });
+    revealKey(response.key, "admin", { upgraded, upgradeFailed: handover && !upgraded });
+    // A guided handover never types the new key into the sign-in form, so offer it to the
+    // password manager directly; otherwise the saved entry keeps the retired bootstrap key.
+    if (handover) rememberAdminCredential(response.key);
   } catch (error) {
     setFormMessage(elements.apiKeyMessage, errorMessage(error));
     if (elements.bootstrapBannerMessage) {
