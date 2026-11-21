@@ -203,20 +203,13 @@ func TestCustomerSessionsBindCustomerExpiryAndIssuer(t *testing.T) {
 	}
 }
 
-// TestAdminSessionsPersistWithoutRetainingBearers verifies protected dashboard sessions survive independently of plaintext admin keys.
+// TestAdminSessionsPersistWithoutRetainingBearers verifies protected dashboard sessions survive independently of plaintext admin keys
+// and bootstrap credentials auto-retire once a stored administrator key exists.
 func TestAdminSessionsPersistWithoutRetainingBearers(t *testing.T) {
 	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}
 	apiKeys, err := NewService(store, testBootstrapAdminKey, 4)
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
-	}
-	storedBearer, err := apiKeys.Create(context.Background(), Principal{Role: persistence.APIKeyRoleAdmin})
-	if err != nil {
-		t.Fatalf("Create() administrator key error = %v", err)
-	}
-	storedIssuer, err := apiKeys.Authenticate(context.Background(), storedBearer)
-	if err != nil {
-		t.Fatalf("Authenticate() stored issuer error = %v", err)
 	}
 	bootstrapIssuer, err := apiKeys.Authenticate(context.Background(), testBootstrapAdminKey)
 	if err != nil {
@@ -229,6 +222,31 @@ func TestAdminSessionsPersistWithoutRetainingBearers(t *testing.T) {
 	}
 	now := time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC)
 	sessions.clock = func() time.Time { return now }
+
+	bootstrapSession, err := sessions.Mint(context.Background(), bootstrapIssuer)
+	if err != nil {
+		t.Fatalf("Mint() bootstrap session error = %v", err)
+	}
+	bootstrapPrincipal, err := sessions.Authenticate(context.Background(), bootstrapSession.Token)
+	if err != nil || bootstrapPrincipal.KeyID != "" || bootstrapPrincipal.Role != persistence.APIKeyRoleAdmin {
+		t.Fatalf("Authenticate() bootstrap principal = %#v, %v", bootstrapPrincipal, err)
+	}
+
+	storedBearer, err := apiKeys.Create(context.Background(), Principal{Role: persistence.APIKeyRoleAdmin})
+	if err != nil {
+		t.Fatalf("Create() administrator key error = %v", err)
+	}
+	storedIssuer, err := apiKeys.Authenticate(context.Background(), storedBearer)
+	if err != nil {
+		t.Fatalf("Authenticate() stored issuer error = %v", err)
+	}
+
+	if _, err := apiKeys.Authenticate(context.Background(), testBootstrapAdminKey); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("retired bootstrap bearer Authenticate() error = %v, want unauthorized", err)
+	}
+	if _, err := sessions.Authenticate(context.Background(), bootstrapSession.Token); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("retired bootstrap session Authenticate() error = %v, want unauthorized", err)
+	}
 
 	storedSession, err := sessions.Mint(context.Background(), storedIssuer)
 	if err != nil {
@@ -251,15 +269,6 @@ func TestAdminSessionsPersistWithoutRetainingBearers(t *testing.T) {
 		t.Fatalf("Authenticate() administrator session storage error = %v, want ErrUnavailable", err)
 	}
 	store.err = nil
-
-	bootstrapSession, err := sessions.Mint(context.Background(), bootstrapIssuer)
-	if err != nil {
-		t.Fatalf("Mint() bootstrap session error = %v", err)
-	}
-	bootstrapPrincipal, err := sessions.Authenticate(context.Background(), bootstrapSession.Token)
-	if err != nil || bootstrapPrincipal.KeyID != "" || bootstrapPrincipal.Role != persistence.APIKeyRoleAdmin {
-		t.Fatalf("Authenticate() bootstrap principal = %#v, %v", bootstrapPrincipal, err)
-	}
 
 	replacement := byte('A')
 	if storedSession.Token[len(storedSession.Token)-1] == replacement {
@@ -331,6 +340,16 @@ func (transaction *fakeOperationsTransaction) APIKey(
 		return persistence.APIKeyRecord{}, persistence.ErrNotFound
 	}
 	return record, nil
+}
+
+// HasActiveAdminAPIKey reports whether any stored administrator verifier exists.
+func (transaction *fakeOperationsTransaction) HasActiveAdminAPIKey(_ context.Context) (bool, error) {
+	for _, record := range transaction.records {
+		if record.Role == persistence.APIKeyRoleAdmin {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // PutAPIKey retains one verifier and rejects duplicate identities.

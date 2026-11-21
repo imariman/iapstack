@@ -30,13 +30,27 @@ func TestDashboardSessionExchangesBearerForSecureCookie(t *testing.T) {
 		t.Fatalf("login response exposes secret material: %s", loginRecorder.Body.String())
 	}
 	var response dashboardSessionResponse
-	if err := json.Unmarshal(loginRecorder.Body.Bytes(), &response); err != nil || response.ExpiresAt.IsZero() {
+	if err := json.Unmarshal(loginRecorder.Body.Bytes(), &response); err != nil || response.ExpiresAt.IsZero() ||
+		!response.Bootstrap || response.HasDurableAdmin {
 		t.Fatalf("decode login response = %#v, %v", response, err)
 	}
 	cookie := dashboardCookie(t, loginRecorder)
 	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode ||
 		cookie.Path != dashboardSessionCookiePath || cookie.Expires.IsZero() || cookie.MaxAge <= 0 {
 		t.Fatalf("dashboard cookie attributes = %#v", cookie)
+	}
+
+	statusRequest := httptest.NewRequest(http.MethodGet, "/v1/admin/dashboard-session", nil)
+	statusRequest.AddCookie(cookie)
+	statusRecorder := httptest.NewRecorder()
+	api.getDashboardSession(statusRecorder, statusRequest)
+	if statusRecorder.Code != http.StatusOK {
+		t.Fatalf("get dashboard session status = %d: %s", statusRecorder.Code, statusRecorder.Body.String())
+	}
+	var statusResponse dashboardSessionResponse
+	if err := json.Unmarshal(statusRecorder.Body.Bytes(), &statusResponse); err != nil ||
+		!statusResponse.Bootstrap || statusResponse.HasDurableAdmin || !statusResponse.ExpiresAt.Equal(response.ExpiresAt) {
+		t.Fatalf("get dashboard session response = %#v, %v", statusResponse, err)
 	}
 
 	projectsRequest := httptest.NewRequest(http.MethodGet, "/v1/admin/projects", nil)
@@ -113,6 +127,68 @@ func TestDashboardSessionRequiresSameOriginProofForMutations(t *testing.T) {
 	}
 }
 
+// TestDashboardSessionAutoRetiresBootstrapOnDurableAdminCreation verifies durable admin creation retires bootstrap bearers and cookies.
+func TestDashboardSessionAutoRetiresBootstrapOnDurableAdminCreation(t *testing.T) {
+	t.Parallel()
+
+	api := newDashboardSessionTestAPI(t)
+	bootstrapCookie := loginDashboardSession(t, api)
+
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/admin/api-keys", strings.NewReader(`{"role":"admin"}`))
+	createRequest.Header.Set("Content-Type", "application/json")
+	createRequest.AddCookie(bootstrapCookie)
+	setSameOriginDashboardHeaders(createRequest)
+	createRecorder := httptest.NewRecorder()
+	api.createAPIKey(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create durable admin key status = %d: %s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var created struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil || created.Key == "" {
+		t.Fatalf("decode created key = %#v, %v", created, err)
+	}
+
+	upgradeRequest := httptest.NewRequest(http.MethodPost, "/v1/admin/dashboard-session", nil)
+	upgradeRequest.Header.Set("Authorization", "Bearer "+created.Key)
+	upgradeRecorder := httptest.NewRecorder()
+	api.createDashboardSession(upgradeRecorder, upgradeRequest)
+	if upgradeRecorder.Code != http.StatusCreated {
+		t.Fatalf("upgrade dashboard session status = %d: %s", upgradeRecorder.Code, upgradeRecorder.Body.String())
+	}
+	var upgradedResponse dashboardSessionResponse
+	if err := json.Unmarshal(upgradeRecorder.Body.Bytes(), &upgradedResponse); err != nil ||
+		upgradedResponse.Bootstrap || !upgradedResponse.HasDurableAdmin {
+		t.Fatalf("upgraded session response = %#v, %v", upgradedResponse, err)
+	}
+	durableCookie := dashboardCookie(t, upgradeRecorder)
+
+	retiredCookieRequest := httptest.NewRequest(http.MethodGet, "/v1/admin/dashboard-session", nil)
+	retiredCookieRequest.AddCookie(bootstrapCookie)
+	retiredCookieRecorder := httptest.NewRecorder()
+	api.getDashboardSession(retiredCookieRecorder, retiredCookieRequest)
+	if retiredCookieRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("retired bootstrap cookie status = %d, want 401", retiredCookieRecorder.Code)
+	}
+
+	retiredBearerRequest := httptest.NewRequest(http.MethodPost, "/v1/admin/dashboard-session", nil)
+	retiredBearerRequest.Header.Set("Authorization", "Bearer "+testBootstrapAdminKey)
+	retiredBearerRecorder := httptest.NewRecorder()
+	api.createDashboardSession(retiredBearerRecorder, retiredBearerRequest)
+	if retiredBearerRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("retired bootstrap bearer status = %d, want 401", retiredBearerRecorder.Code)
+	}
+
+	activeRequest := httptest.NewRequest(http.MethodGet, "/v1/admin/dashboard-session", nil)
+	activeRequest.AddCookie(durableCookie)
+	activeRecorder := httptest.NewRecorder()
+	api.getDashboardSession(activeRecorder, activeRequest)
+	if activeRecorder.Code != http.StatusOK {
+		t.Fatalf("upgraded durable cookie status = %d: %s", activeRecorder.Code, activeRecorder.Body.String())
+	}
+}
+
 // newDashboardSessionTestAPI constructs dashboard authentication with deterministic protection keys.
 func newDashboardSessionTestAPI(t *testing.T) *API {
 	t.Helper()
@@ -141,6 +217,7 @@ func newDashboardSessionTestAPI(t *testing.T) *API {
 	}
 	return &API{
 		admin: fakeAdminQueryStore{}, authentication: authentication, adminSessions: sessions,
+		bodyLimit: 1 << 20,
 	}
 }
 

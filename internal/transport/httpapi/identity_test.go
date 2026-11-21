@@ -42,10 +42,6 @@ func TestCustomerIdentityHTTPRejectsTheWrongPrincipals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	adminKey, err := authentication.Create(context.Background(), auth.Principal{Role: persistence.APIKeyRoleAdmin})
-	if err != nil {
-		t.Fatalf("Create() admin key error = %v", err)
-	}
 	applicationKey, err := authentication.Create(context.Background(), auth.Principal{
 		Role: persistence.APIKeyRoleApplication, ProjectID: "project-1", ApplicationID: "application-1",
 	})
@@ -81,6 +77,20 @@ func TestCustomerIdentityHTTPRejectsTheWrongPrincipals(t *testing.T) {
 	api.putAdminCustomerAlias(bootstrapRecorder, bootstrap)
 	if bootstrapRecorder.Code != http.StatusForbidden || !strings.Contains(bootstrapRecorder.Body.String(), `"code":"forbidden"`) {
 		t.Fatalf("bootstrap alias = %d %s", bootstrapRecorder.Code, bootstrapRecorder.Body.String())
+	}
+
+	adminKey, err := authentication.Create(context.Background(), auth.Principal{Role: persistence.APIKeyRoleAdmin})
+	if err != nil {
+		t.Fatalf("Create() admin key error = %v", err)
+	}
+	retiredBootstrap := identityRequest(t, http.MethodPut, "/v1/admin/projects/project-1/customers/customer-1/aliases/alias-external", testBootstrapAdminKey, `{}`)
+	retiredBootstrap.SetPathValue("project_id", "project-1")
+	retiredBootstrap.SetPathValue("customer_id", "customer-1")
+	retiredBootstrap.SetPathValue("external_id", "alias-external")
+	retiredRecorder := httptest.NewRecorder()
+	api.putAdminCustomerAlias(retiredRecorder, retiredBootstrap)
+	if retiredRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("retired bootstrap alias = %d %s, want 401", retiredRecorder.Code, retiredRecorder.Body.String())
 	}
 
 	sessionRequest := identityRequest(t, http.MethodPut, "/v1/admin/projects/project-1/customers/customer-1/aliases/alias-external", session.Token, `{}`)

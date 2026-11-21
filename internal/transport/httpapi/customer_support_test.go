@@ -147,16 +147,6 @@ func TestManualGrantHTTPRequiresStoredAdminAndValidPeriod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	adminKey, err := authentication.Create(context.Background(), auth.Principal{Role: persistence.APIKeyRoleAdmin})
-	if err != nil {
-		t.Fatalf("Create() admin key error = %v", err)
-	}
-	applicationKey, err := authentication.Create(context.Background(), auth.Principal{
-		Role: persistence.APIKeyRoleApplication, ProjectID: "project-1", ApplicationID: "application-1",
-	})
-	if err != nil {
-		t.Fatalf("Create() application key error = %v", err)
-	}
 	api := &API{
 		store: &identityAPIStore{}, authentication: authentication, bodyLimit: 1 << 20,
 		clock: func() time.Time { return time.Date(2026, time.November, 18, 12, 0, 0, 0, time.UTC) },
@@ -176,6 +166,20 @@ func TestManualGrantHTTPRequiresStoredAdminAndValidPeriod(t *testing.T) {
 	if recorder := grant(testBootstrapAdminKey, valid); recorder.Code != http.StatusForbidden ||
 		!strings.Contains(recorder.Body.String(), `"code":"forbidden"`) {
 		t.Fatalf("bootstrap grant = %d %s", recorder.Code, recorder.Body.String())
+	}
+
+	adminKey, err := authentication.Create(context.Background(), auth.Principal{Role: persistence.APIKeyRoleAdmin})
+	if err != nil {
+		t.Fatalf("Create() admin key error = %v", err)
+	}
+	applicationKey, err := authentication.Create(context.Background(), auth.Principal{
+		Role: persistence.APIKeyRoleApplication, ProjectID: "project-1", ApplicationID: "application-1",
+	})
+	if err != nil {
+		t.Fatalf("Create() application key error = %v", err)
+	}
+	if recorder := grant(testBootstrapAdminKey, valid); recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("retired bootstrap grant = %d %s, want 401", recorder.Code, recorder.Body.String())
 	}
 	if recorder := grant(applicationKey, valid); recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("application grant = %d %s", recorder.Code, recorder.Body.String())

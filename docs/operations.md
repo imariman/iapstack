@@ -20,10 +20,12 @@ a URL-form connection string or use the libpq key/value form.
 
 The fingerprint key must remain stable across encryption-key rotation. The bootstrap
 admin key is an installation credential and must contain at least 32 bytes: use it to
-create stored admin/application keys through `POST /v1/admin/api-keys`, then remove it
-from the runtime environment and recreate the API container. The default Compose worker
-and migration services never receive this secret. Store every durable bearer outside
-the database because IAPStack returns it only once.
+create the first stored administrator key through `/dashboard/` or
+`POST /v1/admin/api-keys`, after which the bootstrap key and any bootstrap dashboard
+sessions automatically retire (and optionally clear `IAPSTACK_BOOTSTRAP_ADMIN_KEY` from
+your environment as cleanup). The default Compose worker and migration services never
+receive this secret. Store every durable bearer outside the database because IAPStack
+returns it only once.
 
 ## Configuration reference
 

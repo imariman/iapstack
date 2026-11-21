@@ -55,13 +55,10 @@ gcloud compute ssh iapstack --zone us-central1-a --tunnel-through-iap
 sudo grep ^IAPSTACK_BOOTSTRAP_ADMIN_KEY= /opt/iapstack/deploy/vps/.env
 ```
 
-Create a durable administrator in `/dashboard/`, then remove the bootstrap key:
-
-```sh
-cd /opt/iapstack/deploy/vps
-sudo sed -i 's/^IAPSTACK_BOOTSTRAP_ADMIN_KEY=.*/IAPSTACK_BOOTSTRAP_ADMIN_KEY=/' .env
-sudo docker compose up -d --wait
-```
+Create a permanent administrator in `/dashboard/` from the setup banner—your session
+switches automatically and the bootstrap key retires immediately without restarting the
+stack. (Optionally clear `IAPSTACK_BOOTSTRAP_ADMIN_KEY=` in `/opt/iapstack/deploy/vps/.env`
+when convenient.)
 
 If you skipped the token, add `CLOUDFLARE_TUNNEL_TOKEN=<token>` to `.env` and run
 `sudo sh /opt/iapstack/deploy/vps/install.sh`. Then configure off-server backups and

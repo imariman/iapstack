@@ -50,12 +50,9 @@ IAPSTACK_ZONE=us-east1-b IAPSTACK_REF=main bash deploy/gcp/deploy.sh
 
 When the script prints **Next steps**, follow them:
 
-1. Read the bootstrap administrator key over IAP SSH.
-2. Open `https://<your-hostname>/dashboard/`, connect with the key, and create a
-   durable administrator key.
-3. Remove the bootstrap key from `.env` and restart the stack.
-4. Copy `/opt/iapstack/deploy/vps/.env` to your password manager and configure
-   off-server backups as described in `deploy/vps/README.md`.
+1. Read the one-time bootstrap administrator key over IAP SSH (or confirm when `deploy.sh` offers to print it).
+2. Open `https://<your-hostname>/dashboard/`, sign in with that key, and follow the setup banner to create your permanent administrator key (your browser session upgrades automatically and the bootstrap key retires immediately).
+3. Save the permanent key in your password manager, copy `/opt/iapstack/deploy/vps/.env` to your password manager, and configure off-server backups as described in `deploy/vps/README.md`.
 
 ## Done
 

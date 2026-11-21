@@ -36,7 +36,7 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 	fixture.requestJSON(t, http.MethodPut, project+"/customers/"+apiIntegrationCustomerID+"/aliases/legacy-support-user",
 		admin, map[string]string{}, http.StatusOK, nil)
 	fixture.requestJSON(t, http.MethodPut, project+"/customers/http-customer-2",
-		bootstrap, customerRequest{ExternalID: "http-external-customer-2"}, http.StatusOK, nil)
+		admin, customerRequest{ExternalID: "http-external-customer-2"}, http.StatusOK, nil)
 
 	search := func(query string, extra string) adminCustomerSearchResponse {
 		t.Helper()

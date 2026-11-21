@@ -257,6 +257,6 @@ if [ -z "$(env_value CLOUDFLARE_TUNNEL_TOKEN)" ]; then
 fi
 if [ -n "$(env_value IAPSTACK_BOOTSTRAP_ADMIN_KEY)" ]; then
   log "Bootstrap administrator key: sudo grep ^IAPSTACK_BOOTSTRAP_ADMIN_KEY= $IAPSTACK_DIR/deploy/vps/.env"
-  log "Create a durable administrator in /dashboard/, then empty that value and re-run this script."
+  log "Sign in at /dashboard/ and create your permanent admin key; the bootstrap key retires automatically once it exists."
 fi
 log "Secrets live in $IAPSTACK_DIR/deploy/vps/.env; copy them to your password manager."

@@ -292,6 +292,7 @@ func serveMuxPath(path string) string {
 // v1Routes returns the complete machine-checked public operation registry.
 func (api *API) v1Routes() []v1Route {
 	return []v1Route{
+		{Method: http.MethodGet, Path: "/v1/admin/dashboard-session", OperationID: "getAdminDashboardSession", Handler: api.getDashboardSession},
 		{Method: http.MethodPost, Path: "/v1/admin/dashboard-session", OperationID: "createAdminDashboardSession", Handler: api.createDashboardSession},
 		{Method: http.MethodDelete, Path: "/v1/admin/dashboard-session", OperationID: "deleteAdminDashboardSession", Handler: api.deleteDashboardSession},
 		{Method: http.MethodGet, Path: "/v1/admin/api-keys", OperationID: "listApiKeys", Handler: api.listAPIKeys},

@@ -663,7 +663,7 @@ func TestCustomerAliasResolveAndMergeHTTP(t *testing.T) {
 	var adminKey map[string]string
 	fixture.requestJSON(t, http.MethodPost, "/v1/admin/api-keys", adminBearer, keyRequest{Role: persistence.APIKeyRoleAdmin}, http.StatusCreated, &adminKey)
 	var applicationKey map[string]string
-	fixture.requestJSON(t, http.MethodPost, "/v1/admin/api-keys", adminBearer, keyRequest{
+	fixture.requestJSON(t, http.MethodPost, "/v1/admin/api-keys", adminKey["key"], keyRequest{
 		Role: persistence.APIKeyRoleApplication, ProjectID: apiIntegrationProjectID, ApplicationID: apiIntegrationApplicationID,
 	}, http.StatusCreated, &applicationKey)
 
