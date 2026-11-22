@@ -177,6 +177,10 @@ jobs:
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
+          # /readyz reports the release version and commit stamped here.
+          build-args: |
+            IAPSTACK_VERSION=${{ inputs.version }}
+            IAPSTACK_COMMIT=${{ github.sha }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha

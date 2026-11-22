@@ -221,7 +221,23 @@ configure_env() {
   fi
 }
 
+# release_tag prints the remote release tag that points at the deployed commit, or nothing.
+# The checkout fetches one ref without tags, so ask the remote instead.
+release_tag() {
+  git -C "$IAPSTACK_DIR" ls-remote --tags origin 2>/dev/null |
+    awk -v sha="$1" '$1 == sha {
+      tag = $2; sub("^refs/tags/", "", tag)
+      if (substr(tag, length(tag) - 2) == "^{}") tag = substr(tag, 1, length(tag) - 3)
+      print tag; exit
+    }'
+}
+
 start_stack() {
+  # The image build stamps these into the binary; /readyz reports them.
+  IAPSTACK_COMMIT="$(git -C "$IAPSTACK_DIR" rev-parse HEAD)"
+  IAPSTACK_VERSION="$(release_tag "$IAPSTACK_COMMIT")"
+  export IAPSTACK_COMMIT IAPSTACK_VERSION
+  log "building commit $IAPSTACK_COMMIT${IAPSTACK_VERSION:+ ($IAPSTACK_VERSION)}"
   if [ "$(env_value COMPOSE_PROFILES)" = tunnel ]; then
     log "building and starting PostgreSQL, IAPStack, and the Cloudflare Tunnel"
   else

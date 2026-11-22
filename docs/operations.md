@@ -190,6 +190,15 @@ curl --fail -H "Authorization: Bearer $IAPSTACK_METRICS_BEARER_TOKEN" http://127
 
 The migration container must complete successfully before API and worker processes start. `/healthz` is process liveness; `/readyz` also probes PostgreSQL.
 
+`/readyz` also reports the running build, so you can check which release an upgrade
+deployed: `{"status":"ready","version":"v0.2.0","commit":"<full SHA>"}`. Release images
+carry their version and commit. A local image build has no `.git` in its context, so it
+reports `"version":"dev"` and no commit unless you pass them as build arguments, for
+example `docker build --build-arg IAPSTACK_COMMIT="$(git rev-parse HEAD)" .`
+(add `--build-arg IAPSTACK_VERSION=<tag>` for a release tag). The VPS installer passes
+both automatically. Version and commit are public on this unauthenticated
+probe; they identify the release, not any secret.
+
 ## Operations dashboard
 
 Open `http://127.0.0.1:8080/dashboard/` after the API becomes ready. Connect with a

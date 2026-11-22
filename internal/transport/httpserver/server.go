@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/imariman/iapstack/internal/platform/buildinfo"
 	"github.com/imariman/iapstack/internal/platform/metrics"
 )
 
@@ -63,7 +65,14 @@ type Server struct {
 	metrics          *metrics.Registry
 	metricsTokenHash [sha256.Size]byte
 	metricsEnabled   bool
+	build            buildinfo.Info
 	ready            atomic.Bool
+}
+
+// readinessResponse is the /readyz body: the probe status and the running build.
+type readinessResponse struct {
+	Status string `json:"status"`
+	buildinfo.Info
 }
 
 // statusRecorder captures the final response status for access logs and metrics.
@@ -102,6 +111,7 @@ func NewWithOptions(options Options) *Server {
 		metrics:          options.Metrics,
 		metricsTokenHash: sha256.Sum256([]byte(options.MetricsBearerToken)),
 		metricsEnabled:   options.MetricsBearerToken != "",
+		build:            buildinfo.Current(),
 	}
 
 	mux := http.NewServeMux()
@@ -194,7 +204,7 @@ func (server *Server) health(writer http.ResponseWriter, _ *http.Request) {
 // readiness reports process state and live dependency availability.
 func (server *Server) readiness(writer http.ResponseWriter, request *http.Request) {
 	if !server.ready.Load() {
-		writeStatus(writer, http.StatusServiceUnavailable, "not_ready")
+		server.writeReadiness(writer, http.StatusServiceUnavailable, "not_ready")
 		return
 	}
 	if server.readyChecker != nil {
@@ -202,11 +212,24 @@ func (server *Server) readiness(writer http.ResponseWriter, request *http.Reques
 		defer cancel()
 		if err := server.readyChecker.Ping(ctx); err != nil {
 			server.logger.Warn("readiness dependency failed", "error_code", "dependency_unavailable")
-			writeStatus(writer, http.StatusServiceUnavailable, "not_ready")
+			server.writeReadiness(writer, http.StatusServiceUnavailable, "not_ready")
 			return
 		}
 	}
-	writeStatus(writer, http.StatusOK, "ready")
+	server.writeReadiness(writer, http.StatusOK, "ready")
+}
+
+// writeReadiness writes the readiness status with the running build, so an operator can
+// see which release and commit a deployment serves.
+func (server *Server) writeReadiness(writer http.ResponseWriter, statusCode int, status string) {
+	body, err := json.Marshal(readinessResponse{Status: status, Info: server.build})
+	if err != nil {
+		writeStatus(writer, statusCode, status)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(statusCode)
+	_, _ = writer.Write(append(body, '\n'))
 }
 
 // prometheus writes a bounded-cardinality operational metrics snapshot.

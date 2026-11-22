@@ -44,6 +44,10 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      # install.sh exports these from the deployed checkout; /readyz reports them.
+      args:
+        IAPSTACK_VERSION: ${IAPSTACK_VERSION:-}
+        IAPSTACK_COMMIT: ${IAPSTACK_COMMIT:-}
     command: ["migrate"]
     environment:
       <<: *database-url
