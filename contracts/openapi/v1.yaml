@@ -3498,7 +3498,9 @@ components:
           minimum: 1
         status:
           type: string
-          description: Delivery status for entitlement and webhook events, or the reconciliation job outcome.
+          description: >-
+            Delivery status for entitlement and webhook events (pending, delivered, failed, or
+            skipped when the application has no webhook configured), or the reconciliation job outcome.
         error_code:
           type: string
         actor_role:
@@ -3790,7 +3792,7 @@ components:
     AdminQueue:
       type: object
       additionalProperties: false
-      required: [name, pending, completed, failed]
+      required: [name, pending, completed, failed, skipped]
       properties:
         name:
           type: string
@@ -3807,6 +3809,13 @@ components:
           type: integer
           format: int64
           minimum: 0
+        skipped:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Outbox events closed without a delivery attempt because their application
+            has no webhook configured. Never counted in failed; always 0 for other queues.
     AdminWebhookEvent:
       type: object
       additionalProperties: false
@@ -3822,6 +3831,10 @@ components:
           type: string
         status:
           type: string
+          description: >-
+            One of pending, delivered, failed or skipped; clients should tolerate new values.
+            skipped means the application had no webhook configured, so nothing was sent and
+            nothing will be (error_code webhook_not_configured).
         error_code:
           type: string
         occurred_at:

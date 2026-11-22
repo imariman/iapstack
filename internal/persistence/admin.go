@@ -20,6 +20,13 @@ const (
 	AdminRevenueReportsImported AdminRevenueStatus = "reports_imported"
 	// AdminRevenueNoApplications means the project has no application scope yet.
 	AdminRevenueNoApplications AdminRevenueStatus = "no_applications"
+
+	// WebhookNotConfiguredCode closes an application event whose application has no webhook
+	// endpoint. It is stored like a failure, so retention and idempotency are unchanged, but
+	// it is expected rather than a fault, and admin reads report it as skipped.
+	WebhookNotConfiguredCode = "webhook_not_configured"
+	// AdminDeliverySkipped is the admin status of an event closed with WebhookNotConfiguredCode.
+	AdminDeliverySkipped = "skipped"
 )
 
 // AdminQueryStore exposes read-only, secret-free operational projections for administrators.
@@ -182,6 +189,9 @@ type AdminQueue struct {
 	Pending   int64
 	Completed int64
 	Failed    int64
+	// Skipped counts outbox events closed because their application has no webhook.
+	// It is never part of Failed and is zero for other queues.
+	Skipped int64
 }
 
 // AdminWebhookEvent reports one outbound delivery result without returning its payload.

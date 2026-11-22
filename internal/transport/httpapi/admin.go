@@ -153,6 +153,7 @@ type adminQueueResponse struct {
 	Pending   int64                 `json:"pending"`
 	Completed int64                 `json:"completed"`
 	Failed    int64                 `json:"failed"`
+	Skipped   int64                 `json:"skipped"`
 }
 
 // adminWebhookEventResponse reports delivery metadata without event payloads.
@@ -263,7 +264,7 @@ func adminOverviewFromRecord(overview persistence.AdminProjectOverview) adminOve
 	for _, queue := range overview.Queues {
 		response.Queues = append(response.Queues, adminQueueResponse{
 			Name: queue.Name, Pending: queue.Pending,
-			Completed: queue.Completed, Failed: queue.Failed,
+			Completed: queue.Completed, Failed: queue.Failed, Skipped: queue.Skipped,
 		})
 	}
 	for _, event := range overview.RecentWebhookEvents {

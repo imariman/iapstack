@@ -586,21 +586,24 @@ func (repository *transaction) adminQueues(
 		SELECT 'inbox',
 			count(*) FILTER (WHERE processed_at IS NULL AND failed_at IS NULL),
 			count(*) FILTER (WHERE processed_at IS NOT NULL),
-			count(*) FILTER (WHERE failed_at IS NOT NULL)
+			count(*) FILTER (WHERE failed_at IS NOT NULL),
+			0::bigint
 		FROM inbox_messages WHERE project_id = $1
 		UNION ALL
 		SELECT 'reconciliation',
 			count(*) FILTER (WHERE processed_at IS NULL AND failed_at IS NULL),
 			count(*) FILTER (WHERE processed_at IS NOT NULL),
-			count(*) FILTER (WHERE failed_at IS NOT NULL)
+			count(*) FILTER (WHERE failed_at IS NOT NULL),
+			0::bigint
 		FROM reconciliation_jobs WHERE project_id = $1
 		UNION ALL
 		SELECT 'outbox',
 			count(*) FILTER (WHERE delivered_at IS NULL AND failed_at IS NULL),
 			count(*) FILTER (WHERE delivered_at IS NOT NULL),
-			count(*) FILTER (WHERE failed_at IS NOT NULL)
+			count(*) FILTER (WHERE failed_at IS NOT NULL AND last_error_code IS DISTINCT FROM $2),
+			count(*) FILTER (WHERE failed_at IS NOT NULL AND last_error_code = $2)
 		FROM outbox_events WHERE project_id = $1
-	`, projectID)
+	`, projectID, persistence.WebhookNotConfiguredCode)
 	if err != nil {
 		return nil, classifyError("load admin queues", err)
 	}
@@ -609,7 +612,7 @@ func (repository *transaction) adminQueues(
 	queues := make([]persistence.AdminQueue, 0, 3)
 	for rows.Next() {
 		var queue persistence.AdminQueue
-		if err := rows.Scan(&queue.Name, &queue.Pending, &queue.Completed, &queue.Failed); err != nil {
+		if err := rows.Scan(&queue.Name, &queue.Pending, &queue.Completed, &queue.Failed, &queue.Skipped); err != nil {
 			return nil, classifyError("scan admin queue", err)
 		}
 		queues = append(queues, queue)
@@ -629,6 +632,7 @@ func (repository *transaction) adminWebhookEvents(
 		SELECT id, application_id, event_type, aggregate_id,
 			CASE
 				WHEN delivered_at IS NOT NULL THEN 'delivered'
+				WHEN failed_at IS NOT NULL AND last_error_code = $3 THEN $4
 				WHEN failed_at IS NOT NULL THEN 'failed'
 				ELSE 'pending'
 			END,
@@ -637,7 +641,7 @@ func (repository *transaction) adminWebhookEvents(
 		WHERE project_id = $1
 		ORDER BY occurred_at DESC, id DESC
 		LIMIT $2
-	`, projectID, adminActivityLimit)
+	`, projectID, adminActivityLimit, persistence.WebhookNotConfiguredCode, persistence.AdminDeliverySkipped)
 	if err != nil {
 		return nil, classifyError("list admin webhook events", err)
 	}

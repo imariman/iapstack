@@ -36,6 +36,10 @@ const (
 	// maximumTerminalAuditSnoozes bounds final-attempt audit retries before the job is discarded.
 	// Twenty snoozes is five minutes at terminalAuditRetryDelay.
 	maximumTerminalAuditSnoozes = 20
+
+	// notConfiguredOutcome labels a handler that ran and found its target not configured. It is
+	// distinct from "skipped", which means the record was already terminal and nothing ran.
+	notConfiguredOutcome = "not_configured"
 )
 
 // Handler processes one durable message without changing queue state directly.
@@ -52,6 +56,15 @@ type RetryableError interface {
 	error
 	// Retryable reports whether the failed operation may succeed later.
 	Retryable() bool
+}
+
+// SkippedError marks a permanent outcome that is expected rather than a fault, such as an
+// application event with no webhook to deliver to. The record closes like a failure, so
+// retention is unchanged, but its attempt is counted as not_configured, not failed.
+type SkippedError interface {
+	error
+	// Skipped reports whether nothing was attempted by design.
+	Skipped() bool
 }
 
 // Config controls River identity, polling, attempts, retention, shutdown, and per-queue concurrency.
@@ -465,9 +478,14 @@ func (execution *executor) execute(
 		execution.metrics.ObserveQueueAttempt(string(queue), "retry")
 		return errors.New(code)
 	}
-	if err := execution.fail(ctx, queue, id, code); err != nil {
+	terminal := "failed"
+	if isSkipped(handlerErr) {
+		terminal = notConfiguredOutcome
+	}
+	if err := execution.fail(ctx, queue, id, code, terminal); err != nil {
 		return execution.auditTransitionError(ctx, queue, id, attempt, maxAttempts, auditSnoozes, err)
 	}
+	outcome = terminal
 	if isRetryable(handlerErr) {
 		return errors.New(code)
 	}
@@ -546,7 +564,7 @@ func snoozeCount(metadata []byte) int {
 }
 
 // fail records one terminal audit outcome after attempts are exhausted or a permanent error occurs.
-func (execution *executor) fail(ctx context.Context, queue persistence.QueueName, id, code string) error {
+func (execution *executor) fail(ctx context.Context, queue persistence.QueueName, id, code, outcome string) error {
 	failedAt := execution.clock().UTC()
 	err := execution.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
 		return repository.FailQueue(ctx, persistence.QueueFailure{
@@ -556,7 +574,7 @@ func (execution *executor) fail(ctx context.Context, queue persistence.QueueName
 	if err != nil {
 		return errors.New("queue_transition_failed")
 	}
-	execution.metrics.ObserveQueueAttempt(string(queue), "failed")
+	execution.metrics.ObserveQueueAttempt(string(queue), outcome)
 	return nil
 }
 
@@ -598,6 +616,12 @@ func isRetryable(err error) bool {
 		return classified.Retryable()
 	}
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, persistence.ErrUnavailable)
+}
+
+// isSkipped reports whether a permanent handler outcome is an expected skip, not a fault.
+func isSkipped(err error) bool {
+	var classified SkippedError
+	return errors.As(err, &classified) && classified.Skipped()
 }
 
 // errorCode returns a bounded safe code without persisting arbitrary error messages.

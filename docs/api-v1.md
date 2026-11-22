@@ -127,7 +127,7 @@ cookie mutations additionally require the same-origin browser marker and `Origin
 The initial dashboard uses two bounded, read-only administrator contracts:
 
 - `GET /v1/admin/projects` lists up to 200 projects with application, customer, and product counts.
-- `GET /v1/admin/projects/{project_id}/overview` returns up to 200 applications, products, and customers plus the 50 most recent normalized purchase observations and webhook delivery outcomes. It also returns a fixed 30-day UTC verification-activity series, active-entitlement count, and an explicit revenue-availability status.
+- `GET /v1/admin/projects/{project_id}/overview` returns up to 200 applications, products, and customers plus the 50 most recent normalized purchase observations and webhook delivery outcomes. An application with no webhook configured still records each `entitlement.changed` event; it is closed as `skipped` (error code `webhook_not_configured`), counted under the outbox queue's `skipped`, never `failed`, and is not retried. Configuring a webhook later does not replay skipped events: the receiver gets only changes recorded after the webhook exists, so read current entitlements to backfill. The admin overview's `queues` gained `skipped`, and webhook event `status` can be `skipped`; admin API clients should accept both. It also returns a fixed 30-day UTC verification-activity series, active-entitlement count, and an explicit revenue-availability status.
 
 The overview also includes aggregate pending, completed, and failed counts for the
 inbox, reconciliation, and outbox queues. These responses deliberately omit API key

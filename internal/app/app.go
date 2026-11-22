@@ -271,6 +271,12 @@ func runWorker(
 		persistence.QueueAppleConsumption: worker.HandlerFunc(providerProcessing.HandleAppleConsumption),
 		persistence.QueueOutbox: worker.HandlerFunc(func(ctx context.Context, message persistence.QueueMessage) error {
 			err := webhookService.Deliver(ctx, message)
+			var skipped worker.SkippedError
+			if errors.As(err, &skipped) && skipped.Skipped() {
+				// No webhook is configured, so nothing was attempted. The worker records the
+				// skip on the queue metrics; webhook attempt metrics count real attempts only.
+				return err
+			}
 			if err != nil {
 				metricRegistry.ObserveWebhook("failed")
 				return err

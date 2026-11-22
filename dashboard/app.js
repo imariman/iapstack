@@ -494,6 +494,7 @@ function renderOverview() {
 
   const unconfigured = overview.applications.length - configured;
   const failedDeliveries = Number(outbox.failed || 0);
+  const skippedDeliveries = Number(outbox.skipped || 0);
   const unresolvedAccess = Number(overview.analytics.unresolved_count || 0);
   setText(
     "signal-store",
@@ -509,7 +510,7 @@ function renderOverview() {
   );
   setText(
     "signal-deliver",
-    `${formatNumber(delivered)} delivered${failedDeliveries ? ` · ${formatNumber(failedDeliveries)} failed` : ""}`,
+    `${formatNumber(delivered)} delivered${failedDeliveries ? ` · ${formatNumber(failedDeliveries)} failed` : ""}${skippedDeliveries ? ` · ${formatNumber(skippedDeliveries)} skipped, no webhook, not resent` : ""}`,
   );
   setSignalWarning("store", configured !== overview.applications.length);
   setSignalWarning("verify", failedVerifyJobs > 0);
@@ -1940,6 +1941,7 @@ function renderQueues(queues) {
       queueNumber("Completed", queue.completed),
       queueNumber("Failed", queue.failed, Number(queue.failed) > 0 ? "failed" : ""),
     );
+    if (Number(queue.skipped) > 0) item.append(queueNumber("Skipped", queue.skipped));
     container.append(item);
   }
 }
