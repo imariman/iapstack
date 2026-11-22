@@ -273,7 +273,8 @@ func runWorker(
 			err := webhookService.Deliver(ctx, message)
 			var skipped worker.SkippedError
 			if errors.As(err, &skipped) && skipped.Skipped() {
-				metricRegistry.ObserveWebhook("skipped")
+				// No webhook is configured, so nothing was attempted. The worker records the
+				// skip on the queue metrics; webhook attempt metrics count real attempts only.
 				return err
 			}
 			if err != nil {

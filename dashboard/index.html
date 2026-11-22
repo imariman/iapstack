@@ -372,7 +372,7 @@
 
           <section class="management-section" aria-labelledby="webhook-config-title">
             <div class="management-heading"><div><h3 id="webhook-config-title">Backend notifications</h3></div><span id="webhook-revision" class="revision-badge">New</span></div>
-            <p>Sends entitlement changes to your application backend with an HMAC-SHA-256 signature. The signing secret is never shown again.</p>
+            <p>Sends entitlement changes to your application backend with an HMAC-SHA-256 signature. The signing secret is never shown again. Changes recorded before a connection exists are shown as skipped and are not sent later.</p>
             <form id="webhook-form" class="management-form">
               <div class="form-grid">
                 <label class="full-row">HTTPS endpoint<input name="url" type="url" required placeholder="https://api.example.com/iapstack/events"></label>

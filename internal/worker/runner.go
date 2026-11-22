@@ -36,6 +36,10 @@ const (
 	// maximumTerminalAuditSnoozes bounds final-attempt audit retries before the job is discarded.
 	// Twenty snoozes is five minutes at terminalAuditRetryDelay.
 	maximumTerminalAuditSnoozes = 20
+
+	// notConfiguredOutcome labels a handler that ran and found its target not configured. It is
+	// distinct from "skipped", which means the record was already terminal and nothing ran.
+	notConfiguredOutcome = "not_configured"
 )
 
 // Handler processes one durable message without changing queue state directly.
@@ -56,7 +60,7 @@ type RetryableError interface {
 
 // SkippedError marks a permanent outcome that is expected rather than a fault, such as an
 // application event with no webhook to deliver to. The record closes like a failure, so
-// retention is unchanged, but it is counted as skipped.
+// retention is unchanged, but its attempt is counted as not_configured, not failed.
 type SkippedError interface {
 	error
 	// Skipped reports whether nothing was attempted by design.
@@ -476,7 +480,7 @@ func (execution *executor) execute(
 	}
 	terminal := "failed"
 	if isSkipped(handlerErr) {
-		terminal = "skipped"
+		terminal = notConfiguredOutcome
 	}
 	if err := execution.fail(ctx, queue, id, code, terminal); err != nil {
 		return execution.auditTransitionError(ctx, queue, id, attempt, maxAttempts, auditSnoozes, err)

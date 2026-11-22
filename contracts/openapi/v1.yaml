@@ -3831,10 +3831,10 @@ components:
           type: string
         status:
           type: string
-          enum: [pending, delivered, failed, skipped]
           description: >-
-            skipped means the application has no webhook configured, so nothing was sent;
-            error_code is webhook_not_configured.
+            One of pending, delivered, failed or skipped; clients should tolerate new values.
+            skipped means the application had no webhook configured, so nothing was sent and
+            nothing will be (error_code webhook_not_configured).
         error_code:
           type: string
         occurred_at:

@@ -510,7 +510,7 @@ function renderOverview() {
   );
   setText(
     "signal-deliver",
-    `${formatNumber(delivered)} delivered${failedDeliveries ? ` · ${formatNumber(failedDeliveries)} failed` : ""}${skippedDeliveries ? ` · ${formatNumber(skippedDeliveries)} skipped (no webhook)` : ""}`,
+    `${formatNumber(delivered)} delivered${failedDeliveries ? ` · ${formatNumber(failedDeliveries)} failed` : ""}${skippedDeliveries ? ` · ${formatNumber(skippedDeliveries)} skipped, no webhook, not resent` : ""}`,
   );
   setSignalWarning("store", configured !== overview.applications.length);
   setSignalWarning("verify", failedVerifyJobs > 0);

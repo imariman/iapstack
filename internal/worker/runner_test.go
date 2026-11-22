@@ -282,8 +282,8 @@ func TestExecutorRecordsPermanentFailure(t *testing.T) {
 	}
 }
 
-// TestExecutorRecordsSkippedWebhookAsSkipped verifies an event with no webhook closes without counting as failed.
-func TestExecutorRecordsSkippedWebhookAsSkipped(t *testing.T) {
+// TestExecutorRecordsMissingWebhookAsNotConfigured verifies an event with no webhook closes without counting as failed.
+func TestExecutorRecordsMissingWebhookAsNotConfigured(t *testing.T) {
 	transaction := &executorTransaction{}
 	execution := newTestExecutor(transaction, HandlerFunc(func(context.Context, persistence.QueueMessage) error {
 		return &webhooks.DeliveryError{Code: persistence.WebhookNotConfiguredCode}
@@ -299,9 +299,11 @@ func TestExecutorRecordsSkippedWebhookAsSkipped(t *testing.T) {
 		t.Fatalf("WritePrometheus() error = %v", err)
 	}
 	text := exposition.String()
-	if !strings.Contains(text, `iapstack_queue_attempts_total{queue="outbox",outcome="skipped"} 1`) ||
-		strings.Contains(text, `iapstack_queue_attempts_total{queue="outbox",outcome="failed"}`) {
-		t.Fatalf("queue metrics = %s, want the outbox attempt counted as skipped only", text)
+	// "skipped" stays reserved for records that were already terminal and never ran.
+	if !strings.Contains(text, `iapstack_queue_attempts_total{queue="outbox",outcome="not_configured"} 1`) ||
+		strings.Contains(text, `iapstack_queue_attempts_total{queue="outbox",outcome="failed"}`) ||
+		strings.Contains(text, `outcome="skipped"`) {
+		t.Fatalf("queue metrics = %s, want the outbox attempt counted as not_configured only", text)
 	}
 }
 
