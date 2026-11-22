@@ -117,9 +117,11 @@ curl --fail http://127.0.0.1:8080/readyz
 Bewahre diese Werte auf: Das Compose-Volume hängt von ihnen ab, und neu erzeugte Werte
 rotieren weder das bestehende Datenbankpasswort noch die Schutzschlüssel.
 
-Öffne `http://127.0.0.1:8080/dashboard/` und melde dich mit dem
-Bootstrap-Administratorschlüssel an. Erstelle einen dauerhaften Administratorschlüssel,
-entferne dann `IAPSTACK_BOOTSTRAP_ADMIN_KEY` und erstelle den API-Container neu. Der
+Öffne `http://127.0.0.1:8080/dashboard/`, wähle „Use an admin or bootstrap key
+instead“ und melde dich mit dem Bootstrap-Administratorschlüssel an. Erstelle im
+Einrichtungsbanner dein Administratorkonto; ab dann meldest du dich mit diesem
+Benutzernamen und Passwort an. Entferne anschließend `IAPSTACK_BOOTSTRAP_ADMIN_KEY`
+und erstelle den API-Container neu. Der
 [Betriebsleitfaden](docs/operations.md) erklärt den Rest: Schlüsselrotation, Backups,
 Upgrades und die Sicherheitsgrundlage für den Produktivbetrieb.
 

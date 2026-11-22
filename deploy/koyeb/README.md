@@ -64,8 +64,8 @@ one bootstrap command instead of presenting an incomplete button.
 
 4. Read the app's assigned `.koyeb.app` domain in the dashboard, verify `/readyz`,
    and open `/dashboard/`. The script prints a newly created bootstrap administrator
-   key once; use it to create the first durable administrator key and store that key
-   securely.
+   key once; sign in with it and create your administrator account in the setup
+   banner.
 
 5. Remove `IAPSTACK_BOOTSTRAP_ADMIN_KEY` from the API service after bootstrap. The
    script deliberately disables deploy-on-push; rerun it when you want a deployment.

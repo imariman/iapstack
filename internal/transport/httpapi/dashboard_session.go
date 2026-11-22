@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +28,14 @@ type dashboardSessionResponse struct {
 	ExpiresAt       time.Time `json:"expires_at"`
 	Bootstrap       bool      `json:"bootstrap"`
 	HasDurableAdmin bool      `json:"has_durable_admin"`
+	// Username names the administrator account behind a password sign-in. Key and bootstrap sessions omit it.
+	Username string `json:"username,omitempty"`
+}
+
+// dashboardSignInRequest carries one administrator account's username and password.
+type dashboardSignInRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 // getDashboardSession reports the browser session expiry and whether bootstrap handover is still required.
@@ -44,12 +54,22 @@ func (api *API) getDashboardSession(writer http.ResponseWriter, request *http.Re
 	writeJSON(writer, http.StatusOK, dashboardSessionResponseFromPrincipal(session))
 }
 
-// createDashboardSession exchanges one administrator bearer for a protected HttpOnly browser cookie.
+// createDashboardSession exchanges one administrator bearer, or one administrator account's username
+// and password, for a protected HttpOnly browser cookie.
 func (api *API) createDashboardSession(writer http.ResponseWriter, request *http.Request) {
-	principal, err := api.authenticate(request)
-	if err != nil || principal.Role != persistence.APIKeyRoleAdmin {
-		api.writeAuthenticationFailure(writer, request, err)
-		return
+	var principal auth.Principal
+	if request.Header.Get("Authorization") != "" {
+		var err error
+		principal, err = api.authenticate(request)
+		if err != nil || principal.Role != persistence.APIKeyRoleAdmin {
+			api.writeAuthenticationFailure(writer, request, err)
+			return
+		}
+	} else {
+		var ok bool
+		if principal, ok = api.signInWithPassword(writer, request); !ok {
+			return
+		}
 	}
 	session, err := api.adminSessions.Mint(request.Context(), principal)
 	if err != nil {
@@ -61,6 +81,55 @@ func (api *API) createDashboardSession(writer http.ResponseWriter, request *http
 	writeJSON(writer, http.StatusCreated, dashboardSessionResponseFromPrincipal(auth.AdminPrincipal{
 		Principal: principal, ExpiresAt: session.ExpiresAt,
 	}))
+}
+
+// signInWithPassword authenticates the username and password in the request body. It writes the
+// failure response itself and reports whether sign-in succeeded.
+func (api *API) signInWithPassword(writer http.ResponseWriter, request *http.Request) (auth.Principal, bool) {
+	// A request with no bearer and no body carries no credentials at all.
+	if request.ContentLength == 0 {
+		api.writeAuthenticationFailure(writer, request, auth.ErrUnauthorized)
+		return auth.Principal{}, false
+	}
+	// Password sign-in is a browser flow, so it obeys the same same-origin boundary as cookie mutations.
+	if !validDashboardMutation(request) {
+		writeAPIError(writer, request, http.StatusForbidden, "csrf_rejected", "dashboard request origin could not be verified")
+		return auth.Principal{}, false
+	}
+	var input dashboardSignInRequest
+	if !api.decode(writer, request, &input) {
+		return auth.Principal{}, false
+	}
+	principal, err := api.authentication.AuthenticatePassword(request.Context(), input.Username, input.Password)
+	if err != nil {
+		api.writePasswordFailure(writer, request, err)
+		return auth.Principal{}, false
+	}
+	return principal, true
+}
+
+// writePasswordFailure maps a failed password check onto a lock, a wrong-credentials, or a service response.
+func (api *API) writePasswordFailure(writer http.ResponseWriter, request *http.Request, err error) {
+	var locked *auth.LockedError
+	switch {
+	case errors.As(err, &locked):
+		// Round up so a client that waits the advertised seconds is past the lock.
+		seconds := int64((locked.RetryAfter + time.Second - 1) / time.Second)
+		if seconds < 1 {
+			seconds = 1
+		}
+		writer.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+		writeAPIError(
+			writer, request, http.StatusTooManyRequests,
+			"too_many_attempts", "too many failed sign-in attempts; try again later",
+		)
+	case errors.Is(err, auth.ErrPasswordMismatch):
+		writeAPIError(writer, request, http.StatusForbidden, "password_mismatch", "the current password is incorrect")
+	case errors.Is(err, auth.ErrUnauthorized):
+		writeAPIError(writer, request, http.StatusUnauthorized, "invalid_credentials", "the username or password is incorrect")
+	default:
+		api.writeAuthenticationFailure(writer, request, err)
+	}
 }
 
 // deleteDashboardSession authenticates the current administrator and expires its browser cookie.
@@ -97,12 +166,13 @@ func (api *API) authenticateDashboardCookie(request *http.Request) (auth.AdminPr
 
 // dashboardSessionResponseFromPrincipal builds the secret-free session status payload.
 func dashboardSessionResponseFromPrincipal(session auth.AdminPrincipal) dashboardSessionResponse {
-	// Bootstrap credentials authenticate only when zero active stored administrator keys exist.
-	bootstrap := session.KeyID == ""
+	// Bootstrap credentials authenticate only while no stored administrator key or account exists.
+	bootstrap := session.KeyID == "" && session.UserID == ""
 	return dashboardSessionResponse{
 		ExpiresAt:       session.ExpiresAt,
 		Bootstrap:       bootstrap,
 		HasDurableAdmin: !bootstrap,
+		Username:        session.Username,
 	}
 }
 

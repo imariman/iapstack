@@ -115,10 +115,11 @@ curl --fail http://127.0.0.1:8080/readyz
 Bu değerleri saklayın: Compose birimi bunlara bağlıdır ve yenilerini oluşturmak mevcut
 veritabanı parolasını veya koruma anahtarlarını döndürmez.
 
-`http://127.0.0.1:8080/dashboard/` adresini açın ve önyükleme (bootstrap) yönetici
-anahtarıyla giriş yapın. Kalıcı bir yönetici anahtarı oluşturun, ardından
-`IAPSTACK_BOOTSTRAP_ADMIN_KEY` değişkenini kaldırın ve API container'ını yeniden
-oluşturun. Gerisini [operasyon kılavuzu](docs/operations.md) anlatır: anahtar döndürme,
+`http://127.0.0.1:8080/dashboard/` adresini açın, "Use an admin or bootstrap key
+instead" seçeneğine tıklayın ve önyükleme (bootstrap) yönetici anahtarıyla giriş yapın.
+Kurulum bandında yönetici hesabınızı oluşturun; bundan sonra o kullanıcı adı ve
+şifreyle giriş yaparsınız. Ardından `IAPSTACK_BOOTSTRAP_ADMIN_KEY` değişkenini kaldırın
+ve API container'ını yeniden oluşturun. Gerisini [operasyon kılavuzu](docs/operations.md) anlatır: anahtar döndürme,
 yedeklemeler, yükseltmeler ve üretim güvenliği temel çizgisi.
 
 <a id="deploy"></a>

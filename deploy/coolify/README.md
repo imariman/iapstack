@@ -57,7 +57,7 @@ Coolify's proxy.
    migration container is intentionally excluded from Coolify's overall health
    evaluation.
 7. Verify `https://<assigned-domain>/readyz`, open `/dashboard/`, and use the
-   bootstrap key to create and securely store the first durable administrator key.
+   bootstrap key to create your administrator account in the setup banner.
 8. Empty `IAPSTACK_BOOTSTRAP_ADMIN_KEY` in Coolify and redeploy. The generated
    protection and fingerprint keys must remain stable across deployments.
 

@@ -156,11 +156,14 @@ manual steps below do.
    it; add `IAPSTACK_VERSION=<tag>` when you deploy a release tag.
 
 6. **Create a durable administrator.** Open `https://iapstack.example.com/dashboard/`,
-   connect with `IAPSTACK_BOOTSTRAP_ADMIN_KEY`, and click **Create permanent admin key**
-   in the setup banner. Your browser session upgrades automatically and the bootstrap key
-   retires immediately without restarting the stack (you can still clear
-   `IAPSTACK_BOOTSTRAP_ADMIN_KEY=` in `.env` later as cleanup). Store the new key in
-   your password manager.
+   choose **Use an admin or bootstrap key instead**, connect with
+   `IAPSTACK_BOOTSTRAP_ADMIN_KEY`, and fill in a username and password under **Create
+   account** in the setup banner. Your browser session upgrades automatically and the
+   bootstrap key retires immediately without restarting the stack (you can still clear
+   `IAPSTACK_BOOTSTRAP_ADMIN_KEY=` in `.env` later as cleanup). From then on you sign in
+   with that username and password; save them in your password manager. If you forget
+   the password, run `docker compose exec iapstack /usr/local/bin/iapstack admin reset-password <username>`
+   on the server.
 
 7. **Configure stores.** Create the project and application in the dashboard, then
    register the notification URLs described in the

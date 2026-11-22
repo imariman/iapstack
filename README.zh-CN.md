@@ -98,7 +98,7 @@ curl --fail http://127.0.0.1:8080/readyz
 
 请妥善保存这些值：Compose 卷依赖于它们，重新生成这些值并不会轮换现有的数据库密码或保护密钥。
 
-打开 `http://127.0.0.1:8080/dashboard/`，使用引导管理员密钥登录。创建一个长期有效的管理员密钥，然后移除 `IAPSTACK_BOOTSTRAP_ADMIN_KEY` 并重新创建 API 容器。其余内容见[运维指南](docs/operations.md)：密钥轮换、备份、升级以及生产环境安全基线。
+打开 `http://127.0.0.1:8080/dashboard/`，选择“Use an admin or bootstrap key instead”，使用引导管理员密钥登录。在设置横幅中创建管理员账户，之后即可使用该用户名和密码登录。然后移除 `IAPSTACK_BOOTSTRAP_ADMIN_KEY` 并重新创建 API 容器。其余内容见[运维指南](docs/operations.md)：密钥轮换、备份、升级以及生产环境安全基线。
 
 <a id="deploy"></a>
 

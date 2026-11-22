@@ -30,19 +30,39 @@ Administrator key rotation uses three endpoints:
   its bearer once. The bearer, salt, hash, and verifier are never returned by the list
   endpoint.
 - `DELETE /v1/admin/api-keys/{key_id}` idempotently revokes a stored key. A stored
-  administrator cannot revoke the key authenticating its current request, and the
-  final active administrator key cannot be revoked.
+  administrator cannot revoke the key authenticating its current request. The final
+  active administrator key cannot be revoked unless an administrator account exists,
+  because that account can still sign in and create a replacement key.
+- `GET /v1/admin/administrators` lists the administrator accounts that sign in to the
+  dashboard with a username and password. It never returns a password or verifier, and
+  marks the account behind the current dashboard session with `current: true`.
+- `POST /v1/admin/administrators` creates an account from `username` and `password`.
+  The username is trimmed and lowercased: 3-64 letters, digits, dots, underscores, at
+  signs, and hyphens, starting with a letter or digit. The password needs at least 12
+  characters, at most 256 bytes, and must differ from the username. A taken username
+  answers `409`.
+- `PUT /v1/admin/administrators/{administrator_id}/password` replaces an account's
+  password. An administrator changing the password of the account they are signed in
+  with must send `current_password`; a wrong one answers `403` with code
+  `password_mismatch`. Any other administrator replaces it without the current
+  password. The change ends every dashboard session the account issued earlier, and
+  the caller's own session is replaced by a new cookie in the response.
+- `DELETE /v1/admin/administrators/{administrator_id}` deletes another administrator's
+  account and ends its sessions. Deleting the account you are signed in with answers
+  `409`, and so does deleting the final account while no active administrator key
+  exists.
 
 Rotate a key by creating its replacement, storing the new bearer in the deployment
 secret manager, connecting with the replacement, and only then revoking the old key.
 Bootstrap authentication has no stored key identity, so it never appears as `current`.
-It works only while no active stored administrator key exists: creating the first one
-retires the bootstrap bearer and every bootstrap dashboard session immediately, without
-a restart. Clearing the bootstrap secret from the runtime afterwards is optional.
+It works only while no active stored administrator key and no administrator account
+exists: creating the first of either retires the bootstrap bearer and every bootstrap
+dashboard session immediately, without a restart. Clearing the bootstrap secret from
+the runtime afterwards is optional.
 
 ## Bootstrap sequence
 
-1. Use `IAPSTACK_BOOTSTRAP_ADMIN_KEY` to create a stored admin key with `POST /v1/admin/api-keys` and `{"role":"admin"}`. The bootstrap key stops working at that moment, so use the returned stored admin key for every later step.
+1. Use `IAPSTACK_BOOTSTRAP_ADMIN_KEY` to create a stored admin key with `POST /v1/admin/api-keys` and `{"role":"admin"}`. The bootstrap key stops working at that moment, so use the returned stored admin key for every later step. A person setting up the dashboard creates an administrator account instead (the setup banner does this); scripts keep using stored admin keys.
 2. Create the project, provider application, entitlement, product, and provider-product mapping using the idempotent `/v1/admin/projects/...` PUT endpoints. Customers need no step here: the first stored purchase creates one (see [Application operations](#application-operations)). Create a customer with `PUT /v1/admin/projects/{project_id}/customers/{customer_id}` only to choose its internal id or to attach aliases before its first purchase. That PUT returns `409` when the external id already belongs to a customer with a different internal id.
 3. Store the provider's versioned credential package and an HTTPS webhook configuration.
 4. Create an application key with `{"role":"application","project_id":"...","application_id":"..."}`.
@@ -113,13 +133,22 @@ Pub/Sub pushes.
 
 ## Administrative read model
 
-The dashboard exchanges an explicit administrator bearer through
-`POST /v1/admin/dashboard-session` for a protected 12-hour browser session. The
+The dashboard exchanges an administrator account's username and password, or an
+explicit administrator bearer, through `POST /v1/admin/dashboard-session` for a
+protected 12-hour browser session. A request with an `Authorization` header signs in
+with that bearer. A request without one signs in with the JSON body
+`{"username": "...", "password": "..."}`; it must come from the dashboard's own origin
+and send `X-IAPStack-Dashboard: 1`, or it gets `403` with code `csrf_rejected`. A wrong
+username or password answers `401` with code `invalid_credentials`. Five consecutive
+wrong passwords lock the account for five minutes, and until a sign-in succeeds every
+further wrong password locks it again. A locked account answers `429` with code
+`too_many_attempts` and a `Retry-After` header, even for the right password. The
 encrypted session value is returned only as a `Secure`, `HttpOnly`,
 `SameSite=Strict` cookie scoped to `/v1/admin`; it is never exposed to dashboard
 JavaScript. `GET /v1/admin/dashboard-session` reads only that cookie (a request that
 also sends `Authorization` gets `401`) and reports its `expires_at` plus whether it was
-issued by the bootstrap credential (`bootstrap`, `has_durable_admin`).
+issued by the bootstrap credential (`bootstrap`, `has_durable_admin`). A session
+created with a username and password also reports that `username`.
 `DELETE /v1/admin/dashboard-session` clears the cookie. Existing API
 clients may continue using administrator bearer authentication directly. Dashboard
 cookie mutations additionally require the same-origin browser marker and `Origin`.
@@ -186,19 +215,18 @@ billing, reversed, and unclassified, a churn rate of
 product breakdown. Every figure is evaluated at or before `measured_at`; nothing is
 projected. Family-shared access and imported RevenueCat grants are not counted.
 
-Migration 014 also stores Apple `transactionReason` and `originalPurchaseDate` and
+Observations also store Apple `transactionReason` and `originalPurchaseDate` and
 Google Play `canceledStateContext`. With them, an Apple subscriber first seen at a
 renewal is not new, an Apple upgrade or downgrade is a plan change rather than a
 renewal, and a Google Play token canceled by `replacementCancellation` is replaced
 rather than churned even when the new token starts after a gap. Rows without these
-fields, including rows stored before migration 014, keep the earlier rules: earliest
-stored period for new, every later transaction a renewal, and replaced only when the
+fields fall back to simpler rules: earliest stored period for new, every later transaction a renewal, and replaced only when the
 periods meet.
 
 Trials come only from a provider-signed offer phase. Apple and Google Play record
 one; Huawei does not, so its `trials` row is `not_available` with null counts.
-Observations stored before migration 014 carry no phase, and `with_offer_phase`
-shows that coverage. The response has no money figure. The definitions are in
+An observation whose provider evidence had no phase carries none, and
+`with_offer_phase` shows that coverage. The response has no money figure. The definitions are in
 [docs/plans/subscription-metrics.md](plans/subscription-metrics.md).
 
 ### Customer support
@@ -220,8 +248,13 @@ shows that coverage. The response has no money figure. The definitions are in
   with a required `reason` and `idempotency_key`. The application must map the product to
   a store product; otherwise the grant is refused with `422 product_not_mapped`.
   `POST .../manual-grants/{grant_id}:revoke` ends it early with a required reason. Both
-  require a stored administrator key. Before the first stored administrator key exists,
-  the bootstrap credential gets `403 forbidden`; after that it gets `401 unauthorized`.
+  require a stored administrator key or a dashboard session opened with an administrator
+  account. Before the first of either exists, the bootstrap credential gets
+  `403 forbidden`; after that it gets `401 unauthorized`.
+
+Audit fields named `actor_key_id`, `revoked_by_key_id`, and `updated_by_key_id` hold the
+public id of the stored key that made the change. When the change came from a dashboard
+session opened with a username and password, they hold `account:<username>` instead.
 
 A manual grant is an audited access source of kind `manual`. While it allows access, the
 public entitlement and the webhook report `reason` `manual_grant`; after revocation they report

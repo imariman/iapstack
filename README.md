@@ -108,9 +108,10 @@ curl --fail http://127.0.0.1:8080/readyz
 Keep these values: the Compose volume depends on them, and generating new ones does
 not rotate the existing database password or protection keys.
 
-Open `http://127.0.0.1:8080/dashboard/` and sign in with the bootstrap administrator
-key. Create a durable administrator key, then remove `IAPSTACK_BOOTSTRAP_ADMIN_KEY`
-and recreate the API container. The [operations guide](docs/operations.md) covers the
+Open `http://127.0.0.1:8080/dashboard/`, choose "Use an admin or bootstrap key
+instead", and sign in with the bootstrap administrator key. Create your administrator
+account in the setup banner; from then on you sign in with that username and password.
+Then remove `IAPSTACK_BOOTSTRAP_ADMIN_KEY` and recreate the API container. The [operations guide](docs/operations.md) covers the
 rest: key rotation, backups, upgrades, and the production security baseline.
 
 ## Deploy

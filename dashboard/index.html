@@ -24,17 +24,33 @@
             <button class="secondary-button theme-toggle" type="button" aria-label="Color theme: System. Switch to Light"><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="system"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="light" hidden><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="dark" hidden><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg><span data-theme-label>System</span></button>
           </div>
           <h1 id="auth-title">Every purchase.<br>One control panel.</h1>
-          <p class="auth-copy">Connect with an admin bearer to configure store authority, inspect purchase verification, and monitor entitlement delivery.</p>
-          <form id="auth-form" class="auth-form">
+          <p class="auth-copy">Sign in to configure store authority, inspect purchase verification, and monitor entitlement delivery.</p>
+          <form id="password-form" class="auth-form">
+            <label for="admin-username">Username</label>
+            <input id="admin-username" name="username" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="128" required aria-describedby="auth-message">
+            <label for="admin-password">Password</label>
+            <div class="password-field">
+              <input id="admin-password" name="password" type="password" autocomplete="current-password" maxlength="256" required aria-describedby="caps-lock-note auth-message">
+              <button type="button" class="icon-button password-toggle" id="toggle-password" aria-label="Show password" aria-controls="admin-password" title="Show password"><svg aria-hidden="true" viewBox="0 0 24 24" data-password-icon="show"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg><svg aria-hidden="true" viewBox="0 0 24 24" data-password-icon="hide" hidden><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="M10.7 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a13.2 13.2 0 0 1-1.7 2.7"/><path d="M6.6 6.6A13.5 13.5 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M2 2l20 20"/></svg></button>
+            </div>
+            <p class="field-note caps-lock-note" id="caps-lock-note" hidden>Caps Lock is on.</p>
+            <p class="form-message" id="auth-message" role="alert"></p>
+            <button type="submit" class="primary-button auth-submit">Sign in</button>
+            <p class="field-note">Opens a protected 12-hour browser session.</p>
+          </form>
+          <form id="auth-form" class="auth-form" hidden>
             <input class="sr-only" type="text" name="username" value="iapstack-admin" autocomplete="username" readonly tabindex="-1" aria-hidden="true">
             <label for="admin-key">Admin bearer key</label>
             <div class="key-row">
-              <input id="admin-key" name="admin-key" type="password" autocomplete="current-password" spellcheck="false" required placeholder="iap_… or bootstrap key">
+              <input id="admin-key" name="admin-key" type="password" autocomplete="current-password" spellcheck="false" required placeholder="iap_… or bootstrap key" aria-describedby="auth-message">
               <button type="submit" class="primary-button">Connect</button>
             </div>
-            <p class="field-note">Exchanged once for a protected 12-hour browser session. Save your permanent <code>iap_…</code> key in a password manager to autofill future sign-ins.</p>
-            <p class="form-message" id="auth-message" role="alert"></p>
+            <p class="field-note">Exchanged once for a protected 12-hour browser session. Use the bootstrap key on a new installation, or a stored <code>iap_…</code> admin key.</p>
           </form>
+          <div class="auth-alternative">
+            <p class="field-note" id="auth-mode-note">No account yet? Sign in with the bootstrap key to create one.</p>
+            <button type="button" class="text-button auth-mode-toggle" id="auth-mode-toggle">Use an admin or bootstrap key instead</button>
+          </div>
         </div>
         <aside class="auth-preview" aria-label="Purchase pipeline preview">
           <div class="preview-header"><span>Purchase route</span><span class="live-badge"><i aria-hidden="true"></i>Self-hosted</span></div>
@@ -76,7 +92,7 @@
           </div>
           <div class="topbar-actions">
             <span id="updated-at" class="updated-at">Not refreshed yet</span>
-            <button class="secondary-button" id="open-api-keys" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 7a5 5 0 1 0-4.6 5H12l2 2h2v2h2v2h3v-3l-6.1-6.1A5 5 0 0 0 15 7Z"/></svg><span>Access keys</span></button>
+            <button class="secondary-button" id="open-api-keys" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 7a5 5 0 1 0-4.6 5H12l2 2h2v2h2v2h3v-3l-6.1-6.1A5 5 0 0 0 15 7Z"/></svg><span>Access</span></button>
             <button class="secondary-button" id="refresh" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span>Refresh</span></button>
             <button class="primary-button" id="open-setup-primary" type="button"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>New catalog</span></button>
             <button class="secondary-button theme-toggle" type="button" aria-label="Color theme: System. Switch to Light"><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="system"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="light" hidden><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg aria-hidden="true" viewBox="0 0 24 24" data-theme-icon="dark" hidden><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg><span data-theme-label>System</span></button>
@@ -88,11 +104,16 @@
 
         <section class="bootstrap-banner" id="bootstrap-banner" aria-labelledby="bootstrap-banner-title" hidden>
           <div class="bootstrap-banner-copy">
-            <h2 id="bootstrap-banner-title">Finish setup: create your permanent admin key</h2>
-            <p>You signed in with the temporary bootstrap key. Create a permanent admin key below—your browser session switches to it automatically and the bootstrap key retires immediately with no server restart.</p>
+            <h2 id="bootstrap-banner-title">Finish setup: create your administrator account</h2>
+            <p>You signed in with the temporary bootstrap key. Create an account to sign in with a username and password from now on. Your browser session switches to it automatically and the bootstrap key retires immediately with no server restart.</p>
             <p class="form-message" id="bootstrap-banner-message" role="status"></p>
           </div>
-          <button type="button" class="primary-button" id="bootstrap-create-admin-key">Create permanent admin key</button>
+          <form id="bootstrap-account-form" class="account-form">
+            <label>Username<input name="username" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" minlength="3" maxlength="64" required placeholder="owner"></label>
+            <label>Password<input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required placeholder="At least 12 characters"></label>
+            <button type="submit" class="primary-button">Create account</button>
+            <button type="button" class="text-button" id="bootstrap-create-admin-key">Create an admin key instead</button>
+          </form>
         </section>
 
         <section class="signal-line" aria-labelledby="signal-title">
@@ -419,9 +440,21 @@
     <dialog id="api-key-dialog" class="setup-dialog api-key-dialog">
       <div class="api-key-shell">
         <div class="dialog-heading">
-          <div><h2>Access keys</h2></div>
-          <button class="icon-button" id="close-api-keys" type="button" aria-label="Close access keys"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+          <div><h2>Access</h2></div>
+          <button class="icon-button" id="close-api-keys" type="button" aria-label="Close access"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
         </div>
+        <section class="administrator-section" aria-labelledby="administrator-title">
+          <h3 id="administrator-title">Administrator accounts</h3>
+          <p class="dialog-copy">Accounts sign in to this dashboard with a username and password. A forgotten password is reset on the server with <code>iapstack admin reset-password</code>.</p>
+          <div class="api-key-list administrator-list" id="administrator-list" aria-live="polite"></div>
+          <form id="administrator-form" class="account-form">
+            <label>Username<input name="username" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" minlength="3" maxlength="64" required placeholder="teammate"></label>
+            <label>Password<input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required placeholder="At least 12 characters"></label>
+            <button type="submit" class="secondary-button">Add account</button>
+          </form>
+          <p class="form-message" id="administrator-message" role="status"></p>
+        </section>
+        <h3>Access keys</h3>
         <div class="key-control-row">
           <p class="dialog-copy">See every stored key without exposing its bearer. Create a replacement first, connect with it, then revoke the old key.</p>
           <button class="secondary-button" id="create-admin-key" type="button">Create admin key</button>
@@ -445,6 +478,35 @@
         <p class="dialog-copy">Requests using this bearer will fail immediately. This action cannot be undone.</p>
         <code class="revoke-key-identity" id="revoke-key-identity"></code>
         <div class="dialog-actions"><button type="button" class="text-button" id="cancel-revoke-key">Keep active</button><button type="button" class="danger-button" id="confirm-revoke-key">Revoke key</button></div>
+      </div>
+    </dialog>
+
+    <dialog id="password-dialog" class="setup-dialog small-dialog">
+      <form id="administrator-password-form" method="dialog">
+        <div class="dialog-heading">
+          <div><h2 id="password-dialog-title">Change password</h2></div>
+          <button class="icon-button" id="close-password-dialog" type="button" aria-label="Close password dialog"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <p class="dialog-copy" id="password-dialog-copy"></p>
+        <input class="sr-only" type="text" name="username" autocomplete="username" readonly tabindex="-1" aria-hidden="true">
+        <div class="form-grid">
+          <label class="full-row" id="current-password-field">Current password<input name="current_password" type="password" autocomplete="current-password" maxlength="256"></label>
+          <label class="full-row">New password<input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required placeholder="At least 12 characters"></label>
+        </div>
+        <p class="form-message" id="password-dialog-message" role="alert"></p>
+        <div class="dialog-actions"><button type="button" class="text-button" id="cancel-password-dialog">Cancel</button><button type="submit" class="primary-button">Save password</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="delete-administrator-dialog" class="setup-dialog small-dialog revoke-key-dialog">
+      <div class="key-reveal">
+        <div class="dialog-heading">
+          <div><h2>Delete administrator account?</h2><span class="dialog-flag danger">Immediate cutoff</span></div>
+          <button class="icon-button" id="close-delete-administrator" type="button" aria-label="Close deletion confirmation"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <p class="dialog-copy">The account can no longer sign in and its dashboard sessions end immediately. This action cannot be undone.</p>
+        <code class="revoke-key-identity" id="delete-administrator-identity"></code>
+        <div class="dialog-actions"><button type="button" class="text-button" id="cancel-delete-administrator">Keep account</button><button type="button" class="danger-button" id="confirm-delete-administrator">Delete account</button></div>
       </div>
     </dialog>
 

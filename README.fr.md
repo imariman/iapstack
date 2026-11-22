@@ -118,9 +118,11 @@ curl --fail http://127.0.0.1:8080/readyz
 Conservez ces valeurs : le volume Compose en dépend, et les régénérer n’effectue pas de
 rotation du mot de passe de base de données ni des clés de protection existants.
 
-Ouvrez `http://127.0.0.1:8080/dashboard/` et connectez-vous avec la clé d’administration
-d’amorçage. Créez une clé d’administration durable, puis retirez
-`IAPSTACK_BOOTSTRAP_ADMIN_KEY` et recréez le conteneur de l’API. Le
+Ouvrez `http://127.0.0.1:8080/dashboard/`, choisissez « Use an admin or bootstrap key
+instead » et connectez-vous avec la clé d’administration d’amorçage. Créez votre compte
+administrateur dans le bandeau de configuration ; vous vous connecterez ensuite avec ce
+nom d’utilisateur et ce mot de passe. Retirez ensuite `IAPSTACK_BOOTSTRAP_ADMIN_KEY` et
+recréez le conteneur de l’API. Le
 [guide d’exploitation](docs/operations.md) couvre le reste : rotation des clés,
 sauvegardes, mises à niveau et socle de sécurité pour la production.
 

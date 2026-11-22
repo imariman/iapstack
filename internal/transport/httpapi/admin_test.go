@@ -14,6 +14,7 @@ import (
 	"github.com/imariman/iapstack/internal/auth"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/persistence/persistencetest"
 	"github.com/imariman/iapstack/internal/stores"
 	"github.com/imariman/iapstack/internal/validation"
 )
@@ -36,16 +37,19 @@ type authOperationsTransaction struct {
 
 // keyLifecycleStore retains active and revoked API keys for HTTP lifecycle tests.
 type keyLifecycleStore struct {
-	records      map[string]persistence.APIKeyRecord
-	revokedAt    map[string]time.Time
+	records   map[string]persistence.APIKeyRecord
+	revokedAt map[string]time.Time
+	// users holds administrator accounts by identity. Operate creates it on first use.
+	users        map[string]persistence.AdminUserRecord
 	operateError error
 	// listPageSize bounds one list page. Zero uses the production page size.
 	listPageSize int
 }
 
-// keyLifecycleTransaction implements the API key repository against deterministic test state.
+// keyLifecycleTransaction implements the API key repository against deterministic test state and
+// embeds the in-memory administrator account repository.
 type keyLifecycleTransaction struct {
-	persistence.OperationsTransaction
+	persistencetest.AdminUserRepository
 	store *keyLifecycleStore
 }
 
@@ -207,6 +211,11 @@ func (fakeAdminQueryStore) AdminSubscriptionMetrics(
 
 // HasActiveAdminAPIKey reports zero stored administrators in bootstrap-only stubs.
 func (authOperationsTransaction) HasActiveAdminAPIKey(context.Context) (bool, error) {
+	return false, nil
+}
+
+// HasAdminUser reports zero administrator accounts in bootstrap-only stubs.
+func (authOperationsTransaction) HasAdminUser(context.Context) (bool, error) {
 	return false, nil
 }
 
@@ -522,7 +531,18 @@ func (store *keyLifecycleStore) Operate(ctx context.Context, operation persisten
 	if store.operateError != nil {
 		return store.operateError
 	}
-	return operation(&keyLifecycleTransaction{store: store})
+	if store.users == nil {
+		store.users = make(map[string]persistence.AdminUserRecord)
+	}
+	transaction := &keyLifecycleTransaction{store: store}
+	transaction.AdminUserRepository = persistencetest.AdminUserRepository{
+		Accounts: store.users,
+		HasActiveAdminKey: func() bool {
+			hasKey, _ := transaction.HasActiveAdminAPIKey(ctx)
+			return hasKey
+		},
+	}
+	return operation(transaction)
 }
 
 // APIKey returns one active verifier by public identity.
@@ -626,7 +646,7 @@ func (transaction *keyLifecycleTransaction) RevokeAPIKey(
 				activeAdministrators++
 			}
 		}
-		if activeAdministrators <= 1 {
+		if activeAdministrators <= 1 && len(transaction.store.users) == 0 {
 			return persistence.APIKeySummary{}, persistence.ErrConflict
 		}
 	}

@@ -56,9 +56,12 @@ type AdminPrincipal struct {
 
 // adminSessionClaims are encrypted and authenticated inside one opaque browser session.
 type adminSessionClaims struct {
-	IssuerKeyID string    `json:"issuer_key_id"`
-	IssuedAt    time.Time `json:"issued_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
+	IssuerKeyID string `json:"issuer_key_id"`
+	// IssuerUserID names the administrator account that signed in with a password. Key-issued and
+	// bootstrap sessions omit it, so their tokens keep the earlier claim shape.
+	IssuerUserID string    `json:"issuer_user_id,omitempty"`
+	IssuedAt     time.Time `json:"issued_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 // adminSessionEnvelope carries only protected metadata required to open dashboard claims.
@@ -81,7 +84,7 @@ func NewAdminSessions(
 	}, nil
 }
 
-// Mint exchanges one authenticated administrator bearer for a bounded browser session.
+// Mint exchanges one authenticated administrator bearer or account sign-in for a bounded browser session.
 func (service *AdminSessions) Mint(ctx context.Context, issuer Principal) (AdminSession, error) {
 	if err := issuer.Validate(); err != nil {
 		return AdminSession{}, validation.Wrap(err)
@@ -91,9 +94,10 @@ func (service *AdminSessions) Mint(ctx context.Context, issuer Principal) (Admin
 	}
 	now := service.clock().UTC()
 	claims := adminSessionClaims{
-		IssuerKeyID: issuer.KeyID,
-		IssuedAt:    now,
-		ExpiresAt:   now.Add(service.ttl),
+		IssuerKeyID:  issuer.KeyID,
+		IssuerUserID: issuer.UserID,
+		IssuedAt:     now,
+		ExpiresAt:    now.Add(service.ttl),
 	}
 	payload, err := json.Marshal(claims)
 	if err != nil {
@@ -111,7 +115,9 @@ func (service *AdminSessions) Mint(ctx context.Context, issuer Principal) (Admin
 	return AdminSession{Token: token, ExpiresAt: claims.ExpiresAt}, nil
 }
 
-// Authenticate opens one dashboard session, checks expiry and stored-key revocation, and returns its administrator.
+// Authenticate opens one dashboard session, checks its expiry and that its issuer is still valid, and
+// returns its administrator. A key-issued session ends when the key is revoked. An account session ends
+// when the account is deleted or its password changes.
 func (service *AdminSessions) Authenticate(ctx context.Context, token string) (AdminPrincipal, error) {
 	value, err := decodeAdminSession(token)
 	if err != nil {
@@ -137,7 +143,28 @@ func (service *AdminSessions) Authenticate(ctx context.Context, token string) (A
 	}
 
 	principal := Principal{Role: persistence.APIKeyRoleAdmin}
-	if claims.IssuerKeyID != "" {
+	if claims.IssuerKeyID != "" && claims.IssuerUserID != "" {
+		return AdminPrincipal{}, ErrUnauthorized
+	}
+	if claims.IssuerUserID != "" {
+		var issuer persistence.AdminUserRecord
+		err = service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
+			var loadErr error
+			issuer, loadErr = repository.AdminUser(ctx, claims.IssuerUserID)
+			return loadErr
+		})
+		if err != nil {
+			if errors.Is(err, persistence.ErrNotFound) {
+				return AdminPrincipal{}, ErrUnauthorized
+			}
+			return AdminPrincipal{}, fmt.Errorf("load administrator session account: %w", err)
+		}
+		// A password change or reset ends every session issued before it.
+		if issuer.ID != claims.IssuerUserID || issuer.PasswordChangedAt.After(claims.IssuedAt) {
+			return AdminPrincipal{}, ErrUnauthorized
+		}
+		principal.UserID, principal.Username = issuer.ID, issuer.Username
+	} else if claims.IssuerKeyID != "" {
 		var issuer persistence.APIKeyRecord
 		err = service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
 			var loadErr error
@@ -158,11 +185,11 @@ func (service *AdminSessions) Authenticate(ctx context.Context, token string) (A
 		var hasAdmin bool
 		err = service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
 			var checkErr error
-			hasAdmin, checkErr = repository.HasActiveAdminAPIKey(ctx)
+			hasAdmin, checkErr = hasStoredAdministrator(ctx, repository)
 			return checkErr
 		})
 		if err != nil {
-			return AdminPrincipal{}, fmt.Errorf("check active administrator keys for bootstrap session: %w", err)
+			return AdminPrincipal{}, fmt.Errorf("check stored administrators for bootstrap session: %w", err)
 		}
 		if hasAdmin {
 			return AdminPrincipal{}, ErrUnauthorized

@@ -43,12 +43,24 @@ paths:
     post:
       tags: [Administration]
       operationId: createAdminDashboardSession
-      summary: Exchange an administrator bearer for a protected browser session
+      summary: Exchange an administrator bearer, or an administrator username and password, for a protected browser session
       description: >-
         Sets a Secure, HttpOnly, SameSite=Strict cookie scoped to /v1/admin.
         The administrator bearer is never returned or persisted by the dashboard.
+        A request with an Authorization header signs in with that bearer and its body is ignored.
+        A request without one signs in with the username and password in the body; it must come from
+        the dashboard's own origin and send the X-IAPStack-Dashboard header, or it is rejected with 403.
+        Five consecutive wrong passwords lock the account for five minutes, and every further wrong
+        password locks it again until a sign-in succeeds. A locked account answers 429 with Retry-After.
       security:
         - adminBearer: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DashboardSignIn'
       responses:
         '201':
           description: Protected dashboard session created
@@ -61,8 +73,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DashboardSession'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/TooManyAttempts'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -155,7 +177,9 @@ paths:
       tags: [Administration]
       operationId: revokeApiKey
       summary: Idempotently revoke a non-current stored API key
-      description: The final active administrator key cannot be revoked.
+      description: >-
+        The final active administrator key cannot be revoked unless an administrator account exists,
+        because that account can still sign in and create a replacement key.
       security:
         - adminBearer: []
         - dashboardSession: []
@@ -176,6 +200,147 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/administrators:
+    get:
+      tags: [Administration]
+      operationId: listAdministrators
+      summary: List the administrator accounts that sign in to the dashboard with a password
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      responses:
+        '200':
+          description: Up to 200 administrator accounts ordered oldest first, without password verifiers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdministratorCollection'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    post:
+      tags: [Administration]
+      operationId: createAdministrator
+      summary: Create an administrator account with a username and password
+      description: >-
+        Creating the first account retires the bootstrap key, exactly as the first stored administrator
+        key does. The username is trimmed and lowercased before it is stored.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdministratorRequest'
+      responses:
+        '201':
+          description: The created administrator account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Administrator'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/administrators/{administrator_id}:
+    delete:
+      tags: [Administration]
+      operationId: deleteAdministrator
+      summary: Delete another administrator's account
+      description: >-
+        An administrator cannot delete the account they are signed in with. The final account cannot be
+        deleted while no active administrator key exists. Both cases answer 409. Deleting an account ends
+        its dashboard sessions.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/AdministratorId'
+      responses:
+        '204':
+          description: Administrator account deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /v1/admin/administrators/{administrator_id}/password:
+    put:
+      tags: [Administration]
+      operationId: setAdministratorPassword
+      summary: Replace an administrator account's password
+      description: >-
+        An administrator changing the password of the account they are signed in with must send
+        current_password; a wrong one answers 403 with code password_mismatch and counts toward the
+        account lock. Any other administrator replaces the password without it. The change ends every
+        dashboard session the account issued earlier. The caller's own session is replaced by a new
+        cookie in the response.
+      security:
+        - adminBearer: []
+        - dashboardSession: []
+      parameters:
+        - $ref: '#/components/parameters/AdministratorId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdministratorPasswordRequest'
+      responses:
+        '200':
+          description: The administrator account with its new password change time
+          headers:
+            Set-Cookie:
+              description: Replacement session cookie, sent only when the caller changed their own password.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Administrator'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/TooManyAttempts'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -1579,7 +1744,9 @@ components:
       type: apiKey
       in: cookie
       name: __Secure-iapstack_admin
-      description: Protected 12-hour dashboard session cookie with same-origin mutation checks.
+      description: >-
+        Protected 12-hour dashboard session cookie with same-origin mutation checks. It is issued for an
+        administrator bearer or for an administrator account's username and password.
     applicationBearer:
       type: http
       scheme: bearer
@@ -1598,6 +1765,13 @@ components:
   parameters:
     ApiKeyId:
       name: key_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-f0-9]{24}$'
+    AdministratorId:
+      name: administrator_id
       in: path
       required: true
       schema:
@@ -1685,7 +1859,21 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
     Forbidden:
-      description: Cookie-authenticated dashboard mutation failed same-origin verification
+      description: >-
+        Cookie-authenticated dashboard mutation or password sign-in failed same-origin verification
+        (code csrf_rejected), or an administrator supplied a wrong current password (code password_mismatch)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    TooManyAttempts:
+      description: The administrator account is locked after repeated wrong passwords (code too_many_attempts)
+      headers:
+        Retry-After:
+          description: Whole seconds until the account accepts a sign-in again.
+          schema:
+            type: integer
+            minimum: 1
       content:
         application/json:
           schema:
@@ -1776,16 +1964,97 @@ components:
       type: object
       additionalProperties: false
       required: [expires_at]
+      description: The username is present only when the session was created with a username and password.
       properties:
         expires_at:
           type: string
           format: date-time
         bootstrap:
           type: boolean
-          description: True when authenticated with the temporary bootstrap credential rather than a stored administrator key.
+          description: True when authenticated with the temporary bootstrap credential rather than a stored administrator key or an administrator account.
         has_durable_admin:
           type: boolean
-          description: True when at least one non-revoked stored administrator key exists.
+          description: True when at least one non-revoked stored administrator key or one administrator account exists.
+        username:
+          $ref: '#/components/schemas/AdministratorUsername'
+    DashboardSignIn:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Matched after trimming and lowercasing.
+        password:
+          type: string
+          minLength: 1
+          maxLength: 256
+    AdministratorUsername:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9._@-]{2,63}$'
+      description: Administrator account name, stored lowercase.
+    AdministratorRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 128
+          description: >-
+            3-64 letters, digits, dots, underscores, at signs, and hyphens after trimming, starting with
+            a letter or digit. Stored lowercase.
+        password:
+          $ref: '#/components/schemas/AdministratorPassword'
+    AdministratorPasswordRequest:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        current_password:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Required when the caller changes the password of the account they are signed in with.
+        password:
+          $ref: '#/components/schemas/AdministratorPassword'
+    AdministratorPassword:
+      type: string
+      minLength: 12
+      maxLength: 256
+      description: At least 12 characters and at most 256 bytes. It must differ from the username.
+    AdministratorCollection:
+      type: object
+      additionalProperties: false
+      required: [administrators]
+      properties:
+        administrators:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/Administrator'
+    Administrator:
+      type: object
+      additionalProperties: false
+      required: [id, username, created_at, password_changed_at, current]
+      properties:
+        id:
+          type: string
+          pattern: '^[a-f0-9]{24}$'
+        username:
+          $ref: '#/components/schemas/AdministratorUsername'
+        created_at:
+          type: string
+          format: date-time
+        password_changed_at:
+          type: string
+          format: date-time
+        current:
+          type: boolean
+          description: True for the account that authenticated this request.
     ApiKeyCollection:
       type: object
       additionalProperties: false

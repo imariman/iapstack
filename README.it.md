@@ -117,9 +117,11 @@ curl --fail http://127.0.0.1:8080/readyz
 Conserva questi valori: il volume Compose dipende da essi, e rigenerarli non ruota la
 password del database né le chiavi di protezione esistenti.
 
-Apri `http://127.0.0.1:8080/dashboard/` e accedi con la chiave di bootstrap
-dell'amministratore. Crea una chiave di amministratore durevole, poi rimuovi
-`IAPSTACK_BOOTSTRAP_ADMIN_KEY` e ricrea il container dell'API. La
+Apri `http://127.0.0.1:8080/dashboard/`, scegli "Use an admin or bootstrap key instead"
+e accedi con la chiave di bootstrap dell'amministratore. Crea il tuo account
+amministratore nel banner di configurazione; da quel momento accedi con quel nome
+utente e quella password. Poi rimuovi `IAPSTACK_BOOTSTRAP_ADMIN_KEY` e ricrea il
+container dell'API. La
 [guida operativa](docs/operations.md) copre il resto: rotazione delle chiavi, backup,
 aggiornamenti e la baseline di sicurezza per la produzione.
 
