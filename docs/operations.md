@@ -313,7 +313,7 @@ Limits:
   `IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS` capacity with `/v1` (`503` when exhausted).
 - `GET` and `DELETE` get `405`. A browser request whose `Origin` differs from the
   request host gets `403`; no CORS headers are sent.
-- One tool result is capped at 256 KiB. Lists are paginated with `next_page_token`.
+- One serialized tool result is capped at 256 KiB. Lists are paginated with `next_page_token`.
 - Each tool call writes one structured log line (`mcp tool call`) with the tool name,
   key id, role, outcome code, and duration. Arguments and results are never logged.
 

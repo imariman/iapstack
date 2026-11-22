@@ -73,9 +73,12 @@ Phase 1 exposes eight read-only tools, all annotated `readOnlyHint: true`, not
 destructive, idempotent, and closed world, with strict input schemas and declared output
 schemas: `list_projects`, `get_project_overview`, `get_subscription_metrics`,
 `search_customers`, `get_customer`, `resolve_customer`, `list_financial_reports`, and
-`get_setup_status`. The last one composes existing reads and one new secret-free read
-of credential kinds and webhook URLs per application. It prints full store notification
-URLs only from the configured `IAPSTACK_PUBLIC_URL`, never from a request `Host` header.
+`get_setup_status`. The last one has no `/v1` counterpart. It uses one narrow,
+secret-free read of applications, stored credential kinds, webhook presence, queue
+outcomes, and recent deliveries, not the dashboard overview. It prints full store
+notification URLs only from the configured `IAPSTACK_PUBLIC_URL`, never from a request
+`Host` header, and reports an application whose provider has no adapter as
+`provider_not_supported`.
 The OpenAPI contract is served as the resource `iapstack://openapi/v1`.
 
 Phase 2 may add write tools for `allow_writes` keys: manual grant creation and
@@ -92,15 +95,19 @@ creation. Tools are a curated allowlist, never generated from the OpenAPI operat
 
 Tool output never contains raw purchase evidence, receipts, purchase tokens, signed
 transactions, credential payloads, ciphertext, fingerprints, report file digests, or
-webhook signing secrets. Webhook URLs lose their query string, fragment, and user
-information. A test calls every tool against seeded sentinel secrets and scans every
-result and every output schema for protected field names and sentinel values.
+webhook signing secrets. A stored webhook URL is reduced to its origin (scheme and
+host): the path, query string, fragment, and user information can each carry a token,
+and no `/v1` read route returns the URL either. A test calls every tool against seeded
+sentinel secrets and scans every result and every output schema for protected field
+names and sentinel values.
 
 Customer-supplied strings (external ids, aliases, grant reasons) appear only as values
 inside structured content, never in tool descriptions, server instructions, or error
 text. Error messages are fixed text. The server instructions and documentation tell the
-agent to treat result values as untrusted data. Lists are paginated with
-`next_page_token`, and one result is capped at 256 KiB. Each tool call logs one line
+agent to treat result values as untrusted data. Lists are paginated with a
+`next_page_token` that names the last item read rather than an offset, and one
+serialized result, text and structured content together, is capped at 256 KiB. Each
+tool call logs one line
 with tool, key id, role, outcome code, and duration, never arguments or results.
 
 ## Consequences
