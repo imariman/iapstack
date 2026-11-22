@@ -195,14 +195,14 @@ func applicationSetupView(
 	}
 	for _, credential := range stored.Credentials {
 		setup.Credentials.Stored = append(setup.Credentials.Stored, StoredCredential{
-			Kind: credential.Kind, Revision: credential.Revision, UpdatedAt: credential.UpdatedAt,
+			Kind: credential.Kind, Revision: credential.Revision, UpdatedAt: credential.UpdatedAt.UTC(),
 		})
 		if requiredKind != "" && credential.Kind == requiredKind {
 			setup.Credentials.Configured = true
 		}
 	}
 	if stored.Webhook != nil {
-		updatedAt := stored.Webhook.UpdatedAt
+		updatedAt := stored.Webhook.UpdatedAt.UTC()
 		setup.Webhook = WebhookSetup{
 			Configured: true, URL: redactedURL(stored.Webhook.URL),
 			Revision: stored.Webhook.Revision, UpdatedAt: &updatedAt,

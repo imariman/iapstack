@@ -35,6 +35,8 @@ const (
 	defaultReadinessTimeout = 2 * time.Second
 	// requestIDHeader carries one safe request correlation identity.
 	requestIDHeader = "X-Request-ID"
+	// mcpPath is the exact path of the optional MCP endpoint.
+	mcpPath = "/mcp"
 )
 
 // ReadyChecker verifies that a required runtime dependency is currently usable.
@@ -53,6 +55,9 @@ type Options struct {
 	Metrics            *metrics.Registry
 	MetricsBearerToken string
 	Handler            http.Handler
+	// MCPHandler, when set, serves exactly the /mcp path with its own bounded route label.
+	// Nil leaves /mcp to Handler, so a disabled endpoint behaves like any unknown path.
+	MCPHandler http.Handler
 }
 
 // Server owns the API listener, probes, middleware, and graceful lifecycle.
@@ -120,6 +125,9 @@ func NewWithOptions(options Options) *Server {
 	mux.HandleFunc("GET /metrics", server.prometheus)
 	if options.Handler != nil {
 		mux.Handle("/", options.Handler)
+	}
+	if options.MCPHandler != nil {
+		mux.Handle(mcpPath, options.MCPHandler)
 	}
 	server.server = &http.Server{
 		Addr:              options.Address,

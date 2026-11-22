@@ -39,6 +39,12 @@ const (
 	grafanaTokenEnvironment = "IAPSTACK_GRAFANA_OTLP_TOKEN"
 	// telemetryEnvironmentEnvironment names the bounded deployment environment label.
 	telemetryEnvironmentEnvironment = "IAPSTACK_ENVIRONMENT"
+	// mcpEnabledEnvironment names the opt-in MCP endpoint switch.
+	mcpEnabledEnvironment = "IAPSTACK_MCP_ENABLED"
+	// mcpConcurrencyEnvironment names the per-key MCP concurrency cap.
+	mcpConcurrencyEnvironment = "IAPSTACK_MCP_MAX_CONCURRENT_REQUESTS_PER_KEY"
+	// publicURLEnvironment names the external API base URL.
+	publicURLEnvironment = "IAPSTACK_PUBLIC_URL"
 
 	// defaultHTTPAddress is the expected listen address when no override is configured.
 	defaultHTTPAddress = ":8080"
@@ -212,6 +218,36 @@ func TestLoadBlankOfferingDirectoryStaysUnset(t *testing.T) {
 	}
 }
 
+// TestLoadMCPSettings verifies the MCP endpoint is off by default and its settings parse strictly.
+func TestLoadMCPSettings(t *testing.T) {
+	t.Parallel()
+
+	defaults, err := config.Load(env(nil))
+	if err != nil {
+		t.Fatalf("Load() defaults error = %v", err)
+	}
+	if defaults.MCPEnabled || defaults.MCPMaxConcurrentRequestsPerKey != 4 || defaults.PublicURL != "" {
+		t.Fatalf("MCP defaults = enabled %t, concurrency %d, public URL %q",
+			defaults.MCPEnabled, defaults.MCPMaxConcurrentRequestsPerKey, defaults.PublicURL)
+	}
+	cfg, err := config.Load(env(map[string]string{
+		mcpEnabledEnvironment:     "true",
+		mcpConcurrencyEnvironment: "9",
+		publicURLEnvironment:      " https://iap.example.com/base/ ",
+	}))
+	if err != nil {
+		t.Fatalf("Load() overrides error = %v", err)
+	}
+	if !cfg.MCPEnabled || cfg.MCPMaxConcurrentRequestsPerKey != 9 || cfg.PublicURL != "https://iap.example.com/base" {
+		t.Fatalf("MCP overrides = enabled %t, concurrency %d, public URL %q",
+			cfg.MCPEnabled, cfg.MCPMaxConcurrentRequestsPerKey, cfg.PublicURL)
+	}
+	local, err := config.Load(env(map[string]string{publicURLEnvironment: "http://localhost:8080"}))
+	if err != nil || local.PublicURL != "http://localhost:8080" {
+		t.Fatalf("Load() local public URL = %q, %v", local.PublicURL, err)
+	}
+}
+
 // TestLoadRejectsInvalidValues verifies fail-fast validation for malformed configuration.
 func TestLoadRejectsInvalidValues(t *testing.T) {
 	t.Parallel()
@@ -246,6 +282,15 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 			grafanaEndpointEnvironment: "https://example.com/otlp", grafanaUsernameEnvironment: "1", grafanaTokenEnvironment: "short",
 		}},
 		{name: "unsafe telemetry environment", values: map[string]string{telemetryEnvironmentEnvironment: "production/customer"}},
+		{name: "MCP enabled setting", values: map[string]string{mcpEnabledEnvironment: "yes"}},
+		{name: "MCP concurrency sign", values: map[string]string{mcpConcurrencyEnvironment: "0"}},
+		{name: "MCP concurrency syntax", values: map[string]string{mcpConcurrencyEnvironment: "four"}},
+		{name: "public URL relative", values: map[string]string{publicURLEnvironment: "iap.example.com"}},
+		{name: "public URL scheme", values: map[string]string{publicURLEnvironment: "ftp://iap.example.com"}},
+		{name: "public URL query", values: map[string]string{publicURLEnvironment: "https://iap.example.com/?a=b"}},
+		{name: "public URL empty query", values: map[string]string{publicURLEnvironment: "https://iap.example.com/?"}},
+		{name: "public URL fragment", values: map[string]string{publicURLEnvironment: "https://iap.example.com/#top"}},
+		{name: "public URL credentials", values: map[string]string{publicURLEnvironment: "https://user:pass@iap.example.com"}},
 	}
 
 	for _, tt := range tests {

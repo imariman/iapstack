@@ -7,14 +7,17 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/imariman/iapstack/dashboard"
 	"github.com/imariman/iapstack/internal/auth"
+	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/credentials"
 	"github.com/imariman/iapstack/internal/financialreports"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/persistence/postgres"
+	"github.com/imariman/iapstack/internal/platform/buildinfo"
 	"github.com/imariman/iapstack/internal/platform/config"
 	"github.com/imariman/iapstack/internal/platform/logging"
 	"github.com/imariman/iapstack/internal/platform/metrics"
@@ -27,6 +30,7 @@ import (
 	"github.com/imariman/iapstack/internal/stores/huawei"
 	"github.com/imariman/iapstack/internal/transport/httpapi"
 	"github.com/imariman/iapstack/internal/transport/httpserver"
+	"github.com/imariman/iapstack/internal/transport/mcp"
 	"github.com/imariman/iapstack/internal/verification"
 	"github.com/imariman/iapstack/internal/webhooks"
 	"github.com/imariman/iapstack/internal/worker"
@@ -233,13 +237,45 @@ func runAPI(
 	if err != nil {
 		return err
 	}
+	mcpHandler, err := newMCPHandler(cfg, store, keyring, authentication, financialReportService, logger)
+	if err != nil {
+		return err
+	}
 	server := httpserver.NewWithOptions(httpserver.Options{
 		Address: cfg.HTTPAddress, ShutdownTimeout: cfg.ShutdownTimeout,
 		ReadinessTimeout: cfg.ReadinessTimeout, Logger: logger,
 		ReadyChecker: store, Metrics: metricRegistry, Handler: dashboardHandler,
-		MetricsBearerToken: cfg.MetricsBearerToken,
+		MetricsBearerToken: cfg.MetricsBearerToken, MCPHandler: mcpHandler,
 	})
 	return server.Run(ctx)
+}
+
+// newMCPHandler builds the opt-in MCP endpoint, or returns nil when it is disabled so /mcp stays unrouted.
+func newMCPHandler(
+	cfg config.Config,
+	store *postgres.Store,
+	keyring *platformprotection.Keyring,
+	authentication *auth.Service,
+	financialReportService *financialreports.Service,
+	logger *slog.Logger,
+) (http.Handler, error) {
+	if !cfg.MCPEnabled {
+		return nil, nil
+	}
+	controlPlane := controlplane.New(controlplane.Dependencies{
+		Store: store, Admin: store, Setup: store, FinancialReports: financialReportService,
+		Protection: keyring, PublicURL: cfg.PublicURL,
+	})
+	handler, err := mcp.NewHandler(mcp.Options{
+		Authentication: authentication, ControlPlane: controlPlane, BodyLimit: cfg.HTTPBodyLimit,
+		MaxConcurrentRequestsPerKey: cfg.MCPMaxConcurrentRequestsPerKey,
+		Version:                     buildinfo.Current().Version, Logger: logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("mcp endpoint enabled", "path", mcp.Path)
+	return handler, nil
 }
 
 // runWorker composes durable provider, consumption, and webhook handlers under the worker lifecycle.

@@ -223,6 +223,48 @@ func TestObserveCollapsesUnsupportedHTTPMethods(t *testing.T) {
 	}
 }
 
+// TestMCPHandlerMountsOnlyTheExactPath verifies the optional MCP handler owns /mcp with a bounded route
+// label, and that without it /mcp falls through to the API handler like any unknown path.
+func TestMCPHandlerMountsOnlyTheExactPath(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	api := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNotFound)
+		_, _ = writer.Write([]byte("api"))
+	})
+	mcp := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusAccepted)
+		_, _ = writer.Write([]byte("mcp"))
+	})
+	disabled := NewWithOptions(Options{Address: "127.0.0.1:0", Logger: logger, Handler: api})
+	enabled := NewWithOptions(Options{Address: "127.0.0.1:0", Logger: logger, Handler: api, MCPHandler: mcp})
+	for _, testCase := range []struct {
+		name   string
+		server *Server
+		path   string
+		want   string
+	}{
+		{name: "disabled", server: disabled, path: "/mcp", want: "api"},
+		{name: "enabled", server: enabled, path: "/mcp", want: "mcp"},
+		{name: "enabled subpath", server: enabled, path: "/mcp/extra", want: "api"},
+		{name: "enabled trailing slash", server: enabled, path: "/mcp/", want: "api"},
+	} {
+		recorder := httptest.NewRecorder()
+		testCase.server.server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, testCase.path, nil))
+		if recorder.Body.String() != testCase.want {
+			t.Fatalf("%s %s served %q, want %q", testCase.name, testCase.path, recorder.Body.String(), testCase.want)
+		}
+	}
+	var output bytes.Buffer
+	if err := enabled.metrics.WritePrometheus(&output); err != nil {
+		t.Fatalf("WritePrometheus() error = %v", err)
+	}
+	if !strings.Contains(output.String(), `route="/mcp"`) {
+		t.Fatalf("metrics output has no /mcp route label\n%s", output.String())
+	}
+}
+
 // newTestServer constructs an isolated loopback server for lifecycle tests.
 func newTestServer() *Server {
 	return newTestServerWithMetricsToken("")

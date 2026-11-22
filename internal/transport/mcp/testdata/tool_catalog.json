@@ -1,0 +1,2038 @@
+{
+  "catalog_version": "1",
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Returns one customer's identity, merged members and aliases, current entitlements with the access source each one cites, manual grants, and a bounded purchase and delivery timeline. Use it to explain why a customer does or does not have an entitlement.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "customer_id": {
+            "description": "The internal customer id, for example from search_customers or resolve_customer.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The project id. An agent key may only name its own project.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "customer_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_customer",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "aliases": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "actor_key_id": {
+                  "type": "string"
+                },
+                "actor_role": {
+                  "type": "string"
+                },
+                "canonical_customer_id": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "external_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "external_id",
+                "canonical_customer_id",
+                "actor_role",
+                "actor_key_id",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "canonical_customer_id": {
+            "type": "string"
+          },
+          "customer": {
+            "additionalProperties": false,
+            "properties": {
+              "created_at": {
+                "type": "string"
+              },
+              "external_id": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "merged_into_customer_id": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "external_id",
+              "created_at"
+            ],
+            "type": "object"
+          },
+          "entitlements": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "access": {
+                  "type": "string"
+                },
+                "effective_ends_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "effective_starts_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "entitlement_id": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "source_application_id": {
+                  "type": "string"
+                },
+                "source_id": {
+                  "type": "string"
+                },
+                "source_product_id": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "entitlement_id",
+                "key",
+                "source",
+                "source_id",
+                "source_application_id",
+                "source_product_id",
+                "access",
+                "reason",
+                "version",
+                "updated_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "grant_options": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "application_ids": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "null",
+                    "array"
+                  ]
+                },
+                "entitlement_id": {
+                  "type": "string"
+                },
+                "entitlement_key": {
+                  "type": "string"
+                },
+                "product_id": {
+                  "type": "string"
+                },
+                "product_kind": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "entitlement_id",
+                "entitlement_key",
+                "product_id",
+                "product_kind",
+                "application_ids"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "manual_grants": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "actor_key_id": {
+                  "type": "string"
+                },
+                "application_id": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "customer_id": {
+                  "type": "string"
+                },
+                "effective_ends_at": {
+                  "type": "string"
+                },
+                "effective_starts_at": {
+                  "type": "string"
+                },
+                "entitlement_id": {
+                  "type": "string"
+                },
+                "entitlement_key": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "product_id": {
+                  "type": "string"
+                },
+                "project_id": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "revocation_reason": {
+                  "type": "string"
+                },
+                "revoked_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "revoked_by_key_id": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "project_id",
+                "customer_id",
+                "application_id",
+                "product_id",
+                "entitlement_id",
+                "entitlement_key",
+                "reason",
+                "actor_key_id",
+                "status",
+                "effective_starts_at",
+                "effective_ends_at",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "members": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "created_at": {
+                  "type": "string"
+                },
+                "external_id": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "merged_into_customer_id": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "external_id",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "merges": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "actor_key_id": {
+                  "type": "string"
+                },
+                "canonical_customer_id": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "source_customer_id": {
+                  "type": "string"
+                },
+                "source_external_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "canonical_customer_id",
+                "source_customer_id",
+                "source_external_id",
+                "actor_key_id",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "timeline": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "access": {
+                  "type": "string"
+                },
+                "access_reason": {
+                  "type": "string"
+                },
+                "actor_key_id": {
+                  "type": "string"
+                },
+                "actor_role": {
+                  "type": "string"
+                },
+                "application_id": {
+                  "type": "string"
+                },
+                "customer_id": {
+                  "type": "string"
+                },
+                "effective_ends_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "entitlement_id": {
+                  "type": "string"
+                },
+                "entitlement_key": {
+                  "type": "string"
+                },
+                "error_code": {
+                  "type": "string"
+                },
+                "external_id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "lifecycle_state": {
+                  "type": "string"
+                },
+                "occurred_at": {
+                  "type": "string"
+                },
+                "origin_store": {
+                  "type": "string"
+                },
+                "previous_lifecycle_state": {
+                  "type": "string"
+                },
+                "product_id": {
+                  "type": "string"
+                },
+                "provider_product_id": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "related_customer_id": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "source_id": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "occurred_at",
+                "customer_id"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "timeline_truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "generated_at",
+          "customer",
+          "canonical_customer_id",
+          "members",
+          "aliases",
+          "merges",
+          "entitlements",
+          "manual_grants",
+          "grant_options",
+          "timeline",
+          "timeline_truncated"
+        ],
+        "type": "object"
+      },
+      "title": "Get customer"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Returns one project's 30-day verification activity, revenue availability from imported store reports, applications with credential and webhook coverage, products, recent customers and transactions, queue outcomes, and recent webhook deliveries.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "financial_period_end": {
+            "description": "Optional last day (YYYY-MM-DD) of the financial report period used for revenue. Requires financial_period_start.",
+            "type": "string"
+          },
+          "financial_period_start": {
+            "description": "Optional first day (YYYY-MM-DD) of the financial report period used for revenue. Requires financial_period_end.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The project id. An agent key may only name its own project.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_project_overview",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "analytics": {
+            "additionalProperties": false,
+            "properties": {
+              "active_entitlement_count": {
+                "type": "integer"
+              },
+              "allowed_count": {
+                "type": "integer"
+              },
+              "daily_activity": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "allowed": {
+                      "type": "integer"
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "denied": {
+                      "type": "integer"
+                    },
+                    "reversed": {
+                      "type": "integer"
+                    },
+                    "unresolved": {
+                      "type": "integer"
+                    },
+                    "verified": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "date",
+                    "verified",
+                    "allowed",
+                    "denied",
+                    "unresolved",
+                    "reversed"
+                  ],
+                  "type": "object"
+                },
+                "type": [
+                  "null",
+                  "array"
+                ]
+              },
+              "denied_count": {
+                "type": "integer"
+              },
+              "generated_at": {
+                "type": "string"
+              },
+              "revenue": {
+                "additionalProperties": false,
+                "properties": {
+                  "amounts": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "amount_decimal": {
+                          "type": "string"
+                        },
+                        "amount_scale": {
+                          "maximum": 2147483647,
+                          "minimum": -2147483648,
+                          "type": "integer"
+                        },
+                        "commission_state": {
+                          "type": "string"
+                        },
+                        "currency": {
+                          "type": "string"
+                        },
+                        "minor_units": {
+                          "type": [
+                            "null",
+                            "integer"
+                          ]
+                        },
+                        "period_end": {
+                          "type": "string"
+                        },
+                        "period_start": {
+                          "type": "string"
+                        },
+                        "provider": {
+                          "type": "string"
+                        },
+                        "report_kind": {
+                          "type": "string"
+                        },
+                        "tax_state": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "provider",
+                        "report_kind",
+                        "period_start",
+                        "period_end",
+                        "currency",
+                        "amount_decimal",
+                        "amount_scale",
+                        "minor_units",
+                        "commission_state",
+                        "tax_state"
+                      ],
+                      "type": "object"
+                    },
+                    "type": [
+                      "null",
+                      "array"
+                    ]
+                  },
+                  "currency": {
+                    "type": [
+                      "null",
+                      "string"
+                    ]
+                  },
+                  "production_application_count": {
+                    "type": "integer"
+                  },
+                  "recognized_minor_units": {
+                    "type": [
+                      "null",
+                      "integer"
+                    ]
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "test_application_count": {
+                    "type": "integer"
+                  },
+                  "uncovered_providers": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "null",
+                      "array"
+                    ]
+                  },
+                  "zero_filled_application_ids": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "null",
+                      "array"
+                    ]
+                  }
+                },
+                "required": [
+                  "status",
+                  "recognized_minor_units",
+                  "currency",
+                  "amounts",
+                  "uncovered_providers",
+                  "zero_filled_application_ids",
+                  "production_application_count",
+                  "test_application_count"
+                ],
+                "type": "object"
+              },
+              "reversed_count": {
+                "type": "integer"
+              },
+              "sandbox_value": {
+                "additionalProperties": false,
+                "properties": {
+                  "amounts": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "currency": {
+                          "type": "string"
+                        },
+                        "milliunits": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "milliunits",
+                        "currency"
+                      ],
+                      "type": "object"
+                    },
+                    "type": [
+                      "null",
+                      "array"
+                    ]
+                  },
+                  "missing_price_count": {
+                    "type": "integer"
+                  },
+                  "transaction_count": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "amounts",
+                  "transaction_count",
+                  "missing_price_count"
+                ],
+                "type": "object"
+              },
+              "unresolved_count": {
+                "type": "integer"
+              },
+              "verified_count": {
+                "type": "integer"
+              },
+              "window_days": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "window_days",
+              "generated_at",
+              "verified_count",
+              "allowed_count",
+              "denied_count",
+              "unresolved_count",
+              "reversed_count",
+              "active_entitlement_count",
+              "revenue",
+              "sandbox_value",
+              "daily_activity"
+            ],
+            "type": "object"
+          },
+          "applications": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "created_at": {
+                  "type": "string"
+                },
+                "credential_configured": {
+                  "type": "boolean"
+                },
+                "credential_revision": {
+                  "type": "integer"
+                },
+                "environment": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "provider_application_id": {
+                  "type": "string"
+                },
+                "webhook_configured": {
+                  "type": "boolean"
+                },
+                "webhook_revision": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "provider",
+                "environment",
+                "provider_application_id",
+                "credential_configured",
+                "credential_revision",
+                "webhook_configured",
+                "webhook_revision",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "customers": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "alias_count": {
+                  "type": "integer"
+                },
+                "allowed_count": {
+                  "type": "integer"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "entitlement_count": {
+                  "type": "integer"
+                },
+                "external_id": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "last_observed_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "merged_into_customer_id": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "external_id",
+                "alias_count",
+                "entitlement_count",
+                "allowed_count",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "products": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "created_at": {
+                  "type": "string"
+                },
+                "entitlement_keys": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "null",
+                    "array"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "store_mapping_count": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "entitlement_keys",
+                "store_mapping_count",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "project": {
+            "additionalProperties": false,
+            "properties": {
+              "application_count": {
+                "type": "integer"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "customer_count": {
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "product_count": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "application_count",
+              "customer_count",
+              "product_count",
+              "created_at"
+            ],
+            "type": "object"
+          },
+          "queues": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "completed": {
+                  "type": "integer"
+                },
+                "failed": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "pending": {
+                  "type": "integer"
+                },
+                "skipped": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "name",
+                "pending",
+                "completed",
+                "failed",
+                "skipped"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "recent_transactions": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "access": {
+                  "type": "string"
+                },
+                "access_reason": {
+                  "type": "string"
+                },
+                "application_id": {
+                  "type": "string"
+                },
+                "customer_id": {
+                  "type": "string"
+                },
+                "effective_ends_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "lifecycle_state": {
+                  "type": "string"
+                },
+                "observed_at": {
+                  "type": "string"
+                },
+                "product_id": {
+                  "type": "string"
+                },
+                "provider_product_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "application_id",
+                "customer_id",
+                "product_id",
+                "provider_product_id",
+                "lifecycle_state",
+                "access",
+                "access_reason",
+                "observed_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "recent_webhook_events": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "aggregate_id": {
+                  "type": "string"
+                },
+                "application_id": {
+                  "type": "string"
+                },
+                "delivered_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "error_code": {
+                  "type": "string"
+                },
+                "event_type": {
+                  "type": "string"
+                },
+                "failed_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "occurred_at": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "application_id",
+                "event_type",
+                "aggregate_id",
+                "status",
+                "occurred_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          }
+        },
+        "required": [
+          "project",
+          "analytics",
+          "applications",
+          "products",
+          "customers",
+          "recent_transactions",
+          "queues",
+          "recent_webhook_events"
+        ],
+        "type": "object"
+      },
+      "title": "Get project overview"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Reports what is still missing in one project's setup: per application the stored provider credential kinds and revisions, the webhook endpoint, and the store notification path (and the full URL when the server's public URL is configured) to paste into App Store Connect, the Play notifications Pub/Sub push subscription, or AppGallery Connect. It also lists queue failures and recent failed webhook deliveries. Credential payloads and secrets are never returned.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "description": "The project id. An agent key may only name its own project.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_setup_status",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "applications": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "credentials": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "configured": {
+                      "type": "boolean"
+                    },
+                    "required_kind": {
+                      "type": "string"
+                    },
+                    "stored": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "revision": {
+                            "type": "integer"
+                          },
+                          "updated_at": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "revision",
+                          "updated_at"
+                        ],
+                        "type": "object"
+                      },
+                      "type": [
+                        "null",
+                        "array"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "required_kind",
+                    "configured",
+                    "stored"
+                  ],
+                  "type": "object"
+                },
+                "environment": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "provider_application_id": {
+                  "type": "string"
+                },
+                "store_notifications": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "destination": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "destination",
+                    "path"
+                  ],
+                  "type": "object"
+                },
+                "webhook": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "configured": {
+                      "type": "boolean"
+                    },
+                    "revision": {
+                      "type": "integer"
+                    },
+                    "updated_at": {
+                      "type": [
+                        "null",
+                        "string"
+                      ]
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "configured"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "id",
+                "provider",
+                "environment",
+                "provider_application_id",
+                "credentials",
+                "webhook",
+                "store_notifications"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "issues": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "application_id": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "queue": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "public_url_configured": {
+            "type": "boolean"
+          },
+          "queues": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "completed": {
+                  "type": "integer"
+                },
+                "failed": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "pending": {
+                  "type": "integer"
+                },
+                "skipped": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "name",
+                "pending",
+                "completed",
+                "failed",
+                "skipped"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "recent_webhook_failures": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "application_id": {
+                  "type": "string"
+                },
+                "error_code": {
+                  "type": "string"
+                },
+                "event_id": {
+                  "type": "string"
+                },
+                "event_type": {
+                  "type": "string"
+                },
+                "failed_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "occurred_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "event_id",
+                "application_id",
+                "event_type",
+                "occurred_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          }
+        },
+        "required": [
+          "project_id",
+          "generated_at",
+          "public_url_configured",
+          "applications",
+          "queues",
+          "recent_webhook_failures",
+          "issues"
+        ],
+        "type": "object"
+      },
+      "title": "Get setup status"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Returns subscription health for one project environment over a UTC day window: active, new, renewed, and churned subscriptions, trial conversion where the store records it, a per-product breakdown, and daily active counts.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "environment": {
+            "description": "production (default), sandbox, or test.",
+            "enum": [
+              "production",
+              "sandbox",
+              "test"
+            ],
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The project id. An agent key may only name its own project.",
+            "type": "string"
+          },
+          "window_days": {
+            "description": "UTC day window ending today, from 1 to 90. Defaults to 30.",
+            "maximum": 90,
+            "minimum": 1,
+            "type": [
+              "null",
+              "integer"
+            ]
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_subscription_metrics",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "active_at_end": {
+            "type": "integer"
+          },
+          "active_at_start": {
+            "type": "integer"
+          },
+          "active_during_window": {
+            "type": "integer"
+          },
+          "breakdown": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "active_at_end": {
+                  "type": "integer"
+                },
+                "application_id": {
+                  "type": "string"
+                },
+                "churned": {
+                  "type": "integer"
+                },
+                "new_subscriptions": {
+                  "type": "integer"
+                },
+                "product_id": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "renewals": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "application_id",
+                "provider",
+                "product_id",
+                "active_at_end",
+                "new_subscriptions",
+                "renewals",
+                "churned"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "breakdown_truncated": {
+            "type": "boolean"
+          },
+          "churn": {
+            "additionalProperties": false,
+            "properties": {
+              "awaiting_evidence": {
+                "type": "integer"
+              },
+              "billing": {
+                "type": "integer"
+              },
+              "churned": {
+                "type": "integer"
+              },
+              "paused": {
+                "type": "integer"
+              },
+              "rate": {
+                "type": [
+                  "null",
+                  "number"
+                ]
+              },
+              "replaced": {
+                "type": "integer"
+              },
+              "reversed": {
+                "type": "integer"
+              },
+              "unclassified": {
+                "type": "integer"
+              },
+              "voluntary": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "churned",
+              "voluntary",
+              "billing",
+              "reversed",
+              "unclassified",
+              "replaced",
+              "paused",
+              "awaiting_evidence",
+              "rate"
+            ],
+            "type": "object"
+          },
+          "daily_active": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "active": {
+                  "type": "integer"
+                },
+                "date": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "date",
+                "active"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "environment": {
+            "type": "string"
+          },
+          "in_trial_at_end": {
+            "type": "integer"
+          },
+          "measured_at": {
+            "type": "string"
+          },
+          "new_subscriptions": {
+            "type": "integer"
+          },
+          "plan_changes": {
+            "type": "integer"
+          },
+          "renewals": {
+            "type": "integer"
+          },
+          "resubscriptions": {
+            "type": "integer"
+          },
+          "trials": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "active_during_window": {
+                  "type": "integer"
+                },
+                "availability": {
+                  "type": "string"
+                },
+                "conversion_rate": {
+                  "type": [
+                    "null",
+                    "number"
+                  ]
+                },
+                "converted": {
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
+                },
+                "ended": {
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
+                },
+                "not_converted": {
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
+                },
+                "outcome_not_recorded": {
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "started": {
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
+                },
+                "with_offer_phase": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "provider",
+                "availability",
+                "active_during_window",
+                "with_offer_phase",
+                "started",
+                "ended",
+                "converted",
+                "not_converted",
+                "outcome_not_recorded",
+                "conversion_rate"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "window_days": {
+            "type": "integer"
+          },
+          "window_end": {
+            "type": "string"
+          },
+          "window_start": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "window_days",
+          "window_start",
+          "window_end",
+          "measured_at",
+          "active_at_start",
+          "active_at_end",
+          "in_trial_at_end",
+          "active_during_window",
+          "new_subscriptions",
+          "renewals",
+          "plan_changes",
+          "resubscriptions",
+          "churn",
+          "trials",
+          "breakdown",
+          "breakdown_truncated",
+          "daily_active"
+        ],
+        "type": "object"
+      },
+      "title": "Get subscription metrics"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Lists one project's imported store financial reports with their period, status, and accepted currency totals per application. Report files and order ids are never returned.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "page_size": {
+            "description": "Reports per page, from 1 to 100. Defaults to 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": [
+              "null",
+              "integer"
+            ]
+          },
+          "page_token": {
+            "description": "The next_page_token from the previous page.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The project id. An agent key may only name its own project.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "name": "list_financial_reports",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "financial_reports": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "amounts": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "amount_decimal": {
+                        "type": "string"
+                      },
+                      "amount_scale": {
+                        "maximum": 2147483647,
+                        "minimum": -2147483648,
+                        "type": "integer"
+                      },
+                      "commission_state": {
+                        "type": "string"
+                      },
+                      "covered_application_id": {
+                        "type": "string"
+                      },
+                      "currency": {
+                        "type": "string"
+                      },
+                      "minor_units": {
+                        "type": [
+                          "null",
+                          "integer"
+                        ]
+                      },
+                      "tax_state": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "currency",
+                      "amount_decimal",
+                      "amount_scale",
+                      "minor_units",
+                      "commission_state",
+                      "tax_state",
+                      "covered_application_id"
+                    ],
+                    "type": "object"
+                  },
+                  "type": [
+                    "null",
+                    "array"
+                  ]
+                },
+                "byte_size": {
+                  "type": "integer"
+                },
+                "content_type": {
+                  "type": "string"
+                },
+                "covered_application_ids": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "null",
+                    "array"
+                  ]
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "currencies": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "null",
+                    "array"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "parser_version": {
+                  "type": "string"
+                },
+                "period_end": {
+                  "type": "string"
+                },
+                "period_start": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "report_kind": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "supersedes_import_id": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "provider",
+                "report_kind",
+                "period_start",
+                "period_end",
+                "source",
+                "byte_size",
+                "content_type",
+                "parser_version",
+                "status",
+                "reason",
+                "currencies",
+                "amounts",
+                "covered_application_ids",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "financial_reports"
+        ],
+        "type": "object"
+      },
+      "title": "List financial reports"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Lists the projects this API key can read, with application, customer, and product counts. An agent key sees only its own project.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "page_size": {
+            "description": "Projects per page, from 1 to 100. Defaults to 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": [
+              "null",
+              "integer"
+            ]
+          },
+          "page_token": {
+            "description": "The next_page_token from the previous page.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_projects",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "next_page_token": {
+            "type": "string"
+          },
+          "projects": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "application_count": {
+                  "type": "integer"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "customer_count": {
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "product_count": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "application_count",
+                "customer_count",
+                "product_count",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          }
+        },
+        "required": [
+          "projects"
+        ],
+        "type": "object"
+      },
+      "title": "List projects"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Resolves an external customer id or alias to the canonical internal customer id in one project.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "external_id": {
+            "description": "The external customer id or alias the host application uses.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The project id. An agent key may only name its own project.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "external_id"
+        ],
+        "type": "object"
+      },
+      "name": "resolve_customer",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "canonical_customer_id": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "external_id",
+          "canonical_customer_id",
+          "match"
+        ],
+        "type": "object"
+      },
+      "title": "Resolve customer"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Finds customers in one project by internal id, external id, alias, or store transaction id, and reports why each matched. Purchase tokens are never searchable.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "Customers per page, from 1 to 100. Defaults to 25.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": [
+              "null",
+              "integer"
+            ]
+          },
+          "page_token": {
+            "description": "The next_page_token from the previous page of the same query.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The project id. An agent key may only name its own project.",
+            "type": "string"
+          },
+          "query": {
+            "description": "Customer id, external id, alias, or store transaction id. Exact matches rank first, then prefix matches. Empty lists customers newest first.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "name": "search_customers",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "customers": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "alias_count": {
+                  "type": "integer"
+                },
+                "allowed_count": {
+                  "type": "integer"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "entitlement_count": {
+                  "type": "integer"
+                },
+                "external_id": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "last_observed_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "match": {
+                  "type": "string"
+                },
+                "merged_into_customer_id": {
+                  "type": [
+                    "null",
+                    "string"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "external_id",
+                "alias_count",
+                "entitlement_count",
+                "allowed_count",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": [
+              "null",
+              "array"
+            ]
+          },
+          "next_page_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "customers"
+        ],
+        "type": "object"
+      },
+      "title": "Search customers"
+    }
+  ]
+}
