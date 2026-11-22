@@ -137,12 +137,15 @@ gives the reason per tool.
 **Least-privilege tool listing.** The handler builds two MCP servers, one with the read
 tools and one with all tools, and picks one per request from the authenticated actor. A
 key that cannot write never sees the write tools. The listing is not the boundary: the
-service's write gate runs on every call, and tests cover both layers.
+service's write gate runs on every call, and tests cover both layers. A call to a tool
+outside the key's list never reaches a tool handler, so a server middleware writes its
+call log line with the outcome `tool_not_offered`.
 
 **Audit channel.** `customer_aliases` and `manual_grants` gained a stored channel:
 `actor_channel` on both and `revoked_by_channel` for a revocation, each checked against
-`api`, `dashboard`, `mcp`, and `import`. `import` marks aliases written by the offline
-RevenueCat import, which has no transport channel. Aliases also accept the role
+`api`, `dashboard`, and `mcp`. Aliases also accept `import`, which marks aliases written
+by the offline RevenueCat import; no import writes manual grants, so grants do not
+accept it. Aliases also accept the role
 `agent`, and a check ties roles to channels: an agent alias is always `mcp` and an
 application alias always `api`. `/v1` records `dashboard` when a dashboard session
 authenticated the request and `api` for a bearer. The customer detail on `/v1` and
@@ -152,8 +155,11 @@ authenticated the request and `api` for a bearer. The customer detail on `/v1` a
 product definitions have no stored audit row on any transport, and this phase does not
 add one. An MCP definition write is recorded by the tool call's log line, which names
 the tool, key, role, channel, project, outcome, and, for a successful write, the
-definition id. The definition itself is create-once: a later write can only confirm it. A stored audit trail for definitions,
-if needed, is a separate decision.
+definition id. The definition itself is create-once: a later write can only confirm it.
+The product write enforces this for the entitlement set too. It used to add the
+requested entitlements before comparing, so a superset silently widened a stored
+product; it now compares the stored set first and answers `conflict`, on `/v1` as well.
+A stored audit trail for definitions, if needed, is a separate decision.
 
 ## Consequences
 

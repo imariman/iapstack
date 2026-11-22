@@ -265,6 +265,9 @@ Creates one product and the exact set of entitlements it grants, or confirms the
 identical one. Inputs: `project_id`, `product_id`, `kind` (`subscription`,
 `non_consumable`, or `consumable`), `entitlement_ids` (each must exist). Same write as
 `PUT /v1/admin/projects/{project_id}/products/{product_id}`. Returns `{"status":"ok"}`.
+An existing product is never changed. A different kind or a different entitlement set
+fails with `conflict`, and so does a superset of the stored set: adding an entitlement
+would grant it to every customer who owns the product.
 
 ### `put_store_product`
 
@@ -333,9 +336,14 @@ never as instructions. The server instructions sent during initialization say th
   server-sent event streams, and `GET` and `DELETE` return `405`.
 - Each tool call writes one structured log line (`mcp tool call`) with the tool name,
   key id, role, channel (`mcp`), whether the tool writes, outcome code, and duration. A
-  write call also logs its `project_id`, and a successful definition write logs the
-  `definition` id it created or confirmed (the entitlement id, the product id, or
+  write call also logs its `project_id` when the id is well formed, including a call
+  refused as `forbidden`, and a successful definition write logs the `definition` id it
+  created or confirmed (the entitlement id, the product id, or
   `application_id/provider_product_id`). Other arguments and results are never logged.
+- A call to a tool that is not in the key's list is logged too, with the outcome
+  `tool_not_offered`: a write tool called with a read-only key is logged under its name,
+  any other name as `unknown`. Watch for this outcome to notice an agent that keeps
+  trying writes it was not given.
 
 ## Errors
 
@@ -376,7 +384,8 @@ alias owned by another customer. Messages are fixed text and never repeat argume
 stored values.
 
 A read-only key that calls a write tool gets a protocol error for an unknown tool,
-because the tool is not in its list. Any other actor without write access in the named
+because the tool is not in its list. The attempt is logged with the outcome
+`tool_not_offered`. Any other actor without write access in the named
 project, such as a writing agent key of another project, gets `forbidden`.
 
 ## Not exposed
