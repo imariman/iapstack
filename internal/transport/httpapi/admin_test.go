@@ -659,7 +659,8 @@ func keySummary(record persistence.APIKeyRecord, revokedAt time.Time) persistenc
 	}
 	return persistence.APIKeySummary{
 		ID: record.ID, Role: record.Role, ProjectID: record.ProjectID,
-		ApplicationID: record.ApplicationID, CreatedAt: record.CreatedAt, RevokedAt: revoked,
+		ApplicationID: record.ApplicationID, AllowWrites: record.AllowWrites, CreatedAt: record.CreatedAt,
+		RevokedAt: revoked,
 	}
 }
 

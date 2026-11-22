@@ -218,6 +218,10 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 			}},
 			NextPageToken: "0123456789abcdef01234567",
 		}},
+		{name: "agent API key", schema: "ApiKey", value: apiKeyFromSummary(persistence.APIKeySummary{
+			ID: "0123456789abcdef01234568", Role: persistence.APIKeyRoleAgent, ProjectID: "project-1",
+			AllowWrites: true, CreatedAt: now,
+		}, "")},
 		{name: "imported proceeds", schema: "AdminRevenue", value: adminRevenueResponse{
 			Status: persistence.AdminRevenueReportsImported,
 			Amounts: []adminRecognizedAmountResponse{{

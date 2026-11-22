@@ -33,9 +33,11 @@ func (repository *transaction) APIKey(ctx context.Context, id string) (persisten
 	var projectID, applicationID *string
 	var salt, hash []byte
 	err := repository.tx.QueryRow(ctx, `
-		SELECT id, role, project_id, application_id, secret_salt, secret_hash, created_at
+		SELECT id, role, project_id, application_id, allow_writes, secret_salt, secret_hash, created_at
 		FROM api_keys WHERE id = $1 AND revoked_at IS NULL
-	`, id).Scan(&record.ID, &record.Role, &projectID, &applicationID, &salt, &hash, &record.CreatedAt)
+	`, id).Scan(
+		&record.ID, &record.Role, &projectID, &applicationID, &record.AllowWrites, &salt, &hash, &record.CreatedAt,
+	)
 	if err != nil {
 		return persistence.APIKeyRecord{}, classifyError("load API key", err)
 	}
@@ -81,14 +83,14 @@ func (repository *transaction) APIKeys(ctx context.Context, pageToken string) (p
 	var err error
 	if pageToken == "" {
 		summaries, err = repository.queryAPIKeySummaries(ctx, `
-			SELECT id, role, project_id, application_id, created_at, revoked_at
+			SELECT id, role, project_id, application_id, allow_writes, created_at, revoked_at
 			FROM api_keys
 			ORDER BY created_at DESC, id
 			LIMIT $1
 		`, apiKeyListLimit+1)
 	} else {
 		summaries, err = repository.queryAPIKeySummaries(ctx, `
-			SELECT id, role, project_id, application_id, created_at, revoked_at
+			SELECT id, role, project_id, application_id, allow_writes, created_at, revoked_at
 			FROM api_keys
 			WHERE created_at < $1 OR (created_at = $1 AND id > $2)
 			ORDER BY created_at DESC, id
@@ -161,14 +163,19 @@ func (repository *transaction) PutAPIKey(ctx context.Context, record persistence
 	}
 	var projectID any
 	var applicationID any
-	if record.Role == persistence.APIKeyRoleApplication {
+	switch record.Role {
+	case persistence.APIKeyRoleApplication:
 		projectID = record.ProjectID
 		applicationID = record.ApplicationID
+	case persistence.APIKeyRoleAgent:
+		projectID = record.ProjectID
 	}
 	_, err := repository.tx.Exec(ctx, `
-		INSERT INTO api_keys (id, role, project_id, application_id, secret_salt, secret_hash, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, record.ID, record.Role, projectID, applicationID, record.SecretSalt[:], record.SecretHash[:], record.CreatedAt)
+		INSERT INTO api_keys (
+			id, role, project_id, application_id, allow_writes, secret_salt, secret_hash, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, record.ID, record.Role, projectID, applicationID, record.AllowWrites,
+		record.SecretSalt[:], record.SecretHash[:], record.CreatedAt)
 	return classifyError("put API key", err)
 }
 
@@ -188,7 +195,7 @@ func (repository *transaction) RevokeAPIKey(
 		return persistence.APIKeySummary{}, classifyError("lock API key lifecycle", err)
 	}
 	summary, err := scanAPIKeySummary(repository.tx.QueryRow(ctx, `
-		SELECT id, role, project_id, application_id, created_at, revoked_at
+		SELECT id, role, project_id, application_id, allow_writes, created_at, revoked_at
 		FROM api_keys
 		WHERE id = $1
 		FOR UPDATE
@@ -312,6 +319,7 @@ func scanAPIKeySummary(scanner apiKeySummaryScanner) (persistence.APIKeySummary,
 		&summary.Role,
 		&projectID,
 		&applicationID,
+		&summary.AllowWrites,
 		&summary.CreatedAt,
 		&summary.RevokedAt,
 	); err != nil {

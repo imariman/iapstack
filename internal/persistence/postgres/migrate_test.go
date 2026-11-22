@@ -80,6 +80,7 @@ func TestMigrationLifecycle(t *testing.T) {
 		"purchase_observations_subscription_metrics_idx",
 		"manual_grants",
 		"apple_consumption_requests",
+		"api_keys_project_idx",
 	}
 	if got, want := len(relations), int(postgres.LatestVersion); got != want {
 		t.Fatalf("migration relation count = %d, want %d", got, want)
@@ -702,6 +703,59 @@ func TestManualGrantMigrationConstraintsAndDirtyDown(t *testing.T) {
 	mustMigrateTo(t, database, manualGrantSchemaVersion-1)
 	assertRelationExists(t, database, "manual_grants", false)
 	mustMigrateTo(t, database, manualGrantSchemaVersion)
+}
+
+// TestAgentAPIKeyMigrationConstraintsAndDown verifies agent key scope rules, the write flag, the project
+// reference, and that rolling back removes agent keys while keeping every other key.
+func TestAgentAPIKeyMigrationConstraintsAndDown(t *testing.T) {
+	const agentKeySchemaVersion int32 = 17
+	database := openTestDatabase(t, agentKeySchemaVersion)
+	fixture := seedCatalog(t, database)
+	salt := bytes.Repeat([]byte{1}, 16)
+	hash := bytes.Repeat([]byte{2}, 32)
+	keyInsert := `
+		INSERT INTO api_keys (id, role, project_id, application_id, allow_writes, secret_salt, secret_hash)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`
+	mustExec(t, database, keyInsert, "admin-key", "admin", nil, nil, false, salt, hash)
+	mustExec(t, database, keyInsert, "application-key", "application", fixture.projectID, fixture.applicationID, false, salt, hash)
+	mustExec(t, database, keyInsert, "agent-key", "agent", fixture.projectID, nil, false, salt, hash)
+	mustExec(t, database, keyInsert, "agent-writer-key", "agent", fixture.projectID, nil, true, salt, hash)
+	expectConstraint(t, database, "api_keys_scope_valid", keyInsert,
+		"agent-without-project", "agent", nil, nil, false, salt, hash)
+	expectConstraint(t, database, "api_keys_scope_valid", keyInsert,
+		"agent-with-application", "agent", fixture.projectID, fixture.applicationID, false, salt, hash)
+	expectConstraint(t, database, "api_keys_allow_writes_valid", keyInsert,
+		"admin-writer", "admin", nil, nil, true, salt, hash)
+	expectConstraint(t, database, "api_keys_allow_writes_valid", keyInsert,
+		"application-writer", "application", fixture.projectID, fixture.applicationID, true, salt, hash)
+	expectConstraint(t, database, "api_keys_role_valid", keyInsert,
+		"operator-key", "operator", fixture.projectID, nil, false, salt, hash)
+	expectConstraint(t, database, "api_keys_project_fk", keyInsert,
+		"agent-missing-project", "agent", "missing-project", nil, false, salt, hash)
+
+	mustMigrateTo(t, database, agentKeySchemaVersion-1)
+	assertRelationExists(t, database, "api_keys_project_idx", false)
+	var remaining []string
+	rows, err := database.conn.Query(database.ctx, `SELECT id FROM api_keys ORDER BY id`)
+	if err != nil {
+		t.Fatalf("list API keys after rollback: %v", err)
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan API key after rollback: %v", err)
+		}
+		remaining = append(remaining, id)
+	}
+	rows.Close()
+	if strings.Join(remaining, ",") != "admin-key,application-key" {
+		t.Fatalf("API keys after rollback = %v, want only the admin and application keys", remaining)
+	}
+	expectConstraint(t, database, "api_keys_role_valid", `
+		INSERT INTO api_keys (id, role, project_id, secret_salt, secret_hash) VALUES ('agent-old', 'agent', $1, $2, $3)
+	`, fixture.projectID, salt, hash)
+	mustMigrateTo(t, database, agentKeySchemaVersion)
 }
 
 // openTestDatabase opens the configured integration database at one schema version.

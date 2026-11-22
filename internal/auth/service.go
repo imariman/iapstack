@@ -38,12 +38,14 @@ const (
 	argonOutputBytes uint32 = 32
 )
 
-// Principal is one authenticated administration or application identity.
+// Principal is one authenticated administration, application, or agent identity.
 type Principal struct {
 	KeyID         string
 	Role          persistence.APIKeyRole
 	ProjectID     core.ProjectID
 	ApplicationID core.ApplicationID
+	// AllowWrites reports whether an agent key may call write operations. Only agent keys set it.
+	AllowWrites bool
 }
 
 // Service creates and verifies memory-hard API key records.
@@ -115,6 +117,7 @@ func (service *Service) Create(ctx context.Context, principal Principal) (string
 		Role:          principal.Role,
 		ProjectID:     principal.ProjectID,
 		ApplicationID: principal.ApplicationID,
+		AllowWrites:   principal.AllowWrites,
 		SecretSalt:    salt,
 		SecretHash:    hash,
 		CreatedAt:     service.clock().UTC(),
@@ -209,22 +212,17 @@ func (service *Service) Authenticate(ctx context.Context, bearer string) (Princi
 	if subtle.ConstantTimeCompare(hash[:], record.SecretHash[:]) != 1 {
 		return Principal{}, ErrUnauthorized
 	}
-	return Principal{KeyID: record.ID, Role: record.Role, ProjectID: record.ProjectID, ApplicationID: record.ApplicationID}, nil
+	return Principal{
+		KeyID: record.ID, Role: record.Role, ProjectID: record.ProjectID, ApplicationID: record.ApplicationID,
+		AllowWrites: record.AllowWrites,
+	}, nil
 }
 
-// Validate checks that principal scope matches its role.
+// Validate checks that principal scope and write flag match its role.
 func (principal Principal) Validate() error {
-	switch principal.Role {
-	case persistence.APIKeyRoleAdmin:
-		if principal.ProjectID != "" || principal.ApplicationID != "" {
-			return errors.New("admin principal must not have application scope")
-		}
-		return nil
-	case persistence.APIKeyRoleApplication:
-		return errors.Join(principal.ProjectID.Validate(), principal.ApplicationID.Validate())
-	default:
-		return fmt.Errorf("unsupported principal role %q", principal.Role)
-	}
+	return persistence.ValidateAPIKeyScope(
+		principal.Role, principal.ProjectID, principal.ApplicationID, principal.AllowWrites,
+	)
 }
 
 // parseBearer separates and decodes one public key identity and private secret.

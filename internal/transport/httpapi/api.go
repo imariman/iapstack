@@ -173,11 +173,12 @@ type webhookRequest struct {
 	ExpectedRevision int64  `json:"expected_revision"`
 }
 
-// keyRequest selects the durable role and optional application scope for a new bearer.
+// keyRequest selects the durable role, optional scope, and agent write flag for a new bearer.
 type keyRequest struct {
 	Role          persistence.APIKeyRole `json:"role"`
 	ProjectID     core.ProjectID         `json:"project_id,omitempty"`
 	ApplicationID core.ApplicationID     `json:"application_id,omitempty"`
+	AllowWrites   bool                   `json:"allow_writes,omitempty"`
 }
 
 // apiKeyCollectionResponse contains one page of secret-free administrator key metadata.
@@ -192,9 +193,11 @@ type apiKeyResponse struct {
 	Role          persistence.APIKeyRole `json:"role"`
 	ProjectID     core.ProjectID         `json:"project_id,omitempty"`
 	ApplicationID core.ApplicationID     `json:"application_id,omitempty"`
-	CreatedAt     time.Time              `json:"created_at"`
-	RevokedAt     *time.Time             `json:"revoked_at,omitempty"`
-	Current       bool                   `json:"current"`
+	// AllowWrites is present only for agent keys.
+	AllowWrites *bool      `json:"allow_writes,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+	Current     bool       `json:"current"`
 }
 
 // verificationRequest is the public alias of the protected worker verification payload.
@@ -386,7 +389,7 @@ func (api *API) notFound(writer http.ResponseWriter, request *http.Request) {
 	writeAPIError(writer, request, http.StatusNotFound, "not_found", "the requested resource was not found")
 }
 
-// createAPIKey creates a stored administrator or application bearer and returns it once.
+// createAPIKey creates a stored administrator, application, or agent bearer and returns it once.
 func (api *API) createAPIKey(writer http.ResponseWriter, request *http.Request) {
 	if _, ok := api.requireAdmin(writer, request); !ok {
 		return
@@ -397,6 +400,7 @@ func (api *API) createAPIKey(writer http.ResponseWriter, request *http.Request) 
 	}
 	bearer, err := api.authentication.Create(request.Context(), auth.Principal{
 		Role: input.Role, ProjectID: input.ProjectID, ApplicationID: input.ApplicationID,
+		AllowWrites: input.AllowWrites,
 	})
 	if err != nil {
 		api.writeError(writer, request, err)
@@ -1220,11 +1224,16 @@ func responseFromResult(result verification.Result, now time.Time) verificationR
 
 // apiKeyFromSummary maps secret-free lifecycle metadata and identifies the active request key.
 func apiKeyFromSummary(summary persistence.APIKeySummary, currentKeyID string) apiKeyResponse {
-	return apiKeyResponse{
+	response := apiKeyResponse{
 		ID: summary.ID, Role: summary.Role, ProjectID: summary.ProjectID,
 		ApplicationID: summary.ApplicationID, CreatedAt: summary.CreatedAt,
 		RevokedAt: summary.RevokedAt, Current: currentKeyID != "" && summary.ID == currentKeyID,
 	}
+	if summary.Role == persistence.APIKeyRoleAgent {
+		allowWrites := summary.AllowWrites
+		response.AllowWrites = &allowWrites
+	}
+	return response
 }
 
 // entitlementResponses removes internal source identities and fails closed at effective-period expiry.

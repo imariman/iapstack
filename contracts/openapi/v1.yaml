@@ -117,7 +117,7 @@ paths:
     post:
       tags: [Administration]
       operationId: createApiKey
-      summary: Create an administrator or application bearer
+      summary: Create an administrator, application, or agent bearer
       security:
         - adminBearer: []
         - dashboardSession: []
@@ -1755,14 +1755,24 @@ components:
       type: object
       additionalProperties: false
       required: [role]
+      description: >-
+        An admin key has no scope. An application key needs project_id and application_id. An agent
+        key needs project_id and no application_id; it authenticates only on the opt-in MCP endpoint
+        (/mcp), never on /v1 routes.
       properties:
         role:
           type: string
-          enum: [admin, application]
+          enum: [admin, application, agent]
         project_id:
           $ref: '#/components/schemas/Identifier'
         application_id:
           $ref: '#/components/schemas/Identifier'
+        allow_writes:
+          type: boolean
+          default: false
+          description: >-
+            Lets an agent key call MCP write tools. Only valid with role agent. Agent keys are read-only
+            unless this is true.
     ApiKeyCreated:
       type: object
       additionalProperties: false
@@ -1811,11 +1821,14 @@ components:
           pattern: '^[a-f0-9]{24}$'
         role:
           type: string
-          enum: [admin, application]
+          enum: [admin, application, agent]
         project_id:
           $ref: '#/components/schemas/Identifier'
         application_id:
           $ref: '#/components/schemas/Identifier'
+        allow_writes:
+          type: boolean
+          description: Present only for agent keys. True when the key may call MCP write tools.
         created_at:
           type: string
           format: date-time
