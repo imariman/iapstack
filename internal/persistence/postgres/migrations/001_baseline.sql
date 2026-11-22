@@ -598,7 +598,8 @@ CREATE INDEX outbox_events_failed_retention_idx
 
 -- Add dashboard administrator accounts that sign in with a username and password.
 -- Only a memory-hard password verifier is stored. Consecutive failed sign-ins are counted per
--- account so the service can lock it for a bounded window.
+-- account so the service can lock it for a bounded window. session_generation grows by one with
+-- every password change, and a dashboard session is valid only for the generation it was issued in.
 CREATE TABLE admin_users (
     id text PRIMARY KEY,
     username text NOT NULL,
@@ -608,13 +609,15 @@ CREATE TABLE admin_users (
     failed_attempts integer NOT NULL DEFAULT 0,
     locked_until timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
+    session_generation bigint NOT NULL DEFAULT 1,
     CONSTRAINT admin_users_id_valid CHECK (id <> '' AND id = btrim(id)),
     CONSTRAINT admin_users_username_unique UNIQUE (username),
     CONSTRAINT admin_users_username_valid CHECK (username ~ '^[a-z0-9][a-z0-9._@-]{2,63}$'),
     CONSTRAINT admin_users_password_valid CHECK (
         octet_length(password_salt) = 16 AND octet_length(password_hash) = 32
     ),
-    CONSTRAINT admin_users_failed_attempts_valid CHECK (failed_attempts >= 0)
+    CONSTRAINT admin_users_failed_attempts_valid CHECK (failed_attempts >= 0),
+    CONSTRAINT admin_users_session_generation_valid CHECK (session_generation > 0)
 );
 
 -- Customer identity: aliases and merges recorded without rewriting historical purchase rows.

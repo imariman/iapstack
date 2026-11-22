@@ -59,9 +59,12 @@ type adminSessionClaims struct {
 	IssuerKeyID string `json:"issuer_key_id"`
 	// IssuerUserID names the administrator account that signed in with a password. Key-issued and
 	// bootstrap sessions omit it, so their tokens keep the earlier claim shape.
-	IssuerUserID string    `json:"issuer_user_id,omitempty"`
-	IssuedAt     time.Time `json:"issued_at"`
-	ExpiresAt    time.Time `json:"expires_at"`
+	IssuerUserID string `json:"issuer_user_id,omitempty"`
+	// IssuerGeneration is the account's session generation when the session was issued. Comparing
+	// generations, not timestamps, keeps the check independent of the clocks of the processes involved.
+	IssuerGeneration int64     `json:"issuer_generation,omitempty"`
+	IssuedAt         time.Time `json:"issued_at"`
+	ExpiresAt        time.Time `json:"expires_at"`
 }
 
 // adminSessionEnvelope carries only protected metadata required to open dashboard claims.
@@ -94,10 +97,11 @@ func (service *AdminSessions) Mint(ctx context.Context, issuer Principal) (Admin
 	}
 	now := service.clock().UTC()
 	claims := adminSessionClaims{
-		IssuerKeyID:  issuer.KeyID,
-		IssuerUserID: issuer.UserID,
-		IssuedAt:     now,
-		ExpiresAt:    now.Add(service.ttl),
+		IssuerKeyID:      issuer.KeyID,
+		IssuerUserID:     issuer.UserID,
+		IssuerGeneration: issuer.AccountGeneration,
+		IssuedAt:         now,
+		ExpiresAt:        now.Add(service.ttl),
 	}
 	payload, err := json.Marshal(claims)
 	if err != nil {
@@ -159,11 +163,13 @@ func (service *AdminSessions) Authenticate(ctx context.Context, token string) (A
 			}
 			return AdminPrincipal{}, fmt.Errorf("load administrator session account: %w", err)
 		}
-		// A password change or reset ends every session issued before it.
-		if issuer.ID != claims.IssuerUserID || issuer.PasswordChangedAt.After(claims.IssuedAt) {
+		// A password change or reset moves the account to a new generation, which ends every
+		// session issued in an earlier one.
+		if issuer.ID != claims.IssuerUserID || issuer.SessionGeneration != claims.IssuerGeneration {
 			return AdminPrincipal{}, ErrUnauthorized
 		}
 		principal.UserID, principal.Username = issuer.ID, issuer.Username
+		principal.AccountGeneration = issuer.SessionGeneration
 	} else if claims.IssuerKeyID != "" {
 		var issuer persistence.APIKeyRecord
 		err = service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {

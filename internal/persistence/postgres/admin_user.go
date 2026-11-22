@@ -16,7 +16,7 @@ const (
 	// adminUserFailedAttemptsLimit keeps the stored failure count far below integer overflow.
 	adminUserFailedAttemptsLimit = 1_000_000
 	// adminUserColumns lists the account columns in the order scanAdminUserRecord reads them.
-	adminUserColumns = `id, username, created_at, password_changed_at,
+	adminUserColumns = `id, username, created_at, password_changed_at, session_generation,
 		password_salt, password_hash, failed_attempts, locked_until`
 )
 
@@ -28,8 +28,9 @@ type adminUserScanner interface {
 
 // AdminUser returns one administrator account and its password verifier by public identity.
 func (repository *transaction) AdminUser(ctx context.Context, id string) (persistence.AdminUserRecord, error) {
+	// The id comes from a request path, so a malformed one is the caller's error, not a server failure.
 	if err := validateText("administrator account ID", id); err != nil {
-		return persistence.AdminUserRecord{}, err
+		return persistence.AdminUserRecord{}, validation.Wrap(err)
 	}
 	record, err := scanAdminUserRecord(repository.tx.QueryRow(ctx, `
 		SELECT `+adminUserColumns+` FROM admin_users WHERE id = $1
@@ -60,7 +61,7 @@ func (repository *transaction) AdminUserByUsername(
 // AdminUsers returns up to 200 administrator accounts, oldest first, without password verifiers.
 func (repository *transaction) AdminUsers(ctx context.Context) ([]persistence.AdminUserSummary, error) {
 	rows, err := repository.tx.Query(ctx, `
-		SELECT id, username, created_at, password_changed_at
+		SELECT id, username, created_at, password_changed_at, session_generation
 		FROM admin_users
 		ORDER BY created_at, id
 		LIMIT $1
@@ -99,14 +100,16 @@ func (repository *transaction) PutAdminUser(ctx context.Context, record persiste
 		return err
 	}
 	_, err := repository.tx.Exec(ctx, `
-		INSERT INTO admin_users (id, username, password_salt, password_hash, password_changed_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO admin_users (
+			id, username, password_salt, password_hash, password_changed_at, created_at, session_generation
+		) VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, record.ID, record.Username, record.PasswordSalt[:], record.PasswordHash[:],
-		record.PasswordChangedAt.UTC(), record.CreatedAt.UTC())
+		record.PasswordChangedAt.UTC(), record.CreatedAt.UTC(), record.SessionGeneration)
 	return classifyError("put administrator account", err)
 }
 
-// SetAdminUserPassword replaces one account's password verifier and clears its failed sign-in state.
+// SetAdminUserPassword replaces one account's password verifier, advances its session generation,
+// and clears its failed sign-in state.
 func (repository *transaction) SetAdminUserPassword(
 	ctx context.Context,
 	write persistence.AdminUserPasswordWrite,
@@ -117,9 +120,10 @@ func (repository *transaction) SetAdminUserPassword(
 	summary, err := scanAdminUserSummary(repository.tx.QueryRow(ctx, `
 		UPDATE admin_users
 		SET password_salt = $2, password_hash = $3, password_changed_at = $4,
+			session_generation = session_generation + 1,
 			failed_attempts = 0, locked_until = NULL
 		WHERE id = $1
-		RETURNING id, username, created_at, password_changed_at
+		RETURNING id, username, created_at, password_changed_at, session_generation
 	`, write.ID, write.PasswordSalt[:], write.PasswordHash[:], write.ChangedAt.UTC()))
 	if err != nil {
 		return persistence.AdminUserSummary{}, classifyError("set administrator password", err)
@@ -172,7 +176,7 @@ func (repository *transaction) ClearAdminUserSignInFailures(ctx context.Context,
 // while no active administrator key exists.
 func (repository *transaction) DeleteAdminUser(ctx context.Context, id string) error {
 	if err := validateText("administrator account ID", id); err != nil {
-		return err
+		return validation.Wrap(err)
 	}
 	// Key revocation takes the same lock, so the two cannot remove the last administrator between them.
 	if _, err := repository.tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, apiKeyLifecycleLockID); err != nil {
@@ -203,6 +207,7 @@ func scanAdminUserSummary(scanner adminUserScanner) (persistence.AdminUserSummar
 	var summary persistence.AdminUserSummary
 	if err := scanner.Scan(
 		&summary.ID, &summary.Username, &summary.CreatedAt, &summary.PasswordChangedAt,
+		&summary.SessionGeneration,
 	); err != nil {
 		return persistence.AdminUserSummary{}, err
 	}
@@ -220,7 +225,7 @@ func scanAdminUserRecord(scanner adminUserScanner) (persistence.AdminUserRecord,
 	var salt, hash []byte
 	if err := scanner.Scan(
 		&record.ID, &record.Username, &record.CreatedAt, &record.PasswordChangedAt,
-		&salt, &hash, &record.FailedAttempts, &record.LockedUntil,
+		&record.SessionGeneration, &salt, &hash, &record.FailedAttempts, &record.LockedUntil,
 	); err != nil {
 		return persistence.AdminUserRecord{}, err
 	}

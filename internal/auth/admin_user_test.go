@@ -67,6 +67,7 @@ func TestAdminUserPolicyRejectsWeakInput(t *testing.T) {
 		"username with space":   {"two words", testAdminPassword},
 		"username leading dot":  {".owner", testAdminPassword},
 		"short password":        {"owner", "elevenchars"},
+		"short in characters":   {"owner", "çççççç"},
 		"oversize password":     {"owner", string(make([]byte, maximumAdminPasswordBytes+1))},
 		"password equals name":  {"owner-of-everything", "Owner-Of-Everything"},
 		"username beyond limit": {string(make([]byte, 65)), testAdminPassword},
@@ -78,11 +79,15 @@ func TestAdminUserPolicyRejectsWeakInput(t *testing.T) {
 	if _, err := service.CreateAdminUser(ctx, "owner", testAdminPassword); err != nil {
 		t.Fatalf("CreateAdminUser() error = %v", err)
 	}
+	// The minimum counts characters: twelve two-byte letters pass, six of them (twelve bytes) do not.
+	if _, err := service.CreateAdminUser(ctx, "multibyte", "çççççççççççç"); err != nil {
+		t.Fatalf("CreateAdminUser() twelve multi-byte characters error = %v", err)
+	}
 	if _, err := service.CreateAdminUser(ctx, "OWNER", testAdminReplacementPassword); !errors.Is(err, persistence.ErrConflict) {
 		t.Fatalf("CreateAdminUser() duplicate error = %v, want conflict", err)
 	}
 	users, err := service.AdminUsers(ctx)
-	if err != nil || len(users) != 1 || users[0].Username != "owner" {
+	if err != nil || len(users) != 2 || users[0].SessionGeneration != 1 {
 		t.Fatalf("AdminUsers() = %#v, %v", users, err)
 	}
 }
@@ -142,7 +147,9 @@ func TestAdminUserPasswordChangeEndsEarlierSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAdminSessions() error = %v", err)
 	}
-	sessions.clock = func() time.Time { return now }
+	// Sessions keep their own fixed clock, as a replica that mints them would.
+	sessionNow := now
+	sessions.clock = func() time.Time { return sessionNow }
 	user, err := service.CreateAdminUser(ctx, "owner", testAdminPassword)
 	if err != nil {
 		t.Fatalf("CreateAdminUser() error = %v", err)
@@ -172,8 +179,11 @@ func TestAdminUserPasswordChangeEndsEarlierSessions(t *testing.T) {
 	if _, err := service.ChangeAdminUserPassword(ctx, "missing", "", false, testAdminReplacementPassword); !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatalf("ChangeAdminUserPassword() missing account error = %v, want not found", err)
 	}
+	// The service clock moves backwards before the change: a writer whose clock is behind the one that
+	// minted the session must still end it, because generations are compared, not times.
+	now = now.Add(-48 * time.Hour)
 	changed, err := service.ChangeAdminUserPassword(ctx, user.ID, testAdminPassword, true, testAdminReplacementPassword)
-	if err != nil || !changed.PasswordChangedAt.Equal(now) {
+	if err != nil || !changed.PasswordChangedAt.Equal(now) || changed.SessionGeneration != principal.AccountGeneration+1 {
 		t.Fatalf("ChangeAdminUserPassword() = %#v, %v", changed, err)
 	}
 	if record := store.users[user.ID]; record.FailedAttempts != 0 {
@@ -182,19 +192,28 @@ func TestAdminUserPasswordChangeEndsEarlierSessions(t *testing.T) {
 	if _, err := sessions.Authenticate(ctx, earlier.Token); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Authenticate() session issued before the change error = %v, want unauthorized", err)
 	}
-	// A session minted at the same instant as the change belongs to the administrator who made it.
-	replacement, err := sessions.Mint(ctx, principal)
+	// A session minted from the earlier principal carries the earlier generation and is already ended.
+	stale, err := sessions.Mint(ctx, principal)
+	if err != nil {
+		t.Fatalf("Mint() stale principal error = %v", err)
+	}
+	if _, err := sessions.Authenticate(ctx, stale.Token); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Authenticate() session from the earlier generation error = %v, want unauthorized", err)
+	}
+	if _, err := service.AuthenticatePassword(ctx, "owner", testAdminPassword); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("AuthenticatePassword() old password error = %v, want unauthorized", err)
+	}
+	// The writer's clock is far behind the session clock, and the fresh session still authenticates.
+	renewed, err := service.AuthenticatePassword(ctx, "owner", testAdminReplacementPassword)
+	if err != nil || renewed.AccountGeneration != changed.SessionGeneration {
+		t.Fatalf("AuthenticatePassword() new password = %#v, %v", renewed, err)
+	}
+	replacement, err := sessions.Mint(ctx, renewed)
 	if err != nil {
 		t.Fatalf("Mint() replacement error = %v", err)
 	}
 	if _, err := sessions.Authenticate(ctx, replacement.Token); err != nil {
 		t.Fatalf("Authenticate() replacement session error = %v", err)
-	}
-	if _, err := service.AuthenticatePassword(ctx, "owner", testAdminPassword); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("AuthenticatePassword() old password error = %v, want unauthorized", err)
-	}
-	if _, err := service.AuthenticatePassword(ctx, "owner", testAdminReplacementPassword); err != nil {
-		t.Fatalf("AuthenticatePassword() new password error = %v", err)
 	}
 
 	// The final account cannot be deleted while no administrator key exists.
@@ -274,7 +293,7 @@ func TestPrincipalActorIDNamesKeysAndAccounts(t *testing.T) {
 		want      string
 	}{
 		"stored key": {Principal{KeyID: "0123456789abcdef01234567", Role: persistence.APIKeyRoleAdmin}, "0123456789abcdef01234567"},
-		"account":    {Principal{UserID: "account-1", Username: "owner", Role: persistence.APIKeyRoleAdmin}, "account:owner"},
+		"account":    {Principal{UserID: "account-1", Username: "owner", Role: persistence.APIKeyRoleAdmin}, "account:account-1:owner"},
 		"bootstrap":  {Principal{Role: persistence.APIKeyRoleAdmin}, ""},
 	} {
 		if got := test.principal.ActorID(); got != test.want {
@@ -294,16 +313,54 @@ func TestPasswordDerivationsDoNotTakeAPIKeySlots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() administrator key error = %v", err)
 	}
-	for slot := 0; slot < cap(service.passwordSlots); slot++ {
-		service.passwordSlots <- struct{}{}
+	service.passwordSlotWait = 20 * time.Millisecond
+	for slot := 0; slot < cap(service.signInSlots); slot++ {
+		service.signInSlots <- struct{}{}
 	}
 
 	for _, username := range []string{"owner", "nobody"} {
 		if _, err := service.AuthenticatePassword(ctx, username, testAdminPassword); !errors.Is(err, ErrCapacity) {
-			t.Fatalf("AuthenticatePassword(%s) with a full password pool error = %v, want ErrCapacity", username, err)
+			t.Fatalf("AuthenticatePassword(%s) with a full sign-in pool error = %v, want ErrCapacity", username, err)
 		}
 	}
 	if _, err := service.Authenticate(ctx, bearer); err != nil {
-		t.Fatalf("Authenticate() API key with a full password pool error = %v", err)
+		t.Fatalf("Authenticate() API key with a full sign-in pool error = %v", err)
 	}
+	// Account management derives in its own pool, so a sign-in flood cannot block it.
+	if _, err := service.CreateAdminUser(ctx, "second", testAdminReplacementPassword); err != nil {
+		t.Fatalf("CreateAdminUser() with a full sign-in pool error = %v", err)
+	}
+	if _, err := service.ResetAdminUserPassword(ctx, "owner"); err != nil {
+		t.Fatalf("ResetAdminUserPassword() with a full sign-in pool error = %v", err)
+	}
+}
+
+// TestPasswordSignInWaitsForABusySlot verifies concurrent sign-ins queue for the slot instead of failing.
+func TestPasswordSignInWaitsForABusySlot(t *testing.T) {
+	ctx := context.Background()
+	service, _ := newAdminUserTestService(t)
+	if _, err := service.CreateAdminUser(ctx, "owner", testAdminPassword); err != nil {
+		t.Fatalf("CreateAdminUser() error = %v", err)
+	}
+	service.passwordSlotWait = 5 * time.Second
+	service.signInSlots <- struct{}{}
+	released := make(chan struct{})
+	go func() {
+		defer close(released)
+		time.Sleep(50 * time.Millisecond)
+		<-service.signInSlots
+	}()
+	if _, err := service.AuthenticatePassword(ctx, "owner", testAdminPassword); err != nil {
+		t.Fatalf("AuthenticatePassword() while another derivation holds the slot error = %v", err)
+	}
+	<-released
+
+	// A caller that gives up stops waiting and reports its own context error.
+	service.signInSlots <- struct{}{}
+	canceled, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	if _, err := service.AuthenticatePassword(canceled, "owner", testAdminPassword); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("AuthenticatePassword() with an expired context error = %v, want DeadlineExceeded", err)
+	}
+	<-service.signInSlots
 }

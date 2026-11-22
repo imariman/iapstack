@@ -76,6 +76,7 @@ func (api *API) createAdministrator(writer http.ResponseWriter, request *http.Re
 
 // setAdministratorPassword replaces one account's password. An administrator changing their own password
 // must supply the current one and receives a fresh session cookie, because the change ends earlier sessions.
+// If that cookie cannot be issued, the stale one is cleared and the response still reports the change.
 func (api *API) setAdministratorPassword(writer http.ResponseWriter, request *http.Request) {
 	principal, ok := api.requireAdmin(writer, request)
 	if !ok {
@@ -95,12 +96,17 @@ func (api *API) setAdministratorPassword(writer http.ResponseWriter, request *ht
 		return
 	}
 	if self {
+		// The change is committed and has ended the caller's session, so the response must say it
+		// succeeded either way. Without a replacement session the stale cookie is cleared and the
+		// dashboard asks for a new sign-in with the new password.
+		principal.AccountGeneration = user.SessionGeneration
 		session, err := api.adminSessions.Mint(request.Context(), principal)
 		if err != nil {
-			api.writeError(writer, request, err)
-			return
+			api.logger.Warn("dashboard session was not reissued after a password change", "administrator_id", user.ID)
+			clearDashboardSessionCookie(writer)
+		} else {
+			setDashboardSessionCookie(writer, session)
 		}
-		setDashboardSessionCookie(writer, session)
 		writer.Header().Set("Cache-Control", "no-store")
 	}
 	writeJSON(writer, http.StatusOK, administratorFromSummary(user, principal.UserID))

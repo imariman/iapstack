@@ -281,6 +281,8 @@ paths:
       responses:
         '204':
           description: Administrator account deleted
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':

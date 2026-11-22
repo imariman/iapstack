@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/imariman/iapstack/internal/auth"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/protection"
 )
 
 const (
@@ -17,6 +20,12 @@ const (
 	// testAdministratorReplacementPassword is a second valid administrator password.
 	testAdministratorReplacementPassword = "another long passphrase"
 )
+
+// switchableSessionProtection wraps the session keyring and can refuse to protect new sessions.
+type switchableSessionProtection struct {
+	protection.Service
+	failProtect bool
+}
 
 // TestAdministratorAccountReplacesBootstrapSignIn verifies the first account retires the bootstrap session
 // and that a username and password then open a dashboard session.
@@ -164,6 +173,45 @@ func TestAdministratorPasswordChangeRotatesSession(t *testing.T) {
 	}
 }
 
+// TestAdministratorPasswordChangeSucceedsWhenSessionCannotBeReissued verifies a committed change is reported
+// as a success and the stale cookie is cleared when no replacement session can be minted.
+func TestAdministratorPasswordChangeSucceedsWhenSessionCannotBeReissued(t *testing.T) {
+	t.Parallel()
+
+	protector := &switchableSessionProtection{}
+	api := newDashboardSessionTestAPIWithProtection(t, func(service protection.Service) protection.Service {
+		protector.Service = service
+		return protector
+	})
+	owner := createTestAdministrator(t, api, loginDashboardSession(t, api), "owner", testAdministratorPassword)
+	cookie := dashboardCookie(t, signInTestAdministrator(api, "owner", testAdministratorPassword))
+
+	protector.failProtect = true
+	request := dashboardJSONRequest(http.MethodPut, "/v1/admin/administrators/"+owner.ID+"/password",
+		`{"current_password":"`+testAdministratorPassword+`","password":"`+testAdministratorReplacementPassword+`"}`, cookie)
+	request.SetPathValue("administrator_id", owner.ID)
+	recorder := httptest.NewRecorder()
+	api.setAdministratorPassword(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("password change without a replacement session status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if cleared := dashboardCookie(t, recorder); cleared.Value != "" || cleared.MaxAge >= 0 {
+		t.Fatalf("stale session cookie after the change = %#v, want it cleared", cleared)
+	}
+
+	protector.failProtect = false
+	statusRequest := httptest.NewRequest(http.MethodGet, "/v1/admin/dashboard-session", nil)
+	statusRequest.AddCookie(cookie)
+	statusRecorder := httptest.NewRecorder()
+	api.getDashboardSession(statusRecorder, statusRequest)
+	if statusRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("earlier session after the change status = %d, want %d", statusRecorder.Code, http.StatusUnauthorized)
+	}
+	if recorder := signInTestAdministrator(api, "owner", testAdministratorReplacementPassword); recorder.Code != http.StatusCreated {
+		t.Fatalf("sign-in with the new password status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 // TestAdministratorSignInLocksAfterRepeatedFailures verifies the lock response and its Retry-After header.
 func TestAdministratorSignInLocksAfterRepeatedFailures(t *testing.T) {
 	t.Parallel()
@@ -253,4 +301,12 @@ func TestAccountSessionsAreDurableAuditActors(t *testing.T) {
 			t.Fatalf("%s rejection status = %d, want %d", name, recorder.Code, http.StatusForbidden)
 		}
 	}
+}
+
+// Protect fails while failProtect is set and delegates otherwise.
+func (service *switchableSessionProtection) Protect(ctx context.Context, request protection.Request) (protection.Value, error) {
+	if service.failProtect {
+		return protection.Value{}, errors.New("session protection is unavailable")
+	}
+	return service.Service.Protect(ctx, request)
 }

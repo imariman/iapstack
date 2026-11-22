@@ -192,7 +192,8 @@ type OperationsRepository interface {
 	HasAdminUser(context.Context) (bool, error)
 	// PutAdminUser creates one administrator account and rejects a duplicate identity or username.
 	PutAdminUser(context.Context, AdminUserRecord) error
-	// SetAdminUserPassword replaces one account's password verifier and clears its failed sign-in state.
+	// SetAdminUserPassword replaces one account's password verifier, advances its session generation,
+	// and clears its failed sign-in state.
 	SetAdminUserPassword(context.Context, AdminUserPasswordWrite) (AdminUserSummary, error)
 	// RecordAdminUserSignInFailure counts one failed sign-in and locks the account once the count reaches
 	// the threshold. It returns the lock expiry, or nil while the account stays unlocked.
@@ -403,6 +404,9 @@ type AdminUserSummary struct {
 	Username          string
 	CreatedAt         time.Time
 	PasswordChangedAt time.Time
+	// SessionGeneration starts at 1 and grows by one with every password change. A dashboard session
+	// is valid only while the account is still in the generation the session was issued in.
+	SessionGeneration int64
 }
 
 // AdminUserRecord stores one administrator account, its memory-hard password verifier, and its
@@ -621,7 +625,12 @@ func (summary APIKeySummary) Validate() error {
 
 // Validate checks administrator account identity, username shape, and lifecycle timestamps.
 func (summary AdminUserSummary) Validate() error {
+	var generationError error
+	if summary.SessionGeneration <= 0 {
+		generationError = errors.New("administrator session generation must be positive")
+	}
 	return errors.Join(
+		generationError,
 		validateText("administrator account ID", summary.ID),
 		ValidateAdminUsername(summary.Username),
 		validateTime("administrator account creation time", summary.CreatedAt),

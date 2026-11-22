@@ -3,6 +3,8 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/imariman/iapstack/internal/auth"
 	"github.com/imariman/iapstack/internal/persistence"
 	platformprotection "github.com/imariman/iapstack/internal/platform/protection"
+	"github.com/imariman/iapstack/internal/protection"
 )
 
 // TestDashboardSessionExchangesBearerForSecureCookie verifies login, cookie-only reads, and explicit logout.
@@ -206,6 +209,15 @@ func TestDashboardSessionAutoRetiresBootstrapOnDurableAdminCreation(t *testing.T
 // newDashboardSessionTestAPI constructs dashboard authentication with deterministic protection keys.
 func newDashboardSessionTestAPI(t *testing.T) *API {
 	t.Helper()
+	return newDashboardSessionTestAPIWithProtection(t, nil)
+}
+
+// newDashboardSessionTestAPIWithProtection builds the same API with the session keyring wrapped by wrap.
+func newDashboardSessionTestAPIWithProtection(
+	t *testing.T,
+	wrap func(protection.Service) protection.Service,
+) *API {
+	t.Helper()
 	store := &keyLifecycleStore{
 		records: make(map[string]persistence.APIKeyRecord), revokedAt: make(map[string]time.Time),
 	}
@@ -225,13 +237,17 @@ func newDashboardSessionTestAPI(t *testing.T) *API {
 	if err != nil {
 		t.Fatalf("New() keyring error = %v", err)
 	}
-	sessions, err := auth.NewAdminSessions(store, keyring)
+	var sessionProtection protection.Service = keyring
+	if wrap != nil {
+		sessionProtection = wrap(keyring)
+	}
+	sessions, err := auth.NewAdminSessions(store, sessionProtection)
 	if err != nil {
 		t.Fatalf("NewAdminSessions() error = %v", err)
 	}
 	return &API{
 		admin: fakeAdminQueryStore{}, authentication: authentication, adminSessions: sessions,
-		bodyLimit: 1 << 20,
+		bodyLimit: 1 << 20, logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 

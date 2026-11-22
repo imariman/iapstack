@@ -77,7 +77,7 @@ func (users AdminUserRepository) PutAdminUser(_ context.Context, record persiste
 	return nil
 }
 
-// SetAdminUserPassword replaces one verifier and clears the failed sign-in state.
+// SetAdminUserPassword replaces one verifier, advances the session generation, and clears the failed sign-in state.
 func (users AdminUserRepository) SetAdminUserPassword(
 	_ context.Context,
 	write persistence.AdminUserPasswordWrite,
@@ -91,6 +91,7 @@ func (users AdminUserRepository) SetAdminUserPassword(
 	}
 	record.PasswordSalt, record.PasswordHash = write.PasswordSalt, write.PasswordHash
 	record.PasswordChangedAt = write.ChangedAt
+	record.SessionGeneration++
 	record.FailedAttempts, record.LockedUntil = 0, nil
 	users.Accounts[write.ID] = record
 	return record.AdminUserSummary, nil

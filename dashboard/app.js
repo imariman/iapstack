@@ -2957,10 +2957,13 @@ function countLabel(value, singular) {
   return `${formatNumber(value)} ${singular}${Number(value) === 1 ? "" : "s"}`;
 }
 
-// actorLabel names the audit actor: an administrator account or a stored key.
+// actorLabel names the audit actor: a stored key, or an administrator account recorded as
+// "account:<id>:<username>". The short id tells apart two accounts that used the same username.
 function actorLabel(actorID) {
   const value = String(actorID || "");
-  return value.startsWith("account:") ? `account ${value.slice("account:".length)}` : `key ${value}`;
+  if (!value.startsWith("account:")) return `key ${value}`;
+  const [accountID, ...username] = value.slice("account:".length).split(":");
+  return username.length ? `account ${username.join(":")} (${accountID.slice(0, 8)})` : `account ${accountID}`;
 }
 
 function node(tag, className = "", text = "") {

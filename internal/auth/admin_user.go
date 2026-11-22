@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/validation"
@@ -18,8 +19,8 @@ import (
 const (
 	// adminUserIDBytes controls the collision-resistant public account identity length.
 	adminUserIDBytes = 12
-	// minimumAdminPasswordBytes is the shortest accepted administrator password.
-	minimumAdminPasswordBytes = 12
+	// minimumAdminPasswordCharacters is the shortest accepted administrator password, in characters.
+	minimumAdminPasswordCharacters = 12
 	// maximumAdminPasswordBytes bounds the input of one memory-hard derivation.
 	maximumAdminPasswordBytes = 256
 	// adminSignInFailureThreshold is the consecutive failure count that locks an account.
@@ -120,7 +121,7 @@ func (service *Service) AuthenticatePassword(
 	}
 	record, err := service.adminUserByUsername(ctx, normalized)
 	if errors.Is(err, persistence.ErrNotFound) {
-		if _, deriveErr := service.derivePassword(ctx, password, unknownAdminUserSalt); deriveErr != nil {
+		if _, deriveErr := service.derivePassword(ctx, service.signInSlots, password, unknownAdminUserSalt); deriveErr != nil {
 			return Principal{}, deriveErr
 		}
 		return Principal{}, ErrUnauthorized
@@ -128,15 +129,20 @@ func (service *Service) AuthenticatePassword(
 	if err != nil {
 		return Principal{}, fmt.Errorf("load administrator account for sign-in: %w", err)
 	}
-	if err := service.verifyAdminUserPassword(ctx, record, password); err != nil {
+	if err := service.verifyAdminUserPassword(ctx, service.signInSlots, record, password); err != nil {
 		return Principal{}, err
 	}
-	return Principal{Role: persistence.APIKeyRoleAdmin, UserID: record.ID, Username: record.Username}, nil
+	// The generation is the one the verified password belongs to. If the password changed while it
+	// was being checked, the session minted from this principal is already out of date.
+	return Principal{
+		Role: persistence.APIKeyRoleAdmin, UserID: record.ID, Username: record.Username,
+		AccountGeneration: record.SessionGeneration,
+	}, nil
 }
 
 // ChangeAdminUserPassword replaces one account's password. With verifyCurrent set, the caller's
 // current password must match first; a wrong one returns ErrPasswordMismatch and counts toward the lock.
-// Sessions issued before the change stop authenticating.
+// The change moves the account to a new session generation, which ends its earlier sessions.
 func (service *Service) ChangeAdminUserPassword(
 	ctx context.Context,
 	id string,
@@ -160,7 +166,7 @@ func (service *Service) ChangeAdminUserPassword(
 		if currentPassword == "" || len(currentPassword) > maximumAdminPasswordBytes {
 			return persistence.AdminUserSummary{}, ErrPasswordMismatch
 		}
-		if err := service.verifyAdminUserPassword(ctx, record, currentPassword); err != nil {
+		if err := service.verifyAdminUserPassword(ctx, service.accountSlots, record, currentPassword); err != nil {
 			if errors.Is(err, ErrUnauthorized) {
 				return persistence.AdminUserSummary{}, ErrPasswordMismatch
 			}
@@ -249,11 +255,12 @@ func (service *Service) adminUserByUsername(
 	return record, err
 }
 
-// verifyAdminUserPassword checks one password against a loaded account under the lock policy.
-// It returns nil on a match, ErrUnauthorized on a mismatch, and *LockedError while the account is
-// locked or when this mismatch locks it.
+// verifyAdminUserPassword checks one password against a loaded account under the lock policy, deriving
+// in the given pool. It returns nil on a match, ErrUnauthorized on a mismatch, and *LockedError while
+// the account is locked or when this mismatch locks it.
 func (service *Service) verifyAdminUserPassword(
 	ctx context.Context,
+	slots chan struct{},
 	record persistence.AdminUserRecord,
 	password string,
 ) error {
@@ -261,7 +268,7 @@ func (service *Service) verifyAdminUserPassword(
 	if record.LockedUntil != nil && now.Before(*record.LockedUntil) {
 		return &LockedError{RetryAfter: record.LockedUntil.Sub(now)}
 	}
-	hash, err := service.derivePassword(ctx, password, record.PasswordSalt)
+	hash, err := service.derivePassword(ctx, slots, password, record.PasswordSalt)
 	if err != nil {
 		return err
 	}
@@ -314,6 +321,7 @@ func (service *Service) newAdminUserRecord(
 	return persistence.AdminUserRecord{
 		AdminUserSummary: persistence.AdminUserSummary{
 			ID: write.ID, Username: username, CreatedAt: write.ChangedAt, PasswordChangedAt: write.ChangedAt,
+			SessionGeneration: 1,
 		},
 		PasswordSalt: write.PasswordSalt, PasswordHash: write.PasswordHash,
 	}, nil
@@ -329,29 +337,36 @@ func (service *Service) newAdminPasswordWrite(
 	if _, err := rand.Read(salt[:]); err != nil {
 		return persistence.AdminUserPasswordWrite{}, fmt.Errorf("generate administrator password salt: %w", err)
 	}
-	hash, err := service.derivePassword(ctx, password, salt)
+	// Setting a password is an authenticated or operator action, so it derives in the account pool.
+	hash, err := service.derivePassword(ctx, service.accountSlots, password, salt)
 	if err != nil {
 		return persistence.AdminUserPasswordWrite{}, fmt.Errorf("derive administrator password verifier: %w", err)
 	}
-	// PostgreSQL keeps microseconds. Truncating here keeps the stored change time equal to the one
-	// returned to the caller, so a session minted right after the change is not older than it.
+	// PostgreSQL keeps microseconds. Truncating here keeps the returned times equal to the stored ones.
 	return persistence.AdminUserPasswordWrite{
 		ID: id, PasswordSalt: salt, PasswordHash: hash,
 		ChangedAt: service.clock().UTC().Truncate(time.Microsecond),
 	}, nil
 }
 
-// derivePassword runs the memory-hard derivation over a password in the password pool and wipes the copied bytes.
-func (service *Service) derivePassword(ctx context.Context, password string, salt [16]byte) ([32]byte, error) {
+// derivePassword runs the memory-hard derivation over a password in the given pool, waiting briefly
+// for a slot, and wipes the copied bytes.
+func (service *Service) derivePassword(
+	ctx context.Context,
+	slots chan struct{},
+	password string,
+	salt [16]byte,
+) ([32]byte, error) {
 	secret := []byte(password)
 	defer zero(secret)
-	return deriveInSlot(ctx, service.passwordSlots, secret, salt)
+	return deriveInSlot(ctx, slots, service.passwordSlotWait, secret, salt)
 }
 
 // validateAdminPassword enforces the administrator password length and rejects the username as a password.
+// The minimum counts characters, as the public contract promises; the maximum bounds the derivation input in bytes.
 func validateAdminPassword(username string, password string) error {
-	if len(password) < minimumAdminPasswordBytes {
-		return fmt.Errorf("administrator password must contain at least %d characters", minimumAdminPasswordBytes)
+	if utf8.RuneCountInString(password) < minimumAdminPasswordCharacters {
+		return fmt.Errorf("administrator password must contain at least %d characters", minimumAdminPasswordCharacters)
 	}
 	if len(password) > maximumAdminPasswordBytes {
 		return fmt.Errorf("administrator password must not exceed %d bytes", maximumAdminPasswordBytes)

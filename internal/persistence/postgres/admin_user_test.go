@@ -7,6 +7,7 @@ import (
 
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/persistence/postgres"
+	"github.com/imariman/iapstack/internal/validation"
 )
 
 // adminUserRecord creates one deterministic valid administrator account for repository tests.
@@ -18,6 +19,7 @@ func adminUserRecord(id string, username string, createdAt time.Time) persistenc
 	return persistence.AdminUserRecord{
 		AdminUserSummary: persistence.AdminUserSummary{
 			ID: id, Username: username, CreatedAt: createdAt, PasswordChangedAt: createdAt,
+			SessionGeneration: 1,
 		},
 		PasswordSalt: salt, PasswordHash: hash,
 	}
@@ -128,14 +130,16 @@ func TestAdminUserRepositoryStoresAccountsAndSignInFailures(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if !summary.PasswordChangedAt.Equal(changedAt) || summary.Username != "owner@example.com" {
-			t.Fatalf("SetAdminUserPassword() = %#v", summary)
+		if !summary.PasswordChangedAt.Equal(changedAt) || summary.Username != "owner@example.com" ||
+			summary.SessionGeneration != 2 {
+			t.Fatalf("SetAdminUserPassword() = %#v, want the second session generation", summary)
 		}
 		record, err := repository.AdminUser(database.ctx, "account-1")
 		if err != nil {
 			return err
 		}
-		if record.PasswordHash != hash || record.PasswordSalt != salt || record.FailedAttempts != 0 || record.LockedUntil != nil {
+		if record.PasswordHash != hash || record.PasswordSalt != salt || record.FailedAttempts != 0 ||
+			record.LockedUntil != nil || record.SessionGeneration != 2 {
 			t.Fatalf("AdminUser() after password change = %#v, want the new verifier and cleared failures", record)
 		}
 		return nil
@@ -180,6 +184,16 @@ func TestAdminUserAndKeyLifecyclePreserveOneAdministrator(t *testing.T) {
 	}
 	if err := deleteAccount("account-2"); !errors.Is(err, persistence.ErrNotFound) {
 		t.Fatalf("DeleteAdminUser() missing account error = %v, want ErrNotFound", err)
+	}
+	// A malformed id from a request path is the caller's error, not a server failure.
+	if err := deleteAccount(" account-1"); !errors.Is(err, validation.ErrInvalid) {
+		t.Fatalf("DeleteAdminUser() malformed id error = %v, want ErrInvalid", err)
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		_, err := repository.AdminUser(database.ctx, " account-1")
+		return err
+	}); !errors.Is(err, validation.ErrInvalid) {
+		t.Fatalf("AdminUser() malformed id error = %v, want ErrInvalid", err)
 	}
 	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
 		_, err := repository.RevokeAPIKey(database.ctx, "admin-key-1", time.Now().UTC())

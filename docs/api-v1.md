@@ -254,7 +254,9 @@ An observation whose provider evidence had no phase carries none, and
 
 Audit fields named `actor_key_id`, `revoked_by_key_id`, and `updated_by_key_id` hold the
 public id of the stored key that made the change. When the change came from a dashboard
-session opened with a username and password, they hold `account:<username>` instead.
+session opened with a username and password, they hold `account:<id>:<username>`
+instead. The id keeps the row tied to one account when a username is later reused, and
+the username keeps it readable after the account is deleted.
 
 A manual grant is an audited access source of kind `manual`. While it allows access, the
 public entitlement and the webhook report `reason` `manual_grant`; after revocation they report

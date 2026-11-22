@@ -32,8 +32,11 @@ const (
 	// Key ids are hexadecimal, so the prefix cannot collide with one.
 	accountActorPrefix = "account:"
 	// maxConcurrentPasswordDerivations caps the memory-hard work that unauthenticated password
-	// sign-in attempts can run at once. Administrator sign-ins are rare, so one slot is enough.
+	// sign-in attempts can run at once, and separately what account operations can run at once.
 	maxConcurrentPasswordDerivations = 1
+	// defaultPasswordSlotWait lets concurrent password derivations queue briefly instead of failing,
+	// so two administrators signing in at the same moment both succeed.
+	defaultPasswordSlotWait = 3 * time.Second
 	// argonTime controls Argon2id iterations.
 	argonTime uint32 = 2
 	// argonMemory controls Argon2id memory in KiB.
@@ -51,11 +54,14 @@ type Principal struct {
 	KeyID string
 	// UserID and Username identify the administrator account that signed in with a password.
 	// Both are empty for API keys and for the bootstrap administrator.
-	UserID        string
-	Username      string
-	Role          persistence.APIKeyRole
-	ProjectID     core.ProjectID
-	ApplicationID core.ApplicationID
+	UserID   string
+	Username string
+	// AccountGeneration is the account's session generation at the moment it authenticated. A
+	// dashboard session minted from this principal ends when the account moves to a later generation.
+	AccountGeneration int64
+	Role              persistence.APIKeyRole
+	ProjectID         core.ProjectID
+	ApplicationID     core.ApplicationID
 }
 
 // Service creates and verifies memory-hard API key records.
@@ -64,10 +70,15 @@ type Service struct {
 	bootstrapAdminHash [sha256.Size]byte
 	hasBootstrapAdmin  bool
 	derivationSlots    chan struct{}
-	// passwordSlots bounds password derivations apart from API key derivations. Password sign-in is
-	// reachable without a credential, so a flood of it must not take the slots that API keys need.
-	passwordSlots chan struct{}
-	clock         func() time.Time
+	// signInSlots bounds the password derivations that sign-in attempts run. Sign-in is reachable
+	// without a credential, so a flood of it must not take the slots that API keys need.
+	signInSlots chan struct{}
+	// accountSlots bounds the derivations of authenticated account operations (create, change, reset),
+	// so a sign-in flood cannot keep an administrator from managing accounts.
+	accountSlots chan struct{}
+	// passwordSlotWait is how long a password derivation waits for its slot before reporting ErrCapacity.
+	passwordSlotWait time.Duration
+	clock            func() time.Time
 }
 
 var (
@@ -91,7 +102,9 @@ func NewService(
 	}
 	service := &Service{
 		store: store, derivationSlots: make(chan struct{}, maxConcurrentDerivations),
-		passwordSlots: make(chan struct{}, maxConcurrentPasswordDerivations), clock: time.Now,
+		signInSlots:      make(chan struct{}, maxConcurrentPasswordDerivations),
+		accountSlots:     make(chan struct{}, maxConcurrentPasswordDerivations),
+		passwordSlotWait: defaultPasswordSlotWait, clock: time.Now,
 	}
 	if bootstrapAdminKey = strings.TrimSpace(bootstrapAdminKey); bootstrapAdminKey != "" {
 		if len(bootstrapAdminKey) < minimumBootstrapAdminKeyBytes {
@@ -251,9 +264,12 @@ func (principal Principal) Validate() error {
 		if (principal.UserID == "") != (principal.Username == "") {
 			return errors.New("admin principal must carry an administrator account ID together with its username")
 		}
+		if (principal.UserID == "") != (principal.AccountGeneration == 0) || principal.AccountGeneration < 0 {
+			return errors.New("admin principal must carry a positive session generation exactly when it is an account")
+		}
 		return nil
 	case persistence.APIKeyRoleApplication:
-		if principal.UserID != "" || principal.Username != "" {
+		if principal.UserID != "" || principal.Username != "" || principal.AccountGeneration != 0 {
 			return errors.New("application principal must not carry an administrator account")
 		}
 		return errors.Join(principal.ProjectID.Validate(), principal.ApplicationID.Validate())
@@ -297,31 +313,51 @@ func (service *Service) deriveVerifier(
 	secret []byte,
 	salt [16]byte,
 ) ([32]byte, error) {
-	return deriveInSlot(ctx, service.derivationSlots, secret, salt)
+	return deriveInSlot(ctx, service.derivationSlots, 0, secret, salt)
 }
 
-// deriveInSlot runs one derivation inside the given bounded pool and fails fast when the pool is full.
-func deriveInSlot(ctx context.Context, slots chan struct{}, secret []byte, salt [16]byte) ([32]byte, error) {
+// deriveInSlot runs one derivation inside the given bounded pool. It waits up to wait for a free slot
+// and reports ErrCapacity when none frees in time; a zero wait fails at once.
+func deriveInSlot(
+	ctx context.Context,
+	slots chan struct{},
+	wait time.Duration,
+	secret []byte,
+	salt [16]byte,
+) ([32]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return [32]byte{}, err
 	}
 	select {
 	case slots <- struct{}{}:
-		defer func() { <-slots }()
-		return derive(secret, salt), nil
 	default:
-		return [32]byte{}, ErrCapacity
+		if wait <= 0 {
+			return [32]byte{}, ErrCapacity
+		}
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case slots <- struct{}{}:
+		case <-timer.C:
+			return [32]byte{}, ErrCapacity
+		case <-ctx.Done():
+			return [32]byte{}, ctx.Err()
+		}
 	}
+	defer func() { <-slots }()
+	return derive(secret, salt), nil
 }
 
 // ActorID returns the durable identity recorded in audit rows: the stored key id, or
-// "account:<username>" for an administrator account. The bootstrap administrator has none.
+// "account:<id>:<username>" for an administrator account. The id keeps the row tied to one account
+// when a username is reused later, and the username keeps it readable after the account is deleted.
+// The bootstrap administrator has no actor identity.
 func (principal Principal) ActorID() string {
 	if principal.KeyID != "" {
 		return principal.KeyID
 	}
-	if principal.Username != "" {
-		return accountActorPrefix + principal.Username
+	if principal.UserID != "" && principal.Username != "" {
+		return accountActorPrefix + principal.UserID + ":" + principal.Username
 	}
 	return ""
 }
