@@ -76,6 +76,12 @@ type Handler struct {
 // actorContextKey stores the authenticated control-plane actor on the request context.
 type actorContextKey struct{}
 
+// noStoreWriter keeps every MCP response out of shared and browser caches, like the v1 JSON API.
+type noStoreWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
 // errorEnvelope is the JSON body of a rejected HTTP request, matching the v1 error envelope.
 type errorEnvelope struct {
 	Error errorBody `json:"error"`
@@ -147,7 +153,32 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	defer handler.limiter.release(actor.KeyID)
-	handler.streamable.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), actorContextKey{}, actor)))
+	handler.streamable.ServeHTTP(
+		&noStoreWriter{ResponseWriter: writer},
+		request.WithContext(context.WithValue(request.Context(), actorContextKey{}, actor)),
+	)
+}
+
+// WriteHeader forces Cache-Control: no-store over the SDK's own cache header before headers are sent.
+func (writer *noStoreWriter) WriteHeader(status int) {
+	if !writer.wroteHeader {
+		writer.wroteHeader = true
+		writer.Header().Set("Cache-Control", "no-store")
+	}
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+// Write sends an implicit 200 header with no-store before the first body bytes.
+func (writer *noStoreWriter) Write(body []byte) (int, error) {
+	if !writer.wroteHeader {
+		writer.WriteHeader(http.StatusOK)
+	}
+	return writer.ResponseWriter.Write(body)
+}
+
+// Unwrap exposes the underlying writer to http.ResponseController.
+func (writer *noStoreWriter) Unwrap() http.ResponseWriter {
+	return writer.ResponseWriter
 }
 
 // authenticate accepts stored agent and administrator API keys and nothing else.

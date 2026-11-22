@@ -219,8 +219,10 @@ func TestEndpointRejectsUnsupportedRequests(t *testing.T) {
 		t.Fatalf("same-origin Do() error = %v", err)
 	}
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "application/json" {
-		t.Fatalf("same-origin initialize = %d %q, want a plain JSON 200", response.StatusCode, response.Header.Get("Content-Type"))
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "application/json" ||
+		response.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("same-origin initialize = %d %q %q, want a plain JSON no-store 200", response.StatusCode,
+			response.Header.Get("Content-Type"), response.Header.Get("Cache-Control"))
 	}
 }
 
