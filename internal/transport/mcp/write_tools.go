@@ -25,6 +25,13 @@ type projectScopedInput interface {
 	loggedProjectID() string
 }
 
+// definitionInput is implemented by definition write inputs, so the call log names the definition a
+// successful write created or confirmed. Grants and aliases store their own audit rows and log no ids.
+type definitionInput interface {
+	// loggedDefinition returns the operator-chosen id of the definition the write names.
+	loggedDefinition() string
+}
+
 // createManualGrantInput asks for one audited grant for a relative duration or until an absolute end.
 type createManualGrantInput struct {
 	ProjectID      string `json:"project_id" jsonschema:"The project id. An agent key may only name its own project."`
@@ -216,6 +223,21 @@ func (input putStoreProductInput) loggedProjectID() string {
 // loggedProjectID returns the project the alias is written in.
 func (input putCustomerAliasInput) loggedProjectID() string {
 	return input.ProjectID
+}
+
+// loggedDefinition returns the entitlement id.
+func (input putEntitlementInput) loggedDefinition() string {
+	return input.EntitlementID
+}
+
+// loggedDefinition returns the product id.
+func (input putProductInput) loggedDefinition() string {
+	return input.ProductID
+}
+
+// loggedDefinition returns the application and the store product id it maps.
+func (input putStoreProductInput) loggedDefinition() string {
+	return input.ApplicationID + "/" + input.ProviderProductID
 }
 
 // writeAnnotations marks a closed-world write. Every write tool is idempotent: a repeated call with the same

@@ -591,6 +591,12 @@ func TestEveryToolReturnsSchemaValidRedactedOutput(t *testing.T) {
 		if write && (entry["project_id"] != "project-1" || entry["outcome"] != "ok") {
 			t.Fatalf("write log line %s, want project-1 and outcome ok", line)
 		}
+		wantDefinition, defines := map[string]string{
+			"put_entitlement": "entitlement-1", "put_product": "product-1", "put_store_product": "ios-app/premium_monthly",
+		}[entry["tool"].(string)]
+		if definition, named := entry["definition"]; named != defines || (defines && definition != wantDefinition) {
+			t.Fatalf("log line %s: definition = %v, want %q only on definition writes", line, definition, wantDefinition)
+		}
 	}
 }
 

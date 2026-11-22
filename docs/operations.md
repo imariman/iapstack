@@ -353,7 +353,8 @@ Limits:
 - One serialized tool result is capped at 256 KiB. Lists are paginated with `next_page_token`.
 - Each tool call writes one structured log line (`mcp tool call`) with the tool name,
   key id, role, channel, whether the tool writes, outcome code, and duration; a write
-  call also logs its `project_id`. Other arguments and results are never logged.
+  call also logs its `project_id`, and a successful definition write logs the
+  `definition` id. Other arguments and results are never logged.
 - Manual grants, revocations, and aliases written through MCP are stored with the agent
   key id and the channel `mcp`, and the customer detail shows it. Entitlement, product,
   and store product definitions have no stored audit row on any transport, so the log

@@ -151,8 +151,8 @@ authenticated the request and `api` for a bearer. The customer detail on `/v1` a
 **Definition writes are audited by log line only.** Entitlement, product, and store
 product definitions have no stored audit row on any transport, and this phase does not
 add one. An MCP definition write is recorded by the tool call's log line, which names
-the tool, key, role, channel, project, and outcome. The definition itself is
-create-once: a later write can only confirm it. A stored audit trail for definitions,
+the tool, key, role, channel, project, outcome, and, for a successful write, the
+definition id. The definition itself is create-once: a later write can only confirm it. A stored audit trail for definitions,
 if needed, is a separate decision.
 
 ## Consequences

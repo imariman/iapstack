@@ -321,7 +321,7 @@ func defineTool[In, Out any](
 		startedAt := time.Now()
 		actor, authenticated := actorFromContext(ctx)
 		outcome := outcomeOK
-		projectID := ""
+		projectID, definition := "", ""
 		defer func() {
 			attributes := []any{
 				"tool", name,
@@ -334,6 +334,11 @@ func defineTool[In, Out any](
 			// store no actor, such as definition writes. Reads log no arguments at all.
 			if write && projectID != "" {
 				attributes = append(attributes, "project_id", projectID)
+			}
+			// A definition has no stored actor, so this line is its only record of who created it. The
+			// id is logged only after the write succeeded, when it has passed identifier validation.
+			if definition != "" && outcome == outcomeOK {
+				attributes = append(attributes, "definition", definition)
 			}
 			attributes = append(attributes, "outcome", outcome, "duration_ms", time.Since(startedAt).Milliseconds())
 			logger.Info("mcp tool call", attributes...)
@@ -353,6 +358,9 @@ func defineTool[In, Out any](
 		}
 		if scoped, ok := any(input).(projectScopedInput); ok && write {
 			projectID = scoped.loggedProjectID()
+		}
+		if defined, ok := any(input).(definitionInput); ok && write {
+			definition = defined.loggedDefinition()
 		}
 		output, err := run(ctx, actor, input)
 		if err != nil {

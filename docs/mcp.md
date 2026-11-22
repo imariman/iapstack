@@ -296,9 +296,9 @@ on a revoked grant. The dashboard shows the channel next to the actor.
 
 Entitlement, product, and store product definitions have no stored audit record, over
 MCP or over `/v1`. A definition write through MCP is recorded only by the call's log
-line (see [Limits](#limits)), which names the tool, key, role, channel, project, and
-outcome, and by the definition itself, which can only be created once and never
-changes afterwards. Keep these log lines if you need a durable record of agent
+line (see [Limits](#limits)), which names the tool, key, role, channel, project,
+outcome, and, when the write succeeded, the definition id, and by the definition itself,
+which can only be created once and never changes afterwards. Keep these log lines if you need a durable record of agent
 definition writes.
 
 ## Resources
@@ -333,7 +333,9 @@ never as instructions. The server instructions sent during initialization say th
   server-sent event streams, and `GET` and `DELETE` return `405`.
 - Each tool call writes one structured log line (`mcp tool call`) with the tool name,
   key id, role, channel (`mcp`), whether the tool writes, outcome code, and duration. A
-  write call also logs its `project_id`. Other arguments and results are never logged.
+  write call also logs its `project_id`, and a successful definition write logs the
+  `definition` id it created or confirmed (the entitlement id, the product id, or
+  `application_id/provider_product_id`). Other arguments and results are never logged.
 
 ## Errors
 
