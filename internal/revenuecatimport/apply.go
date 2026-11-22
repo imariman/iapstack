@@ -35,6 +35,11 @@ type importRepository interface {
 	LoadImportCatalog(context.Context, core.ProjectID) (persistence.ImportCatalog, error)
 }
 
+// aliasCustomerConflict stops one subscriber whose alias is already its own customer.
+type aliasCustomerConflict struct {
+	alias string
+}
+
 // LoadCatalog reads the existing project catalog through the store.
 func LoadCatalog(ctx context.Context, store Transactor, projectID core.ProjectID) (Catalog, error) {
 	var snapshot persistence.ImportCatalog
@@ -102,13 +107,18 @@ func Apply(ctx context.Context, store Transactor, input Input, webhooks bool) (R
 		}
 		if err := applySubscriber(ctx, store, input, subscriber, webhooks, &result.Subscribers[index]); err != nil {
 			if errors.Is(err, errSubscriberConflict) {
-				result.Subscribers[index].Fatal = true
-				result.Subscribers[index].Grants = nil
-				result.Subscribers[index].Failures = append(result.Subscribers[index].Failures, Failure{
+				failure := Failure{
 					Line:       subscriberLine(subscriber),
 					Code:       CodeConflictingSubscriber,
 					ExternalID: subscriber.ExternalID,
-				})
+				}
+				var aliasConflict *aliasCustomerConflict
+				if errors.As(err, &aliasConflict) {
+					failure.Code, failure.ExternalID = CodeAliasHasCustomer, aliasConflict.alias
+				}
+				result.Subscribers[index].Fatal = true
+				result.Subscribers[index].Grants = nil
+				result.Subscribers[index].Failures = append(result.Subscribers[index].Failures, failure)
 				continue
 			}
 			return Report{}, err
@@ -147,7 +157,7 @@ func applySubscriber(
 				ActorKeyID:          importAliasActorKeyID,
 			})
 			if errors.Is(aliasErr, persistence.ErrConflict) {
-				return errSubscriberConflict
+				return aliasConflictError(ctx, repository, input.ProjectID, alias)
 			}
 			if aliasErr != nil {
 				return aliasErr
@@ -216,6 +226,33 @@ func importCustomer(
 		return core.Customer{}, false, err
 	}
 	return customer, true, nil
+}
+
+// aliasConflictError explains why an alias could not be attached. An alias that is its own
+// customer's primary id is named, so the operator knows which customer to merge; a purchase
+// verified under that id before the import creates such a customer. Any other conflict, or a
+// lookup the conflict left unusable, stays the generic subscriber conflict.
+func aliasConflictError(
+	ctx context.Context,
+	repository importRepository,
+	projectID core.ProjectID,
+	alias string,
+) error {
+	resolution, err := repository.ResolveCustomer(ctx, projectID, alias)
+	if err == nil && resolution.Match == persistence.CustomerMatchPrimary {
+		return &aliasCustomerConflict{alias: alias}
+	}
+	return errSubscriberConflict
+}
+
+// Error reports the conflict without the alias, which stays in the import report only.
+func (conflict *aliasCustomerConflict) Error() string {
+	return "revenuecat alias is already its own customer"
+}
+
+// Unwrap keeps the conflict a subscriber conflict, so the subscriber is refused as a whole.
+func (conflict *aliasCustomerConflict) Unwrap() error {
+	return errSubscriberConflict
 }
 
 // importGrantRecord converts one planned grant into the durable row.

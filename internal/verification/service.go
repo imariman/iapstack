@@ -3,6 +3,7 @@ package verification
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -44,6 +45,9 @@ const (
 	entitlementEventSchemaVersionManual = 3
 	// outboxIDPrefix distinguishes deterministic outbox identities from other records.
 	outboxIDPrefix = "outbox-"
+
+	// createdCustomerIDPrefix marks the internal id of a customer a first purchase created.
+	createdCustomerIDPrefix = "cust-"
 )
 
 // AdapterRegistry resolves the concrete adapter registered for a provider.
@@ -56,6 +60,13 @@ type AdapterRegistry interface {
 type Clock interface {
 	// Now returns the current trusted time.
 	Now() time.Time
+}
+
+// customerCreator is the transaction capability that creates the customer a first purchase
+// belongs to. Only purchase verification needs it, so it stays out of persistence.Transaction.
+type customerCreator interface {
+	// PutCustomer creates one external customer identity or returns its existing record.
+	PutCustomer(context.Context, core.Customer) (core.Customer, error)
 }
 
 // Command describes one application and customer scoped purchase submission.
@@ -182,7 +193,7 @@ func (service *Service) Verify(ctx context.Context, command Command) (Result, er
 		return Result{}, errors.New("verification clock returned zero time")
 	}
 
-	application, customer, err := service.loadScope(ctx, command)
+	application, customer, newCustomer, err := service.loadScope(ctx, command, true)
 	if err != nil {
 		return Result{}, err
 	}
@@ -227,7 +238,7 @@ func (service *Service) Verify(ctx context.Context, command Command) (Result, er
 	if err != nil {
 		return Result{}, err
 	}
-	result, err := service.persist(ctx, command, application, customer, providerResult, prepared)
+	result, err := service.persist(ctx, command, application, customer, newCustomer, providerResult, prepared)
 	if err != nil {
 		return Result{}, err
 	}
@@ -257,7 +268,7 @@ func (service *Service) Reconcile(ctx context.Context, command ReconciliationCom
 		ExpectedCustomerBindings: append([]core.StoreReference(nil), command.ExpectedCustomerBindings...),
 		Evidence:                 command.Signal,
 	}
-	application, customer, err := service.loadScope(ctx, base)
+	application, customer, _, err := service.loadScope(ctx, base, false)
 	if err != nil {
 		return Result{}, err
 	}
@@ -309,7 +320,7 @@ func (service *Service) Reconcile(ctx context.Context, command ReconciliationCom
 	if err != nil {
 		return Result{}, err
 	}
-	result, err := service.persist(ctx, base, application, customer, providerResult, prepared)
+	result, err := service.persist(ctx, base, application, customer, false, providerResult, prepared)
 	if err != nil {
 		return Result{}, err
 	}
@@ -437,19 +448,31 @@ func (command ReconciliationCommand) Validate() error {
 }
 
 // loadScope resolves the authoritative application and customer before a provider call.
+//
+// With allowNewCustomer, an external id that is neither a customer nor an alias does not fail:
+// loadScope returns a customer with a fresh internal id and reports it as new, and persist
+// creates that customer in the transaction that stores the purchase. Nothing is written here,
+// so a request that fails before persist commits leaves no customer behind.
 func (service *Service) loadScope(
 	ctx context.Context,
 	command Command,
-) (core.Application, core.Customer, error) {
+	allowNewCustomer bool,
+) (core.Application, core.Customer, bool, error) {
 	var application core.Application
 	var customer core.Customer
+	var newCustomer bool
 	err := service.store.Transact(ctx, func(repository persistence.Transaction) error {
+		newCustomer = false
 		var err error
 		application, err = repository.Application(ctx, command.ProjectID, command.ApplicationID)
 		if err != nil {
 			return err
 		}
 		customer, err = repository.CustomerByExternalID(ctx, command.ProjectID, command.ExternalCustomerID)
+		if allowNewCustomer && errors.Is(err, persistence.ErrNotFound) {
+			customer = core.Customer{ProjectID: command.ProjectID, ExternalID: command.ExternalCustomerID}
+			newCustomer, err = true, nil
+		}
 		if err != nil {
 			return err
 		}
@@ -464,9 +487,15 @@ func (service *Service) loadScope(
 		return err
 	})
 	if err != nil {
-		return core.Application{}, core.Customer{}, fmt.Errorf("resolve verification scope: %w", err)
+		return core.Application{}, core.Customer{}, false, fmt.Errorf("resolve verification scope: %w", err)
 	}
-	return application, customer, nil
+	if newCustomer {
+		customer.ID, err = newCustomerID()
+		if err != nil {
+			return core.Application{}, core.Customer{}, false, err
+		}
+	}
+	return application, customer, newCustomer, nil
 }
 
 // prepare protects submitted evidence, verified artifacts, and provider references.
@@ -586,12 +615,41 @@ func zeroBytes(value []byte) {
 	}
 }
 
+// newCustomerID generates the internal id of a customer a first purchase creates.
+func newCustomerID() (core.CustomerID, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate customer ID: %w", err)
+	}
+	return core.CustomerID(createdCustomerIDPrefix + hex.EncodeToString(raw[:])), nil
+}
+
+// createCustomer stores the customer a first purchase belongs to. PutCustomer returns the
+// existing row when a concurrent purchase created it first, and refuses an external id that
+// became an alias meanwhile; the caller's next resolution then finds the alias owner.
+func createCustomer(ctx context.Context, repository persistence.Transaction, customer core.Customer) error {
+	creator, ok := repository.(customerCreator)
+	if !ok {
+		return errors.New("customer creation is unavailable in this transaction")
+	}
+	_, err := creator.PutCustomer(ctx, customer)
+	if errors.Is(err, persistence.ErrConflict) {
+		return nil
+	}
+	return err
+}
+
 // persist validates current scope and atomically stores one complete verification result.
+//
+// A newCustomer from loadScope is created here, in the transaction that stores the purchase.
+// When another request created that customer, or attached the external id as an alias, since
+// loadScope, the purchase belongs to whichever customer the external id resolves to now.
 func (service *Service) persist(
 	ctx context.Context,
 	command Command,
 	application core.Application,
 	customer core.Customer,
+	newCustomer bool,
 	providerResult stores.VerificationResult,
 	prepared preparedVerification,
 ) (Result, error) {
@@ -601,6 +659,12 @@ func (service *Service) persist(
 	}
 	err := service.store.Transact(ctx, func(repository persistence.Transaction) error {
 		resolution, err := repository.ResolveCustomer(ctx, command.ProjectID, command.ExternalCustomerID)
+		if newCustomer && errors.Is(err, persistence.ErrNotFound) {
+			if err := createCustomer(ctx, repository, customer); err != nil {
+				return err
+			}
+			resolution, err = repository.ResolveCustomer(ctx, command.ProjectID, command.ExternalCustomerID)
+		}
 		if err != nil {
 			if errors.Is(err, persistence.ErrNotFound) {
 				return fmt.Errorf("verification scope changed: %w", persistence.ErrConflict)
@@ -627,7 +691,7 @@ func (service *Service) persist(
 		if currentApplication != application || currentCustomer.ID != resolution.CanonicalCustomerID {
 			return fmt.Errorf("verification scope changed: %w", persistence.ErrConflict)
 		}
-		if currentCustomer.ID != customer.ID {
+		if !newCustomer && currentCustomer.ID != customer.ID {
 			inClosure, closureErr := repository.CustomerInClosure(
 				ctx,
 				command.ProjectID,

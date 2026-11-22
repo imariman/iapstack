@@ -316,7 +316,8 @@ Failures are `{line, code, external_id, entitlement_key}`. `external_id` is the 
 | `missing_app_user_id` | Envelope or canonical column empty | None |
 | `invalid_external_id` | Fails `ValidateExternalCustomerID` | None |
 | `alias_refused` | Alias id not stored. Canonical grants still proceed unless the next row applies | Alias only |
-| `conflicting_subscriber` | Alias id is already another customer, or two canonical ids claim one alias | None |
+| `conflicting_subscriber` | Alias id is already another customer's alias, or two canonical ids claim one alias | None |
+| `alias_has_customer` | Alias id is already its own customer, usually because a purchase under it was stored before the import. `external_id` names the alias: merge its customer into the subscriber's, then import again | None |
 | `unknown_entitlement` | RevenueCat entitlement id is not in the mapping | None |
 | `unknown_product` | No mapping, or the mapped product or store-product row is absent | None |
 | `entitlement_not_granted` | Mapped product does not grant the mapped entitlement | None |

@@ -67,7 +67,6 @@ type API struct {
 	credentials       *credentials.Service
 	webhooks          *webhooks.Service
 	verification      purchaseVerifier
-	customers         customerProvisioner
 	scheduler         reconciliationScheduler
 	huawei            *huawei.Adapter
 	apple             *apple.Adapter
@@ -248,8 +247,7 @@ func New(dependencies Dependencies) (*API, error) {
 		customerSessions: dependencies.CustomerSessions,
 		credentials:      dependencies.Credentials,
 		webhooks:         dependencies.Webhooks, verification: dependencies.Verification,
-		customers: operationsCustomerProvisioner{operations: dependencies.Operations},
-		huawei:    dependencies.Huawei, apple: dependencies.Apple, googlePlay: dependencies.GooglePlay,
+		huawei: dependencies.Huawei, apple: dependencies.Apple, googlePlay: dependencies.GooglePlay,
 		protection: dependencies.Protection, financialReports: dependencies.FinancialReports,
 		metrics:           dependencies.Metrics,
 		bodyLimit:         dependencies.BodyLimit,
@@ -482,6 +480,11 @@ func (api *API) putCustomer(writer http.ResponseWriter, request *http.Request) {
 	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
 		var putErr error
 		stored, putErr = repository.PutCustomer(request.Context(), customer)
+		if putErr == nil && stored.ID != customer.ID {
+			// The external id already belongs to another customer, for example one its first
+			// purchase created. A PUT never moves an external id, so it must not report success.
+			putErr = fmt.Errorf("put customer %q: %w", customer.ID, persistence.ErrConflict)
+		}
 		return putErr
 	})
 	if err != nil {
@@ -911,11 +914,6 @@ func (api *API) verify(
 	evidence, bindings, err := input.VerificationInputs(application.Store.Provider)
 	if err != nil {
 		return verification.Result{}, validation.Wrap(err)
-	}
-	// A purchase is the first state IAPStack keeps for a customer, so the first verification
-	// of an external id that is neither a customer nor an alias creates that customer.
-	if err := api.customers.EnsureCustomer(ctx, principal.ProjectID, input.ExternalCustomerID); err != nil {
-		return verification.Result{}, err
 	}
 	result, err := api.verification.Verify(ctx, verification.Command{
 		ProjectID: principal.ProjectID, ApplicationID: principal.ApplicationID,

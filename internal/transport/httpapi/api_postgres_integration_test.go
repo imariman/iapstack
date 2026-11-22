@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -83,7 +84,9 @@ type apiIntegrationClock struct {
 
 // apiIntegrationAdapter records verification requests and returns one deterministic Google Play result.
 type apiIntegrationAdapter struct {
+	mu             sync.Mutex
 	result         stores.VerificationResult
+	verifyErr      error
 	verifyRequests []stores.VerificationRequest
 	reconcileCalls int
 }
@@ -363,7 +366,12 @@ func (adapter *apiIntegrationAdapter) Verify(
 ) (stores.VerificationResult, error) {
 	request.ClaimedProducts = append([]core.ProviderProductID(nil), request.ClaimedProducts...)
 	request.ExpectedCustomerBindings = append([]core.StoreReference(nil), request.ExpectedCustomerBindings...)
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
 	adapter.verifyRequests = append(adapter.verifyRequests, request)
+	if adapter.verifyErr != nil {
+		return stores.VerificationResult{}, adapter.verifyErr
+	}
 	return adapter.result, nil
 }
 

@@ -2,8 +2,6 @@
 package core
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"unicode"
@@ -22,13 +20,6 @@ type ProviderProductID string
 // ValidateExternalCustomerID checks one application-owned customer identity.
 func ValidateExternalCustomerID(value string) error {
 	return validateIdentifier("external customer ID", value)
-}
-
-// DerivedCustomerID returns the stable internal id IAPStack gives a customer it creates for
-// one external id, so every path that creates that customer agrees on the same row.
-func DerivedCustomerID(projectID ProjectID, externalID string) CustomerID {
-	sum := sha256.Sum256([]byte(string(projectID) + "\x00" + externalID))
-	return CustomerID("cust-" + hex.EncodeToString(sum[:16]))
 }
 
 // ValidateOpaqueIdentifier checks one non-domain identity with the shared identifier rules.

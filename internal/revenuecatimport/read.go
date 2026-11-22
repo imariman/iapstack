@@ -47,7 +47,8 @@ func ReadExport(reader io.Reader) ([]byte, [32]byte, error) {
 
 // CustomerID derives the stable internal customer id for one canonical external id.
 func CustomerID(projectID core.ProjectID, externalID string) core.CustomerID {
-	return core.DerivedCustomerID(projectID, externalID)
+	sum := sha256.Sum256([]byte(string(projectID) + "\x00" + externalID))
+	return core.CustomerID("cust-" + hex.EncodeToString(sum[:16]))
 }
 
 // GrantID derives the stable import grant id from the lineage and mapped catalog ids.
