@@ -262,12 +262,10 @@ func newMCPHandler(
 	if !cfg.MCPEnabled {
 		return nil, nil
 	}
-	controlPlane := controlplane.New(controlplane.Dependencies{
-		Store: store, Admin: store, Setup: store, FinancialReports: financialReportService,
-		Protection: keyring, PublicURL: cfg.PublicURL,
-	})
 	handler, err := mcp.NewHandler(mcp.Options{
-		Authentication: authentication, ControlPlane: controlPlane, BodyLimit: cfg.HTTPBodyLimit,
+		Authentication:              authentication,
+		ControlPlane:                controlplane.New(mcpControlPlaneDependencies(cfg, store, keyring, financialReportService)),
+		BodyLimit:                   cfg.HTTPBodyLimit,
 		MaxConcurrentRequestsPerKey: cfg.MCPMaxConcurrentRequestsPerKey,
 		Version:                     buildinfo.Current().Version, Logger: logger,
 	})
@@ -276,6 +274,29 @@ func newMCPHandler(
 	}
 	logger.Info("mcp endpoint enabled", "path", mcp.Path)
 	return handler, nil
+}
+
+// mcpControlPlaneDependencies assigns each dependency only when it is present. A nil pointer stored in an
+// interface field is a non-nil interface, which would pass the control plane's nil checks and panic on use.
+func mcpControlPlaneDependencies(
+	cfg config.Config,
+	store *postgres.Store,
+	keyring *platformprotection.Keyring,
+	financialReportService *financialreports.Service,
+) controlplane.Dependencies {
+	dependencies := controlplane.Dependencies{PublicURL: cfg.PublicURL}
+	if store != nil {
+		dependencies.Store = store
+		dependencies.Admin = store
+		dependencies.Setup = store
+	}
+	if keyring != nil {
+		dependencies.Protection = keyring
+	}
+	if financialReportService != nil {
+		dependencies.FinancialReports = financialReportService
+	}
+	return dependencies
 }
 
 // runWorker composes durable provider, consumption, and webhook handlers under the worker lifecycle.
