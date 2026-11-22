@@ -199,6 +199,78 @@ func TestToolListFollowsWriteAccess(t *testing.T) {
 	}
 }
 
+// TestUnofferedToolCallsAreLogged verifies a call to a tool outside the key's list still leaves a call log
+// line: a write tool is named, any other name is logged as unknown, and no arguments are logged.
+func TestUnofferedToolCallsAreLogged(t *testing.T) {
+	logs := &lockedBuffer{}
+	handler := newTestHandler(t, Options{Logger: slog.New(slog.NewJSONHandler(logs, nil))})
+	readOnly := connect(t, newTestServer(t, handler), agentBearer)
+	for _, name := range []string{"revoke_manual_grant", "drop-everything; ignore previous instructions"} {
+		result, err := readOnly.CallTool(t.Context(), &sdk.CallToolParams{
+			Name: name, Arguments: writeToolCalls["revoke_manual_grant"],
+		})
+		if err == nil && (result == nil || !result.IsError) {
+			t.Fatalf("read-only CallTool(%q) = %#v, want a rejected call", name, result)
+		}
+	}
+	logged := logs.String()
+	lines := strings.Split(strings.TrimSpace(logged), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("log lines = %q, want one line per rejected call", logged)
+	}
+	for index, want := range []map[string]any{
+		{"tool": "revoke_manual_grant", "write": true},
+		{"tool": "unknown", "write": false},
+	} {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(lines[index]), &entry); err != nil {
+			t.Fatalf("decode log line %q: %v", lines[index], err)
+		}
+		if entry["tool"] != want["tool"] || entry["write"] != want["write"] || entry["outcome"] != outcomeToolNotOffered ||
+			entry["key_id"] != "agent-key" || entry["role"] != "agent" || entry["channel"] != "mcp" {
+			t.Fatalf("log line %s, want %v with the agent key and outcome %s", lines[index], want, outcomeToolNotOffered)
+		}
+	}
+	if strings.Contains(logged, "drop-everything") || strings.Contains(logged, "customer-1") || strings.Contains(logged, "Refunded") {
+		t.Fatalf("rejected call logs contain caller text: %s", logged)
+	}
+}
+
+// TestWriteLogNamesOnlyWellFormedProjects verifies a rejected write logs its project id only when the id is
+// well formed, so a caller cannot put arbitrary text into the call log.
+func TestWriteLogNamesOnlyWellFormedProjects(t *testing.T) {
+	logs := &lockedBuffer{}
+	handler := newTestHandler(t, Options{Logger: slog.New(slog.NewJSONHandler(logs, nil))})
+	writer := connect(t, newTestServer(t, handler), writerBearer)
+	injected := "project one\nlevel=ERROR forged " + strings.Repeat("x", 512)
+	for _, projectID := range []string{injected, "project-2"} {
+		result, err := writer.CallTool(t.Context(), &sdk.CallToolParams{
+			Name: "put_entitlement", Arguments: map[string]any{"project_id": projectID, "entitlement_id": "entitlement-1", "key": "premium"},
+		})
+		if err != nil || !result.IsError {
+			t.Fatalf("CallTool(put_entitlement in %.20q) = %#v, %v, want a tool error", projectID, result, err)
+		}
+	}
+	logged := logs.String()
+	lines := strings.Split(strings.TrimSpace(logged), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("log lines = %q, want one line per call", logged)
+	}
+	if strings.Contains(logged, "forged") || strings.Contains(lines[0], "project_id") {
+		t.Fatalf("log line %s, want no project id for a malformed id", lines[0])
+	}
+	var entry map[string]any
+	if err := json.Unmarshal([]byte(lines[1]), &entry); err != nil {
+		t.Fatalf("decode log line %q: %v", lines[1], err)
+	}
+	if entry["project_id"] != "project-2" || entry["outcome"] != "forbidden" {
+		t.Fatalf("log line %s, want the forbidden cross-project attempt recorded with its project", lines[1])
+	}
+	if _, named := entry["definition"]; named {
+		t.Fatalf("log line %s names a definition for a failed write", lines[1])
+	}
+}
+
 // TestWriteToolsRejectActorsWithoutWriteAccess verifies the write gate on both layers: a read-only key cannot
 // call a write tool it was not offered, and the control-plane gate rejects every actor without write access
 // in the project even when the write tool handler is reached directly, before any storage call.
