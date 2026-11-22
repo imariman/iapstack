@@ -127,6 +127,9 @@ type huaweiText string
 type tokenResponse struct {
 	AccessToken string `json:"access_token"`
 	ExpiresIn   int64  `json:"expires_in"`
+	// TokenType is "Bearer" in every Huawei OAuth answer. It is declared so the strict
+	// decoder accepts a real response; the app access token is always sent as APPAT.
+	TokenType string `json:"token_type"`
 }
 
 // signedData pairs authoritative Huawei JSON with its detached signature and algorithm.

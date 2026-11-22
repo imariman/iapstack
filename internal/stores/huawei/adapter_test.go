@@ -75,7 +75,7 @@ func TestAdapterVerifiesAuthoritativeLifetimePurchase(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/token":
-			writeFixtureJSON(writer, map[string]any{"access_token": "provider-access", "expires_in": 300})
+			writeFixtureJSON(writer, map[string]any{"access_token": "provider-access", "expires_in": 300, "token_type": "Bearer"})
 		case "/order":
 			if request.Header.Get("Authorization") != appAccessTokenAuthorization("provider-access") {
 				writer.WriteHeader(http.StatusUnauthorized)
@@ -246,7 +246,7 @@ func TestAdapterKeepsAuthoritativePriceAfterChange(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/token":
-			writeFixtureJSON(writer, map[string]any{"access_token": "provider-access", "expires_in": 300})
+			writeFixtureJSON(writer, map[string]any{"access_token": "provider-access", "expires_in": 300, "token_type": "Bearer"})
 		case "/order":
 			if request.Header.Get("Authorization") != appAccessTokenAuthorization("provider-access") {
 				writer.WriteHeader(http.StatusUnauthorized)
@@ -790,7 +790,7 @@ func TestAdapterVerifiesDeviceSignatureAlgorithm(t *testing.T) {
 			adapter := newHuaweiAdapter(t, privateKey, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				providerCalls.Add(1)
 				if request.URL.Path == "/token" {
-					writeFixtureJSON(writer, map[string]any{"access_token": "provider-access", "expires_in": 300})
+					writeFixtureJSON(writer, map[string]any{"access_token": "provider-access", "expires_in": 300, "token_type": "Bearer"})
 					return
 				}
 				if request.URL.Path != "/order" {
@@ -859,7 +859,7 @@ func TestAdapterCachesTokenAcrossConcurrentVerify(t *testing.T) {
 		case "/token":
 			tokenRequests.Add(1)
 			time.Sleep(150 * time.Millisecond)
-			writeFixtureJSON(writer, map[string]any{"access_token": "provider-access", "expires_in": 300})
+			writeFixtureJSON(writer, map[string]any{"access_token": "provider-access", "expires_in": 300, "token_type": "Bearer"})
 		case "/order":
 			if request.Header.Get("Authorization") != appAccessTokenAuthorization("provider-access") {
 				writer.WriteHeader(http.StatusUnauthorized)
@@ -949,7 +949,7 @@ func TestAdapterIsolatesCachedTokensByClientSecret(t *testing.T) {
 			if request.PostForm.Get("client_secret") == secretB {
 				accessToken = tokenB
 			}
-			writeFixtureJSON(writer, map[string]any{"access_token": accessToken, "expires_in": 300})
+			writeFixtureJSON(writer, map[string]any{"access_token": accessToken, "expires_in": 300, "token_type": "Bearer"})
 		case "/order":
 			authorizationMu.Lock()
 			authorizations = append(authorizations, request.Header.Get("Authorization"))
@@ -1042,7 +1042,7 @@ func TestAdapterRetriesPurchaseOnceAfterUnauthorized(t *testing.T) {
 				if tokenRequests.Add(1) > 1 {
 					token = "fresh-token"
 				}
-				writeFixtureJSON(writer, map[string]any{"access_token": token, "expires_in": 300})
+				writeFixtureJSON(writer, map[string]any{"access_token": token, "expires_in": 300, "token_type": "Bearer"})
 			case "/order":
 				attempt := orderRequests.Add(1)
 				want := appAccessTokenAuthorization("stale-token")
@@ -1079,7 +1079,7 @@ func TestAdapterRetriesPurchaseOnceAfterUnauthorized(t *testing.T) {
 			switch httpRequest.URL.Path {
 			case "/token":
 				tokenRequests.Add(1)
-				writeFixtureJSON(writer, map[string]any{"access_token": "rejected-token", "expires_in": 300})
+				writeFixtureJSON(writer, map[string]any{"access_token": "rejected-token", "expires_in": 300, "token_type": "Bearer"})
 			case "/order":
 				orderRequests.Add(1)
 				writer.WriteHeader(http.StatusUnauthorized)
@@ -1238,7 +1238,7 @@ func huaweiTokenAnd(path string, handle http.HandlerFunc) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/token":
-			writeFixtureJSON(writer, map[string]any{"access_token": "provider-access", "expires_in": 300})
+			writeFixtureJSON(writer, map[string]any{"access_token": "provider-access", "expires_in": 300, "token_type": "Bearer"})
 		case path:
 			if request.Header.Get("Authorization") != appAccessTokenAuthorization("provider-access") {
 				writer.WriteHeader(http.StatusUnauthorized)
