@@ -627,6 +627,7 @@ func newVerifyScheduleAPI(t *testing.T, verifyErr, protectErr, saveErr error) (
 		store:        store,
 		operations:   operations,
 		verification: verifier,
+		customers:    &recordingCustomerProvisioner{},
 		scheduler:    scheduler,
 		protection:   protector,
 		metrics:      metrics.New(),

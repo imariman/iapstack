@@ -43,7 +43,7 @@ a restart. Clearing the bootstrap secret from the runtime afterwards is optional
 ## Bootstrap sequence
 
 1. Use `IAPSTACK_BOOTSTRAP_ADMIN_KEY` to create a stored admin key with `POST /v1/admin/api-keys` and `{"role":"admin"}`. The bootstrap key stops working at that moment, so use the returned stored admin key for every later step.
-2. Create the project, provider application, entitlement, product, provider-product mapping, and customer using the idempotent `/v1/admin/projects/...` PUT endpoints.
+2. Create the project, provider application, entitlement, product, and provider-product mapping using the idempotent `/v1/admin/projects/...` PUT endpoints. Customers need no step here: the first verified purchase creates one (see [Application operations](#application-operations)). Create a customer with `PUT /v1/admin/projects/{project_id}/customers/{customer_id}` only to choose its internal id or to attach aliases before its first purchase.
 3. Store the provider's versioned credential package and an HTTPS webhook configuration.
 4. Create an application key with `{"role":"application","project_id":"...","application_id":"..."}`.
 5. Keep that application key in the trusted host backend. After authenticating a
@@ -246,6 +246,15 @@ Only the trusted host backend calls the first endpoint, using its durable applic
 bearer after authenticating the user. The remaining endpoints require the returned
 customer session and reject requests whose application or external customer ID does
 not exactly match the authenticated session.
+
+Minting a session does not create a customer, so a host can mint one before it attaches
+an alias. Until the external id has a customer, the entitlement GET returns `404
+not_found`. The first `purchases:verify` or `purchases:restore` item for an external id
+that is neither a customer nor an alias creates the customer, with internal id
+`cust-` followed by the first 16 bytes of SHA-256 over the project id, a zero byte, and
+the external id, in hex. The customer is created before the provider is queried, so it
+remains when that purchase then fails verification. After that, attaching the external
+id as another customer's alias returns `409`; merge the customers instead.
 
 Restore processes items sequentially under a 25-second server budget. If that budget
 expires, the API returns retryable `503 request_timeout`; already completed items remain
