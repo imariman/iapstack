@@ -19,7 +19,8 @@ ALTER TABLE api_keys ADD CONSTRAINT api_keys_allow_writes_valid CHECK (NOT allow
 ALTER TABLE api_keys ADD CONSTRAINT api_keys_project_fk FOREIGN KEY (project_id)
     REFERENCES projects (id) ON DELETE CASCADE;
 
-CREATE INDEX api_keys_project_idx ON api_keys (project_id) WHERE revoked_at IS NULL;
+-- Not partial: the cascading foreign key above deletes by project_id across revoked keys too.
+CREATE INDEX api_keys_project_idx ON api_keys (project_id);
 
 ---- create above / drop below ----
 
