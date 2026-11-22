@@ -23,7 +23,7 @@ func TestManualGrantReplayPeriodMergeAndEndedRevocation(t *testing.T) {
 		ProjectID: projectID, CustomerID: core.CustomerID(fixture.customerID),
 		ApplicationID: core.ApplicationID(fixture.applicationID), ProductID: core.ProductID(fixture.productID),
 		EntitlementID: core.EntitlementID(fixture.entitlementID), Reason: "Goodwill", ActorKeyID: "admin-key",
-		IdempotencyKey: "grant-period", StartsAt: now, EndsAt: now.AddDate(0, 0, 30),
+		ActorChannel: persistence.ActorChannelAPI, IdempotencyKey: "grant-period", StartsAt: now, EndsAt: now.AddDate(0, 0, 30),
 	}
 	create := func(write persistence.ManualGrantWrite) (persistence.ManualGrantResult, error) {
 		var result persistence.ManualGrantResult
@@ -73,7 +73,7 @@ func TestManualGrantReplayPeriodMergeAndEndedRevocation(t *testing.T) {
 	err = store.Transact(database.ctx, func(repository persistence.Transaction) error {
 		_, revokeErr := repository.RevokeManualGrant(database.ctx, persistence.ManualGrantRevocation{
 			ProjectID: projectID, CustomerID: "customer-target", GrantID: endedGrant.Grant.ID,
-			Reason: "Too late", ActorKeyID: "admin-key", RevokedAt: now,
+			Reason: "Too late", ActorKeyID: "admin-key", ActorChannel: persistence.ActorChannelAPI, RevokedAt: now,
 		})
 		return revokeErr
 	})

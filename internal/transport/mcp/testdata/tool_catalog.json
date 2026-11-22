@@ -1,6 +1,178 @@
 {
-  "catalog_version": "1",
+  "catalog_version": "2",
   "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Grants one entitlement to a customer for a duration or until an end time, citing a product mapped to the application, and records the reason and the acting key in the audit trail. The customer's entitlements are recomputed and the application's webhook is notified. Use get_customer first to see grant_options. Requires a key with write access.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "application_id": {
+            "description": "The application whose webhook receives the entitlement change.",
+            "type": "string"
+          },
+          "customer_id": {
+            "description": "The internal customer id. A merged customer's grant is stored on its canonical customer.",
+            "type": "string"
+          },
+          "duration_days": {
+            "description": "Grant length in days from now, from 1 to 3660. Give either duration_days or ends_at.",
+            "maximum": 3660,
+            "minimum": 1,
+            "type": [
+              "null",
+              "integer"
+            ]
+          },
+          "ends_at": {
+            "description": "Absolute RFC 3339 end time in the future, at most 3660 days ahead. Give either duration_days or ends_at.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "entitlement_id": {
+            "description": "The entitlement to grant. The product must grant it; get_customer lists valid pairs in grant_options.",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "description": "A key unique to this grant in the project, at most 200 characters. Repeating the call with the same key and arguments returns the stored grant as a replay; the same key with other arguments fails with conflict.",
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "product_id": {
+            "description": "The product the grant cites. It must not be a consumable and must be mapped to a store product of the application.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The project id. An agent key may only name its own project.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why the grant is made, for example a support ticket. One line, 1 to 500 characters, stored in the audit trail.",
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "customer_id",
+          "idempotency_key",
+          "entitlement_id",
+          "product_id",
+          "application_id",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "name": "create_manual_grant",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "grant": {
+            "additionalProperties": false,
+            "properties": {
+              "actor_channel": {
+                "type": "string"
+              },
+              "actor_key_id": {
+                "type": "string"
+              },
+              "application_id": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "customer_id": {
+                "type": "string"
+              },
+              "effective_ends_at": {
+                "type": "string"
+              },
+              "effective_starts_at": {
+                "type": "string"
+              },
+              "entitlement_id": {
+                "type": "string"
+              },
+              "entitlement_key": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "product_id": {
+                "type": "string"
+              },
+              "project_id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "revocation_reason": {
+                "type": "string"
+              },
+              "revoked_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "revoked_by_channel": {
+                "type": "string"
+              },
+              "revoked_by_key_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "project_id",
+              "customer_id",
+              "application_id",
+              "product_id",
+              "entitlement_id",
+              "entitlement_key",
+              "reason",
+              "actor_key_id",
+              "actor_channel",
+              "status",
+              "effective_starts_at",
+              "effective_ends_at",
+              "created_at"
+            ],
+            "type": "object"
+          },
+          "projections_changed": {
+            "type": "integer"
+          },
+          "replay": {
+            "type": "boolean"
+          },
+          "webhooks_enqueued": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "grant",
+          "replay",
+          "projections_changed",
+          "webhooks_enqueued"
+        ],
+        "type": "object"
+      },
+      "title": "Create manual grant"
+    },
     {
       "annotations": {
         "destructiveHint": false,
@@ -35,6 +207,9 @@
             "items": {
               "additionalProperties": false,
               "properties": {
+                "actor_channel": {
+                  "type": "string"
+                },
                 "actor_key_id": {
                   "type": "string"
                 },
@@ -56,6 +231,7 @@
                 "canonical_customer_id",
                 "actor_role",
                 "actor_key_id",
+                "actor_channel",
                 "created_at"
               ],
               "type": "object"
@@ -207,6 +383,9 @@
             "items": {
               "additionalProperties": false,
               "properties": {
+                "actor_channel": {
+                  "type": "string"
+                },
                 "actor_key_id": {
                   "type": "string"
                 },
@@ -252,6 +431,9 @@
                     "string"
                   ]
                 },
+                "revoked_by_channel": {
+                  "type": "string"
+                },
                 "revoked_by_key_id": {
                   "type": "string"
                 },
@@ -269,6 +451,7 @@
                 "entitlement_key",
                 "reason",
                 "actor_key_id",
+                "actor_channel",
                 "status",
                 "effective_starts_at",
                 "effective_ends_at",
@@ -359,6 +542,9 @@
                   "type": "string"
                 },
                 "access_reason": {
+                  "type": "string"
+                },
+                "actor_channel": {
                   "type": "string"
                 },
                 "actor_key_id": {
@@ -1881,6 +2067,220 @@
         "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Attaches an additional external customer id to a canonical customer and records the acting key in the audit trail, or confirms an alias that already resolves to that customer. An external id that belongs to another customer fails with conflict. Requires a key with write access.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "customer_id": {
+            "description": "The canonical internal customer id the alias resolves to.",
+            "type": "string"
+          },
+          "external_id": {
+            "description": "The additional external customer id. It must not already belong to another customer.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The project id. An agent key may only name its own project.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "customer_id",
+          "external_id"
+        ],
+        "type": "object"
+      },
+      "name": "put_customer_alias",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "canonical_customer_id": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "external_id",
+          "canonical_customer_id",
+          "match"
+        ],
+        "type": "object"
+      },
+      "title": "Put customer alias"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Creates one entitlement definition, or confirms it when the same id already has the same key. A different key for an existing id fails with conflict; nothing is overwritten. Requires a key with write access.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "entitlement_id": {
+            "description": "The entitlement id.",
+            "type": "string"
+          },
+          "key": {
+            "description": "The public entitlement key apps check, for example premium.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The project id. An agent key may only name its own project.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "entitlement_id",
+          "key"
+        ],
+        "type": "object"
+      },
+      "name": "put_entitlement",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "title": "Put entitlement"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Creates one product with its kind and the exact set of entitlements it grants, or confirms it when the same id already has the same kind and set. A different kind or set fails with conflict; nothing is overwritten. Requires a key with write access.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "entitlement_ids": {
+            "description": "The complete set of entitlement ids the product grants. Each must already exist.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "description": "subscription, non_consumable, or consumable.",
+            "enum": [
+              "subscription",
+              "non_consumable",
+              "consumable"
+            ],
+            "type": "string"
+          },
+          "product_id": {
+            "description": "The internal product id.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The project id. An agent key may only name its own project.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "product_id",
+          "kind",
+          "entitlement_ids"
+        ],
+        "type": "object"
+      },
+      "name": "put_product",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "title": "Put product"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Maps one store product of an application to an internal product, or confirms the identical mapping. A mapping to a different product fails with conflict; nothing is overwritten. Requires a key with write access.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "application_id": {
+            "description": "The application the provider product belongs to.",
+            "type": "string"
+          },
+          "product_id": {
+            "description": "The internal product the store product maps to. It must already exist.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The project id. An agent key may only name its own project.",
+            "type": "string"
+          },
+          "provider_product_id": {
+            "description": "The product id in the store, for example the App Store product identifier.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "application_id",
+          "provider_product_id",
+          "product_id"
+        ],
+        "type": "object"
+      },
+      "name": "put_store_product",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "title": "Put store product"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
         "readOnlyHint": true
       },
       "description": "Resolves an external customer id or alias to the canonical internal customer id in one project.",
@@ -1928,6 +2328,147 @@
         "type": "object"
       },
       "title": "Resolve customer"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Ends one manual grant early, records the reason and the acting key in the audit trail, recomputes the customer's entitlements, and notifies the application's webhook. The customer loses access that the grant gave, and a revocation cannot be undone. Revoking a revoked grant returns the stored revocation. Requires a key with write access.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "customer_id": {
+            "description": "The customer the grant belongs to, or any customer merged with it.",
+            "type": "string"
+          },
+          "grant_id": {
+            "description": "The manual grant id (mgr-...), from get_customer.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "The project id. An agent key may only name its own project.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why the grant ends early. One line, 1 to 500 characters, stored in the audit trail.",
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "customer_id",
+          "grant_id",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "name": "revoke_manual_grant",
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "grant": {
+            "additionalProperties": false,
+            "properties": {
+              "actor_channel": {
+                "type": "string"
+              },
+              "actor_key_id": {
+                "type": "string"
+              },
+              "application_id": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "customer_id": {
+                "type": "string"
+              },
+              "effective_ends_at": {
+                "type": "string"
+              },
+              "effective_starts_at": {
+                "type": "string"
+              },
+              "entitlement_id": {
+                "type": "string"
+              },
+              "entitlement_key": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "product_id": {
+                "type": "string"
+              },
+              "project_id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "revocation_reason": {
+                "type": "string"
+              },
+              "revoked_at": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "revoked_by_channel": {
+                "type": "string"
+              },
+              "revoked_by_key_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "project_id",
+              "customer_id",
+              "application_id",
+              "product_id",
+              "entitlement_id",
+              "entitlement_key",
+              "reason",
+              "actor_key_id",
+              "actor_channel",
+              "status",
+              "effective_starts_at",
+              "effective_ends_at",
+              "created_at"
+            ],
+            "type": "object"
+          },
+          "projections_changed": {
+            "type": "integer"
+          },
+          "replay": {
+            "type": "boolean"
+          },
+          "webhooks_enqueued": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "grant",
+          "replay",
+          "projections_changed",
+          "webhooks_enqueued"
+        ],
+        "type": "object"
+      },
+      "title": "Revoke manual grant"
     },
     {
       "annotations": {

@@ -1941,6 +1941,13 @@ components:
       type: string
       minLength: 1
       pattern: '^[^[:cntrl:]]+$'
+    AuditActorChannel:
+      type: string
+      description: >-
+        The transport an audited write arrived on: api for a bearer on this API, dashboard for a
+        dashboard session, mcp for the MCP endpoint, and import for an offline import command such
+        as the RevenueCat import.
+      enum: [api, dashboard, mcp, import]
     ApiKeyRequest:
       type: object
       additionalProperties: false
@@ -3589,7 +3596,7 @@ components:
     AdminCustomerAlias:
       type: object
       additionalProperties: false
-      required: [external_id, canonical_customer_id, actor_role, actor_key_id, created_at]
+      required: [external_id, canonical_customer_id, actor_role, actor_key_id, actor_channel, created_at]
       properties:
         external_id:
           $ref: '#/components/schemas/Identifier'
@@ -3597,9 +3604,11 @@ components:
           $ref: '#/components/schemas/Identifier'
         actor_role:
           type: string
-          enum: [admin, application]
+          enum: [admin, agent, application]
         actor_key_id:
           $ref: '#/components/schemas/Identifier'
+        actor_channel:
+          $ref: '#/components/schemas/AuditActorChannel'
         created_at:
           type: string
           format: date-time
@@ -3662,7 +3671,7 @@ components:
     ManualGrant:
       type: object
       additionalProperties: false
-      required: [id, project_id, customer_id, application_id, product_id, entitlement_id, entitlement_key, reason, actor_key_id, status, effective_starts_at, effective_ends_at, created_at]
+      required: [id, project_id, customer_id, application_id, product_id, entitlement_id, entitlement_key, reason, actor_key_id, actor_channel, status, effective_starts_at, effective_ends_at, created_at]
       properties:
         id:
           type: string
@@ -3685,6 +3694,8 @@ components:
           maxLength: 500
         actor_key_id:
           $ref: '#/components/schemas/Identifier'
+        actor_channel:
+          $ref: '#/components/schemas/AuditActorChannel'
         status:
           type: string
           enum: [active, expired, revoked]
@@ -3699,6 +3710,8 @@ components:
           format: date-time
         revoked_by_key_id:
           $ref: '#/components/schemas/Identifier'
+        revoked_by_channel:
+          $ref: '#/components/schemas/AuditActorChannel'
         revocation_reason:
           type: string
           minLength: 1
@@ -3789,9 +3802,11 @@ components:
           type: string
         actor_role:
           type: string
-          enum: [admin, application]
+          enum: [admin, agent, application]
         actor_key_id:
           $ref: '#/components/schemas/Identifier'
+        actor_channel:
+          $ref: '#/components/schemas/AuditActorChannel'
         external_id:
           $ref: '#/components/schemas/Identifier'
         related_customer_id:

@@ -290,6 +290,7 @@ func mcpControlPlaneDependencies(
 	dependencies := controlplane.Dependencies{PublicURL: cfg.PublicURL}
 	if store != nil {
 		dependencies.Store = store
+		dependencies.Operations = store
 		dependencies.Admin = store
 		dependencies.Setup = store
 	}

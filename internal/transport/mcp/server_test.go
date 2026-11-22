@@ -46,16 +46,43 @@ type lockedBuffer struct {
 var (
 	// updateGolden rewrites the committed tool catalogue from the running server.
 	updateGolden = flag.Bool("update", false, "rewrite testdata/tool_catalog.json")
-	// expectedTools lists the complete phase 1 tool allowlist.
-	expectedTools = []string{
+	// expectedReadTools lists the read tools every accepted key is offered.
+	expectedReadTools = []string{
 		"get_customer", "get_project_overview", "get_setup_status", "get_subscription_metrics",
 		"list_financial_reports", "list_projects", "resolve_customer", "search_customers",
+	}
+	// expectedWriteTools maps each write tool to whether it is destructive. Every write tool is idempotent.
+	expectedWriteTools = map[string]bool{
+		"create_manual_grant": false, "revoke_manual_grant": true, "put_entitlement": false,
+		"put_product": false, "put_store_product": false, "put_customer_alias": false,
+	}
+	// writeToolCalls are valid arguments for every write tool against the fakes.
+	writeToolCalls = map[string]map[string]any{
+		"create_manual_grant": {
+			"project_id": "project-1", "customer_id": "customer-1", "idempotency_key": "grant-1",
+			"entitlement_id": "entitlement-1", "product_id": "product-1", "application_id": "ios-app",
+			"reason": "Support ticket 42", "duration_days": 30,
+		},
+		"revoke_manual_grant": {
+			"project_id": "project-1", "customer_id": "customer-1", "grant_id": fixtureGrantID, "reason": "Refunded",
+		},
+		"put_entitlement": {"project_id": "project-1", "entitlement_id": "entitlement-1", "key": "premium"},
+		"put_product": {
+			"project_id": "project-1", "product_id": "product-1", "kind": "subscription",
+			"entitlement_ids": []any{"entitlement-1"},
+		},
+		"put_store_product": {
+			"project_id": "project-1", "application_id": "ios-app", "provider_product_id": "premium_monthly",
+			"product_id": "product-1",
+		},
+		"put_customer_alias": {"project_id": "project-1", "customer_id": "customer-1", "external_id": "legacy-2"},
 	}
 	// catalogHashes pins the SHA-256 of the sorted tools array for every catalogue version. A released
 	// version keeps its hash forever: a tool change needs a new CatalogVersion and a new entry here, so
 	// regenerating the golden file alone can never ship changed tools under an old version.
 	catalogHashes = map[string]string{
 		"1": "44faff6aa918e12c3d8533efbd8053147c969b911721e7d748354d0f6df37d00",
+		"2": "7666ca59c2e1543eb24493b2f9f2f7c965efa41a74ec38331eee092f72d8642a",
 	}
 	// protectedFieldFragments name data that must never appear as a field in any tool output or schema.
 	protectedFieldFragments = []string{
@@ -120,9 +147,18 @@ func TestToolCatalogMatchesGolden(t *testing.T) {
 	names := make([]string, 0, len(listed.Tools))
 	for _, tool := range listed.Tools {
 		names = append(names, tool.Name)
-		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil ||
-			*tool.Annotations.DestructiveHint || tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint {
-			t.Fatalf("tool %s annotations = %#v, want read-only, non-destructive, closed world", tool.Name, tool.Annotations)
+		annotations := tool.Annotations
+		if annotations == nil || annotations.DestructiveHint == nil || annotations.OpenWorldHint == nil ||
+			*annotations.OpenWorldHint || !annotations.IdempotentHint {
+			t.Fatalf("tool %s annotations = %#v, want idempotent and closed world", tool.Name, annotations)
+		}
+		if destructive, write := expectedWriteTools[tool.Name]; write {
+			if annotations.ReadOnlyHint || *annotations.DestructiveHint != destructive {
+				t.Fatalf("write tool %s annotations = %#v, want not read-only and destructive %t",
+					tool.Name, annotations, destructive)
+			}
+		} else if !annotations.ReadOnlyHint || *annotations.DestructiveHint {
+			t.Fatalf("read tool %s annotations = %#v, want read-only and non-destructive", tool.Name, annotations)
 		}
 		input, ok := tool.InputSchema.(map[string]any)
 		if !ok || input["type"] != "object" || input["additionalProperties"] != false {
@@ -133,8 +169,175 @@ func TestToolCatalogMatchesGolden(t *testing.T) {
 		}
 	}
 	sort.Strings(names)
-	if strings.Join(names, ",") != strings.Join(expectedTools, ",") {
-		t.Fatalf("tools = %v, want exactly %v", names, expectedTools)
+	if expected := allExpectedTools(); strings.Join(names, ",") != strings.Join(expected, ",") {
+		t.Fatalf("tools = %v, want exactly %v", names, expected)
+	}
+}
+
+// TestToolListFollowsWriteAccess verifies least privilege in the tool list: a key that cannot write is
+// offered exactly the read tools, and keys that may write are offered the full catalogue.
+func TestToolListFollowsWriteAccess(t *testing.T) {
+	server := newTestServer(t, newTestHandler(t, Options{}))
+	for bearer, expected := range map[string][]string{
+		agentBearer:      expectedReadTools,
+		otherAgentBearer: expectedReadTools,
+		writerBearer:     allExpectedTools(),
+		adminBearer:      allExpectedTools(),
+	} {
+		listed, err := connect(t, server, bearer).ListTools(t.Context(), nil)
+		if err != nil {
+			t.Fatalf("ListTools(%s) error = %v", bearer, err)
+		}
+		names := make([]string, 0, len(listed.Tools))
+		for _, tool := range listed.Tools {
+			names = append(names, tool.Name)
+		}
+		sort.Strings(names)
+		if strings.Join(names, ",") != strings.Join(expected, ",") {
+			t.Fatalf("ListTools(%s) = %v, want exactly %v", bearer, names, expected)
+		}
+	}
+}
+
+// TestWriteToolsRejectActorsWithoutWriteAccess verifies the write gate on both layers: a read-only key cannot
+// call a write tool it was not offered, and the control-plane gate rejects every actor without write access
+// in the project even when the write tool handler is reached directly, before any storage call.
+func TestWriteToolsRejectActorsWithoutWriteAccess(t *testing.T) {
+	operations := &fakeOperationsStore{}
+	service := newTestControlPlane(operations)
+	server := newTestServer(t, newTestHandler(t, Options{ControlPlane: service}))
+	readOnly := connect(t, server, agentBearer)
+	for name, arguments := range writeToolCalls {
+		result, err := readOnly.CallTool(t.Context(), &sdk.CallToolParams{Name: name, Arguments: arguments})
+		if err == nil && (result == nil || !result.IsError) {
+			t.Fatalf("read-only CallTool(%s) = %#v, want a rejected call", name, result)
+		}
+	}
+
+	definitions := map[string]toolDefinition{}
+	for _, definition := range writeToolDefinitions(service, slog.New(slog.DiscardHandler)) {
+		definitions[definition.tool.Name] = definition
+	}
+	if len(definitions) != len(expectedWriteTools) {
+		t.Fatalf("write tools = %d, want %d", len(definitions), len(expectedWriteTools))
+	}
+	for label, actor := range map[string]controlplane.Actor{
+		"read-only agent": {Role: persistence.APIKeyRoleAgent, KeyID: "agent-key", AuditID: "agent-key",
+			ProjectID: "project-1", Channel: controlplane.ChannelMCP},
+		"writing agent of another project": {Role: persistence.APIKeyRoleAgent, KeyID: "other-writer", AuditID: "other-writer",
+			ProjectID: "project-2", AllowWrites: true, Channel: controlplane.ChannelMCP},
+		"application key": {Role: persistence.APIKeyRoleApplication, KeyID: "application-key", AuditID: "application-key",
+			ProjectID: "project-1", ApplicationID: "ios-app", Channel: controlplane.ChannelMCP},
+	} {
+		ctx := context.WithValue(t.Context(), actorContextKey{}, actor)
+		for name, arguments := range writeToolCalls {
+			if label == "application key" && name == "put_customer_alias" {
+				// The data-plane alias route lets an application key attach aliases in its own project;
+				// the MCP endpoint itself rejects application keys before any tool runs.
+				continue
+			}
+			result := callDefinition(t, ctx, definitions[name], arguments)
+			assertToolError(t, label+" "+name, result, "forbidden")
+		}
+	}
+
+	bootstrap := context.WithValue(t.Context(), actorContextKey{}, controlplane.Actor{
+		Role: persistence.APIKeyRoleAdmin, Channel: controlplane.ChannelMCP,
+	})
+	for _, name := range []string{"create_manual_grant", "revoke_manual_grant", "put_customer_alias"} {
+		assertToolError(t, "bootstrap "+name, callDefinition(t, bootstrap, definitions[name], writeToolCalls[name]), "forbidden")
+	}
+	if operations.count() != 0 {
+		t.Fatalf("definition writes reached storage %d times, want none", operations.count())
+	}
+
+	writer := connect(t, server, writerBearer)
+	for name, arguments := range writeToolCalls {
+		result, err := writer.CallTool(t.Context(), &sdk.CallToolParams{Name: name, Arguments: arguments})
+		if err != nil || result.IsError {
+			raw, _ := json.Marshal(result)
+			t.Fatalf("writer CallTool(%s) = %s, %v, want success", name, raw, err)
+		}
+		if name == "create_manual_grant" {
+			grant := result.StructuredContent.(map[string]any)["grant"].(map[string]any)
+			if grant["actor_key_id"] != "writer-key" || grant["actor_channel"] != "mcp" {
+				t.Fatalf("created grant = %#v, want the writer key and the mcp channel", grant)
+			}
+		}
+	}
+	if operations.count() != 3 {
+		t.Fatalf("definition writes = %d, want 3", operations.count())
+	}
+}
+
+// TestWriteToolArgumentsAreValidatedWithoutEcho verifies write tools apply the v1 validation and stable codes
+// and never repeat their arguments in errors.
+func TestWriteToolArgumentsAreValidatedWithoutEcho(t *testing.T) {
+	session := connect(t, newTestServer(t, newTestHandler(t, Options{})), writerBearer)
+	grant := func(changes map[string]any, removed ...string) map[string]any {
+		arguments := map[string]any{}
+		for key, value := range writeToolCalls["create_manual_grant"] {
+			arguments[key] = value
+		}
+		for key, value := range changes {
+			arguments[key] = value
+		}
+		for _, key := range removed {
+			delete(arguments, key)
+		}
+		return arguments
+	}
+	for _, testCase := range []struct {
+		label     string
+		name      string
+		arguments map[string]any
+		code      string
+	}{
+		{label: "missing reason", name: "create_manual_grant", arguments: grant(nil, "reason"), code: "invalid_request"},
+		{label: "empty reason", name: "create_manual_grant", arguments: grant(map[string]any{"reason": ""}), code: "invalid_request"},
+		{label: "padded reason", name: "create_manual_grant", arguments: grant(map[string]any{"reason": " x-padded-reason "}), code: "invalid_request"},
+		{label: "missing idempotency key", name: "create_manual_grant", arguments: grant(nil, "idempotency_key"), code: "invalid_request"},
+		{label: "no period", name: "create_manual_grant", arguments: grant(nil, "duration_days"), code: "invalid_request"},
+		{label: "both periods", name: "create_manual_grant", arguments: grant(map[string]any{"ends_at": "2027-01-01T00:00:00Z"}), code: "invalid_request"},
+		{label: "duration too long", name: "create_manual_grant", arguments: grant(map[string]any{"duration_days": 9999}), code: "invalid_request"},
+		{label: "malformed end", name: "create_manual_grant", arguments: grant(map[string]any{"ends_at": "x-not-a-time"}, "duration_days"), code: "invalid_request"},
+		{label: "past end", name: "create_manual_grant", arguments: grant(map[string]any{"ends_at": "2020-01-01T00:00:00Z"}, "duration_days"), code: "invalid_request"},
+		{label: "idempotency conflict", name: "create_manual_grant", arguments: grant(map[string]any{"idempotency_key": "conflicting-key"}), code: "conflict"},
+		{label: "unknown customer", name: "create_manual_grant", arguments: grant(map[string]any{"customer_id": "x-missing-customer"}), code: "not_found"},
+		{label: "missing revocation reason", name: "revoke_manual_grant", arguments: map[string]any{
+			"project_id": "project-1", "customer_id": "customer-1", "grant_id": fixtureGrantID,
+		}, code: "invalid_request"},
+		{label: "malformed grant id", name: "revoke_manual_grant", arguments: map[string]any{
+			"project_id": "project-1", "customer_id": "customer-1", "grant_id": "x-forged-grant", "reason": "Refunded",
+		}, code: "invalid_request"},
+		{label: "unknown product kind", name: "put_product", arguments: map[string]any{
+			"project_id": "project-1", "product_id": "product-1", "kind": "x-unknown-kind", "entitlement_ids": []any{},
+		}, code: "invalid_request"},
+		{label: "store product conflict", name: "put_store_product", arguments: map[string]any{
+			"project_id": "project-1", "application_id": "ios-app", "provider_product_id": "premium_monthly",
+			"product_id": "other-product",
+		}, code: "conflict"},
+		{label: "alias owned elsewhere", name: "put_customer_alias", arguments: map[string]any{
+			"project_id": "project-1", "customer_id": "customer-1", "external_id": untrustedExternalID,
+		}, code: "conflict"},
+		{label: "unknown field", name: "put_entitlement", arguments: map[string]any{
+			"project_id": "project-1", "entitlement_id": "entitlement-1", "key": "premium", "x-unknown-field": true,
+		}, code: "invalid_request"},
+	} {
+		result, err := session.CallTool(t.Context(), &sdk.CallToolParams{Name: testCase.name, Arguments: testCase.arguments})
+		if err != nil {
+			t.Fatalf("%s: CallTool(%s) error = %v", testCase.label, testCase.name, err)
+		}
+		assertToolError(t, testCase.label, result, testCase.code)
+		raw, _ := json.Marshal(result)
+		for _, argument := range []string{
+			"x-padded-reason", "x-not-a-time", "x-missing-customer", "x-forged-grant", "x-unknown-kind",
+			"x-unknown-field", "conflicting-key", "other-product", untrustedExternalID,
+		} {
+			if strings.Contains(string(raw), argument) {
+				t.Fatalf("%s: error echoes argument %q: %s", testCase.label, argument, raw)
+			}
+		}
 	}
 }
 
@@ -290,7 +493,7 @@ func TestEveryToolReturnsSchemaValidRedactedOutput(t *testing.T) {
 	server := newTestServer(t, handler)
 	sentinelDigest := sha256.Sum256([]byte(sentinelReportBytes))
 	sentinels := []string{sentinelWebhookQuery, sentinelWebhookPath, hex.EncodeToString(sentinelDigest[:])}
-	for _, bearer := range []string{agentBearer, adminBearer} {
+	for _, bearer := range []string{agentBearer, writerBearer, adminBearer} {
 		session := connect(t, server, bearer)
 		listed, err := session.ListTools(t.Context(), nil)
 		if err != nil {
@@ -323,8 +526,13 @@ func TestEveryToolReturnsSchemaValidRedactedOutput(t *testing.T) {
 			"list_financial_reports":   {"project_id": "project-1", "page_size": 10},
 			"get_setup_status":         {"project_id": "project-1"},
 		}
-		if len(calls) != len(expectedTools) {
-			t.Fatalf("redaction test calls %d tools, want %d", len(calls), len(expectedTools))
+		if bearer != agentBearer {
+			for name, arguments := range writeToolCalls {
+				calls[name] = arguments
+			}
+		}
+		if len(calls) != len(listed.Tools) {
+			t.Fatalf("redaction test calls %d tools, the key lists %d", len(calls), len(listed.Tools))
 		}
 		for name, arguments := range calls {
 			result, err := session.CallTool(t.Context(), &sdk.CallToolParams{Name: name, Arguments: arguments})
@@ -364,9 +572,52 @@ func TestEveryToolReturnsSchemaValidRedactedOutput(t *testing.T) {
 		t.Fatalf("tool logs contain arguments or results: %s", logged)
 	}
 	if !strings.Contains(logged, `"tool":"resolve_customer"`) || !strings.Contains(logged, `"key_id":"agent-key"`) ||
-		!strings.Contains(logged, `"outcome":"ok"`) || !strings.Contains(logged, `"duration_ms"`) {
+		!strings.Contains(logged, `"outcome":"ok"`) || !strings.Contains(logged, `"duration_ms"`) ||
+		!strings.Contains(logged, `"channel":"mcp"`) {
 		t.Fatalf("tool logs = %s, want one structured line per call", logged)
 	}
+	for _, line := range strings.Split(strings.TrimSpace(logged), "\n") {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("decode log line %q: %v", line, err)
+		}
+		_, write := expectedWriteTools[entry["tool"].(string)]
+		if entry["write"] != write {
+			t.Fatalf("log line %s: write = %v, want %t", line, entry["write"], write)
+		}
+		if _, named := entry["project_id"]; named != write {
+			t.Fatalf("log line %s names a project %t, want only writes to name it", line, named)
+		}
+		if write && (entry["project_id"] != "project-1" || entry["outcome"] != "ok") {
+			t.Fatalf("write log line %s, want project-1 and outcome ok", line)
+		}
+	}
+}
+
+// allExpectedTools returns the sorted names of the full read-write catalogue.
+func allExpectedTools() []string {
+	names := slices.Clone(expectedReadTools)
+	for name := range expectedWriteTools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// callDefinition calls one tool handler directly with an actor already on the context.
+func callDefinition(t *testing.T, ctx context.Context, definition toolDefinition, arguments map[string]any) *sdk.CallToolResult {
+	t.Helper()
+	raw, err := json.Marshal(arguments)
+	if err != nil {
+		t.Fatalf("marshal arguments: %v", err)
+	}
+	result, err := definition.handler(ctx, &sdk.CallToolRequest{Params: &sdk.CallToolParamsRaw{
+		Name: definition.tool.Name, Arguments: raw,
+	}})
+	if err != nil {
+		t.Fatalf("handler(%s) error = %v", definition.tool.Name, err)
+	}
+	return result
 }
 
 // TestCrossProjectAgentGetsForbiddenToolErrors verifies an agent key never reads another project.

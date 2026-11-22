@@ -23,6 +23,8 @@ type identityAPIStore struct {
 	err        error
 	aliasCalls int
 	mergeCalls int
+	// lastAlias is the most recent alias write, so tests can check the recorded actor and channel.
+	lastAlias persistence.CustomerAliasWrite
 }
 
 // identityAPITransaction serves the identity methods exercised by the HTTP handlers.
@@ -135,6 +137,22 @@ func TestCustomerIdentityHTTPRejectsTheWrongPrincipals(t *testing.T) {
 	if store.aliasCalls != 1 {
 		t.Fatalf("alias calls = %d, want 1", store.aliasCalls)
 	}
+	if store.lastAlias.ActorRole != persistence.APIKeyRoleAdmin || store.lastAlias.ActorChannel != persistence.ActorChannelAPI ||
+		store.lastAlias.ActorKeyID == "" {
+		t.Fatalf("admin bearer alias actor = %#v, want an admin key over the api channel", store.lastAlias)
+	}
+
+	applicationAlias := identityRequest(t, http.MethodPut, "/v1/applications/application-1/customers/customer-1/aliases/alias-external", applicationKey, `{}`)
+	applicationAlias.SetPathValue("application_id", "application-1")
+	applicationAlias.SetPathValue("customer_id", "customer-1")
+	applicationAlias.SetPathValue("external_id", "alias-external")
+	applicationAliasRecorder := httptest.NewRecorder()
+	api.putApplicationCustomerAlias(applicationAliasRecorder, applicationAlias)
+	if applicationAliasRecorder.Code != http.StatusOK || store.lastAlias.ActorRole != persistence.APIKeyRoleApplication ||
+		store.lastAlias.ActorChannel != persistence.ActorChannelAPI {
+		t.Fatalf("application alias = %d %s, actor %#v, want an application key over the api channel",
+			applicationAliasRecorder.Code, applicationAliasRecorder.Body.String(), store.lastAlias)
+	}
 
 	store.err = persistence.ErrNotFound
 	missing := identityRequest(t, http.MethodGet, "/v1/applications/application-1/customer-resolutions/missing-external", applicationKey, "")
@@ -183,10 +201,11 @@ func (transaction *identityAPITransaction) Application(
 
 // PutCustomerAlias returns the configured resolution or injected failure.
 func (transaction *identityAPITransaction) PutCustomerAlias(
-	context.Context,
-	persistence.CustomerAliasWrite,
+	_ context.Context,
+	write persistence.CustomerAliasWrite,
 ) (persistence.CustomerResolution, error) {
 	transaction.store.aliasCalls++
+	transaction.store.lastAlias = write
 	if transaction.store.err != nil {
 		return persistence.CustomerResolution{}, transaction.store.err
 	}

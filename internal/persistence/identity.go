@@ -44,6 +44,7 @@ type CustomerAliasWrite struct {
 	ExternalID          string
 	ActorRole           APIKeyRole
 	ActorKeyID          string
+	ActorChannel        ActorChannel
 }
 
 // CustomerMergeWrite requests one append-only merge of a source customer into a canonical customer.
@@ -87,7 +88,7 @@ func (write CustomerAliasWrite) Validate() error {
 		write.ProjectID.Validate(),
 		write.CanonicalCustomerID.Validate(),
 		core.ValidateExternalCustomerID(write.ExternalID),
-		validateAliasActor(write.ActorRole, write.ActorKeyID),
+		validateAliasActor(write.ActorRole, write.ActorKeyID, write.ActorChannel),
 	)
 }
 
@@ -124,12 +125,26 @@ func validateCustomerMatch(match string) error {
 	}
 }
 
-// validateAliasActor requires a stored admin or application key.
-func validateAliasActor(role APIKeyRole, keyID string) error {
+// validateAliasActor requires a stored admin, agent, or application actor and a channel that role can
+// use: agent keys authenticate only on the MCP endpoint and application keys only on the HTTP API.
+func validateAliasActor(role APIKeyRole, keyID string, channel ActorChannel) error {
+	var channelError error
 	switch role {
-	case APIKeyRoleAdmin, APIKeyRoleApplication:
+	case APIKeyRoleAdmin:
+	case APIKeyRoleAgent:
+		if channel != ActorChannelMCP {
+			channelError = fmt.Errorf("customer alias actor role %q requires the mcp channel", role)
+		}
+	case APIKeyRoleApplication:
+		if channel != ActorChannelAPI {
+			channelError = fmt.Errorf("customer alias actor role %q requires the api channel", role)
+		}
 	default:
 		return fmt.Errorf("unsupported customer alias actor role %q", role)
 	}
-	return core.ValidateOpaqueIdentifier("actor key ID", keyID)
+	return errors.Join(
+		core.ValidateOpaqueIdentifier("actor key ID", keyID),
+		ValidateActorChannel(channel),
+		channelError,
+	)
 }

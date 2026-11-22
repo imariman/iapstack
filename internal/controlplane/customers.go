@@ -81,6 +81,7 @@ type CustomerAlias struct {
 	CanonicalCustomerID core.CustomerID        `json:"canonical_customer_id"`
 	ActorRole           persistence.APIKeyRole `json:"actor_role"`
 	ActorKeyID          string                 `json:"actor_key_id"`
+	ActorChannel        Channel                `json:"actor_channel"`
 	CreatedAt           time.Time              `json:"created_at"`
 }
 
@@ -122,11 +123,13 @@ type ManualGrant struct {
 	EntitlementKey    string             `json:"entitlement_key"`
 	Reason            string             `json:"reason"`
 	ActorKeyID        string             `json:"actor_key_id"`
+	ActorChannel      Channel            `json:"actor_channel"`
 	Status            string             `json:"status"`
 	EffectiveStartsAt time.Time          `json:"effective_starts_at"`
 	EffectiveEndsAt   time.Time          `json:"effective_ends_at"`
 	RevokedAt         *time.Time         `json:"revoked_at,omitempty"`
 	RevokedByKeyID    string             `json:"revoked_by_key_id,omitempty"`
+	RevokedByChannel  Channel            `json:"revoked_by_channel,omitempty"`
 	RevocationReason  string             `json:"revocation_reason,omitempty"`
 	CreatedAt         time.Time          `json:"created_at"`
 }
@@ -162,6 +165,7 @@ type TimelineEvent struct {
 	ErrorCode              string                        `json:"error_code,omitempty"`
 	ActorRole              persistence.APIKeyRole        `json:"actor_role,omitempty"`
 	ActorKeyID             string                        `json:"actor_key_id,omitempty"`
+	ActorChannel           Channel                       `json:"actor_channel,omitempty"`
 	ExternalID             string                        `json:"external_id,omitempty"`
 	RelatedCustomerID      core.CustomerID               `json:"related_customer_id,omitempty"`
 	Reason                 string                        `json:"reason,omitempty"`
@@ -420,7 +424,8 @@ func CustomerDetailView(detail persistence.AdminCustomerDetail, now time.Time) C
 	for _, alias := range detail.Aliases {
 		response.Aliases = append(response.Aliases, CustomerAlias{
 			ExternalID: alias.ExternalID, CanonicalCustomerID: alias.CanonicalCustomerID,
-			ActorRole: alias.ActorRole, ActorKeyID: alias.ActorKeyID, CreatedAt: alias.CreatedAt,
+			ActorRole: alias.ActorRole, ActorKeyID: alias.ActorKeyID, ActorChannel: alias.ActorChannel,
+			CreatedAt: alias.CreatedAt,
 		})
 	}
 	for _, merge := range detail.Merges {
@@ -466,7 +471,8 @@ func CustomerDetailView(detail persistence.AdminCustomerDetail, now time.Time) C
 			LifecycleState: event.LifecycleState, PreviousLifecycleState: event.PreviousLifecycleState,
 			Access: event.Access, AccessReason: event.AccessReason, EffectiveEndsAt: event.EffectiveEndsAt,
 			Version: event.Version, Status: event.Status, ErrorCode: event.ErrorCode,
-			ActorRole: event.ActorRole, ActorKeyID: event.ActorKeyID, ExternalID: event.ExternalID,
+			ActorRole: event.ActorRole, ActorKeyID: event.ActorKeyID, ActorChannel: event.ActorChannel,
+			ExternalID:        event.ExternalID,
 			RelatedCustomerID: event.RelatedCustomerID, Reason: event.Reason, OriginStore: event.OriginStore,
 		})
 	}
@@ -494,9 +500,9 @@ func ManualGrantView(grant persistence.ManualGrant, now time.Time) ManualGrant {
 		ID: grant.ID, ProjectID: grant.ProjectID, CustomerID: grant.CustomerID,
 		ApplicationID: grant.ApplicationID, ProductID: grant.ProductID,
 		EntitlementID: grant.EntitlementID, EntitlementKey: grant.EntitlementKey,
-		Reason: grant.Reason, ActorKeyID: grant.ActorKeyID, Status: status,
+		Reason: grant.Reason, ActorKeyID: grant.ActorKeyID, ActorChannel: grant.ActorChannel, Status: status,
 		EffectiveStartsAt: grant.StartsAt, EffectiveEndsAt: grant.EndsAt,
-		RevokedAt: grant.RevokedAt, RevokedByKeyID: grant.RevokedByKeyID,
+		RevokedAt: grant.RevokedAt, RevokedByKeyID: grant.RevokedByKeyID, RevokedByChannel: grant.RevokedByChannel,
 		RevocationReason: grant.RevocationReason, CreatedAt: grant.CreatedAt,
 	}
 }

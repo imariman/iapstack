@@ -507,62 +507,56 @@ func (api *API) putCustomer(writer http.ResponseWriter, request *http.Request) {
 
 // putEntitlement idempotently creates one named entitlement definition.
 func (api *API) putEntitlement(writer http.ResponseWriter, request *http.Request) {
-	if _, ok := api.requireAdmin(writer, request); !ok {
+	actor, ok := api.requireAdminActor(writer, request)
+	if !ok {
 		return
 	}
 	var input entitlementRequest
 	if !api.decode(writer, request, &input) {
 		return
 	}
-	entitlement := core.Entitlement{ID: core.EntitlementID(request.PathValue("entitlement_id")),
-		ProjectID: core.ProjectID(request.PathValue("project_id")), Key: input.Key}
-	if !api.requireValidInput(writer, request, entitlement.Validate()) {
-		return
-	}
-	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
-		return repository.PutEntitlementDefinition(request.Context(), entitlement)
+	err := api.controlPlane().PutEntitlement(request.Context(), actor, controlplane.EntitlementInput{
+		ProjectID:     core.ProjectID(request.PathValue("project_id")),
+		EntitlementID: core.EntitlementID(request.PathValue("entitlement_id")),
+		Key:           input.Key,
 	})
 	api.writeMutation(writer, request, err)
 }
 
 // putProduct idempotently creates one product and entitlement grant set.
 func (api *API) putProduct(writer http.ResponseWriter, request *http.Request) {
-	if _, ok := api.requireAdmin(writer, request); !ok {
+	actor, ok := api.requireAdminActor(writer, request)
+	if !ok {
 		return
 	}
 	var input productRequest
 	if !api.decode(writer, request, &input) {
 		return
 	}
-	product := core.Product{ID: core.ProductID(request.PathValue("product_id")),
-		ProjectID: core.ProjectID(request.PathValue("project_id")), Kind: input.Kind,
-		EntitlementIDs: input.EntitlementIDs}
-	if !api.requireValidInput(writer, request, product.Validate()) {
-		return
-	}
-	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
-		return repository.PutProduct(request.Context(), product)
+	err := api.controlPlane().PutProduct(request.Context(), actor, controlplane.ProductInput{
+		ProjectID:      core.ProjectID(request.PathValue("project_id")),
+		ProductID:      core.ProductID(request.PathValue("product_id")),
+		Kind:           input.Kind,
+		EntitlementIDs: input.EntitlementIDs,
 	})
 	api.writeMutation(writer, request, err)
 }
 
 // putStoreProduct idempotently maps one provider product to an internal product.
 func (api *API) putStoreProduct(writer http.ResponseWriter, request *http.Request) {
-	if _, ok := api.requireAdmin(writer, request); !ok {
+	actor, ok := api.requireAdminActor(writer, request)
+	if !ok {
 		return
 	}
 	var input storeProductRequest
 	if !api.decode(writer, request, &input) {
 		return
 	}
-	projectID := core.ProjectID(request.PathValue("project_id"))
-	mapping := core.StoreProduct{ApplicationID: core.ApplicationID(request.PathValue("application_id")),
-		ProductID: input.ProductID, ProviderID: core.ProviderProductID(request.PathValue("provider_product_id"))}
-	if !api.requireValidInput(writer, request, errors.Join(projectID.Validate(), mapping.Validate())) {
-		return
-	}
-	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
-		return repository.PutStoreProduct(request.Context(), projectID, mapping)
+	err := api.controlPlane().PutStoreProduct(request.Context(), actor, controlplane.StoreProductInput{
+		ProjectID:         core.ProjectID(request.PathValue("project_id")),
+		ApplicationID:     core.ApplicationID(request.PathValue("application_id")),
+		ProviderProductID: core.ProviderProductID(request.PathValue("provider_product_id")),
+		ProductID:         input.ProductID,
 	})
 	api.writeMutation(writer, request, err)
 }

@@ -70,8 +70,9 @@ func TestManualGrantRepositoryFollowsClosureAndRevokes(t *testing.T) {
 	write := persistence.ManualGrantWrite{
 		ProjectID: projectID, CustomerID: "customer-merged", ApplicationID: core.ApplicationID(fixture.applicationID),
 		ProductID: core.ProductID(fixture.productID), EntitlementID: core.EntitlementID(fixture.entitlementID),
-		Reason: "Support ticket 7", ActorKeyID: "admin-key", IdempotencyKey: "grant-1",
-		StartsAt: now, EndsAt: now.AddDate(0, 0, 30),
+		Reason: "Support ticket 7", ActorKeyID: "admin-key", ActorChannel: persistence.ActorChannelDashboard,
+		IdempotencyKey: "grant-1",
+		StartsAt:       now, EndsAt: now.AddDate(0, 0, 30),
 	}
 	create := func(write persistence.ManualGrantWrite) (persistence.ManualGrantResult, verification.ProjectionRefreshResult, error) {
 		var result persistence.ManualGrantResult
@@ -156,7 +157,8 @@ func TestManualGrantRepositoryFollowsClosureAndRevokes(t *testing.T) {
 			var revokeErr error
 			result, revokeErr = repository.RevokeManualGrant(database.ctx, persistence.ManualGrantRevocation{
 				ProjectID: projectID, CustomerID: customerID, GrantID: created.Grant.ID,
-				Reason: reason, ActorKeyID: "admin-key-2", RevokedAt: now.Add(time.Hour),
+				Reason: reason, ActorKeyID: "admin-key-2", ActorChannel: persistence.ActorChannelMCP,
+				RevokedAt: now.Add(time.Hour),
 			})
 			if revokeErr != nil || result.Replay {
 				return revokeErr
@@ -211,8 +213,8 @@ func TestAdminSearchCustomersMatchesEscapesAndPaginates(t *testing.T) {
 		`, "search-customer-"+string(rune('a'+index)), fixture.projectID, externalID, index+1)
 	}
 	mustExec(t, database, `
-		INSERT INTO customer_aliases (project_id, external_id, canonical_customer_id, actor_role, actor_key_id)
-		VALUES ($1, 'legacy-alias', 'search-customer-d', 'admin', 'admin-key')
+		INSERT INTO customer_aliases (project_id, external_id, canonical_customer_id, actor_role, actor_key_id, actor_channel)
+		VALUES ($1, 'legacy-alias', 'search-customer-d', 'admin', 'admin-key', 'api')
 	`, fixture.projectID)
 	mustExec(t, database, `INSERT INTO projects (id) VALUES ('project-empty')`)
 
@@ -329,7 +331,7 @@ func TestAdminCustomerDetailDescribesMergedClosure(t *testing.T) {
 		}
 		if _, err := repository.PutCustomerAlias(database.ctx, persistence.CustomerAliasWrite{
 			ProjectID: projectID, CanonicalCustomerID: canonicalID, ExternalID: "alias-external",
-			ActorRole: persistence.APIKeyRoleAdmin, ActorKeyID: "admin-key",
+			ActorRole: persistence.APIKeyRoleAdmin, ActorKeyID: "admin-key", ActorChannel: persistence.ActorChannelAPI,
 		}); err != nil {
 			return err
 		}

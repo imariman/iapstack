@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/imariman/iapstack/internal/auth"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/validation"
@@ -32,6 +33,16 @@ type recordingSetupStore struct {
 
 // recordingReportLister counts financial report reads.
 type recordingReportLister struct {
+	calls int
+}
+
+// recordingStore counts transactions so tests can prove a forbidden write never reaches storage.
+type recordingStore struct {
+	calls int
+}
+
+// recordingOperations counts definition write transactions.
+type recordingOperations struct {
 	calls int
 }
 
@@ -116,6 +127,115 @@ func TestForbiddenActorsNeverReachStorage(t *testing.T) {
 	}
 	if admin.calls != 0 || setup.calls != 0 || reports.calls != 0 {
 		t.Fatalf("storage calls = admin %d, setup %d, reports %d, want none", admin.calls, setup.calls, reports.calls)
+	}
+}
+
+// TestForbiddenWritersNeverReachStorage verifies every write authorizes before validation or any storage
+// call: read-only agents, agents of another project, application keys outside the alias rule, and the
+// bootstrap administrator on audited writes all fail with a forbidden error.
+func TestForbiddenWritersNeverReachStorage(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingStore{}
+	operations := &recordingOperations{}
+	service := New(Dependencies{Store: store, Operations: operations})
+	ctx := context.Background()
+	days := 30
+	for name, actor := range map[string]Actor{
+		"read-only agent": {Role: persistence.APIKeyRoleAgent, KeyID: "agent-key", AuditID: "agent-key", ProjectID: "project-1", Channel: ChannelMCP},
+		"writing agent of another project": {
+			Role: persistence.APIKeyRoleAgent, KeyID: "agent-key", AuditID: "agent-key", ProjectID: "project-2", AllowWrites: true, Channel: ChannelMCP,
+		},
+		"application": {
+			Role: persistence.APIKeyRoleApplication, KeyID: "app-key", AuditID: "app-key", ProjectID: "project-1",
+			ApplicationID: "application-1", Channel: ChannelAPI,
+		},
+		"unknown role": {Role: "operator", KeyID: "key", AuditID: "key", ProjectID: "project-1", Channel: ChannelAPI},
+	} {
+		checks := map[string]error{}
+		_, checks["grant"] = service.CreateManualGrant(ctx, actor, ManualGrantInput{
+			ProjectID: "project-1", CustomerID: "customer-1", IdempotencyKey: "grant-1", EntitlementID: "entitlement-1",
+			ProductID: "product-1", ApplicationID: "application-1", Reason: "Support", DurationDays: &days,
+		})
+		_, checks["revoke"] = service.RevokeManualGrant(ctx, actor, ManualGrantRevocationInput{
+			ProjectID: "project-1", CustomerID: "customer-1", GrantID: "mgr-0123456789abcdef0123456789abcdef", Reason: "Refund",
+		})
+		checks["entitlement"] = service.PutEntitlement(ctx, actor, EntitlementInput{ProjectID: "project-1", EntitlementID: "entitlement-1", Key: "premium"})
+		checks["product"] = service.PutProduct(ctx, actor, ProductInput{
+			ProjectID: "project-1", ProductID: "product-1", Kind: core.ProductKindSubscription,
+			EntitlementIDs: []core.EntitlementID{"entitlement-1"},
+		})
+		checks["store product"] = service.PutStoreProduct(ctx, actor, StoreProductInput{
+			ProjectID: "project-1", ApplicationID: "application-1", ProviderProductID: "premium_monthly", ProductID: "product-1",
+		})
+		if actor.Role != persistence.APIKeyRoleApplication {
+			_, checks["alias"] = service.PutCustomerAlias(ctx, actor, CustomerAliasInput{
+				ProjectID: "project-1", CustomerID: "customer-1", ExternalID: "legacy-1",
+			})
+		}
+		for operation, err := range checks {
+			if !errors.Is(err, ErrForbidden) || Classify(err).Code != "forbidden" {
+				t.Fatalf("%s %s error = %v, want forbidden", name, operation, err)
+			}
+		}
+	}
+	// An application key may attach aliases only in its own project.
+	if _, err := service.PutCustomerAlias(ctx, Actor{
+		Role: persistence.APIKeyRoleApplication, AuditID: "app-key", ProjectID: "project-2", ApplicationID: "application-2",
+	}, CustomerAliasInput{ProjectID: "project-1", CustomerID: "customer-1", ExternalID: "legacy-1"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("PutCustomerAlias() cross-project application error = %v, want ErrForbidden", err)
+	}
+	bootstrap := Actor{Role: persistence.APIKeyRoleAdmin, Channel: ChannelAPI}
+	_, grantErr := service.CreateManualGrant(ctx, bootstrap, ManualGrantInput{ProjectID: "project-1"})
+	_, revokeErr := service.RevokeManualGrant(ctx, bootstrap, ManualGrantRevocationInput{ProjectID: "project-1"})
+	_, aliasErr := service.PutCustomerAlias(ctx, bootstrap, CustomerAliasInput{ProjectID: "project-1"})
+	for operation, err := range map[string]error{"grant": grantErr, "revoke": revokeErr, "alias": aliasErr} {
+		if problem := Classify(err); !errors.Is(err, ErrStoredActorRequired) || problem.Code != "forbidden" ||
+			problem.Message != StoredActorRequiredMessage {
+			t.Fatalf("bootstrap %s error = %v (%#v), want the stored actor rejection", operation, err, problem)
+		}
+	}
+	if store.calls != 0 || operations.calls != 0 {
+		t.Fatalf("storage calls = store %d, operations %d, want none", store.calls, operations.calls)
+	}
+
+	// The writing agent of the project reaches storage, and an invalid definition is rejected before it.
+	writer := Actor{Role: persistence.APIKeyRoleAgent, KeyID: "writer", AuditID: "writer", ProjectID: "project-1", AllowWrites: true, Channel: ChannelMCP}
+	if err := service.PutEntitlement(ctx, writer, EntitlementInput{ProjectID: "project-1", EntitlementID: "entitlement-1"}); Classify(err).Code != "invalid_request" {
+		t.Fatalf("PutEntitlement() without a key error = %v, want invalid_request", err)
+	}
+	if err := service.PutEntitlement(ctx, writer, EntitlementInput{ProjectID: "project-1", EntitlementID: "entitlement-1", Key: "premium"}); err != nil {
+		t.Fatalf("PutEntitlement() error = %v", err)
+	}
+	if operations.calls != 1 {
+		t.Fatalf("operations calls = %d, want 1", operations.calls)
+	}
+}
+
+// TestActorFromPrincipalRecordsTheDurableIdentity verifies the audited identity of keys and accounts.
+func TestActorFromPrincipalRecordsTheDurableIdentity(t *testing.T) {
+	t.Parallel()
+
+	key := ActorFromPrincipal(auth.Principal{KeyID: "key-1", Role: persistence.APIKeyRoleAdmin}, ChannelAPI)
+	account := ActorFromPrincipal(auth.Principal{
+		UserID: "user-1", Username: "operator", AccountGeneration: 1, Role: persistence.APIKeyRoleAdmin,
+	}, ChannelDashboard)
+	bootstrap := ActorFromPrincipal(auth.Principal{Role: persistence.APIKeyRoleAdmin}, ChannelAPI)
+	if key.AuditID != "key-1" || key.KeyID != "key-1" || key.Channel != ChannelAPI {
+		t.Fatalf("key actor = %#v, want the key id recorded on the api channel", key)
+	}
+	if account.KeyID != "" || account.AuditID == "" || account.AuditID != (auth.Principal{
+		UserID: "user-1", Username: "operator", AccountGeneration: 1, Role: persistence.APIKeyRoleAdmin,
+	}).ActorID() || account.Channel != ChannelDashboard {
+		t.Fatalf("account actor = %#v, want the account marker recorded on the dashboard channel", account)
+	}
+	if bootstrap.AuditID != "" || !bootstrap.CanWrite() {
+		t.Fatalf("bootstrap actor = %#v, want no audited identity", bootstrap)
+	}
+	if (Actor{Role: persistence.APIKeyRoleAgent, ProjectID: "project-1"}).CanWrite() ||
+		!(Actor{Role: persistence.APIKeyRoleAgent, ProjectID: "project-1", AllowWrites: true}).CanWrite() ||
+		(Actor{Role: persistence.APIKeyRoleApplication, ProjectID: "project-1"}).CanWrite() {
+		t.Fatal("CanWrite() does not follow the write flag and role")
 	}
 }
 
@@ -260,6 +380,8 @@ func TestClassifyUsesStableCodes(t *testing.T) {
 	}{
 		{err: ErrForbidden, status: http.StatusForbidden, code: "forbidden"},
 		{err: persistence.ErrNotFound, status: http.StatusNotFound, code: "not_found"},
+		{err: persistence.ErrConflict, status: http.StatusConflict, code: "conflict"},
+		{err: ErrStoredActorRequired, status: http.StatusForbidden, code: "forbidden"},
 		{err: validation.Wrap(errors.New("opaque")), status: http.StatusBadRequest, code: "invalid_request"},
 		{err: persistence.ErrUnavailable, status: http.StatusServiceUnavailable, code: "storage_unavailable"},
 		{err: errors.New("secret detail"), status: http.StatusInternalServerError, code: "internal_error"},
@@ -330,6 +452,26 @@ func (store *recordingSetupStore) AdminProjectSetup(
 ) (persistence.AdminProjectSetup, error) {
 	store.calls++
 	return store.setup, nil
+}
+
+// Ping reports the recording store as reachable.
+func (store *recordingStore) Ping(context.Context) error {
+	return nil
+}
+
+// Transact counts one transaction without running it.
+func (store *recordingStore) Transact(context.Context, persistence.TransactionFunc) error {
+	store.calls++
+	return nil
+}
+
+// Close releases nothing.
+func (store *recordingStore) Close() {}
+
+// Operate counts one definition write without running it.
+func (operations *recordingOperations) Operate(context.Context, persistence.OperationsFunc) error {
+	operations.calls++
+	return nil
 }
 
 // List counts one report read.

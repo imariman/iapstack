@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,16 +9,12 @@ import (
 
 	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/core"
-	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/validation"
-	"github.com/imariman/iapstack/internal/verification"
 )
 
 const (
 	// manualGrantRevokeMarker is the custom-method suffix of the revoke route.
 	manualGrantRevokeMarker = ":revoke"
-	// manualGrantMaxDurationDays bounds a relative grant duration.
-	manualGrantMaxDurationDays = 3660
 )
 
 // manualGrantRequest asks for one audited grant for a relative duration or until an absolute end.
@@ -36,14 +31,6 @@ type manualGrantRequest struct {
 // manualGrantRevocationRequest carries the required reason for an early revocation.
 type manualGrantRevocationRequest struct {
 	Reason string `json:"reason"`
-}
-
-// manualGrantResultResponse reports the stored grant and what the projection refresh changed.
-type manualGrantResultResponse struct {
-	Grant              controlplane.ManualGrant `json:"grant"`
-	Replay             bool                     `json:"replay"`
-	ProjectionsChanged int                      `json:"projections_changed"`
-	WebhooksEnqueued   int                      `json:"webhooks_enqueued"`
 }
 
 // searchAdminCustomers returns one page of project customers matching an identifier or transaction id.
@@ -93,69 +80,36 @@ func (api *API) getAdminCustomer(writer http.ResponseWriter, request *http.Reque
 
 // createAdminManualGrant records one audited operator grant and refreshes the normal projection and outbox.
 func (api *API) createAdminManualGrant(writer http.ResponseWriter, request *http.Request) {
-	principal, ok := api.requireAdmin(writer, request)
-	if !ok || !api.requireDurableActor(writer, request, principal) {
+	actor, ok := api.requireDurableAdminActor(writer, request)
+	if !ok {
 		return
 	}
 	var input manualGrantRequest
 	if !api.decode(writer, request, &input) {
 		return
 	}
-	now := api.now()
-	endsAt, err := manualGrantEnd(input, now)
-	if !api.requireValidInput(writer, request, err) {
-		return
-	}
-	projectID := core.ProjectID(request.PathValue("project_id"))
-	write := persistence.ManualGrantWrite{
-		ProjectID:      projectID,
+	result, err := api.controlPlane().CreateManualGrant(request.Context(), actor, controlplane.ManualGrantInput{
+		ProjectID:      core.ProjectID(request.PathValue("project_id")),
 		CustomerID:     core.CustomerID(request.PathValue("customer_id")),
-		ApplicationID:  input.ApplicationID,
-		ProductID:      input.ProductID,
-		EntitlementID:  input.EntitlementID,
-		Reason:         input.Reason,
-		ActorKeyID:     principal.ActorID(),
 		IdempotencyKey: input.IdempotencyKey,
-		StartsAt:       now,
-		EndsAt:         endsAt,
-	}
-	if !api.requireValidInput(writer, request, write.Validate()) {
-		return
-	}
-	var result persistence.ManualGrantResult
-	var refresh verification.ProjectionRefreshResult
-	err = api.store.Transact(request.Context(), func(repository persistence.Transaction) error {
-		var grantErr error
-		refresh = verification.ProjectionRefreshResult{}
-		result, grantErr = repository.CreateManualGrant(request.Context(), write)
-		if grantErr != nil || result.Replay {
-			return grantErr
-		}
-		refresh, grantErr = verification.RefreshCustomerProjectionWithOptions(
-			request.Context(), repository, verification.NewDefaultProjector(),
-			projectID, result.CanonicalCustomerID, now, true,
-		)
-		return grantErr
+		EntitlementID:  input.EntitlementID,
+		ProductID:      input.ProductID,
+		ApplicationID:  input.ApplicationID,
+		Reason:         input.Reason,
+		DurationDays:   input.DurationDays,
+		EndsAt:         input.EndsAt,
 	})
 	if err != nil {
 		api.writeError(writer, request, err)
 		return
 	}
-	if !result.Replay {
-		slog.Info(
-			"manual grant created",
-			slog.String("project_id", string(projectID)),
-			slog.String("grant_id", result.Grant.ID),
-			slog.Int("projections_changed", refresh.ProjectionsChanged),
-		)
-	}
-	writeJSON(writer, http.StatusOK, manualGrantResultFromRecord(result, refresh, now))
+	writeJSON(writer, http.StatusOK, result)
 }
 
 // revokeAdminManualGrant ends one operator grant early and refreshes the normal projection and outbox.
 func (api *API) revokeAdminManualGrant(writer http.ResponseWriter, request *http.Request) {
-	principal, ok := api.requireAdmin(writer, request)
-	if !ok || !api.requireDurableActor(writer, request, principal) {
+	actor, ok := api.requireDurableAdminActor(writer, request)
+	if !ok {
 		return
 	}
 	grantID, found := strings.CutSuffix(request.PathValue("grant_id"), manualGrantRevokeMarker)
@@ -167,47 +121,17 @@ func (api *API) revokeAdminManualGrant(writer http.ResponseWriter, request *http
 	if !api.decode(writer, request, &input) {
 		return
 	}
-	now := api.now()
-	projectID := core.ProjectID(request.PathValue("project_id"))
-	revocation := persistence.ManualGrantRevocation{
-		ProjectID:  projectID,
+	result, err := api.controlPlane().RevokeManualGrant(request.Context(), actor, controlplane.ManualGrantRevocationInput{
+		ProjectID:  core.ProjectID(request.PathValue("project_id")),
 		CustomerID: core.CustomerID(request.PathValue("customer_id")),
 		GrantID:    grantID,
 		Reason:     input.Reason,
-		ActorKeyID: principal.ActorID(),
-		RevokedAt:  now,
-	}
-	if !api.requireValidInput(writer, request, revocation.Validate()) {
-		return
-	}
-	var result persistence.ManualGrantResult
-	var refresh verification.ProjectionRefreshResult
-	err := api.store.Transact(request.Context(), func(repository persistence.Transaction) error {
-		var revokeErr error
-		refresh = verification.ProjectionRefreshResult{}
-		result, revokeErr = repository.RevokeManualGrant(request.Context(), revocation)
-		if revokeErr != nil || result.Replay {
-			return revokeErr
-		}
-		refresh, revokeErr = verification.RefreshCustomerProjectionWithOptions(
-			request.Context(), repository, verification.NewDefaultProjector(),
-			projectID, result.CanonicalCustomerID, now, true,
-		)
-		return revokeErr
 	})
 	if err != nil {
 		api.writeError(writer, request, err)
 		return
 	}
-	if !result.Replay {
-		slog.Info(
-			"manual grant revoked",
-			slog.String("project_id", string(projectID)),
-			slog.String("grant_id", result.Grant.ID),
-			slog.Int("projections_changed", refresh.ProjectionsChanged),
-		)
-	}
-	writeJSON(writer, http.StatusOK, manualGrantResultFromRecord(result, refresh, now))
+	writeJSON(writer, http.StatusOK, result)
 }
 
 // now returns the API clock in UTC.
@@ -216,42 +140,4 @@ func (api *API) now() time.Time {
 		return time.Now().UTC()
 	}
 	return api.clock().UTC()
-}
-
-// manualGrantEnd resolves exactly one of a relative duration or an absolute end after now.
-func manualGrantEnd(input manualGrantRequest, now time.Time) (time.Time, error) {
-	switch {
-	case input.DurationDays != nil && input.EndsAt != nil:
-		return time.Time{}, errors.New("manual grant takes duration_days or ends_at, not both")
-	case input.DurationDays != nil:
-		if *input.DurationDays < 1 || *input.DurationDays > manualGrantMaxDurationDays {
-			return time.Time{}, errors.New("manual grant duration_days is out of range")
-		}
-		return now.AddDate(0, 0, *input.DurationDays), nil
-	case input.EndsAt != nil:
-		endsAt := input.EndsAt.UTC()
-		if !endsAt.After(now) {
-			return time.Time{}, errors.New("manual grant ends_at must be in the future")
-		}
-		if endsAt.Sub(now) > persistence.ManualGrantMaxDuration {
-			return time.Time{}, errors.New("manual grant ends_at is too far in the future")
-		}
-		return endsAt, nil
-	default:
-		return time.Time{}, errors.New("manual grant requires duration_days or ends_at")
-	}
-}
-
-// manualGrantResultFromRecord maps one grant write and its projection refresh counts.
-func manualGrantResultFromRecord(
-	result persistence.ManualGrantResult,
-	refresh verification.ProjectionRefreshResult,
-	now time.Time,
-) manualGrantResultResponse {
-	return manualGrantResultResponse{
-		Grant:              controlplane.ManualGrantView(result.Grant, now),
-		Replay:             result.Replay,
-		ProjectionsChanged: refresh.ProjectionsChanged,
-		WebhooksEnqueued:   refresh.WebhooksEnqueued,
-	}
 }

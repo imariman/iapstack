@@ -110,14 +110,14 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 	if !bytes.Contains(unmappedBody, []byte(`"code":"product_not_mapped"`)) {
 		t.Fatalf("unmapped application grant = %s", unmappedBody)
 	}
-	var granted manualGrantResultResponse
+	var granted controlplane.ManualGrantResult
 	fixture.requestJSON(t, http.MethodPost, grantPath, admin, bonusGrant, http.StatusOK, &granted)
 	if granted.Replay || granted.ProjectionsChanged != 1 || granted.WebhooksEnqueued != 1 ||
 		granted.Grant.Status != controlplane.ManualGrantStatusActive || granted.Grant.Reason != bonusGrant.Reason ||
 		granted.Grant.ActorKeyID == "" || !granted.Grant.EffectiveEndsAt.Equal(fixture.now.AddDate(0, 0, 30)) {
 		t.Fatalf("manual grant = %#v", granted)
 	}
-	var replayed manualGrantResultResponse
+	var replayed controlplane.ManualGrantResult
 	fixture.requestJSON(t, http.MethodPost, grantPath, admin, bonusGrant, http.StatusOK, &replayed)
 	if !replayed.Replay || replayed.Grant.ID != granted.Grant.ID || replayed.ProjectionsChanged != 0 {
 		t.Fatalf("manual grant replay = %#v", replayed)
@@ -130,7 +130,7 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 		IdempotencyKey: "grant-premium-1", EntitlementID: apiIntegrationEntitlementID, ProductID: apiIntegrationProductID,
 		ApplicationID: apiIntegrationApplicationID, Reason: "Goodwill extension", DurationDays: &duration,
 	}
-	var shadowed manualGrantResultResponse
+	var shadowed controlplane.ManualGrantResult
 	fixture.requestJSON(t, http.MethodPost, grantPath, admin, premiumGrant, http.StatusOK, &shadowed)
 	if shadowed.ProjectionsChanged != 0 || shadowed.WebhooksEnqueued != 0 {
 		t.Fatalf("grant behind lifetime store access = %#v, want no projection change", shadowed)
@@ -205,14 +205,14 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 	fixture.requestJSON(t, http.MethodPost, grantPath+"/"+granted.Grant.ID, admin,
 		manualGrantRevocationRequest{Reason: "x"}, http.StatusNotFound, nil)
 	fixture.requestJSON(t, http.MethodPost, revokePath, admin, manualGrantRevocationRequest{}, http.StatusBadRequest, nil)
-	var revoked manualGrantResultResponse
+	var revoked controlplane.ManualGrantResult
 	fixture.requestJSON(t, http.MethodPost, revokePath, admin,
 		manualGrantRevocationRequest{Reason: "Granted to the wrong account"}, http.StatusOK, &revoked)
 	if revoked.Replay || revoked.Grant.Status != controlplane.ManualGrantStatusRevoked || revoked.Grant.RevokedAt == nil ||
 		revoked.ProjectionsChanged != 1 || revoked.WebhooksEnqueued != 1 {
 		t.Fatalf("manual grant revocation = %#v", revoked)
 	}
-	var revokedAgain manualGrantResultResponse
+	var revokedAgain controlplane.ManualGrantResult
 	fixture.requestJSON(t, http.MethodPost, revokePath, admin,
 		manualGrantRevocationRequest{Reason: "Repeated click"}, http.StatusOK, &revokedAgain)
 	if !revokedAgain.Replay || revokedAgain.Grant.RevocationReason != "Granted to the wrong account" {

@@ -154,7 +154,7 @@ type listPageToken struct {
 }
 
 var (
-	// readOnlyAnnotations marks every phase 1 tool as a closed-world, non-destructive read.
+	// readOnlyAnnotations marks every read tool as a closed-world, non-destructive read.
 	readOnlyAnnotations = sdk.ToolAnnotations{
 		ReadOnlyHint: true, DestructiveHint: boolPointer(false), IdempotentHint: true, OpenWorldHint: boolPointer(false),
 	}
@@ -163,21 +163,31 @@ var (
 	errInvalidPageToken = errors.New("page token is invalid")
 )
 
-// newServer builds the MCP server with the read-only tool catalogue and the embedded resources.
-func newServer(service *controlplane.Service, version string, logger *slog.Logger) *sdk.Server {
+// newServer builds the MCP server with the read tools, the write tools when writes is set, and the embedded
+// resources. A key that cannot write is served a server without write tools, so it is never offered them.
+func newServer(service *controlplane.Service, version string, logger *slog.Logger, writes bool) *sdk.Server {
 	server := sdk.NewServer(&sdk.Implementation{Name: serverName, Title: "IAPStack", Version: version}, &sdk.ServerOptions{
 		Instructions: serverInstructions,
 		Capabilities: &sdk.ServerCapabilities{Tools: &sdk.ToolCapabilities{}, Resources: &sdk.ResourceCapabilities{}},
 	})
-	for _, definition := range toolDefinitions(service, logger) {
+	definitions := readToolDefinitions(service, logger)
+	if writes {
+		definitions = append(definitions, writeToolDefinitions(service, logger)...)
+	}
+	for _, definition := range definitions {
 		server.AddTool(definition.tool, definition.handler)
 	}
 	addResources(server)
 	return server
 }
 
-// toolDefinitions returns the complete phase 1 tool catalogue in its documented order.
+// toolDefinitions returns the complete tool catalogue, read tools first, in its documented order.
 func toolDefinitions(service *controlplane.Service, logger *slog.Logger) []toolDefinition {
+	return append(readToolDefinitions(service, logger), writeToolDefinitions(service, logger)...)
+}
+
+// readToolDefinitions returns the read-only tools offered to every accepted key.
+func readToolDefinitions(service *controlplane.Service, logger *slog.Logger) []toolDefinition {
 	return []toolDefinition{
 		defineTool(&sdk.Tool{
 			Name:        "list_projects",
@@ -281,7 +291,8 @@ func toolDefinitions(service *controlplane.Service, logger *slog.Logger) []toolD
 }
 
 // defineTool derives strict schemas from the input and output types and wraps run with argument
-// validation, error classification, the response size cap, and one log line per call.
+// validation, error classification, the response size cap, and one log line per call. A tool without
+// annotations is a read; a write tool passes its own annotations with readOnlyHint false.
 func defineTool[In, Out any](
 	tool *sdk.Tool,
 	logger *slog.Logger,
@@ -298,7 +309,11 @@ func defineTool[In, Out any](
 	}
 	defined := *tool
 	annotations := readOnlyAnnotations
+	if tool.Annotations != nil {
+		annotations = *tool.Annotations
+	}
 	defined.Annotations = &annotations
+	write := !annotations.ReadOnlyHint
 	defined.InputSchema = inputSchema
 	defined.OutputSchema = mustSchema[Out]()
 	name := defined.Name
@@ -306,14 +321,22 @@ func defineTool[In, Out any](
 		startedAt := time.Now()
 		actor, authenticated := actorFromContext(ctx)
 		outcome := outcomeOK
+		projectID := ""
 		defer func() {
-			logger.Info("mcp tool call",
+			attributes := []any{
 				"tool", name,
 				"key_id", actor.KeyID,
 				"role", string(actor.Role),
-				"outcome", outcome,
-				"duration_ms", time.Since(startedAt).Milliseconds(),
-			)
+				"channel", string(actor.Channel),
+				"write", write,
+			}
+			// A write names its project so the log line can serve as the audit record of writes that
+			// store no actor, such as definition writes. Reads log no arguments at all.
+			if write && projectID != "" {
+				attributes = append(attributes, "project_id", projectID)
+			}
+			attributes = append(attributes, "outcome", outcome, "duration_ms", time.Since(startedAt).Milliseconds())
+			logger.Info("mcp tool call", attributes...)
 		}()
 		if !authenticated {
 			outcome = codeUnauthorized
@@ -327,6 +350,9 @@ func defineTool[In, Out any](
 		if err != nil {
 			outcome = codeInvalidRequest
 			return toolFailure(codeInvalidRequest, "the tool arguments do not match the input schema"), nil
+		}
+		if scoped, ok := any(input).(projectScopedInput); ok && write {
+			projectID = scoped.loggedProjectID()
 		}
 		output, err := run(ctx, actor, input)
 		if err != nil {

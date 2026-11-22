@@ -17,7 +17,8 @@ func TestManualGrantWriteValidation(t *testing.T) {
 	valid := persistence.ManualGrantWrite{
 		ProjectID: "project-1", CustomerID: "customer-1", ApplicationID: "application-1",
 		ProductID: "product-1", EntitlementID: "entitlement-1", Reason: "Support ticket 42",
-		ActorKeyID: "admin-key", IdempotencyKey: "grant-1", StartsAt: now, EndsAt: now.AddDate(0, 0, 30),
+		ActorKeyID: "admin-key", ActorChannel: persistence.ActorChannelMCP, IdempotencyKey: "grant-1",
+		StartsAt: now, EndsAt: now.AddDate(0, 0, 30),
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid write error = %v", err)
@@ -28,6 +29,8 @@ func TestManualGrantWriteValidation(t *testing.T) {
 		"newline reason":   func(write *persistence.ManualGrantWrite) { write.Reason = "line\nline" },
 		"long reason":      func(write *persistence.ManualGrantWrite) { write.Reason = strings.Repeat("x", 501) },
 		"bootstrap actor":  func(write *persistence.ManualGrantWrite) { write.ActorKeyID = "" },
+		"missing channel":  func(write *persistence.ManualGrantWrite) { write.ActorChannel = "" },
+		"unknown channel":  func(write *persistence.ManualGrantWrite) { write.ActorChannel = "email" },
 		"long replay key":  func(write *persistence.ManualGrantWrite) { write.IdempotencyKey = strings.Repeat("k", 201) },
 		"missing end":      func(write *persistence.ManualGrantWrite) { write.EndsAt = time.Time{} },
 		"end before start": func(write *persistence.ManualGrantWrite) { write.EndsAt = now.Add(-time.Second) },
@@ -130,8 +133,8 @@ func TestManualGrantIdentityAndProjectionSource(t *testing.T) {
 	grant := persistence.ManualGrant{
 		ID: "mgr-0123456789abcdef0123456789abcdef", ProjectID: "project-1", CustomerID: "customer-1",
 		ApplicationID: "application-1", ProductID: "product-1", EntitlementID: "entitlement-1",
-		Reason: "Support", ActorKeyID: "admin-key", IdempotencyKey: "grant-1",
-		StartsAt: start, EndsAt: end, CreatedAt: start,
+		Reason: "Support", ActorKeyID: "admin-key", ActorChannel: persistence.ActorChannelDashboard,
+		IdempotencyKey: "grant-1", StartsAt: start, EndsAt: end, CreatedAt: start,
 	}
 	if !grant.Active(start) || grant.Active(end) || grant.Active(start.Add(-time.Second)) {
 		t.Fatal("manual grant activity window is not [start, end)")
@@ -142,6 +145,10 @@ func TestManualGrantIdentityAndProjectionSource(t *testing.T) {
 		t.Fatal("revoked grant without revocation audit fields was accepted or active")
 	}
 	grant.RevokedByKeyID, grant.RevocationReason = "admin-key", "Wrong account"
+	if grant.Validate() == nil {
+		t.Fatal("revoked grant without a revocation channel validated")
+	}
+	grant.RevokedByChannel = persistence.ActorChannelMCP
 	if err := grant.Validate(); err != nil {
 		t.Fatalf("revoked grant error = %v", err)
 	}

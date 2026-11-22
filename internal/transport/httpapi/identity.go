@@ -16,7 +16,7 @@ import (
 
 const (
 	// identityActorForbiddenMessage rejects principals that have no stored API key or administrator account.
-	identityActorForbiddenMessage = "stored credentials are required"
+	identityActorForbiddenMessage = controlplane.StoredActorRequiredMessage
 )
 
 // customerMergeRequest selects the customer pair and the replay key for one merge.
@@ -38,11 +38,11 @@ type customerMergeResponse struct {
 
 // putAdminCustomerAlias attaches an external id through a stored admin or dashboard session.
 func (api *API) putAdminCustomerAlias(writer http.ResponseWriter, request *http.Request) {
-	principal, ok := api.requireAdmin(writer, request)
-	if !ok || !api.requireDurableActor(writer, request, principal) {
+	actor, ok := api.requireDurableAdminActor(writer, request)
+	if !ok {
 		return
 	}
-	api.putCustomerAlias(writer, request, core.ProjectID(request.PathValue("project_id")), principal)
+	api.putCustomerAlias(writer, request, core.ProjectID(request.PathValue("project_id")), actor)
 }
 
 // putApplicationCustomerAlias attaches an external id inside the application principal's project.
@@ -51,7 +51,9 @@ func (api *API) putApplicationCustomerAlias(writer http.ResponseWriter, request 
 	if !ok || !api.requireDurableActor(writer, request, principal) {
 		return
 	}
-	api.putCustomerAlias(writer, request, principal.ProjectID, principal)
+	api.putCustomerAlias(
+		writer, request, principal.ProjectID, controlplane.ActorFromPrincipal(principal, controlplane.ChannelAPI),
+	)
 }
 
 // getAdminCustomerResolution resolves an external id inside one admin project path.
@@ -123,45 +125,27 @@ func (api *API) postAdminCustomerMerge(writer http.ResponseWriter, request *http
 	writeJSON(writer, http.StatusOK, customerMergeFromRecord(merge))
 }
 
-// putCustomerAlias validates the path and stores one alias in the authenticated project.
+// putCustomerAlias stores one alias in the authenticated project through the shared control plane.
 func (api *API) putCustomerAlias(
 	writer http.ResponseWriter,
 	request *http.Request,
 	projectID core.ProjectID,
-	principal auth.Principal,
+	actor controlplane.Actor,
 ) {
 	var ignored struct{}
 	if !api.decode(writer, request, &ignored) {
 		return
 	}
-	customerID := core.CustomerID(request.PathValue("customer_id"))
-	externalID := request.PathValue("external_id")
-	write := persistence.CustomerAliasWrite{
-		ProjectID:           projectID,
-		CanonicalCustomerID: customerID,
-		ExternalID:          externalID,
-		ActorRole:           principal.Role,
-		ActorKeyID:          principal.ActorID(),
-	}
-	if !api.requireValidInput(writer, request, write.Validate()) {
-		return
-	}
-	var resolution persistence.CustomerResolution
-	err := api.store.Transact(request.Context(), func(repository persistence.Transaction) error {
-		if principal.Role == persistence.APIKeyRoleApplication {
-			if _, loadErr := repository.Application(request.Context(), projectID, principal.ApplicationID); loadErr != nil {
-				return loadErr
-			}
-		}
-		var putErr error
-		resolution, putErr = repository.PutCustomerAlias(request.Context(), write)
-		return putErr
+	resolution, err := api.controlPlane().PutCustomerAlias(request.Context(), actor, controlplane.CustomerAliasInput{
+		ProjectID:  projectID,
+		CustomerID: core.CustomerID(request.PathValue("customer_id")),
+		ExternalID: request.PathValue("external_id"),
 	})
 	if err != nil {
 		api.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, controlplane.CustomerResolutionView(resolution))
+	writeJSON(writer, http.StatusOK, resolution)
 }
 
 // getCustomerResolution reads one canonical customer for an external id in the authenticated project.
@@ -192,6 +176,20 @@ func (api *API) requireDurableActor(
 		return false
 	}
 	return true
+}
+
+// requireDurableAdminActor authenticates one administrator and rejects the bootstrap administrator, which
+// has no stored key or account to record on an audited write.
+func (api *API) requireDurableAdminActor(writer http.ResponseWriter, request *http.Request) (controlplane.Actor, bool) {
+	actor, ok := api.requireAdminActor(writer, request)
+	if !ok {
+		return controlplane.Actor{}, false
+	}
+	if actor.AuditID == "" {
+		writeAPIError(writer, request, http.StatusForbidden, "forbidden", identityActorForbiddenMessage)
+		return controlplane.Actor{}, false
+	}
+	return actor, true
 }
 
 // customerMergeFromRecord maps one stored merge audit row onto the public JSON contract.

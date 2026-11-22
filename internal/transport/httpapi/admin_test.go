@@ -100,7 +100,7 @@ func fakeAdminCustomerDetail(projectID core.ProjectID) persistence.AdminCustomer
 		ID: "mgr-0123456789abcdef0123456789abcdef", ProjectID: projectID, CustomerID: "customer-1",
 		ApplicationID: "application-1", ProductID: "product-1", EntitlementID: "entitlement-1",
 		EntitlementKey: "premium", Reason: "Support ticket 42", ActorKeyID: "0123456789abcdef01234567",
-		IdempotencyKey: "grant-1", StartsAt: createdAt, EndsAt: endsAt, CreatedAt: createdAt,
+		ActorChannel: persistence.ActorChannelDashboard, IdempotencyKey: "grant-1", StartsAt: createdAt, EndsAt: endsAt, CreatedAt: createdAt,
 	}
 	return persistence.AdminCustomerDetail{
 		GeneratedAt:         createdAt,
@@ -111,7 +111,7 @@ func fakeAdminCustomerDetail(projectID core.ProjectID) persistence.AdminCustomer
 		},
 		Aliases: []persistence.AdminCustomerAlias{{
 			ExternalID: "legacy-1", CanonicalCustomerID: "customer-1", ActorRole: persistence.APIKeyRoleAdmin,
-			ActorKeyID: "0123456789abcdef01234567", CreatedAt: createdAt,
+			ActorKeyID: "0123456789abcdef01234567", ActorChannel: persistence.ActorChannelAPI, CreatedAt: createdAt,
 		}},
 		Merges: []persistence.AdminCustomerMergeRecord{},
 		Entitlements: []persistence.AdminCustomerEntitlement{{
@@ -131,7 +131,7 @@ func fakeAdminCustomerDetail(projectID core.ProjectID) persistence.AdminCustomer
 			SourceID: grant.ID, SourceKind: persistence.SourceKindManual, ApplicationID: "application-1",
 			ProductID: "product-1", EntitlementID: "entitlement-1", EntitlementKey: "premium",
 			Access: core.AccessAllowed, AccessReason: core.AccessReasonManualGrant, EffectiveEndsAt: &endsAt,
-			ActorKeyID: grant.ActorKeyID, Reason: grant.Reason,
+			ActorKeyID: grant.ActorKeyID, ActorChannel: grant.ActorChannel, Reason: grant.Reason,
 		}, {
 			Kind: persistence.AdminTimelinePurchaseObserved, OccurredAt: createdAt.Add(-time.Hour),
 			CustomerID: "customer-1", SourceID: "observation-1", SourceKind: persistence.SourceKindStoreObservation,
