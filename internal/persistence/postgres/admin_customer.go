@@ -447,7 +447,7 @@ func (repository *transaction) adminCustomerAliases(
 	members []string,
 ) ([]persistence.AdminCustomerAlias, error) {
 	rows, err := repository.tx.Query(ctx, `
-		SELECT external_id, canonical_customer_id, actor_role, actor_key_id, created_at
+		SELECT external_id, canonical_customer_id, actor_role, actor_key_id, actor_channel, created_at
 		FROM customer_aliases
 		WHERE project_id = $1 AND canonical_customer_id = ANY($2)
 		ORDER BY created_at DESC, external_id
@@ -461,7 +461,8 @@ func (repository *transaction) adminCustomerAliases(
 	for rows.Next() {
 		var alias persistence.AdminCustomerAlias
 		if err := rows.Scan(
-			&alias.ExternalID, &alias.CanonicalCustomerID, &alias.ActorRole, &alias.ActorKeyID, &alias.CreatedAt,
+			&alias.ExternalID, &alias.CanonicalCustomerID, &alias.ActorRole, &alias.ActorKeyID, &alias.ActorChannel,
+			&alias.CreatedAt,
 		); err != nil {
 			return nil, classifyError("scan admin customer alias", err)
 		}
@@ -897,7 +898,7 @@ func (timeline *adminTimeline) addIdentity(detail persistence.AdminCustomerDetai
 		timeline.add(persistence.AdminTimelineEvent{
 			Kind: persistence.AdminTimelineAliasAdded, OccurredAt: alias.CreatedAt,
 			CustomerID: alias.CanonicalCustomerID, ExternalID: alias.ExternalID,
-			ActorRole: alias.ActorRole, ActorKeyID: alias.ActorKeyID,
+			ActorRole: alias.ActorRole, ActorKeyID: alias.ActorKeyID, ActorChannel: alias.ActorChannel,
 		})
 	}
 	timeline.noteSource(len(detail.Aliases))
@@ -922,7 +923,8 @@ func (timeline *adminTimeline) addManualGrants(grants []persistence.ManualGrant)
 			ApplicationID: grant.ApplicationID, ProductID: grant.ProductID,
 			EntitlementID: grant.EntitlementID, EntitlementKey: grant.EntitlementKey,
 			Access: core.AccessAllowed, AccessReason: core.AccessReasonManualGrant,
-			EffectiveEndsAt: &endsAt, ActorKeyID: grant.ActorKeyID, Reason: grant.Reason,
+			EffectiveEndsAt: &endsAt, ActorKeyID: grant.ActorKeyID, ActorChannel: grant.ActorChannel,
+			Reason: grant.Reason,
 		})
 		if grant.RevokedAt != nil {
 			timeline.add(persistence.AdminTimelineEvent{
@@ -931,7 +933,8 @@ func (timeline *adminTimeline) addManualGrants(grants []persistence.ManualGrant)
 				ApplicationID: grant.ApplicationID, ProductID: grant.ProductID,
 				EntitlementID: grant.EntitlementID, EntitlementKey: grant.EntitlementKey,
 				Access: core.AccessDenied, AccessReason: core.AccessReasonRevoked,
-				ActorKeyID: grant.RevokedByKeyID, Reason: grant.RevocationReason,
+				ActorKeyID: grant.RevokedByKeyID, ActorChannel: grant.RevokedByChannel,
+				Reason: grant.RevocationReason,
 			})
 		}
 	}

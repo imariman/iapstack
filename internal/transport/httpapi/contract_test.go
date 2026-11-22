@@ -136,7 +136,8 @@ func TestOpenAPIContractKeepsStableClientSchemas(t *testing.T) {
 		"AdminCustomerSearchPage":      {"customers"},
 		"AdminCustomerDetail":          {"customer", "canonical_customer_id", "entitlements", "manual_grants", "timeline", "timeline_truncated"},
 		"AdminCustomerEntitlement":     {"key", "source", "source_id", "access", "reason", "version"},
-		"ManualGrant":                  {"id", "customer_id", "entitlement_key", "reason", "actor_key_id", "status", "effective_ends_at"},
+		"ManualGrant":                  {"id", "customer_id", "entitlement_key", "reason", "actor_key_id", "actor_channel", "status", "effective_ends_at"},
+		"AdminCustomerAlias":           {"external_id", "canonical_customer_id", "actor_role", "actor_key_id", "actor_channel", "created_at"},
 		"ManualGrantRequest":           {"idempotency_key", "entitlement_id", "product_id", "application_id", "reason"},
 		"ManualGrantRevocationRequest": {"reason"},
 		"AppleConsumptionStatus":       {"settings", "recent_requests"},
@@ -300,7 +301,7 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 		{name: "customer detail", schema: "AdminCustomerDetail", value: controlplane.CustomerDetailView(
 			fakeAdminCustomerDetail("project-1"), now,
 		)},
-		{name: "manual grant result", schema: "ManualGrantResult", value: manualGrantResultFromRecord(
+		{name: "manual grant result", schema: "ManualGrantResult", value: controlplane.ManualGrantResultView(
 			persistence.ManualGrantResult{Grant: fakeAdminCustomerDetail("project-1").ManualGrants[0]},
 			verification.ProjectionRefreshResult{ProjectionsChanged: 1, WebhooksEnqueued: 1}, now,
 		)},

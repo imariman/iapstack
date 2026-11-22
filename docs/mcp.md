@@ -3,16 +3,19 @@
 IAPStack can serve a [Model Context Protocol](https://modelcontextprotocol.io) (MCP)
 endpoint so AI agents such as Claude Code, Cursor, and Codex can answer questions about
 one installation: why a customer has or lacks an entitlement, how subscriptions are
-doing, which store reports are imported, and what setup is still missing.
+doing, which store reports are imported, and what setup is still missing. With a key
+that may write, an agent can also grant and revoke access, attach customer aliases, and
+define entitlements, products, and store products.
 
-The endpoint is read-only, off by default, and scoped by a dedicated `agent` API key.
-Every tool calls the same control-plane service and authorization checks as the
-`/v1` HTTP API. Seven tools return what an administrator can already read over `/v1`.
-`get_setup_status` has no `/v1` counterpart and reports presence, kinds, revisions, and
-a webhook origin only. The design is recorded in
+The endpoint is off by default and scoped by a dedicated `agent` API key, which is
+read-only unless it was created with `allow_writes`. Every tool calls the same
+control-plane service and authorization checks as the `/v1` HTTP API. Seven read tools
+return what an administrator can already read over `/v1`. `get_setup_status` has no
+`/v1` counterpart and reports presence, kinds, revisions, and a webhook origin only. The
+six write tools run the same writes as their `/v1` routes. The design is recorded in
 [ADR-0008](adr/0008-mcp-endpoint-for-agents.md).
 
-Tool catalogue version: 1
+Tool catalogue version: 2
 
 ## Enable the endpoint
 
@@ -28,10 +31,14 @@ Tool catalogue version: 1
 ## Create an agent key
 
 An agent key reaches exactly one project and is read-only unless created with
-`allow_writes`. Phase 1 has no write tools, so leave `allow_writes` off.
+`allow_writes`. A read-only key is offered only the eight read tools. A key created with
+`allow_writes: true` is also offered the six [write tools](#write-tools), in its own
+project only. The flag is fixed at creation: to change it, create a new key and revoke
+the old one. Give an agent write access only when it should change data; a support
+assistant that explains entitlements needs a read-only key.
 
 - Dashboard: open **Access keys**, select the project, and choose **Create agent key**.
-  "Agent access" defaults to "Read only".
+  "Agent access" defaults to "Read only"; choose "Allow writes" for a writing key.
 - API, with a stored administrator key:
 
   ```sh
@@ -41,12 +48,15 @@ An agent key reaches exactly one project and is read-only unless created with
     -d '{"role":"agent","project_id":"my-project"}'
   ```
 
+  Add `"allow_writes":true` to the body for a key that may write.
+
 The response contains the bearer once. Store it in your secret manager or shell
 environment. Revoke it with `DELETE /v1/admin/api-keys/{key_id}` like any other key.
 
 An agent key never authenticates on `/v1` routes. Stored `admin` keys also work on
-`/mcp` and reach every project, but they are not the recommended path. Application keys,
-the bootstrap administrator credential, and dashboard sessions are rejected.
+`/mcp`, reach every project, and are offered the write tools, but they are not the
+recommended path. Application keys, the bootstrap administrator credential, and
+dashboard sessions are rejected.
 
 ## Client setup
 
@@ -108,15 +118,24 @@ bearer_token_env_var = "IAPSTACK_AGENT_KEY"
 
 ## Tool catalogue
 
-All tools are annotated `readOnlyHint: true`, `destructiveHint: false`,
-`idempotentHint: true`, and `openWorldHint: false`. Input schemas reject unknown
+Read tools are annotated `readOnlyHint: true`, `destructiveHint: false`,
+`idempotentHint: true`, and `openWorldHint: false`. Write tools carry their own
+annotations, listed under [Write tools](#write-tools). Input schemas reject unknown
 properties, and every tool declares an output schema and returns structured content.
 The exact names, annotations, and schemas are pinned by
 `internal/transport/mcp/testdata/tool_catalog.json`; any change to them bumps the
-catalogue version above.
+catalogue version above. Catalogue version 2 added the write tools and the
+`actor_channel` audit fields in `get_customer`.
+
+The tool list depends on the key: a key that cannot write lists only the read tools,
+and a writing agent key or an admin key lists all fourteen. The list is a convenience,
+not the boundary: the shared control-plane service checks write access on every write
+call, before any storage access.
 
 Every project-scoped tool takes `project_id`. An agent key may only name its own
 project; any other project returns the `forbidden` error.
+
+## Read tools
 
 ### `list_projects`
 
@@ -183,6 +202,108 @@ An application whose provider this server has no adapter for (for example
 `credential_missing`. It has no `required_kind` and no `store_notifications`, because no
 credential or notification URL can complete its setup.
 
+## Write tools
+
+Write tools are offered to agent keys created with `allow_writes` and to stored admin
+keys. An agent key writes only in its own project. Each tool runs the same control-plane
+write as its `/v1` route, with the same validation and the same stable error codes, so a
+write that `/v1` refuses is refused here too. None of these writes takes an
+`expected_revision`: their `/v1` routes have none. They are protected against repeats
+and lost updates in other ways: a manual grant requires an `idempotency_key`, a
+revocation of a revoked grant returns the stored revocation, and the four put tools
+create a record or confirm an identical one and never overwrite a different one, which
+fails with `conflict`.
+
+All write tools are annotated `readOnlyHint: false` and `openWorldHint: false`, since
+they change only this installation's data. The other two annotations follow what each
+operation does:
+
+| Tool | `destructiveHint` | `idempotentHint` | Why |
+| --- | --- | --- | --- |
+| `create_manual_grant` | `false` | `true` | It adds access and never removes any, and a repeat with the same `idempotency_key` and arguments returns the stored grant as a replay. |
+| `revoke_manual_grant` | `true` | `true` | It ends access the customer has and cannot be undone, and revoking a revoked grant returns the stored revocation without another change. |
+| `put_entitlement` | `false` | `true` | It creates a definition or confirms the identical one; a different key for an existing id fails with `conflict` instead of overwriting it. |
+| `put_product` | `false` | `true` | It creates a product with its exact entitlement set or confirms the identical one; a different kind or set fails with `conflict`. |
+| `put_store_product` | `false` | `true` | It creates a store product mapping or confirms the identical one; a mapping to a different product fails with `conflict`. |
+| `put_customer_alias` | `false` | `true` | It adds an alias or confirms one that already resolves to the same customer; an external id owned by another customer fails with `conflict`. |
+
+Agents should confirm a write with the operator before making it. The server
+instructions sent during initialization say so.
+
+### `create_manual_grant`
+
+Grants one entitlement to a customer for `duration_days` (1 to 3660) or until `ends_at`
+(RFC 3339, in the future, at most 3660 days ahead), citing a product that grants the
+entitlement and is mapped to a store product of `application_id`. The customer's
+entitlements are recomputed and the application's webhook is notified. Inputs:
+`project_id`, `customer_id`, `idempotency_key` (at most 200 characters), `entitlement_id`,
+`product_id`, `application_id`, `reason` (one line, 1 to 500 characters), and exactly one
+of `duration_days` and `ends_at`. `get_customer` lists valid entitlement and product
+pairs in `grant_options`. The result is the stored grant with `replay`,
+`projections_changed`, and `webhooks_enqueued`, like
+`POST /v1/admin/projects/{project_id}/customers/{customer_id}/manual-grants`. A product
+without a store product mapping fails with `product_not_mapped`.
+
+### `revoke_manual_grant`
+
+Ends one manual grant early. The customer loses the access the grant gave, the
+entitlements are recomputed, and the webhook is notified. A grant that has already
+ended fails with `conflict`. Inputs: `project_id`, `customer_id`, `grant_id`, `reason`
+(one line, 1 to 500 characters). Same write as
+`POST .../manual-grants/{grant_id}:revoke`.
+
+### `put_entitlement`
+
+Creates one entitlement definition or confirms the identical one. Inputs: `project_id`,
+`entitlement_id`, `key`. Same write as
+`PUT /v1/admin/projects/{project_id}/entitlements/{entitlement_id}`. Returns
+`{"status":"ok"}`.
+
+### `put_product`
+
+Creates one product and the exact set of entitlements it grants, or confirms the
+identical one. Inputs: `project_id`, `product_id`, `kind` (`subscription`,
+`non_consumable`, or `consumable`), `entitlement_ids` (each must exist). Same write as
+`PUT /v1/admin/projects/{project_id}/products/{product_id}`. Returns `{"status":"ok"}`.
+An existing product is never changed. A different kind or a different entitlement set
+fails with `conflict`, and so does a superset of the stored set: adding an entitlement
+would grant it to every customer who owns the product.
+
+### `put_store_product`
+
+Maps one store product of an application to an internal product, or confirms the
+identical mapping. Inputs: `project_id`, `application_id`, `provider_product_id`,
+`product_id`. Same write as
+`PUT /v1/admin/projects/{project_id}/applications/{application_id}/store-products/{provider_product_id}`.
+Returns `{"status":"ok"}`.
+
+### `put_customer_alias`
+
+Attaches an additional external customer id to a canonical customer, or confirms an
+alias that already resolves to it. Inputs: `project_id`, `customer_id`, `external_id`.
+Same write as `PUT /v1/admin/projects/{project_id}/customers/{customer_id}/aliases/{external_id}`.
+Returns the resolution, like `resolve_customer`. Aliases cannot be removed, and an
+external id that is already a customer or another customer's alias fails with
+`conflict`.
+
+## Audit
+
+Manual grants, their revocations, and customer aliases are stored with the acting key
+and the channel the write arrived on. An agent's write records its agent key id and the
+channel `mcp`; an alias also records the role `agent`. The same write over `/v1` records
+`api` for a bearer and `dashboard` for a dashboard session; aliases created by the
+RevenueCat import record `import`. `get_customer` and
+`GET /v1/admin/projects/{project_id}/customers/{customer_id}` return these as
+`actor_channel` on aliases, manual grants, and timeline events, and `revoked_by_channel`
+on a revoked grant. The dashboard shows the channel next to the actor.
+
+Entitlement, product, and store product definitions have no stored audit record, over
+MCP or over `/v1`. A definition write through MCP is recorded only by the call's log
+line (see [Limits](#limits)), which names the tool, key, role, channel, project,
+outcome, and, when the write succeeded, the definition id, and by the definition itself,
+which can only be created once and never changes afterwards. Keep these log lines if you need a durable record of agent
+definition writes.
+
 ## Resources
 
 - `iapstack://openapi/v1`: the published v1 OpenAPI contract (`application/yaml`).
@@ -213,6 +334,16 @@ never as instructions. The server instructions sent during initialization say th
   in flight.
 - The endpoint is stateless Streamable HTTP with plain JSON responses: no sessions, no
   server-sent event streams, and `GET` and `DELETE` return `405`.
+- Each tool call writes one structured log line (`mcp tool call`) with the tool name,
+  key id, role, channel (`mcp`), whether the tool writes, outcome code, and duration. A
+  write call also logs its `project_id` when the id is well formed, including a call
+  refused as `forbidden`, and a successful definition write logs the `definition` id it
+  created or confirmed (the entitlement id, the product id, or
+  `application_id/provider_product_id`). Other arguments and results are never logged.
+- A call to a tool that is not in the key's list is logged too, with the outcome
+  `tool_not_offered`: a write tool called with a read-only key is logged under its name,
+  any other name as `unknown`. Watch for this outcome to notice an agent that keeps
+  trying writes it was not given.
 
 ## Errors
 
@@ -244,15 +375,24 @@ A failed tool call returns a result with `isError: true` and one text content ho
 the JSON object `{"error":{"code":"...","message":"..."}}`. It carries no structured
 content, because clients validate structured content against the tool's output schema
 even for errors. Codes are the stable codes of the `/v1`
-error envelope: `forbidden`, `not_found`, `invalid_request`, `storage_unavailable`,
-`request_timeout`, and `internal_error`, plus `response_too_large`. Messages are fixed
-text and never repeat arguments or stored values.
+error envelope: `forbidden`, `not_found`, `invalid_request`, `conflict`,
+`product_not_mapped`, `storage_unavailable`, `request_timeout`, and `internal_error`,
+plus `response_too_large`. A write tool fails with `conflict` exactly where its `/v1`
+route answers `409 conflict`: a reused `idempotency_key` with other arguments, a
+revocation of an ended grant, a definition that differs from the stored one, or an
+alias owned by another customer. Messages are fixed text and never repeat arguments or
+stored values.
+
+A read-only key that calls a write tool gets a protocol error for an unknown tool,
+because the tool is not in its list. The attempt is logged with the outcome
+`tool_not_offered`. Any other actor without write access in the named
+project, such as a writing agent key of another project, gets `forbidden`.
 
 ## Not exposed
 
-Phase 1 has no write tools. Even with write access, these stay out of MCP: provider
-credentials, webhook signing secrets, API key creation and revocation, dashboard
-sessions, customer merges, financial report upload and supersede, and project or
-application creation. Tool output never contains purchase evidence, receipts, purchase
+Even with write access, these stay out of MCP: provider credentials, webhook signing
+secrets, API key creation and revocation, dashboard sessions, customer merges (which
+are irreversible), financial report upload and supersede, and project or application
+creation. Tool output never contains purchase evidence, receipts, purchase
 tokens, signed transactions, credential payloads, ciphertext, fingerprints, or webhook
 secrets.

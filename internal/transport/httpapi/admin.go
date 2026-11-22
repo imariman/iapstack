@@ -44,7 +44,7 @@ func (api *API) adminProjectOverview(writer http.ResponseWriter, request *http.R
 // It is built per call so tests that assemble a partial API keep working.
 func (api *API) controlPlane() *controlplane.Service {
 	dependencies := controlplane.Dependencies{
-		Store: api.store, Admin: api.admin, Protection: api.protection, Clock: api.now,
+		Store: api.store, Operations: api.operations, Admin: api.admin, Protection: api.protection, Clock: api.now,
 	}
 	if api.financialReports != nil {
 		dependencies.FinancialReports = api.financialReports

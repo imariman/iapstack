@@ -103,9 +103,9 @@ func (repository *transaction) PutCustomerAlias(
 
 	_, err = repository.tx.Exec(ctx, `
 		INSERT INTO customer_aliases (
-			project_id, external_id, canonical_customer_id, actor_role, actor_key_id
-		) VALUES ($1, $2, $3, $4, $5)
-	`, write.ProjectID, write.ExternalID, write.CanonicalCustomerID, write.ActorRole, write.ActorKeyID)
+			project_id, external_id, canonical_customer_id, actor_role, actor_key_id, actor_channel
+		) VALUES ($1, $2, $3, $4, $5, $6)
+	`, write.ProjectID, write.ExternalID, write.CanonicalCustomerID, write.ActorRole, write.ActorKeyID, write.ActorChannel)
 	if err != nil {
 		return persistence.CustomerResolution{}, classifyError("put customer alias", err)
 	}

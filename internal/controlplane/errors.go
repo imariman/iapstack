@@ -46,6 +46,8 @@ func Classify(err error) Problem {
 		problem = Problem{Status: http.StatusUnauthorized, Code: "unauthorized", Message: "notification authentication failed"}
 	case errors.Is(err, googleplay.ErrNotificationInvalid) || errors.Is(err, apple.ErrNotificationInvalid):
 		problem = Problem{Status: http.StatusBadRequest, Code: "invalid_notification", Message: "notification payload is invalid"}
+	case errors.Is(err, ErrStoredActorRequired):
+		problem = Problem{Status: http.StatusForbidden, Code: "forbidden", Message: StoredActorRequiredMessage}
 	case errors.Is(err, ErrForbidden):
 		problem = Problem{Status: http.StatusForbidden, Code: "forbidden", Message: "the credential may not access this resource"}
 	case errors.Is(err, persistence.ErrNotFound):

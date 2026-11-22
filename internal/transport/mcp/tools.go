@@ -40,6 +40,10 @@ const (
 	codeInvalidRequest = "invalid_request"
 	// codeUnauthorized reports a tool call without an authenticated actor.
 	codeUnauthorized = "unauthorized"
+	// outcomeToolNotOffered is the logged outcome of a call to a tool the key's tool list does not contain.
+	outcomeToolNotOffered = "tool_not_offered"
+	// unknownToolName replaces a called name that is not in the catalogue, so caller text never reaches the log.
+	unknownToolName = "unknown"
 )
 
 // toolDefinition binds one tool's metadata to its handler.
@@ -154,7 +158,7 @@ type listPageToken struct {
 }
 
 var (
-	// readOnlyAnnotations marks every phase 1 tool as a closed-world, non-destructive read.
+	// readOnlyAnnotations marks every read tool as a closed-world, non-destructive read.
 	readOnlyAnnotations = sdk.ToolAnnotations{
 		ReadOnlyHint: true, DestructiveHint: boolPointer(false), IdempotentHint: true, OpenWorldHint: boolPointer(false),
 	}
@@ -163,21 +167,68 @@ var (
 	errInvalidPageToken = errors.New("page token is invalid")
 )
 
-// newServer builds the MCP server with the read-only tool catalogue and the embedded resources.
-func newServer(service *controlplane.Service, version string, logger *slog.Logger) *sdk.Server {
+// newServer builds the MCP server with the read tools, the write tools when writes is set, and the embedded
+// resources. A key that cannot write is served a server without write tools, so it is never offered them.
+func newServer(service *controlplane.Service, version string, logger *slog.Logger, writes bool) *sdk.Server {
 	server := sdk.NewServer(&sdk.Implementation{Name: serverName, Title: "IAPStack", Version: version}, &sdk.ServerOptions{
 		Instructions: serverInstructions,
 		Capabilities: &sdk.ServerCapabilities{Tools: &sdk.ToolCapabilities{}, Resources: &sdk.ResourceCapabilities{}},
 	})
-	for _, definition := range toolDefinitions(service, logger) {
+	catalogue := make(map[string]bool)
+	offered := make(map[string]bool)
+	for _, definition := range readToolDefinitions(service, logger) {
+		catalogue[definition.tool.Name] = false
+		offered[definition.tool.Name] = true
 		server.AddTool(definition.tool, definition.handler)
 	}
+	for _, definition := range writeToolDefinitions(service, logger) {
+		catalogue[definition.tool.Name] = true
+		if writes {
+			offered[definition.tool.Name] = true
+			server.AddTool(definition.tool, definition.handler)
+		}
+	}
+	server.AddReceivingMiddleware(logUnofferedToolCalls(catalogue, offered, logger))
 	addResources(server)
 	return server
 }
 
-// toolDefinitions returns the complete phase 1 tool catalogue in its documented order.
+// logUnofferedToolCalls writes the call log line for a tools/call that names a tool this server does not
+// offer, such as a write tool called with a read-only key. The SDK answers such a call with an unknown-tool
+// error before any tool handler runs, so without this line the attempt would leave no trace. catalogue maps
+// every tool name to whether it writes; a name outside it is logged as "unknown", never as caller text.
+func logUnofferedToolCalls(catalogue, offered map[string]bool, logger *slog.Logger) sdk.Middleware {
+	return func(next sdk.MethodHandler) sdk.MethodHandler {
+		return func(ctx context.Context, method string, request sdk.Request) (sdk.Result, error) {
+			if params, ok := request.GetParams().(*sdk.CallToolParamsRaw); ok && params != nil && !offered[params.Name] {
+				actor, _ := actorFromContext(ctx)
+				name := unknownToolName
+				write, known := catalogue[params.Name]
+				if known {
+					name = params.Name
+				}
+				logger.Info("mcp tool call",
+					"tool", name,
+					"key_id", actor.KeyID,
+					"role", string(actor.Role),
+					"channel", string(actor.Channel),
+					"write", write,
+					"outcome", outcomeToolNotOffered,
+					"duration_ms", int64(0),
+				)
+			}
+			return next(ctx, method, request)
+		}
+	}
+}
+
+// toolDefinitions returns the complete tool catalogue, read tools first, in its documented order.
 func toolDefinitions(service *controlplane.Service, logger *slog.Logger) []toolDefinition {
+	return append(readToolDefinitions(service, logger), writeToolDefinitions(service, logger)...)
+}
+
+// readToolDefinitions returns the read-only tools offered to every accepted key.
+func readToolDefinitions(service *controlplane.Service, logger *slog.Logger) []toolDefinition {
 	return []toolDefinition{
 		defineTool(&sdk.Tool{
 			Name:        "list_projects",
@@ -281,7 +332,8 @@ func toolDefinitions(service *controlplane.Service, logger *slog.Logger) []toolD
 }
 
 // defineTool derives strict schemas from the input and output types and wraps run with argument
-// validation, error classification, the response size cap, and one log line per call.
+// validation, error classification, the response size cap, and one log line per call. A tool without
+// annotations is a read; a write tool passes its own annotations with readOnlyHint false.
 func defineTool[In, Out any](
 	tool *sdk.Tool,
 	logger *slog.Logger,
@@ -298,7 +350,11 @@ func defineTool[In, Out any](
 	}
 	defined := *tool
 	annotations := readOnlyAnnotations
+	if tool.Annotations != nil {
+		annotations = *tool.Annotations
+	}
 	defined.Annotations = &annotations
+	write := !annotations.ReadOnlyHint
 	defined.InputSchema = inputSchema
 	defined.OutputSchema = mustSchema[Out]()
 	name := defined.Name
@@ -306,14 +362,29 @@ func defineTool[In, Out any](
 		startedAt := time.Now()
 		actor, authenticated := actorFromContext(ctx)
 		outcome := outcomeOK
+		projectID, definition := "", ""
 		defer func() {
-			logger.Info("mcp tool call",
+			attributes := []any{
 				"tool", name,
 				"key_id", actor.KeyID,
 				"role", string(actor.Role),
-				"outcome", outcome,
-				"duration_ms", time.Since(startedAt).Milliseconds(),
-			)
+				"channel", string(actor.Channel),
+				"write", write,
+			}
+			// A write names its project so the log line can serve as the audit record of writes that
+			// store no actor, such as definition writes. Reads log no arguments at all. The id is
+			// logged only when it is a well-formed project id, so a rejected call cannot put arbitrary
+			// text into the log; a forbidden call that names a real project is still recorded.
+			if write && projectID != "" {
+				attributes = append(attributes, "project_id", projectID)
+			}
+			// A definition has no stored actor, so this line is its only record of who created it. The
+			// id is logged only after the write succeeded, when it has passed identifier validation.
+			if definition != "" && outcome == outcomeOK {
+				attributes = append(attributes, "definition", definition)
+			}
+			attributes = append(attributes, "outcome", outcome, "duration_ms", time.Since(startedAt).Milliseconds())
+			logger.Info("mcp tool call", attributes...)
 		}()
 		if !authenticated {
 			outcome = codeUnauthorized
@@ -327,6 +398,14 @@ func defineTool[In, Out any](
 		if err != nil {
 			outcome = codeInvalidRequest
 			return toolFailure(codeInvalidRequest, "the tool arguments do not match the input schema"), nil
+		}
+		if scoped, ok := any(input).(projectScopedInput); ok && write {
+			if named := scoped.loggedProjectID(); core.ProjectID(named).Validate() == nil {
+				projectID = named
+			}
+		}
+		if defined, ok := any(input).(definitionInput); ok && write {
+			definition = defined.loggedDefinition()
 		}
 		output, err := run(ctx, actor, input)
 		if err != nil {

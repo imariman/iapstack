@@ -12,21 +12,26 @@ import (
 
 const (
 	// ChannelAPI marks a request made with a bearer on the versioned HTTP API.
-	ChannelAPI Channel = "api"
+	ChannelAPI Channel = persistence.ActorChannelAPI
 	// ChannelDashboard marks a request made with a dashboard session cookie.
-	ChannelDashboard Channel = "dashboard"
+	ChannelDashboard Channel = persistence.ActorChannelDashboard
 	// ChannelMCP marks a request made through the MCP endpoint.
-	ChannelMCP Channel = "mcp"
+	ChannelMCP Channel = persistence.ActorChannelMCP
 )
 
-// Channel names the transport an actor used, so audit records can tell agent, dashboard, and API work apart.
-type Channel string
+// Channel names the transport an actor used. It is the stored audit channel, so audit records tell
+// agent, dashboard, and API work apart.
+type Channel = persistence.ActorChannel
 
 // Actor is the authenticated caller of one control-plane operation.
 type Actor struct {
 	Role persistence.APIKeyRole
-	// KeyID is empty for the bootstrap administrator, which has no stored key.
-	KeyID         string
+	// KeyID is the stored API key. It is empty for administrator accounts and the bootstrap administrator.
+	KeyID string
+	// AuditID is the durable identity recorded on audited writes: the API key id, or the administrator
+	// account marker for a password sign-in. It is empty for the bootstrap administrator, which has
+	// neither, so it may not make audited writes.
+	AuditID       string
 	ProjectID     core.ProjectID
 	ApplicationID core.ApplicationID
 	AllowWrites   bool
@@ -41,7 +46,7 @@ var (
 // ActorFromPrincipal binds one authenticated principal to the transport channel it arrived on.
 func ActorFromPrincipal(principal auth.Principal, channel Channel) Actor {
 	return Actor{
-		Role: principal.Role, KeyID: principal.KeyID, ProjectID: principal.ProjectID,
+		Role: principal.Role, KeyID: principal.KeyID, AuditID: principal.ActorID(), ProjectID: principal.ProjectID,
 		ApplicationID: principal.ApplicationID, AllowWrites: principal.AllowWrites, Channel: channel,
 	}
 }
@@ -81,6 +86,22 @@ func (actor Actor) AuthorizeWrite(projectID core.ProjectID) error {
 	default:
 		return ErrForbidden
 	}
+}
+
+// CanWrite reports whether the actor may write in any project at all: an administrator, or an agent
+// key created with allow_writes. It only selects which tools a transport offers; every write still
+// passes AuthorizeWrite for its own project.
+func (actor Actor) CanWrite() bool {
+	return actor.AuthorizeWrite(actor.ProjectID) == nil
+}
+
+// authorizeAliasWrite lets an application key attach aliases in its own project, as the data-plane
+// alias route always allowed, and otherwise applies the control-plane write rule.
+func (actor Actor) authorizeAliasWrite(projectID core.ProjectID) error {
+	if actor.Role == persistence.APIKeyRoleApplication {
+		return actor.authorizeApplicationProject(projectID)
+	}
+	return actor.AuthorizeWrite(projectID)
 }
 
 // authorizeApplicationProject lets an application key reach its own project on a data-plane route,

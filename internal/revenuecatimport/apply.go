@@ -155,6 +155,7 @@ func applySubscriber(
 				ExternalID:          alias,
 				ActorRole:           persistence.APIKeyRoleAdmin,
 				ActorKeyID:          importAliasActorKeyID,
+				ActorChannel:        persistence.ActorChannelImport,
 			})
 			if errors.Is(aliasErr, persistence.ErrConflict) {
 				return aliasConflictError(ctx, repository, input.ProjectID, alias)

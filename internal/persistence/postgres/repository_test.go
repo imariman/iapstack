@@ -728,7 +728,73 @@ func TestAdminQueryStoreReturnsBoundedSafeOverview(t *testing.T) {
 	}
 }
 
-// TestPutProductSerializesExactEntitlementSets verifies that concurrent writers cannot both commit divergent sets.
+// TestPutProductNeverChangesAnExistingProduct verifies a stored product can be confirmed but not changed:
+// a superset, a subset, another set, and another kind are all conflicts, and the stored set stays as it was.
+func TestPutProductNeverChangesAnExistingProduct(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	projectID := core.ProjectID(fixture.projectID)
+	seeded := core.EntitlementID(fixture.entitlementID)
+	put := func(product core.Product) error {
+		return store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+			return repository.PutProduct(database.ctx, product)
+		})
+	}
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		return repository.PutEntitlementDefinition(database.ctx, core.Entitlement{
+			ID: "entitlement-premium", ProjectID: projectID, Key: "premium",
+		})
+	}); err != nil {
+		t.Fatalf("seed premium entitlement: %v", err)
+	}
+	stored := core.Product{
+		ID: core.ProductID(fixture.productID), ProjectID: projectID, Kind: core.ProductKindNonConsumable,
+		EntitlementIDs: []core.EntitlementID{seeded},
+	}
+	if err := put(stored); err != nil {
+		t.Fatalf("PutProduct() identical product error = %v, want a confirmation", err)
+	}
+	for name, change := range map[string]func(*core.Product){
+		"superset": func(product *core.Product) {
+			product.EntitlementIDs = []core.EntitlementID{seeded, "entitlement-premium"}
+		},
+		"other set": func(product *core.Product) {
+			product.EntitlementIDs = []core.EntitlementID{"entitlement-premium"}
+		},
+		"missing entitlement": func(product *core.Product) {
+			product.EntitlementIDs = []core.EntitlementID{seeded, "entitlement-missing"}
+		},
+		"other kind": func(product *core.Product) { product.Kind = core.ProductKindSubscription },
+	} {
+		changed := stored
+		change(&changed)
+		if err := put(changed); !errors.Is(err, persistence.ErrConflict) {
+			t.Fatalf("PutProduct() %s error = %v, want ErrConflict", name, err)
+		}
+	}
+	rows, err := database.conn.Query(database.ctx, `
+		SELECT entitlement_id FROM product_entitlements WHERE project_id = $1 AND product_id = $2
+	`, fixture.projectID, fixture.productID)
+	if err != nil {
+		t.Fatalf("list product entitlements: %v", err)
+	}
+	defer rows.Close()
+	var entitlementIDs []string
+	for rows.Next() {
+		var entitlementID string
+		if err := rows.Scan(&entitlementID); err != nil {
+			t.Fatalf("scan product entitlement: %v", err)
+		}
+		entitlementIDs = append(entitlementIDs, entitlementID)
+	}
+	if len(entitlementIDs) != 1 || entitlementIDs[0] != fixture.entitlementID {
+		t.Fatalf("stored entitlement set = %v, want only %s", entitlementIDs, fixture.entitlementID)
+	}
+}
+
+// TestPutProductSerializesExactEntitlementSets verifies that concurrent writers creating one new product
+// cannot both commit divergent sets: one creates it and the other conflicts with the stored set.
 func TestPutProductSerializesExactEntitlementSets(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)
 	fixture := seedCatalog(t, database)
@@ -760,7 +826,7 @@ func TestPutProductSerializesExactEntitlementSets(t *testing.T) {
 				ready <- struct{}{}
 				<-start
 				return repository.PutProduct(database.ctx, core.Product{
-					ID: core.ProductID(fixture.productID), ProjectID: core.ProjectID(fixture.projectID),
+					ID: "product-concurrent", ProjectID: core.ProjectID(fixture.projectID),
 					Kind: core.ProductKindNonConsumable,
 					EntitlementIDs: []core.EntitlementID{
 						core.EntitlementID(fixture.entitlementID), entitlementID,
@@ -791,8 +857,8 @@ func TestPutProductSerializesExactEntitlementSets(t *testing.T) {
 	}
 	var storedCount int
 	if err := database.conn.QueryRow(database.ctx, `
-		SELECT count(*) FROM product_entitlements WHERE project_id = $1 AND product_id = $2
-	`, fixture.projectID, fixture.productID).Scan(&storedCount); err != nil {
+		SELECT count(*) FROM product_entitlements WHERE project_id = $1 AND product_id = 'product-concurrent'
+	`, fixture.projectID).Scan(&storedCount); err != nil {
 		t.Fatalf("count product entitlements: %v", err)
 	}
 	if storedCount != 2 {

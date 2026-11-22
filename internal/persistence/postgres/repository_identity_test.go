@@ -45,8 +45,8 @@ func TestCustomerResolutionFollowsOneHop(t *testing.T) {
 	`)
 	mustExec(t, database, `
 		INSERT INTO customer_aliases (
-			project_id, external_id, canonical_customer_id, actor_role, actor_key_id
-		) VALUES ($1, 'alias-external', $2, 'admin', 'admin-key')
+			project_id, external_id, canonical_customer_id, actor_role, actor_key_id, actor_channel
+		) VALUES ($1, 'alias-external', $2, 'admin', 'admin-key', 'api')
 	`, fixture.projectID, fixture.customerID)
 	mustExec(t, database, `
 		UPDATE customers SET merged_into_customer_id = $2
@@ -130,8 +130,8 @@ func TestPutCustomerRejectsAliasExternalID(t *testing.T) {
 	store := openRepositoryStore(t, database.ctx)
 	mustExec(t, database, `
 		INSERT INTO customer_aliases (
-			project_id, external_id, canonical_customer_id, actor_role, actor_key_id
-		) VALUES ($1, 'alias-external', $2, 'application', 'application-key')
+			project_id, external_id, canonical_customer_id, actor_role, actor_key_id, actor_channel
+		) VALUES ($1, 'alias-external', $2, 'application', 'application-key', 'api')
 	`, fixture.projectID, fixture.customerID)
 
 	err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
@@ -517,8 +517,8 @@ func TestMergeCustomersEnforcesConflictIdempotencyAndAliasOwnership(t *testing.T
 	`, fixture.projectID)
 	mustExec(t, database, `
 		INSERT INTO customer_aliases (
-			project_id, external_id, canonical_customer_id, actor_role, actor_key_id
-		) VALUES ($1, 'owned-alias', 'customer-alias-owner', 'admin', 'admin-key')
+			project_id, external_id, canonical_customer_id, actor_role, actor_key_id, actor_channel
+		) VALUES ($1, 'owned-alias', 'customer-alias-owner', 'admin', 'admin-key', 'dashboard')
 	`, fixture.projectID)
 	err = store.Transact(database.ctx, func(repository persistence.Transaction) error {
 		_, mergeErr := repository.MergeCustomers(database.ctx, persistence.CustomerMergeWrite{

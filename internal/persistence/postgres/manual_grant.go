@@ -18,9 +18,9 @@ const (
 	// manualGrantSelectSQL reads one stored grant joined to its public entitlement key.
 	manualGrantSelectSQL = `
 		SELECT mg.id, mg.project_id, mg.customer_id, mg.application_id, mg.product_id,
-			mg.entitlement_id, e.key, mg.reason, mg.actor_key_id, mg.idempotency_key,
+			mg.entitlement_id, e.key, mg.reason, mg.actor_key_id, mg.actor_channel, mg.idempotency_key,
 			mg.effective_starts_at, mg.effective_ends_at, mg.revoked_at,
-			mg.revoked_by_key_id, mg.revocation_reason, mg.created_at
+			mg.revoked_by_key_id, mg.revoked_by_channel, mg.revocation_reason, mg.created_at
 		FROM manual_grants AS mg
 		JOIN entitlements AS e ON e.id = mg.entitlement_id AND e.project_id = mg.project_id
 	`
@@ -68,8 +68,8 @@ func (repository *transaction) CreateManualGrant(
 	_, err = repository.tx.Exec(ctx, `
 		INSERT INTO manual_grants (
 			id, project_id, customer_id, application_id, product_id, entitlement_id,
-			reason, actor_key_id, idempotency_key, effective_starts_at, effective_ends_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			reason, actor_key_id, actor_channel, idempotency_key, effective_starts_at, effective_ends_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`,
 		grantID,
 		write.ProjectID,
@@ -79,6 +79,7 @@ func (repository *transaction) CreateManualGrant(
 		write.EntitlementID,
 		write.Reason,
 		write.ActorKeyID,
+		write.ActorChannel,
 		write.IdempotencyKey,
 		normalizeTime(write.StartsAt),
 		normalizeTime(write.EndsAt),
@@ -123,11 +124,13 @@ func (repository *transaction) RevokeManualGrant(
 		UPDATE manual_grants
 		SET revoked_at = GREATEST($1::timestamptz, effective_starts_at),
 			revoked_by_key_id = $2,
-			revocation_reason = $3
-		WHERE project_id = $4 AND id = $5 AND revoked_at IS NULL
+			revoked_by_channel = $3,
+			revocation_reason = $4
+		WHERE project_id = $5 AND id = $6 AND revoked_at IS NULL
 	`,
 		normalizeTime(revocation.RevokedAt),
 		revocation.ActorKeyID,
+		revocation.ActorChannel,
 		revocation.Reason,
 		revocation.ProjectID,
 		revocation.GrantID,
@@ -230,6 +233,7 @@ func scanManualGrantRow(row pgx.Row) (persistence.ManualGrant, error) {
 	var grant persistence.ManualGrant
 	var revokedAt pgtype.Timestamptz
 	var revokedBy pgtype.Text
+	var revokedByChannel pgtype.Text
 	var revocationReason pgtype.Text
 	if err := row.Scan(
 		&grant.ID,
@@ -241,11 +245,13 @@ func scanManualGrantRow(row pgx.Row) (persistence.ManualGrant, error) {
 		&grant.EntitlementKey,
 		&grant.Reason,
 		&grant.ActorKeyID,
+		&grant.ActorChannel,
 		&grant.IdempotencyKey,
 		&grant.StartsAt,
 		&grant.EndsAt,
 		&revokedAt,
 		&revokedBy,
+		&revokedByChannel,
 		&revocationReason,
 		&grant.CreatedAt,
 	); err != nil {
@@ -253,6 +259,7 @@ func scanManualGrantRow(row pgx.Row) (persistence.ManualGrant, error) {
 	}
 	grant.RevokedAt = timestampPointer(revokedAt)
 	grant.RevokedByKeyID = textValue(revokedBy)
+	grant.RevokedByChannel = persistence.ActorChannel(textValue(revokedByChannel))
 	grant.RevocationReason = textValue(revocationReason)
 	if err := grant.Validate(); err != nil {
 		return persistence.ManualGrant{}, fmt.Errorf("validate stored manual grant: %w", err)

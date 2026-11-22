@@ -68,7 +68,7 @@ IAPStack is configured entirely through environment variables:
 | `IAPSTACK_GRAFANA_OTLP_TOKEN` | none | 32+ character metrics-write-only Grafana Cloud access-policy token |
 | `IAPSTACK_GRAFANA_EXPORT_INTERVAL` | `1m` | Direct OTLP metric export interval |
 | `IAPSTACK_GRAFANA_EXPORT_TIMEOUT` | `10s` | Deadline for one direct OTLP export attempt |
-| `IAPSTACK_MCP_ENABLED` | `false` | Serve the read-only [MCP endpoint](#mcp-endpoint) at `/mcp` from `server` and `api` modes; `true` or `false` |
+| `IAPSTACK_MCP_ENABLED` | `false` | Serve the [MCP endpoint](#mcp-endpoint) at `/mcp` from `server` and `api` modes; `true` or `false` |
 | `IAPSTACK_MCP_MAX_CONCURRENT_REQUESTS_PER_KEY` | `4` | In-flight `/mcp` requests allowed per API key; further requests get `429` with `Retry-After` |
 | `IAPSTACK_PUBLIC_URL` | none | Absolute `http` or `https` base URL of the API, without credentials, query, or fragment. Only used to print full store notification URLs in the MCP `get_setup_status` tool; never derived from a request `Host` header |
 
@@ -313,16 +313,19 @@ your deployment secret manager; the dashboard cannot recover it after the dialog
 
 ## MCP endpoint
 
-The API process can serve a read-only [Model Context Protocol](mcp.md) endpoint so AI
-agents (Claude Code, Cursor, Codex, and other MCP clients) can answer support and setup
-questions without hand-written `curl` calls. It is off by default.
+The API process can serve a [Model Context Protocol](mcp.md) endpoint so AI agents
+(Claude Code, Cursor, Codex, and other MCP clients) can answer support and setup
+questions without hand-written `curl` calls, and, with a key that may write, manage
+manual grants, customer aliases, and catalog definitions. It is off by default.
 
 1. Set `IAPSTACK_MCP_ENABLED=true` on the `server` or `api` process and restart it.
    The worker never serves `/mcp`. Optionally set `IAPSTACK_PUBLIC_URL` to the
    external API base URL so `get_setup_status` prints complete store notification URLs.
 2. Create an agent key for one project, from **Access keys** in the dashboard or with
-   `POST /v1/admin/api-keys` and `{"role":"agent","project_id":"..."}`. Leave
-   `allow_writes` off: phase 1 exposes no write tools.
+   `POST /v1/admin/api-keys` and `{"role":"agent","project_id":"..."}`. The key is
+   read-only. Add `"allow_writes":true` only for an agent that should create and revoke
+   manual grants, attach aliases, or define entitlements, products, and store products
+   in that project; see [Write tools](mcp.md#write-tools).
 3. Configure the client with the URL `https://<api-host>/mcp` and the header
    `Authorization: Bearer <agent key>`. [MCP endpoint](mcp.md) has client examples.
 
@@ -349,7 +352,17 @@ Limits:
   request host gets `403`; no CORS headers are sent.
 - One serialized tool result is capped at 256 KiB. Lists are paginated with `next_page_token`.
 - Each tool call writes one structured log line (`mcp tool call`) with the tool name,
-  key id, role, outcome code, and duration. Arguments and results are never logged.
+  key id, role, channel, whether the tool writes, outcome code, and duration; a write
+  call also logs its `project_id` when the id is well formed, and a successful
+  definition write logs the `definition` id. Other arguments and results are never
+  logged. A call to a tool outside the key's list, such as a write tool called with a
+  read-only key, is logged with the outcome `tool_not_offered`; alert on it to notice an
+  agent that keeps attempting writes.
+- Manual grants, revocations, and aliases written through MCP are stored with the agent
+  key id and the channel `mcp`, and the customer detail shows it. Entitlement, product,
+  and store product definitions have no stored audit row on any transport, so the log
+  line is the only record of an agent's definition writes. Retain these log lines if
+  you need that record.
 
 ## Huawei AppGallery notification setup
 

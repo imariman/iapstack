@@ -92,12 +92,14 @@ func (repository *transaction) PutEntitlementDefinition(ctx context.Context, ent
 	return nil
 }
 
-// PutProduct creates one product and its exact entitlement grant set.
+// PutProduct creates one product and its exact entitlement grant set, or confirms an identical stored
+// product. An existing product is never changed: a different kind or entitlement set, including a
+// superset, is a conflict, because widening the set would grant its owners new entitlements.
 func (repository *transaction) PutProduct(ctx context.Context, product core.Product) error {
 	if err := product.Validate(); err != nil {
 		return err
 	}
-	_, err := repository.tx.Exec(ctx, `
+	inserted, err := repository.tx.Exec(ctx, `
 		INSERT INTO products (id, project_id, kind)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (id) DO NOTHING
@@ -105,6 +107,7 @@ func (repository *transaction) PutProduct(ctx context.Context, product core.Prod
 	if err != nil {
 		return classifyError("put product", err)
 	}
+	created := inserted.RowsAffected() == 1
 	var projectID, kind string
 	err = repository.tx.QueryRow(ctx, `
 		SELECT project_id, kind FROM products WHERE id = $1 FOR UPDATE
@@ -115,14 +118,18 @@ func (repository *transaction) PutProduct(ctx context.Context, product core.Prod
 	if projectID != string(product.ProjectID) || kind != string(product.Kind) {
 		return fmt.Errorf("put product: %w", persistence.ErrConflict)
 	}
-	for _, entitlementID := range product.EntitlementIDs {
-		_, err = repository.tx.Exec(ctx, `
-			INSERT INTO product_entitlements (project_id, product_id, entitlement_id)
-			VALUES ($1, $2, $3)
-			ON CONFLICT (product_id, entitlement_id) DO NOTHING
-		`, product.ProjectID, product.ID, entitlementID)
-		if err != nil {
-			return classifyError("put product entitlement", err)
+	// Entitlement rows are written only for the product this call created. For a product that already
+	// existed the stored set is compared as it is, so a request can confirm it but never extend it.
+	if created {
+		for _, entitlementID := range product.EntitlementIDs {
+			_, err = repository.tx.Exec(ctx, `
+				INSERT INTO product_entitlements (project_id, product_id, entitlement_id)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (product_id, entitlement_id) DO NOTHING
+			`, product.ProjectID, product.ID, entitlementID)
+			if err != nil {
+				return classifyError("put product entitlement", err)
+			}
 		}
 	}
 	rows, err := repository.tx.Query(ctx, `

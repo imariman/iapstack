@@ -166,7 +166,7 @@ versioning, and release automation.
 | --- | --- |
 | [Operations](docs/operations.md) | Secrets, configuration, dashboard, store notification setup, backups, upgrades, releases |
 | [HTTP API v1](docs/api-v1.md) | Endpoints, provider credentials, notifications, webhook verification |
-| [MCP endpoint](docs/mcp.md) | Opt-in read-only tools for AI agents, agent keys, client setup |
+| [MCP endpoint](docs/mcp.md) | Opt-in tools for AI agents, read-only or with audited writes, agent keys, client setup |
 | [v0.1 scope and architecture](docs/v0.1-scope.md) | System context, core invariants, provider slices |
 | [Security](docs/security.md) | Threat model and release security checklist |
 | [Architecture decisions](docs/adr/README.md) | Why the main boundaries exist |

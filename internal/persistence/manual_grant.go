@@ -46,6 +46,7 @@ type ManualGrantWrite struct {
 	EntitlementID  core.EntitlementID
 	Reason         string
 	ActorKeyID     string
+	ActorChannel   ActorChannel
 	IdempotencyKey string
 	StartsAt       time.Time
 	EndsAt         time.Time
@@ -53,12 +54,13 @@ type ManualGrantWrite struct {
 
 // ManualGrantRevocation ends one stored grant before its scheduled end.
 type ManualGrantRevocation struct {
-	ProjectID  core.ProjectID
-	CustomerID core.CustomerID
-	GrantID    string
-	Reason     string
-	ActorKeyID string
-	RevokedAt  time.Time
+	ProjectID    core.ProjectID
+	CustomerID   core.CustomerID
+	GrantID      string
+	Reason       string
+	ActorKeyID   string
+	ActorChannel ActorChannel
+	RevokedAt    time.Time
 }
 
 // ManualGrant is one stored operator grant and its audit fields.
@@ -72,11 +74,13 @@ type ManualGrant struct {
 	EntitlementKey   string
 	Reason           string
 	ActorKeyID       string
+	ActorChannel     ActorChannel
 	IdempotencyKey   string
 	StartsAt         time.Time
 	EndsAt           time.Time
 	RevokedAt        *time.Time
 	RevokedByKeyID   string
+	RevokedByChannel ActorChannel
 	RevocationReason string
 	CreatedAt        time.Time
 }
@@ -108,6 +112,7 @@ func (write ManualGrantWrite) Validate() error {
 		write.EntitlementID.Validate(),
 		ValidateManualGrantReason("manual grant reason", write.Reason),
 		core.ValidateOpaqueIdentifier("actor key ID", write.ActorKeyID),
+		ValidateTransportActorChannel(write.ActorChannel),
 		validateManualGrantIdempotencyKey(write.IdempotencyKey),
 		periodError,
 	)
@@ -121,6 +126,7 @@ func (revocation ManualGrantRevocation) Validate() error {
 		ValidateManualGrantID(revocation.GrantID),
 		ValidateManualGrantReason("revocation reason", revocation.Reason),
 		core.ValidateOpaqueIdentifier("actor key ID", revocation.ActorKeyID),
+		ValidateTransportActorChannel(revocation.ActorChannel),
 		validateTime("revocation time", revocation.RevokedAt),
 	)
 }
@@ -131,9 +137,10 @@ func (grant ManualGrant) Validate() error {
 	if grant.RevokedAt != nil {
 		revocationError = errors.Join(
 			core.ValidateOpaqueIdentifier("revoking actor key ID", grant.RevokedByKeyID),
+			ValidateTransportActorChannel(grant.RevokedByChannel),
 			ValidateManualGrantReason("revocation reason", grant.RevocationReason),
 		)
-	} else if grant.RevokedByKeyID != "" || grant.RevocationReason != "" {
+	} else if grant.RevokedByKeyID != "" || grant.RevokedByChannel != "" || grant.RevocationReason != "" {
 		revocationError = errors.New("manual grant revocation fields must be set together")
 	}
 	var periodError error
@@ -149,6 +156,7 @@ func (grant ManualGrant) Validate() error {
 		grant.EntitlementID.Validate(),
 		ValidateManualGrantReason("manual grant reason", grant.Reason),
 		core.ValidateOpaqueIdentifier("actor key ID", grant.ActorKeyID),
+		ValidateTransportActorChannel(grant.ActorChannel),
 		validateManualGrantIdempotencyKey(grant.IdempotencyKey),
 		validateTime("manual grant start", grant.StartsAt),
 		periodError,

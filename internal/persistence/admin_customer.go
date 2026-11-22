@@ -131,6 +131,7 @@ type AdminCustomerAlias struct {
 	CanonicalCustomerID core.CustomerID
 	ActorRole           APIKeyRole
 	ActorKeyID          string
+	ActorChannel        ActorChannel
 	CreatedAt           time.Time
 }
 
@@ -182,10 +183,12 @@ type AdminTimelineEvent struct {
 	ErrorCode              string
 	ActorRole              APIKeyRole
 	ActorKeyID             string
-	ExternalID             string
-	RelatedCustomerID      core.CustomerID
-	Reason                 string
-	OriginStore            string
+	// ActorChannel is set on alias and manual grant events; merges record no channel.
+	ActorChannel      ActorChannel
+	ExternalID        string
+	RelatedCustomerID core.CustomerID
+	Reason            string
+	OriginStore       string
 }
 
 // AdminGrantOption is one product that grants one entitlement and can therefore back a manual grant.

@@ -37,7 +37,7 @@ func TestNewMCPHandlerIsOptIn(t *testing.T) {
 // nil interfaces, so its nil checks answer with an error instead of dereferencing a typed nil pointer.
 func TestMCPControlPlaneDependenciesStayNilWithoutServices(t *testing.T) {
 	dependencies := mcpControlPlaneDependencies(config.Config{PublicURL: "https://iap.example.com"}, nil, nil, nil)
-	if dependencies.Store != nil || dependencies.Admin != nil || dependencies.Setup != nil ||
+	if dependencies.Store != nil || dependencies.Operations != nil || dependencies.Admin != nil || dependencies.Setup != nil ||
 		dependencies.Protection != nil || dependencies.FinancialReports != nil {
 		t.Fatalf("dependencies = %#v, want nil interfaces for absent services", dependencies)
 	}
@@ -53,5 +53,10 @@ func TestMCPControlPlaneDependenciesStayNilWithoutServices(t *testing.T) {
 		ProjectID: "project-1", Query: "customer-1",
 	}); err == nil {
 		t.Fatal("SearchCustomers() error = nil, want a missing dependency error")
+	}
+	if err := service.PutEntitlement(t.Context(), admin, controlplane.EntitlementInput{
+		ProjectID: "project-1", EntitlementID: "entitlement-1", Key: "premium",
+	}); err == nil {
+		t.Fatal("PutEntitlement() error = nil, want a missing dependency error")
 	}
 }

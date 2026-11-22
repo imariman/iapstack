@@ -637,13 +637,23 @@ CREATE TABLE customer_aliases (
     canonical_customer_id text NOT NULL,
     actor_role text NOT NULL,
     actor_key_id text NOT NULL,
+    -- The transport the alias arrived on: api, dashboard, mcp, or the offline import command.
+    actor_channel text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (project_id, external_id),
     CONSTRAINT customer_aliases_customer_fk FOREIGN KEY (canonical_customer_id, project_id)
         REFERENCES customers (id, project_id) ON DELETE RESTRICT,
-    CONSTRAINT customer_aliases_actor_role_valid CHECK (actor_role IN ('admin', 'application')),
+    CONSTRAINT customer_aliases_actor_role_valid CHECK (actor_role IN ('admin', 'agent', 'application')),
     CONSTRAINT customer_aliases_actor_key_valid CHECK (
         actor_key_id <> '' AND actor_key_id = btrim(actor_key_id)
+    ),
+    CONSTRAINT customer_aliases_actor_channel_valid CHECK (
+        actor_channel IN ('api', 'dashboard', 'mcp', 'import')
+    ),
+    -- Agent keys authenticate only on the MCP endpoint and application keys only on the HTTP API.
+    CONSTRAINT customer_aliases_actor_channel_role_valid CHECK (
+        (actor_role <> 'agent' OR actor_channel = 'mcp')
+        AND (actor_role <> 'application' OR actor_channel = 'api')
     ),
     CONSTRAINT customer_aliases_external_id_valid CHECK (
         external_id <> '' AND external_id = btrim(external_id)
@@ -964,11 +974,14 @@ CREATE TABLE manual_grants (
     entitlement_id text NOT NULL,
     reason text NOT NULL,
     actor_key_id text NOT NULL,
+    -- The transport the grant and its revocation arrived on: api, dashboard, or mcp.
+    actor_channel text NOT NULL,
     idempotency_key text NOT NULL,
     effective_starts_at timestamptz NOT NULL,
     effective_ends_at timestamptz NOT NULL,
     revoked_at timestamptz,
     revoked_by_key_id text,
+    revoked_by_channel text,
     revocation_reason text,
     created_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT manual_grants_idempotency_unique UNIQUE (project_id, idempotency_key),
@@ -989,6 +1002,9 @@ CREATE TABLE manual_grants (
     CONSTRAINT manual_grants_actor_valid CHECK (
         actor_key_id <> '' AND actor_key_id = btrim(actor_key_id) AND actor_key_id !~ '[[:cntrl:]]'
     ),
+    CONSTRAINT manual_grants_actor_channel_valid CHECK (
+        actor_channel IN ('api', 'dashboard', 'mcp')
+    ),
     CONSTRAINT manual_grants_idempotency_key_valid CHECK (
         idempotency_key <> ''
         AND idempotency_key = btrim(idempotency_key)
@@ -997,10 +1013,15 @@ CREATE TABLE manual_grants (
     ),
     CONSTRAINT manual_grants_period_valid CHECK (effective_ends_at > effective_starts_at),
     CONSTRAINT manual_grants_revocation_valid CHECK (
-        (revoked_at IS NULL AND revoked_by_key_id IS NULL AND revocation_reason IS NULL)
+        (
+            revoked_at IS NULL AND revoked_by_key_id IS NULL AND revoked_by_channel IS NULL
+            AND revocation_reason IS NULL
+        )
         OR (
             revoked_at IS NOT NULL
             AND revoked_by_key_id IS NOT NULL
+            AND revoked_by_channel IS NOT NULL
+            AND revoked_by_channel IN ('api', 'dashboard', 'mcp')
             AND revocation_reason IS NOT NULL
             AND revoked_at >= effective_starts_at
             AND revoked_by_key_id <> ''

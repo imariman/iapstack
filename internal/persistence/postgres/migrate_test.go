@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -507,8 +508,8 @@ func TestManualGrantConstraints(t *testing.T) {
 	grantInsert := `
 		INSERT INTO manual_grants (
 			id, project_id, customer_id, application_id, product_id, entitlement_id,
-			reason, actor_key_id, idempotency_key, effective_starts_at, effective_ends_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, 'admin-key', $8, now(), now() + interval '30 days')
+			reason, actor_key_id, actor_channel, idempotency_key, effective_starts_at, effective_ends_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, 'admin-key', 'api', $8, now(), now() + interval '30 days')
 	`
 	expectConstraint(t, database, "manual_grants_id_valid", grantInsert,
 		"imp-0123456789abcdef0123456789abcdef", fixture.projectID, fixture.customerID, fixture.applicationID,
@@ -524,6 +525,47 @@ func TestManualGrantConstraints(t *testing.T) {
 		fixture.productID, fixture.entitlementID, "Support ticket 1", "grant-1")
 	expectConstraint(t, database, "manual_grants_revocation_valid", `
 		UPDATE manual_grants SET revoked_at = now() WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
+	`)
+	expectConstraint(t, database, "manual_grants_revocation_valid", `
+		UPDATE manual_grants
+		SET revoked_at = now(), revoked_by_key_id = 'agent-key', revocation_reason = 'Refund'
+		WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
+	`)
+	expectConstraint(t, database, "manual_grants_revocation_valid", `
+		UPDATE manual_grants
+		SET revoked_at = now(), revoked_by_key_id = 'agent-key', revoked_by_channel = 'email',
+			revocation_reason = 'Refund'
+		WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
+	`)
+	expectConstraint(t, database, "manual_grants_revocation_valid", `
+		UPDATE manual_grants SET revoked_by_channel = 'mcp' WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
+	`)
+	expectConstraint(t, database, "manual_grants_actor_channel_valid", `
+		UPDATE manual_grants SET actor_channel = 'email' WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
+	`)
+	expectConstraint(t, database, "manual_grants_actor_channel_valid", `
+		UPDATE manual_grants SET actor_channel = 'MCP' WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
+	`)
+	// No import path writes manual grants, so the import channel is not a valid actor or revoker here.
+	expectConstraint(t, database, "manual_grants_actor_channel_valid", `
+		UPDATE manual_grants SET actor_channel = 'import' WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
+	`)
+	expectConstraint(t, database, "manual_grants_revocation_valid", `
+		UPDATE manual_grants
+		SET revoked_at = now(), revoked_by_key_id = 'agent-key', revoked_by_channel = 'import',
+			revocation_reason = 'Refund'
+		WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
+	`)
+	mustExec(t, database, `
+		UPDATE manual_grants
+		SET revoked_at = now(), revoked_by_key_id = 'agent-key', revoked_by_channel = 'mcp',
+			revocation_reason = 'Refund'
+		WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
+	`)
+	mustExec(t, database, `
+		UPDATE manual_grants
+		SET revoked_at = NULL, revoked_by_key_id = NULL, revoked_by_channel = NULL, revocation_reason = NULL
+		WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
 	`)
 	expectConstraint(t, database, "customer_entitlements_source_exclusive", `
 		INSERT INTO customer_entitlements (
@@ -553,6 +595,35 @@ func TestManualGrantConstraints(t *testing.T) {
 		UPDATE customer_entitlements SET source_manual_grant_id = 'mgr-ffffffffffffffffffffffffffffffff'
 		WHERE customer_id = $1
 	`, fixture.customerID)
+}
+
+// TestCustomerAliasActorConstraints verifies the alias actor role and channel checks: agents write only
+// over MCP, application keys only over the API, administrators over any stored channel.
+func TestCustomerAliasActorConstraints(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	aliasInsert := `
+		INSERT INTO customer_aliases (
+			project_id, external_id, canonical_customer_id, actor_role, actor_key_id, actor_channel
+		) VALUES ($1, $2, $3, $4, 'key-1', $5)
+	`
+	for index, valid := range [][2]string{
+		{"admin", "api"}, {"admin", "dashboard"}, {"admin", "mcp"}, {"admin", "import"},
+		{"agent", "mcp"}, {"application", "api"},
+	} {
+		mustExec(t, database, aliasInsert,
+			fixture.projectID, fmt.Sprintf("alias-valid-%d", index), fixture.customerID, valid[0], valid[1])
+	}
+	expectConstraint(t, database, "customer_aliases_actor_role_valid", aliasInsert,
+		fixture.projectID, "alias-operator", fixture.customerID, "operator", "api")
+	expectConstraint(t, database, "customer_aliases_actor_channel_valid", aliasInsert,
+		fixture.projectID, "alias-email", fixture.customerID, "admin", "email")
+	expectConstraint(t, database, "customer_aliases_actor_channel_role_valid", aliasInsert,
+		fixture.projectID, "alias-agent-api", fixture.customerID, "agent", "api")
+	expectConstraint(t, database, "customer_aliases_actor_channel_role_valid", aliasInsert,
+		fixture.projectID, "alias-agent-dashboard", fixture.customerID, "agent", "dashboard")
+	expectConstraint(t, database, "customer_aliases_actor_channel_role_valid", aliasInsert,
+		fixture.projectID, "alias-application-mcp", fixture.customerID, "application", "mcp")
 }
 
 // TestAgentAPIKeyConstraints verifies agent key scope rules, the write flag, and the project reference.

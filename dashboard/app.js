@@ -2587,7 +2587,7 @@ function customerIdentitySection(detail) {
     item.append(
       node("span", "source-badge", "Alias"),
       node("code", "", alias.external_id),
-      node("small", "", `Added ${formatTime(alias.created_at)} by ${alias.actor_role} ${actorLabel(alias.actor_key_id)}`),
+      node("small", "", `Added ${formatTime(alias.created_at)} by ${alias.actor_role} ${actorLabel(alias.actor_key_id)}${channelLabel(alias.actor_channel)}`),
     );
     list.append(item);
   }
@@ -2669,10 +2669,10 @@ function customerGrantsSection(detail) {
     summary.append(
       title,
       node("p", "grant-reason", grant.reason),
-      node("small", "", `${formatTime(grant.effective_starts_at)} to ${formatTime(grant.effective_ends_at)} · ${grant.application_id} · by ${actorLabel(grant.actor_key_id)}`),
+      node("small", "", `${formatTime(grant.effective_starts_at)} to ${formatTime(grant.effective_ends_at)} · ${grant.application_id} · by ${actorLabel(grant.actor_key_id)}${channelLabel(grant.actor_channel)}`),
     );
     if (grant.revoked_at) {
-      summary.append(node("small", "", `Revoked ${formatTime(grant.revoked_at)} by ${actorLabel(grant.revoked_by_key_id)}: ${grant.revocation_reason}`));
+      summary.append(node("small", "", `Revoked ${formatTime(grant.revoked_at)} by ${actorLabel(grant.revoked_by_key_id)}${channelLabel(grant.revoked_by_channel)}: ${grant.revocation_reason}`));
     }
     item.append(summary);
     if (grant.status === "active") {
@@ -2722,7 +2722,7 @@ function timelineEntry(event) {
     case "alias_added":
       title.append(node("strong", "", "Alias added"));
       identifiers.push(event.external_id);
-      lines.push(`By ${event.actor_role || "admin"} ${actorLabel(event.actor_key_id)}`);
+      lines.push(`By ${event.actor_role || "admin"} ${actorLabel(event.actor_key_id)}${channelLabel(event.actor_channel)}`);
       break;
     case "customer_merged":
       title.append(node("strong", "", "Customer merged"));
@@ -2749,13 +2749,13 @@ function timelineEntry(event) {
       break;
     case "manual_grant_created":
       title.append(node("strong", "", "Manual grant"));
-      lines.push(`${event.entitlement_key} until ${formatTime(event.effective_ends_at)} · by ${actorLabel(event.actor_key_id)}`, `Reason: ${event.reason}`);
+      lines.push(`${event.entitlement_key} until ${formatTime(event.effective_ends_at)} · by ${actorLabel(event.actor_key_id)}${channelLabel(event.actor_channel)}`, `Reason: ${event.reason}`);
       identifiers.push(event.source_id);
       break;
     case "manual_grant_revoked":
       title.append(node("strong", "", "Manual grant revoked"));
       badge = "revoked";
-      lines.push(`${event.entitlement_key} · by ${actorLabel(event.actor_key_id)}`, `Reason: ${event.reason}`);
+      lines.push(`${event.entitlement_key} · by ${actorLabel(event.actor_key_id)}${channelLabel(event.actor_channel)}`, `Reason: ${event.reason}`);
       identifiers.push(event.source_id);
       break;
     case "entitlement_changed":
@@ -3006,6 +3006,12 @@ function actorLabel(actorID) {
   if (!value.startsWith("account:")) return `key ${value}`;
   const [accountID, ...username] = value.slice("account:".length).split(":");
   return username.length ? `account ${username.join(":")} (${accountID.slice(0, 8)})` : `account ${accountID}`;
+}
+
+// channelLabel names the transport an audited write arrived on, so agent work stands apart from dashboard and API work.
+function channelLabel(channel) {
+  const labels = { api: "API", dashboard: "dashboard", mcp: "MCP agent", import: "import" };
+  return labels[channel] ? ` via ${labels[channel]}` : "";
 }
 
 function node(tag, className = "", text = "") {

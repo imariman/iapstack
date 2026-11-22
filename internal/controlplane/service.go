@@ -18,7 +18,9 @@ type FinancialReportLister interface {
 // Dependencies holds the persistence ports and services the control plane reads through.
 // A nil dependency makes only the operations that need it fail.
 type Dependencies struct {
-	Store            persistence.Store
+	Store persistence.Store
+	// Operations runs catalog definition writes. Nil makes only those writes fail.
+	Operations       persistence.OperationsStore
 	Admin            persistence.AdminQueryStore
 	Setup            persistence.AdminSetupStore
 	FinancialReports FinancialReportLister
@@ -32,7 +34,7 @@ type Dependencies struct {
 	Clock func() time.Time
 }
 
-// Service runs control-plane reads behind one shared authorization model.
+// Service runs control-plane reads and writes behind one shared authorization model.
 type Service struct {
 	dependencies Dependencies
 }

@@ -71,12 +71,15 @@ application key for a missing application. List and revoke responses include
 `allow_writes` for agent keys only.
 
 An agent key never authenticates on a `/v1` route. Every `/v1` endpoint answers it with
-`401`, the same response as any other key of the wrong role.
+`401`, the same response as any other key of the wrong role. An agent key created with
+`allow_writes` makes its writes through the MCP write tools, which run the same
+control-plane writes as the manual grant, alias, entitlement, product, and store product
+routes below.
 
 ## Bootstrap sequence
 
 1. Use `IAPSTACK_BOOTSTRAP_ADMIN_KEY` to create a stored admin key with `POST /v1/admin/api-keys` and `{"role":"admin"}`. The bootstrap key stops working at that moment, so use the returned stored admin key for every later step. A person setting up the dashboard creates an administrator account instead (the setup banner does this); scripts keep using stored admin keys.
-2. Create the project, provider application, entitlement, product, and provider-product mapping using the idempotent `/v1/admin/projects/...` PUT endpoints. Customers need no step here: the first stored purchase creates one (see [Application operations](#application-operations)). Create a customer with `PUT /v1/admin/projects/{project_id}/customers/{customer_id}` only to choose its internal id or to attach aliases before its first purchase. That PUT returns `409` when the external id already belongs to a customer with a different internal id.
+2. Create the project, provider application, entitlement, product, and provider-product mapping using the idempotent `/v1/admin/projects/...` PUT endpoints. These definitions are fixed at creation: repeating a PUT with the same body confirms it, and a different body returns `409`. A product's entitlement set cannot be extended later, because that would grant the added entitlement to everyone who owns the product; create a new product instead. Customers need no step here: the first stored purchase creates one (see [Application operations](#application-operations)). Create a customer with `PUT /v1/admin/projects/{project_id}/customers/{customer_id}` only to choose its internal id or to attach aliases before its first purchase. That PUT returns `409` when the external id already belongs to a customer with a different internal id.
 3. Store the provider's versioned credential package and an HTTPS webhook configuration.
 4. Create an application key with `{"role":"application","project_id":"...","application_id":"..."}`.
 5. Keep that application key in the trusted host backend. After authenticating a
@@ -270,6 +273,14 @@ public id of the stored key that made the change. When the change came from a da
 session opened with a username and password, they hold `account:<id>:<username>`
 instead. The id keeps the row tied to one account when a username is later reused, and
 the username keeps it readable after the account is deleted.
+
+Aliases and manual grants also record the channel the write arrived on, returned as
+`actor_channel` (and `revoked_by_channel` on a revoked grant) in the customer detail,
+its aliases, manual grants, and timeline events: `api` for a request authenticated by a
+bearer on this API, `dashboard` for a dashboard session, `mcp` for the
+[MCP endpoint](mcp.md), and `import` for aliases written by the RevenueCat import. An
+alias `actor_role` is `admin`, `application`, or `agent`; an agent alias is always
+`mcp` and an application alias always `api`. Customer merges record no channel.
 
 A manual grant is an audited access source of kind `manual`. While it allows access, the
 public entitlement and the webhook report `reason` `manual_grant`; after revocation they report
