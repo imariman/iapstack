@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/credentials"
 	"github.com/imariman/iapstack/internal/offering"
@@ -176,9 +177,9 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 
 	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
 	zero := int64(0)
-	dailyActivity := make([]adminDailyActivityResponse, 0, 30)
+	dailyActivity := make([]controlplane.DailyActivity, 0, 30)
 	for offset := 29; offset >= 0; offset-- {
-		dailyActivity = append(dailyActivity, adminDailyActivityResponse{
+		dailyActivity = append(dailyActivity, controlplane.DailyActivity{
 			Date: now.AddDate(0, 0, -offset).Format(time.DateOnly),
 		})
 	}
@@ -203,8 +204,8 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 		{name: "dashboard session", schema: "DashboardSession", value: dashboardSessionResponse{
 			ExpiresAt: now.Add(12 * time.Hour),
 		}},
-		{name: "project collection", schema: "AdminProjects", value: adminProjectsResponse{
-			Projects: []adminProjectResponse{{ID: "project-1", CreatedAt: now}},
+		{name: "project collection", schema: "AdminProjects", value: controlplane.ProjectList{
+			Projects: []controlplane.Project{{ID: "project-1", CreatedAt: now}},
 		}},
 		{name: "API key collection", schema: "ApiKeyCollection", value: apiKeyCollectionResponse{
 			APIKeys: []apiKeyResponse{{
@@ -222,9 +223,9 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 			ID: "0123456789abcdef01234568", Role: persistence.APIKeyRoleAgent, ProjectID: "project-1",
 			AllowWrites: true, CreatedAt: now,
 		}, "")},
-		{name: "imported proceeds", schema: "AdminRevenue", value: adminRevenueResponse{
+		{name: "imported proceeds", schema: "AdminRevenue", value: controlplane.Revenue{
 			Status: persistence.AdminRevenueReportsImported,
-			Amounts: []adminRecognizedAmountResponse{{
+			Amounts: []controlplane.RecognizedAmount{{
 				Provider: core.ProviderAppleAppStore, ReportKind: persistence.FinancialReportKindAppleConsolidated,
 				PeriodStart: "2026-09-28", PeriodEnd: "2026-11-01", Currency: "EUR",
 				AmountDecimal: "-1.25", AmountScale: 2, MinorUnits: func() *int64 { value := int64(-125); return &value }(),
@@ -234,9 +235,9 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 			UncoveredProviders: []core.Provider{}, ZeroFilledApplicationIDs: []core.ApplicationID{},
 			ProductionApplicationCount: 1,
 		}},
-		{name: "one imported app of two", schema: "AdminRevenue", value: adminRevenueResponse{
+		{name: "one imported app of two", schema: "AdminRevenue", value: controlplane.Revenue{
 			Status: persistence.AdminRevenueStoreReportsRequired,
-			Amounts: []adminRecognizedAmountResponse{{
+			Amounts: []controlplane.RecognizedAmount{{
 				Provider: core.ProviderAppleAppStore, ReportKind: persistence.FinancialReportKindAppleConsolidated,
 				PeriodStart: "2026-09-28", PeriodEnd: "2026-11-01", Currency: "USD",
 				AmountDecimal: "2.50", AmountScale: 2, MinorUnits: func() *int64 { value := int64(250); return &value }(),
@@ -246,21 +247,21 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 			UncoveredProviders: []core.Provider{}, ZeroFilledApplicationIDs: []core.ApplicationID{"app-apple-other"},
 			ProductionApplicationCount: 2,
 		}},
-		{name: "project overview", schema: "AdminProjectOverview", value: adminOverviewResponse{
-			Project: adminProjectResponse{ID: "project-1", CreatedAt: now},
-			Analytics: adminAnalyticsResponse{
+		{name: "project overview", schema: "AdminProjectOverview", value: controlplane.ProjectOverview{
+			Project: controlplane.Project{ID: "project-1", CreatedAt: now},
+			Analytics: controlplane.Analytics{
 				WindowDays: 30, GeneratedAt: now,
-				Revenue: adminRevenueResponse{
+				Revenue: controlplane.Revenue{
 					Status: persistence.AdminRevenueSandboxOnly, RecognizedMinorUnits: &zero,
-					Amounts: []adminRecognizedAmountResponse{}, UncoveredProviders: []core.Provider{},
+					Amounts: []controlplane.RecognizedAmount{}, UncoveredProviders: []core.Provider{},
 					ZeroFilledApplicationIDs: []core.ApplicationID{},
 				},
-				SandboxValue:  adminSandboxValueResponse{Amounts: []adminMoneyResponse{}},
+				SandboxValue:  controlplane.SandboxValue{Amounts: []controlplane.Money{}},
 				DailyActivity: dailyActivity,
 			},
-			Applications: []adminApplicationResponse{}, Products: []adminProductResponse{},
-			Customers: []adminCustomerResponse{}, RecentTransactions: []adminTransactionResponse{},
-			Queues: []adminQueueResponse{}, RecentWebhookEvents: []adminWebhookEventResponse{},
+			Applications: []controlplane.Application{}, Products: []controlplane.Product{},
+			Customers: []controlplane.Customer{}, RecentTransactions: []controlplane.Transaction{},
+			Queues: []controlplane.Queue{}, RecentWebhookEvents: []controlplane.WebhookEvent{},
 		}},
 		{name: "manual grant entitlement", schema: "EntitlementSnapshot", value: map[string]any{
 			"customer_id": "customer-1",
@@ -268,34 +269,34 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 				fakeAdminCustomerEntitlement(now),
 			}, now),
 		}},
-		{name: "customer search page", schema: "AdminCustomerSearchPage", value: adminCustomerSearchResponse{
-			Customers: []adminCustomerMatchResponse{{
-				adminCustomerResponse: adminCustomerResponse{
+		{name: "customer search page", schema: "AdminCustomerSearchPage", value: controlplane.CustomerSearchPage{
+			Customers: []controlplane.CustomerMatch{{
+				Customer: controlplane.Customer{
 					ID: "customer-1", ExternalID: "user-1", AliasCount: 1, EntitlementCount: 1,
 					AllowedCount: 1, LastObservedAt: &now, CreatedAt: now,
 				},
 				Match: persistence.AdminCustomerMatchTransactionID,
 			}},
-			NextPageToken: encodeSearchPageToken(persistence.AdminCustomerSearchCursor{
+			NextPageToken: controlplane.EncodeSearchPageToken(persistence.AdminCustomerSearchCursor{
 				Rank: 4, CreatedAt: now, CustomerID: "customer-1",
 			}, "2000000123456789"),
 		}},
-		{name: "customer listing page", schema: "AdminCustomerSearchPage", value: adminCustomerSearchResponse{
-			Customers: []adminCustomerMatchResponse{{
-				adminCustomerResponse: adminCustomerResponse{ID: "customer-2", ExternalID: "user-2", CreatedAt: now},
+		{name: "customer listing page", schema: "AdminCustomerSearchPage", value: controlplane.CustomerSearchPage{
+			Customers: []controlplane.CustomerMatch{{
+				Customer: controlplane.Customer{ID: "customer-2", ExternalID: "user-2", CreatedAt: now},
 			}},
 		}},
-		{name: "customer detail", schema: "AdminCustomerDetail", value: adminCustomerDetailFromRecord(
+		{name: "customer detail", schema: "AdminCustomerDetail", value: controlplane.CustomerDetailView(
 			fakeAdminCustomerDetail("project-1"), now,
 		)},
 		{name: "manual grant result", schema: "ManualGrantResult", value: manualGrantResultFromRecord(
 			persistence.ManualGrantResult{Grant: fakeAdminCustomerDetail("project-1").ManualGrants[0]},
 			verification.ProjectionRefreshResult{ProjectionsChanged: 1, WebhooksEnqueued: 1}, now,
 		)},
-		{name: "subscription metrics", schema: "AdminSubscriptionMetrics", value: subscriptionMetricsFromRecord(
+		{name: "subscription metrics", schema: "AdminSubscriptionMetrics", value: controlplane.SubscriptionMetricsView(
 			fakeSubscriptionMetrics(persistence.SubscriptionMetricsQuery{Environment: core.EnvironmentProduction, WindowDays: 30}),
 		)},
-		{name: "empty subscription metrics", schema: "AdminSubscriptionMetrics", value: subscriptionMetricsFromRecord(
+		{name: "empty subscription metrics", schema: "AdminSubscriptionMetrics", value: controlplane.SubscriptionMetricsView(
 			persistence.ComputeSubscriptionMetrics(
 				persistence.SubscriptionMetricsQuery{Environment: core.EnvironmentSandbox, WindowDays: 1},
 				persistence.SubscriptionWindow{Start: now.Truncate(24 * time.Hour), End: now.Truncate(24 * time.Hour).Add(24 * time.Hour), MeasuredAt: now},

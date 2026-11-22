@@ -40,6 +40,36 @@ type AdminQueryStore interface {
 	AdminSubscriptionMetrics(context.Context, core.ProjectID, SubscriptionMetricsQuery) (SubscriptionMetrics, error)
 }
 
+// AdminSetupStore exposes secret-free application setup metadata for administrators and agents.
+type AdminSetupStore interface {
+	// AdminApplicationSetup returns credential presence and webhook configuration for the applications
+	// of one project, without credential payloads, ciphertext, fingerprints, or webhook secrets.
+	AdminApplicationSetup(context.Context, core.ProjectID) ([]AdminApplicationSetup, error)
+}
+
+// AdminApplicationSetup is the stored setup state of one application.
+type AdminApplicationSetup struct {
+	ApplicationID core.ApplicationID
+	// Credentials lists each stored credential kind, ordered by kind.
+	Credentials []AdminCredentialStatus
+	// Webhook is nil when the application has no webhook endpoint.
+	Webhook *AdminWebhookSetup
+}
+
+// AdminCredentialStatus reports that one credential kind is stored, never its payload.
+type AdminCredentialStatus struct {
+	Kind      string
+	Revision  int64
+	UpdatedAt time.Time
+}
+
+// AdminWebhookSetup reports one webhook endpoint without its signing secret.
+type AdminWebhookSetup struct {
+	URL       string
+	Revision  int64
+	UpdatedAt time.Time
+}
+
 // AdminProject summarizes one project without exposing protected configuration.
 type AdminProject struct {
 	ID               core.ProjectID

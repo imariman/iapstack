@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/jobs"
 	"github.com/imariman/iapstack/internal/persistence"
@@ -49,9 +50,9 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 	fixture.requestJSON(t, http.MethodPut, project+"/customers/http-customer-2",
 		admin, customerRequest{ExternalID: "http-external-customer-2"}, http.StatusOK, nil)
 
-	search := func(query string, extra string) adminCustomerSearchResponse {
+	search := func(query string, extra string) controlplane.CustomerSearchPage {
 		t.Helper()
-		var page adminCustomerSearchResponse
+		var page controlplane.CustomerSearchPage
 		body := fixture.requestJSON(t, http.MethodGet,
 			project+"/customers?query="+url.QueryEscape(query)+extra, admin, nil, http.StatusOK, &page)
 		for _, secret := range []string{apiIntegrationPurchaseToken, "ciphertext", "fingerprint"} {
@@ -97,7 +98,7 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 		admin, nil, http.StatusBadRequest, nil)
 	fixture.requestJSON(t, http.MethodGet, "/v1/admin/projects/project-other/customers?query=x",
 		admin, nil, http.StatusNotFound, nil)
-	var listing adminCustomerSearchResponse
+	var listing controlplane.CustomerSearchPage
 	fixture.requestJSON(t, http.MethodGet, project+"/customers", admin, nil, http.StatusOK, &listing)
 	if len(listing.Customers) != 2 || listing.Customers[0].Match != "" {
 		t.Fatalf("listing = %#v", listing)
@@ -112,7 +113,7 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 	var granted manualGrantResultResponse
 	fixture.requestJSON(t, http.MethodPost, grantPath, admin, bonusGrant, http.StatusOK, &granted)
 	if granted.Replay || granted.ProjectionsChanged != 1 || granted.WebhooksEnqueued != 1 ||
-		granted.Grant.Status != manualGrantStatusActive || granted.Grant.Reason != bonusGrant.Reason ||
+		granted.Grant.Status != controlplane.ManualGrantStatusActive || granted.Grant.Reason != bonusGrant.Reason ||
 		granted.Grant.ActorKeyID == "" || !granted.Grant.EffectiveEndsAt.Equal(fixture.now.AddDate(0, 0, 30)) {
 		t.Fatalf("manual grant = %#v", granted)
 	}
@@ -207,7 +208,7 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 	var revoked manualGrantResultResponse
 	fixture.requestJSON(t, http.MethodPost, revokePath, admin,
 		manualGrantRevocationRequest{Reason: "Granted to the wrong account"}, http.StatusOK, &revoked)
-	if revoked.Replay || revoked.Grant.Status != manualGrantStatusRevoked || revoked.Grant.RevokedAt == nil ||
+	if revoked.Replay || revoked.Grant.Status != controlplane.ManualGrantStatusRevoked || revoked.Grant.RevokedAt == nil ||
 		revoked.ProjectionsChanged != 1 || revoked.WebhooksEnqueued != 1 {
 		t.Fatalf("manual grant revocation = %#v", revoked)
 	}
@@ -221,7 +222,7 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 		t.Fatalf("public bonus entitlement after revocation = %#v", bonus)
 	}
 
-	var detail adminCustomerDetailResponse
+	var detail controlplane.CustomerDetail
 	detailBody := fixture.requestJSON(t, http.MethodGet, project+"/customers/"+apiIntegrationCustomerID,
 		admin, nil, http.StatusOK, &detail)
 	for _, secret := range []string{apiIntegrationPurchaseToken, apiIntegrationTransactionID, "ciphertext", "fingerprint"} {
@@ -233,7 +234,7 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 		len(detail.ManualGrants) != 2 || len(detail.GrantOptions) != 2 || detail.TimelineTruncated {
 		t.Fatalf("customer detail = %#v", detail)
 	}
-	sources := make(map[string]adminCustomerEntitlementResponse, len(detail.Entitlements))
+	sources := make(map[string]controlplane.CustomerEntitlement, len(detail.Entitlements))
 	for _, entitlement := range detail.Entitlements {
 		sources[entitlement.Key] = entitlement
 	}
@@ -266,7 +267,7 @@ func TestCustomerSupportSearchDetailAndManualGrantHTTP(t *testing.T) {
 	}
 	fixture.requestJSON(t, http.MethodGet, project+"/customers/missing-customer", admin, nil, http.StatusNotFound, nil)
 
-	var overview adminOverviewResponse
+	var overview controlplane.ProjectOverview
 	fixture.requestJSON(t, http.MethodGet, project+"/overview", admin, nil, http.StatusOK, &overview)
 	if len(overview.RecentTransactions) != 1 || overview.Analytics.VerifiedCount != 1 {
 		t.Fatalf("manual grants leaked into verified activity: %#v", overview.RecentTransactions)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/imariman/iapstack/internal/auth"
+	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/stores"
@@ -402,7 +403,7 @@ func TestAdminProjectsRequiresAdminAndReturnsStableJSON(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("authorized status = %d, want %d", recorder.Code, http.StatusOK)
 	}
-	var response adminProjectsResponse
+	var response controlplane.ProjectList
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -668,7 +669,7 @@ func keySummary(record persistence.APIKeyRecord, revokedAt time.Time) persistenc
 func TestAdminOverviewSerializesEmptyCollections(t *testing.T) {
 	t.Parallel()
 
-	overview := adminOverviewFromRecord(persistence.AdminProjectOverview{
+	overview := controlplane.ProjectOverviewView(persistence.AdminProjectOverview{
 		Project:   persistence.AdminProject{ID: "project-1", CreatedAt: time.Now().UTC()},
 		Analytics: fakeAdminAnalytics(),
 		Applications: []persistence.AdminApplication{{

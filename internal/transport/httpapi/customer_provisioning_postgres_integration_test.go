@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/stores"
@@ -270,7 +271,7 @@ func assertFirstPurchaseEntitlement(
 // assertFirstPurchaseCustomerCount verifies how many customers the project holds.
 func assertFirstPurchaseCustomerCount(t *testing.T, fixture firstPurchaseFixture, want int64) {
 	t.Helper()
-	var projects adminProjectsResponse
+	var projects controlplane.ProjectList
 	fixture.requestJSON(t, http.MethodGet, "/v1/admin/projects", fixture.admin, nil, http.StatusOK, &projects)
 	if len(projects.Projects) != 1 || projects.Projects[0].CustomerCount != want {
 		t.Fatalf("admin projects = %#v, want %d customers", projects.Projects, want)

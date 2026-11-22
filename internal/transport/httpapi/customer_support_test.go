@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/imariman/iapstack/internal/auth"
+	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/protection"
@@ -73,7 +74,7 @@ func TestSearchAdminCustomersValidatesUntrustedInput(t *testing.T) {
 	}
 
 	calls := store.calls
-	token := encodeSearchPageToken(persistence.AdminCustomerSearchCursor{
+	token := controlplane.EncodeSearchPageToken(persistence.AdminCustomerSearchCursor{
 		Rank: 1, CreatedAt: time.Date(2026, time.November, 18, 0, 0, 0, 0, time.UTC), CustomerID: "customer-9",
 	}, "user-1")
 	for name, rawQuery := range map[string]string{
@@ -107,13 +108,14 @@ func TestSearchReferenceFingerprintsMatchVerificationScopes(t *testing.T) {
 	t.Parallel()
 
 	keyring := newIdentityTestKeyring(t)
-	fingerprints, err := searchReferenceFingerprinter{protector: keyring, text: "2000000123456789"}.ReferenceFingerprints(
+	fingerprints, err := controlplane.SearchReferenceFingerprinter{Protector: keyring, Text: "2000000123456789"}.ReferenceFingerprints(
 		context.Background(), "project-1", []core.ApplicationID{"application-1", "application-2"},
 	)
 	if err != nil {
 		t.Fatalf("ReferenceFingerprints() error = %v", err)
 	}
-	if len(fingerprints) != 2*len(searchableReferences) {
+	// Three searchable scopes: transaction_id, order_id, and original_transaction_id.
+	if len(fingerprints) != 2*3 {
 		t.Fatalf("fingerprints = %d, want one per application and searchable reference", len(fingerprints))
 	}
 	for _, fingerprint := range fingerprints {
@@ -232,23 +234,23 @@ func TestAdminCustomerDetailEvaluatesAccessAtNow(t *testing.T) {
 
 	detail := fakeAdminCustomerDetail("project-1")
 	afterEnd := detail.ManualGrants[0].EndsAt.Add(time.Minute)
-	response := adminCustomerDetailFromRecord(detail, afterEnd)
+	response := controlplane.CustomerDetailView(detail, afterEnd)
 	if response.Entitlements[0].Access != core.AccessDenied || response.Entitlements[0].Reason != core.AccessReasonExpired ||
 		response.Entitlements[0].Source != persistence.SourceKindManual {
 		t.Fatalf("entitlement after end = %#v, want expired manual source", response.Entitlements[0])
 	}
-	if response.ManualGrants[0].Status != manualGrantStatusExpired {
+	if response.ManualGrants[0].Status != controlplane.ManualGrantStatusExpired {
 		t.Fatalf("grant status after end = %q", response.ManualGrants[0].Status)
 	}
-	active := adminCustomerDetailFromRecord(detail, detail.ManualGrants[0].StartsAt.Add(time.Hour))
-	if active.ManualGrants[0].Status != manualGrantStatusActive || active.Entitlements[0].Access != core.AccessAllowed {
+	active := controlplane.CustomerDetailView(detail, detail.ManualGrants[0].StartsAt.Add(time.Hour))
+	if active.ManualGrants[0].Status != controlplane.ManualGrantStatusActive || active.Entitlements[0].Access != core.AccessAllowed {
 		t.Fatalf("active detail = %#v", active)
 	}
 	revokedAt := detail.ManualGrants[0].StartsAt.Add(time.Minute)
 	detail.ManualGrants[0].RevokedAt = &revokedAt
 	detail.ManualGrants[0].RevokedByKeyID = "0123456789abcdef01234567"
 	detail.ManualGrants[0].RevocationReason = "Wrong account"
-	if revoked := adminCustomerDetailFromRecord(detail, revokedAt.Add(time.Hour)); revoked.ManualGrants[0].Status != manualGrantStatusRevoked {
+	if revoked := controlplane.CustomerDetailView(detail, revokedAt.Add(time.Hour)); revoked.ManualGrants[0].Status != controlplane.ManualGrantStatusRevoked {
 		t.Fatalf("revoked grant status = %q", revoked.ManualGrants[0].Status)
 	}
 
@@ -268,7 +270,7 @@ func TestAdminCustomerDetailEvaluatesAccessAtNow(t *testing.T) {
 			t.Fatalf("detail %s = %d %s, want %d", customerID, recorder.Code, recorder.Body.String(), status)
 		}
 		if status == http.StatusOK {
-			var decoded adminCustomerDetailResponse
+			var decoded controlplane.CustomerDetail
 			if err := json.Unmarshal(recorder.Body.Bytes(), &decoded); err != nil {
 				t.Fatalf("decode detail: %v", err)
 			}
