@@ -478,7 +478,21 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Build production image
-        run: docker build --tag iapstack:ci .
+        run: |
+          docker build --tag iapstack:ci \
+            --build-arg IAPSTACK_VERSION=v0.0.0-ci.1 \
+            --build-arg IAPSTACK_COMMIT="$GITHUB_SHA" .
+
+      - name: Check the build stamp /readyz reports
+        run: |
+          # The linker ignores -X for a missing symbol, so check the stamped binary itself.
+          docker run --rm --entrypoint /bin/grep iapstack:ci -q v0.0.0-ci.1 /usr/local/bin/iapstack
+          docker run --rm --entrypoint /bin/grep iapstack:ci -q "$GITHUB_SHA" /usr/local/bin/iapstack
+          # A build argument with whitespace would turn into extra linker flags.
+          if docker build --build-arg IAPSTACK_VERSION="v1 -o /tmp/x" . >/dev/null 2>&1; then
+            echo "Dockerfile accepted a build argument with whitespace" >&2
+            exit 1
+          fi
 
   compose-e2e:
     name: Compose release gate

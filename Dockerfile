@@ -9,7 +9,11 @@ COPY . .
 # the full commit SHA; without them the probe reports version "dev" and no commit.
 ARG IAPSTACK_VERSION=""
 ARG IAPSTACK_COMMIT=""
-RUN BUILDINFO=github.com/imariman/iapstack/internal/platform/buildinfo \
+# The go tool splits -ldflags on whitespace, so refuse anything but one plain token.
+RUN for value in "${IAPSTACK_VERSION}" "${IAPSTACK_COMMIT}"; do \
+      case "$value" in *[!A-Za-z0-9._+-]*) echo "IAPSTACK_VERSION and IAPSTACK_COMMIT allow only A-Z a-z 0-9 . _ + -" >&2; exit 1 ;; esac; \
+    done \
+    && BUILDINFO=github.com/imariman/iapstack/internal/platform/buildinfo \
     && LDFLAGS="-s -w -X ${BUILDINFO}.version=${IAPSTACK_VERSION} -X ${BUILDINFO}.commit=${IAPSTACK_COMMIT}" \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="${LDFLAGS}" -o /out/iapstack ./cmd/iapstack \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/iapstack-webhook-receiver ./cmd/iapstack-webhook-receiver

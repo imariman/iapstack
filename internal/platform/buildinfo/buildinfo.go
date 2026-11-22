@@ -14,6 +14,10 @@ const (
 	maximumValueLength = 64
 	// vcsRevisionSetting is the build setting Go records for the checked-out commit.
 	vcsRevisionSetting = "vcs.revision"
+	// vcsModifiedSetting is the build setting Go records when the checkout had local changes.
+	vcsModifiedSetting = "vcs.modified"
+	// dirtySuffix marks a commit whose checkout had uncommitted changes at build time.
+	dirtySuffix = "-dirty"
 )
 
 // Info identifies one build in operator-facing probes.
@@ -33,6 +37,9 @@ type Info struct {
 var (
 	version string
 	commit  string
+
+	// readBuildInfo reads the binary's build metadata; tests replace it.
+	readBuildInfo = debug.ReadBuildInfo
 )
 
 // Current returns the linked version and commit. Without a linked commit it falls back
@@ -48,18 +55,26 @@ func Current() Info {
 	return info
 }
 
-// vcsRevision returns the commit Go recorded in the binary, or empty when it recorded none.
+// vcsRevision returns the commit Go recorded in the binary, with dirtySuffix when the
+// checkout had uncommitted changes, or empty when Go recorded no commit.
 func vcsRevision() string {
-	build, ok := debug.ReadBuildInfo()
-	if !ok {
+	build, ok := readBuildInfo()
+	if !ok || build == nil {
 		return ""
 	}
+	revision, modified := "", false
 	for _, setting := range build.Settings {
-		if setting.Key == vcsRevisionSetting {
-			return setting.Value
+		switch setting.Key {
+		case vcsRevisionSetting:
+			revision = setting.Value
+		case vcsModifiedSetting:
+			modified = setting.Value == "true"
 		}
 	}
-	return ""
+	if revision != "" && modified {
+		return revision + dirtySuffix
+	}
+	return revision
 }
 
 // clean keeps one short printable token and drops anything else, so a malformed build

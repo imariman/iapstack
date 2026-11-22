@@ -221,11 +221,12 @@ configure_env() {
   fi
 }
 
-# release_tag prints the remote release tag that points at the deployed commit, or nothing.
-# The checkout fetches one ref without tags, so ask the remote instead.
+# release_tag prints the remote release tag (v<digit>…) that points at the deployed commit,
+# or nothing. The checkout fetches one ref without tags, so ask the remote instead; other
+# tags on the same commit are ignored.
 release_tag() {
   git -C "$IAPSTACK_DIR" ls-remote --tags origin 2>/dev/null |
-    awk -v sha="$1" '$1 == sha {
+    awk -v sha="$1" '$1 == sha && $2 ~ /^refs\/tags\/v[0-9]/ {
       tag = $2; sub("^refs/tags/", "", tag)
       if (substr(tag, length(tag) - 2) == "^{}") tag = substr(tag, 1, length(tag) - 3)
       print tag; exit
