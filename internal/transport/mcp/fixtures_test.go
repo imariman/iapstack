@@ -34,6 +34,8 @@ const (
 	capacityBearer = "capacity-bearer"
 	// sentinelWebhookQuery is a token-like webhook URL query value that must never be returned.
 	sentinelWebhookQuery = "sentinel-webhook-query-token"
+	// sentinelWebhookPath is a capability token in a webhook URL path that must never be returned.
+	sentinelWebhookPath = "sentinel-webhook-path-token"
 	// sentinelReportBytes are report file bytes whose digest must never be returned.
 	sentinelReportBytes = "sentinel-report-file-bytes"
 	// untrustedExternalID is a customer-supplied value that reads like an instruction.
@@ -46,7 +48,7 @@ type fakeAuthenticator struct{}
 // fakeAdminStore returns fixed, secret-free admin records for project-1.
 type fakeAdminStore struct{}
 
-// fakeSetupStore returns fixed setup rows, including a webhook URL with a token-like query.
+// fakeSetupStore returns one fixed project setup, including a webhook URL with tokens in its path and query.
 type fakeSetupStore struct{}
 
 // fakeReportLister returns one accepted financial report.
@@ -97,6 +99,11 @@ func (fakeAdminStore) AdminProjects(context.Context) ([]persistence.AdminProject
 		{ID: "project-1", ApplicationCount: 1, CustomerCount: 1, ProductCount: 1, CreatedAt: createdAt},
 		{ID: "project-2", CreatedAt: createdAt},
 	}, nil
+}
+
+// AdminProject returns the summary of the requested project.
+func (fakeAdminStore) AdminProject(_ context.Context, projectID core.ProjectID) (persistence.AdminProject, error) {
+	return persistence.AdminProject{ID: projectID, CreatedAt: fixtureTime()}, nil
 }
 
 // AdminProjectOverview returns one overview with an application, customer, queue, and failed delivery.
@@ -182,16 +189,30 @@ func (fakeAdminStore) AdminSubscriptionMetrics(
 	return persistence.SubscriptionMetrics{Environment: query.Environment, WindowDays: query.WindowDays}, nil
 }
 
-// AdminApplicationSetup returns stored credential and webhook rows.
-func (fakeSetupStore) AdminApplicationSetup(context.Context, core.ProjectID) ([]persistence.AdminApplicationSetup, error) {
+// AdminProjectSetup returns one application with a stored credential and webhook, a failing queue, and a
+// failed delivery.
+func (fakeSetupStore) AdminProjectSetup(context.Context, core.ProjectID) (persistence.AdminProjectSetup, error) {
 	createdAt := fixtureTime()
-	return []persistence.AdminApplicationSetup{{
-		ApplicationID: "ios-app",
-		Credentials:   []persistence.AdminCredentialStatus{{Kind: "apple_app_store_server_api", Revision: 1, UpdatedAt: createdAt}},
-		Webhook: &persistence.AdminWebhookSetup{
-			URL: "https://hooks.example.com/iapstack?token=" + sentinelWebhookQuery, Revision: 1, UpdatedAt: createdAt,
-		},
-	}}, nil
+	failedAt := createdAt.Add(time.Minute)
+	return persistence.AdminProjectSetup{
+		Applications: []persistence.AdminApplication{{
+			ID: "ios-app", Provider: core.ProviderAppleAppStore, Environment: core.EnvironmentSandbox,
+			ProviderApplicationID: "com.example.app", CreatedAt: createdAt,
+		}},
+		ApplicationSetups: []persistence.AdminApplicationSetup{{
+			ApplicationID: "ios-app",
+			Credentials:   []persistence.AdminCredentialStatus{{Kind: "apple_app_store_server_api", Revision: 1, UpdatedAt: createdAt}},
+			Webhook: &persistence.AdminWebhookSetup{
+				URL:      "https://hooks.example.com/hooks/catch/" + sentinelWebhookPath + "/?token=" + sentinelWebhookQuery,
+				Revision: 1, UpdatedAt: createdAt,
+			},
+		}},
+		Queues: []persistence.AdminQueue{{Name: persistence.QueueOutbox, Failed: 1}},
+		RecentWebhookEvents: []persistence.AdminWebhookEvent{{
+			ID: "event-1", ApplicationID: "ios-app", EventType: "entitlement.changed", AggregateID: "customer-1",
+			Status: "failed", ErrorCode: "http_500", OccurredAt: createdAt, FailedAt: &failedAt,
+		}},
+	}, nil
 }
 
 // List returns one accepted report whose file digest is a sentinel.

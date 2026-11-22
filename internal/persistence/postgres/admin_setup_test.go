@@ -2,15 +2,18 @@ package postgres_test
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/imariman/iapstack/internal/core"
+	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/persistence/postgres"
 )
 
-// TestAdminApplicationSetupReportsPresenceWithoutSecrets verifies setup rows carry credential kinds,
-// revisions, and the webhook URL, and only for applications of the requested project.
-func TestAdminApplicationSetupReportsPresenceWithoutSecrets(t *testing.T) {
+// TestAdminProjectSetupReportsPresenceWithoutSecrets verifies the setup read returns applications, their
+// credential kinds, revisions, and webhook URL, and queue outcomes, only for the requested project, and
+// that the narrow project read and the setup read both report a missing project.
+func TestAdminProjectSetupReportsPresenceWithoutSecrets(t *testing.T) {
 	database := openTestDatabase(t, postgres.LatestVersion)
 	fixture := seedCatalog(t, database)
 	store := openRepositoryStore(t, database.ctx)
@@ -26,12 +29,22 @@ func TestAdminApplicationSetupReportsPresenceWithoutSecrets(t *testing.T) {
 	`, fixture.projectID, []byte("webhook-ciphertext"), bytes.Repeat([]byte{7}, 32))
 	mustExec(t, database, `INSERT INTO projects (id) VALUES ('project-2')`)
 
-	setups, err := store.AdminApplicationSetup(database.ctx, core.ProjectID(fixture.projectID))
+	setup, err := store.AdminProjectSetup(database.ctx, core.ProjectID(fixture.projectID))
 	if err != nil {
-		t.Fatalf("AdminApplicationSetup() error = %v", err)
+		t.Fatalf("AdminProjectSetup() error = %v", err)
 	}
-	if len(setups) != 2 {
-		t.Fatalf("AdminApplicationSetup() = %#v, want both applications", setups)
+	setups := setup.ApplicationSetups
+	if len(setups) != 2 || len(setup.Applications) != 2 {
+		t.Fatalf("AdminProjectSetup() = %#v, want both applications", setup)
+	}
+	for index, application := range setup.Applications {
+		if application.ID != setups[index].ApplicationID {
+			t.Fatalf("application %d = %q, setup row = %q, want the same order", index, application.ID, setups[index].ApplicationID)
+		}
+	}
+	if len(setup.Queues) == 0 || setup.RecentWebhookEvents == nil {
+		t.Fatalf("AdminProjectSetup() queues = %#v, events = %#v, want queue outcomes and a delivery list",
+			setup.Queues, setup.RecentWebhookEvents)
 	}
 	first, second := setups[0], setups[1]
 	if first.ApplicationID != core.ApplicationID(fixture.applicationID) || len(first.Credentials) != 1 ||
@@ -43,8 +56,19 @@ func TestAdminApplicationSetupReportsPresenceWithoutSecrets(t *testing.T) {
 		t.Fatalf("second application setup = %#v, want only a webhook", second)
 	}
 
-	other, err := store.AdminApplicationSetup(database.ctx, "project-2")
-	if err != nil || len(other) != 0 {
-		t.Fatalf("AdminApplicationSetup(project-2) = %#v, %v, want no applications", other, err)
+	other, err := store.AdminProjectSetup(database.ctx, "project-2")
+	if err != nil || len(other.Applications) != 0 || len(other.ApplicationSetups) != 0 {
+		t.Fatalf("AdminProjectSetup(project-2) = %#v, %v, want no applications", other, err)
+	}
+	if _, err := store.AdminProjectSetup(database.ctx, "missing-project"); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("AdminProjectSetup(missing-project) error = %v, want ErrNotFound", err)
+	}
+
+	project, err := store.AdminProject(database.ctx, core.ProjectID(fixture.projectID))
+	if err != nil || project.ID != core.ProjectID(fixture.projectID) || project.ApplicationCount != 2 {
+		t.Fatalf("AdminProject() = %#v, %v, want the project with two applications", project, err)
+	}
+	if _, err := store.AdminProject(database.ctx, "missing-project"); !errors.Is(err, persistence.ErrNotFound) {
+		t.Fatalf("AdminProject(missing-project) error = %v, want ErrNotFound", err)
 	}
 }

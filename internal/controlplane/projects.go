@@ -204,14 +204,14 @@ func (service *Service) Projects(ctx context.Context, actor Actor) (ProjectList,
 	if actor.Role == persistence.APIKeyRoleAgent && len(list.Projects) == 0 {
 		// The project collection is bounded, so an agent's project can fall outside it. Read the
 		// project directly instead of reporting that the agent has none.
-		overview, err := service.dependencies.Admin.AdminProjectOverview(ctx, actor.ProjectID, persistence.AdminRevenueQuery{})
+		project, err := service.dependencies.Admin.AdminProject(ctx, actor.ProjectID)
 		if errors.Is(err, persistence.ErrNotFound) {
 			return list, nil
 		}
 		if err != nil {
 			return ProjectList{}, err
 		}
-		list.Projects = append(list.Projects, ProjectView(overview.Project))
+		list.Projects = append(list.Projects, ProjectView(project))
 	}
 	return list, nil
 }

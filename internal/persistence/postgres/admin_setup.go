@@ -14,26 +14,59 @@ var (
 	_ persistence.AdminSetupStore = (*Store)(nil)
 )
 
-// AdminApplicationSetup returns credential presence and webhook configuration for the first applications
-// of one project, in the same bound and order as the project overview. It never reads credential
-// payloads, ciphertext, fingerprints, or webhook secrets.
-func (store *Store) AdminApplicationSetup(
+// AdminProjectSetup returns one project's applications, their stored setup rows, queue outcomes, and
+// recent webhook deliveries in one snapshot, or ErrNotFound for a missing project. It skips the analytics,
+// product, customer, and transaction sections of the overview and never reads credential payloads,
+// ciphertext, fingerprints, or webhook secrets.
+func (store *Store) AdminProjectSetup(
 	ctx context.Context,
 	projectID core.ProjectID,
-) ([]persistence.AdminApplicationSetup, error) {
+) (persistence.AdminProjectSetup, error) {
 	if err := projectID.Validate(); err != nil {
-		return nil, err
+		return persistence.AdminProjectSetup{}, err
 	}
-	var setups []persistence.AdminApplicationSetup
+	var setup persistence.AdminProjectSetup
 	err := store.transact(ctx, pgx.RepeatableRead, func(repository *transaction) error {
 		var loadErr error
-		setups, loadErr = repository.adminApplicationSetup(ctx, projectID)
+		setup, loadErr = repository.adminProjectSetup(ctx, projectID)
 		return loadErr
 	})
-	return setups, err
+	return setup, err
 }
 
-// adminApplicationSetup loads bounded application setup rows inside one snapshot.
+// adminProjectSetup loads the setup sections of one existing project inside one snapshot.
+func (repository *transaction) adminProjectSetup(
+	ctx context.Context,
+	projectID core.ProjectID,
+) (persistence.AdminProjectSetup, error) {
+	var found int
+	if err := repository.tx.QueryRow(ctx, `SELECT 1 FROM projects WHERE id = $1`, projectID).Scan(&found); err != nil {
+		return persistence.AdminProjectSetup{}, classifyError("load admin setup project", err)
+	}
+	applications, err := repository.adminApplications(ctx, projectID)
+	if err != nil {
+		return persistence.AdminProjectSetup{}, err
+	}
+	applicationSetups, err := repository.adminApplicationSetup(ctx, projectID)
+	if err != nil {
+		return persistence.AdminProjectSetup{}, err
+	}
+	queues, err := repository.adminQueues(ctx, projectID)
+	if err != nil {
+		return persistence.AdminProjectSetup{}, err
+	}
+	webhookEvents, err := repository.adminWebhookEvents(ctx, projectID)
+	if err != nil {
+		return persistence.AdminProjectSetup{}, err
+	}
+	return persistence.AdminProjectSetup{
+		Applications: applications, ApplicationSetups: applicationSetups,
+		Queues: queues, RecentWebhookEvents: webhookEvents,
+	}, nil
+}
+
+// adminApplicationSetup loads credential presence and webhook configuration for the first applications
+// of one project, in the same bound and order as adminApplications.
 func (repository *transaction) adminApplicationSetup(
 	ctx context.Context,
 	projectID core.ProjectID,

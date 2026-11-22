@@ -17,6 +17,9 @@ import (
 const (
 	// SetupIssueCredentialMissing means the provider credential the adapter needs is not stored.
 	SetupIssueCredentialMissing = "credential_missing"
+	// SetupIssueProviderNotSupported means this server has no adapter for the application's provider,
+	// so no credential or store notification setup can complete it.
+	SetupIssueProviderNotSupported = "provider_not_supported"
 	// SetupIssueWebhookNotConfigured means entitlement changes for the application are not delivered.
 	SetupIssueWebhookNotConfigured = "webhook_not_configured"
 	// SetupIssuePublicURLNotConfigured means only notification paths can be reported, not full URLs.
@@ -50,13 +53,15 @@ type ApplicationSetup struct {
 	ProviderApplicationID core.ProviderApplicationID `json:"provider_application_id"`
 	Credentials           CredentialSetup            `json:"credentials"`
 	Webhook               WebhookSetup               `json:"webhook"`
-	StoreNotifications    NotificationSetup          `json:"store_notifications"`
+	// StoreNotifications is nil when this server has no adapter for the provider.
+	StoreNotifications *NotificationSetup `json:"store_notifications,omitempty"`
 }
 
 // CredentialSetup reports which provider credentials are stored, by kind and revision only.
 type CredentialSetup struct {
-	// RequiredKind is the credential kind this server's adapter for the provider reads.
-	RequiredKind string `json:"required_kind"`
+	// RequiredKind is the credential kind this server's adapter for the provider reads. It is empty
+	// when the server has no adapter for the provider.
+	RequiredKind string `json:"required_kind,omitempty"`
 	// Configured is true when a credential of RequiredKind is stored.
 	Configured bool               `json:"configured"`
 	Stored     []StoredCredential `json:"stored"`
@@ -69,13 +74,15 @@ type StoredCredential struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// WebhookSetup reports the webhook endpoint without its signing secret. The URL never includes a
-// query string, fragment, or user information.
+// WebhookSetup reports that a webhook endpoint is stored, without its signing secret and without its
+// URL. A webhook URL is a capability: receivers such as automation platforms carry their secret in the
+// path, so only the origin is reported.
 type WebhookSetup struct {
-	Configured bool       `json:"configured"`
-	URL        string     `json:"url,omitempty"`
-	Revision   int64      `json:"revision,omitempty"`
-	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
+	Configured bool `json:"configured"`
+	// Origin is the scheme and host of the stored endpoint, never its path, query, or user information.
+	Origin    string     `json:"origin,omitempty"`
+	Revision  int64      `json:"revision,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
 // NotificationSetup tells the operator where store server notifications must point.
@@ -116,19 +123,15 @@ func (service *Service) SetupStatus(
 	if err := projectID.Validate(); err != nil {
 		return SetupStatus{}, validation.Wrap(err)
 	}
-	if service.dependencies.Admin == nil || service.dependencies.Setup == nil {
+	if service.dependencies.Setup == nil {
 		return SetupStatus{}, errMissingDependency
 	}
-	overview, err := service.dependencies.Admin.AdminProjectOverview(ctx, projectID, persistence.AdminRevenueQuery{})
+	overview, err := service.dependencies.Setup.AdminProjectSetup(ctx, projectID)
 	if err != nil {
 		return SetupStatus{}, err
 	}
-	setups, err := service.dependencies.Setup.AdminApplicationSetup(ctx, projectID)
-	if err != nil {
-		return SetupStatus{}, err
-	}
-	stored := make(map[core.ApplicationID]persistence.AdminApplicationSetup, len(setups))
-	for _, setup := range setups {
+	stored := make(map[core.ApplicationID]persistence.AdminApplicationSetup, len(overview.ApplicationSetups))
+	for _, setup := range overview.ApplicationSetups {
 		stored[setup.ApplicationID] = setup
 	}
 	publicURL := strings.TrimRight(service.dependencies.PublicURL, "/")
@@ -139,18 +142,24 @@ func (service *Service) SetupStatus(
 		RecentWebhookFailures: make([]WebhookFailure, 0),
 		Issues:                make([]SetupIssue, 0),
 	}
-	if publicURL == "" && len(overview.Applications) > 0 {
-		status.Issues = append(status.Issues, SetupIssue{Code: SetupIssuePublicURLNotConfigured})
-	}
+	needsPublicURL := false
 	for _, application := range overview.Applications {
 		setup := applicationSetupView(projectID, application, stored[application.ID], publicURL)
-		if !setup.Credentials.Configured {
+		needsPublicURL = needsPublicURL || (publicURL == "" && setup.StoreNotifications != nil)
+		switch {
+		case setup.Credentials.RequiredKind == "":
+			status.Issues = append(status.Issues, SetupIssue{Code: SetupIssueProviderNotSupported, ApplicationID: application.ID})
+		case !setup.Credentials.Configured:
 			status.Issues = append(status.Issues, SetupIssue{Code: SetupIssueCredentialMissing, ApplicationID: application.ID})
 		}
 		if !setup.Webhook.Configured {
 			status.Issues = append(status.Issues, SetupIssue{Code: SetupIssueWebhookNotConfigured, ApplicationID: application.ID})
 		}
 		status.Applications = append(status.Applications, setup)
+	}
+	if needsPublicURL {
+		// Reported first: without the public URL every notification entry below is a path only.
+		status.Issues = append([]SetupIssue{{Code: SetupIssuePublicURLNotConfigured}}, status.Issues...)
 	}
 	for _, queue := range overview.Queues {
 		status.Queues = append(status.Queues, queueView(queue))
@@ -204,19 +213,20 @@ func applicationSetupView(
 	if stored.Webhook != nil {
 		updatedAt := stored.Webhook.UpdatedAt.UTC()
 		setup.Webhook = WebhookSetup{
-			Configured: true, URL: redactedURL(stored.Webhook.URL),
+			Configured: true, Origin: urlOrigin(stored.Webhook.URL),
 			Revision: stored.Webhook.Revision, UpdatedAt: &updatedAt,
 		}
 	}
 	return setup
 }
 
-// notificationSetup returns where a store must send server notifications for one application.
+// notificationSetup returns where a store must send server notifications for one application, or nil
+// when this server has no adapter for the provider.
 func notificationSetup(
 	projectID core.ProjectID,
 	application persistence.AdminApplication,
 	publicURL string,
-) NotificationSetup {
+) *NotificationSetup {
 	var segment, destination string
 	switch application.Provider {
 	case core.ProviderAppleAppStore:
@@ -229,11 +239,11 @@ func notificationSetup(
 		segment = "huawei"
 		destination = "AppGallery Connect: server notification URL"
 	default:
-		return NotificationSetup{}
+		return nil
 	}
 	path := "/v1/providers/" + segment + "/projects/" + url.PathEscape(string(projectID)) +
 		"/applications/" + url.PathEscape(string(application.ID)) + "/notifications"
-	setup := NotificationSetup{Destination: destination, Path: path}
+	setup := &NotificationSetup{Destination: destination, Path: path}
 	if publicURL != "" {
 		setup.URL = publicURL + path
 	}
@@ -254,16 +264,12 @@ func requiredCredentialKind(provider core.Provider) string {
 	}
 }
 
-// redactedURL drops user information, the query string, and the fragment, which may carry tokens.
-func redactedURL(raw string) string {
+// urlOrigin returns only the scheme and host of a stored URL. The path, query string, fragment, and
+// user information may each carry a token, so none of them is reported.
+func urlOrigin(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return ""
 	}
-	parsed.User = nil
-	parsed.RawQuery = ""
-	parsed.ForceQuery = false
-	parsed.Fragment = ""
-	parsed.RawFragment = ""
-	return parsed.String()
+	return parsed.Scheme + "://" + parsed.Host
 }

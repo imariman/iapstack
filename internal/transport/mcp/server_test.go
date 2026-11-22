@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -50,6 +51,12 @@ var (
 		"get_customer", "get_project_overview", "get_setup_status", "get_subscription_metrics",
 		"list_financial_reports", "list_projects", "resolve_customer", "search_customers",
 	}
+	// catalogHashes pins the SHA-256 of the sorted tools array for every catalogue version. A released
+	// version keeps its hash forever: a tool change needs a new CatalogVersion and a new entry here, so
+	// regenerating the golden file alone can never ship changed tools under an old version.
+	catalogHashes = map[string]string{
+		"1": "44faff6aa918e12c3d8533efbd8053147c969b911721e7d748354d0f6df37d00",
+	}
 	// protectedFieldFragments name data that must never appear as a field in any tool output or schema.
 	protectedFieldFragments = []string{
 		"receipt", "purchase_token", "signed", "evidence_", "_evidence_payload", "payload", "ciphertext",
@@ -81,6 +88,16 @@ func TestToolCatalogMatchesGolden(t *testing.T) {
 	sort.Slice(catalog.Tools, func(left, right int) bool {
 		return catalog.Tools[left]["name"].(string) < catalog.Tools[right]["name"].(string)
 	})
+	tools, err := json.Marshal(catalog.Tools)
+	if err != nil {
+		t.Fatalf("marshal tools: %v", err)
+	}
+	digest := sha256.Sum256(tools)
+	if hash := hex.EncodeToString(digest[:]); catalogHashes[CatalogVersion] != hash {
+		t.Fatalf("tools of catalogue version %s hash to %s, pinned %q; when tools change, bump CatalogVersion and "+
+			"pin the new hash in catalogHashes instead of replacing the hash of a released version",
+			CatalogVersion, hash, catalogHashes[CatalogVersion])
+	}
 	actual, err := json.MarshalIndent(catalog, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal catalogue: %v", err)
@@ -272,7 +289,7 @@ func TestEveryToolReturnsSchemaValidRedactedOutput(t *testing.T) {
 	handler := newTestHandler(t, Options{Logger: slog.New(slog.NewJSONHandler(logs, nil))})
 	server := newTestServer(t, handler)
 	sentinelDigest := sha256.Sum256([]byte(sentinelReportBytes))
-	sentinels := []string{sentinelWebhookQuery, hex.EncodeToString(sentinelDigest[:])}
+	sentinels := []string{sentinelWebhookQuery, sentinelWebhookPath, hex.EncodeToString(sentinelDigest[:])}
 	for _, bearer := range []string{agentBearer, adminBearer} {
 		session := connect(t, server, bearer)
 		listed, err := session.ListTools(t.Context(), nil)
@@ -338,8 +355,8 @@ func TestEveryToolReturnsSchemaValidRedactedOutput(t *testing.T) {
 	}
 	raw, _ := json.Marshal(setup.StructuredContent)
 	if !strings.Contains(string(raw), `"url":"https://iap.example.com/v1/providers/apple/projects/project-1/applications/ios-app/notifications"`) ||
-		!strings.Contains(string(raw), `"url":"https://hooks.example.com/iapstack"`) {
-		t.Fatalf("setup status = %s, want the notification URL and the webhook URL without its query", raw)
+		!strings.Contains(string(raw), `"origin":"https://hooks.example.com"`) || strings.Contains(string(raw), "/hooks/catch") {
+		t.Fatalf("setup status = %s, want the notification URL and only the origin of the webhook URL", raw)
 	}
 
 	logged := logs.String()
@@ -441,13 +458,59 @@ func TestListToolsPaginate(t *testing.T) {
 	assertToolError(t, "list_financial_reports", reused, "invalid_request")
 }
 
-// TestOversizedToolResultIsRejected verifies the response size cap returns a typed tool error.
+// TestListCursorSurvivesListChanges verifies a list cursor names an item rather than an offset: an item
+// added before it neither repeats nor skips what follows, and a cursor whose item is gone is rejected.
+func TestListCursorSurvivesListChanges(t *testing.T) {
+	t.Parallel()
+
+	identity := func(value string) string { return value }
+	size := 2
+	first, token, err := paginate([]string{"e", "d", "c", "b", "a"}, "letters", "scope", &size, "", identity)
+	if err != nil || !slices.Equal(first, []string{"e", "d"}) || token == "" {
+		t.Fatalf("first page = %v, %q, %v, want e and d with a cursor", first, token, err)
+	}
+	grown := []string{"f", "e", "d", "c", "b", "a"}
+	second, next, err := paginate(grown, "letters", "scope", &size, token, identity)
+	if err != nil || !slices.Equal(second, []string{"c", "b"}) || next == "" {
+		t.Fatalf("second page after an insert = %v, %q, %v, want c and b without repeating d", second, next, err)
+	}
+	last, end, err := paginate(grown, "letters", "scope", &size, next, identity)
+	if err != nil || !slices.Equal(last, []string{"a"}) || end != "" {
+		t.Fatalf("last page = %v, %q, %v, want a and no cursor", last, end, err)
+	}
+	empty, end, err := paginate([]string(nil), "letters", "scope", nil, "", identity)
+	if err != nil || empty == nil || len(empty) != 0 || end != "" {
+		t.Fatalf("empty list page = %#v, %q, %v, want an empty non-nil page", empty, end, err)
+	}
+	for name, attempt := range map[string]func() error{
+		"removed item": func() error {
+			_, _, err := paginate([]string{"f", "e", "c", "b", "a"}, "letters", "scope", &size, token, identity)
+			return err
+		},
+		"other scope": func() error {
+			_, _, err := paginate(grown, "letters", "other", &size, token, identity)
+			return err
+		},
+		"other list": func() error {
+			_, _, err := paginate(grown, "digits", "scope", &size, token, identity)
+			return err
+		},
+	} {
+		if err := attempt(); controlplane.Classify(err).Code != "invalid_request" {
+			t.Fatalf("%s cursor error = %v, want invalid_request", name, err)
+		}
+	}
+}
+
+// TestOversizedToolResultIsRejected verifies the response size cap applies to the serialized result, which
+// carries the payload as text and as structured content, and returns a typed tool error.
 func TestOversizedToolResultIsRejected(t *testing.T) {
 	t.Parallel()
 
+	size := MaxResponseBytes
 	definition := defineTool(&sdk.Tool{Name: "oversized"}, slog.New(slog.DiscardHandler), nil,
 		func(context.Context, controlplane.Actor, struct{}) (map[string]string, error) {
-			return map[string]string{"value": strings.Repeat("a", MaxResponseBytes)}, nil
+			return map[string]string{"value": strings.Repeat("a", size)}, nil
 		})
 	ctx := context.WithValue(context.Background(), actorContextKey{}, controlplane.Actor{
 		Role: persistence.APIKeyRoleAdmin, KeyID: "admin-key",
@@ -457,6 +520,23 @@ func TestOversizedToolResultIsRejected(t *testing.T) {
 		t.Fatalf("handler error = %v", err)
 	}
 	assertToolError(t, "oversized", result, codeResponseTooLarge)
+
+	// A payload under the cap on its own still exceeds it once it is sent twice.
+	size = MaxResponseBytes/2 + 1
+	doubled, err := definition.handler(ctx, &sdk.CallToolRequest{Params: &sdk.CallToolParamsRaw{Name: "oversized"}})
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+	assertToolError(t, "oversized", doubled, codeResponseTooLarge)
+
+	size = MaxResponseBytes / 4
+	accepted, err := definition.handler(ctx, &sdk.CallToolRequest{Params: &sdk.CallToolParamsRaw{Name: "oversized"}})
+	if err != nil || accepted.IsError {
+		t.Fatalf("handler = %#v, %v, want a result under the cap", accepted, err)
+	}
+	if encoded, err := json.Marshal(accepted); err != nil || len(encoded) > MaxResponseBytes {
+		t.Fatalf("serialized result = %d bytes, %v, want at most %d", len(encoded), err, MaxResponseBytes)
+	}
 
 	unauthenticated, err := definition.handler(context.Background(), &sdk.CallToolRequest{Params: &sdk.CallToolParamsRaw{Name: "oversized"}})
 	if err != nil {

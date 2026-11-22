@@ -115,7 +115,8 @@ func TestMCPSessionEndToEndOverPostgres(t *testing.T) {
 			)),
 		}, http.StatusOK, nil)
 	stack.requestJSON(t, http.MethodPut, project+"/applications/"+integrationApplicationID+"/webhook", admin, map[string]any{
-		"url": "https://hooks.example.com/iapstack?token=" + sentinelWebhookQuery, "signing_secret": sentinelWebhookSecret,
+		"url":               "https://hooks.example.com/hooks/catch/" + sentinelWebhookPath + "/?token=" + sentinelWebhookQuery,
+		"signing_secret":    sentinelWebhookSecret,
 		"expected_revision": 0,
 	}, http.StatusOK, nil)
 
@@ -179,7 +180,7 @@ func TestMCPSessionEndToEndOverPostgres(t *testing.T) {
 			t.Fatalf("CallTool(%s) = %s, want success", name, raw)
 		}
 		for _, sentinel := range []string{
-			sentinelCredentialSecret, sentinelWebhookSecret, sentinelWebhookQuery, sentinelPurchaseToken,
+			sentinelCredentialSecret, sentinelWebhookSecret, sentinelWebhookQuery, sentinelWebhookPath, sentinelPurchaseToken,
 			sentinelTransactionID, agentKey, otherAgentKey, admin, applicationKey,
 		} {
 			if strings.Contains(string(raw), sentinel) {
@@ -205,9 +206,10 @@ func TestMCPSessionEndToEndOverPostgres(t *testing.T) {
 	if strings.Contains(results["list_projects"], integrationOtherProjectID) {
 		t.Fatalf("list_projects = %s, want only the agent's project", results["list_projects"])
 	}
-	if !strings.Contains(results["get_setup_status"], `"url":"https://hooks.example.com/iapstack"`) ||
+	if !strings.Contains(results["get_setup_status"], `"origin":"https://hooks.example.com"`) ||
+		strings.Contains(results["get_setup_status"], "/hooks/catch") ||
 		!strings.Contains(results["get_setup_status"], `"configured":true,"required_kind":"`+string(googleplay.CredentialKind)+`"`) {
-		t.Fatalf("get_setup_status = %s, want the redacted webhook URL and the configured credential", results["get_setup_status"])
+		t.Fatalf("get_setup_status = %s, want only the webhook origin and the configured credential", results["get_setup_status"])
 	}
 
 	crossProject, err := connectIntegration(t, stack.server.URL, otherAgentKey).CallTool(t.Context(), &sdk.CallToolParams{

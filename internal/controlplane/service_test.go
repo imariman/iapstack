@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -16,15 +17,17 @@ import (
 // recordingAdminStore returns fixed admin records and counts every read so tests can prove a
 // forbidden actor never reaches storage.
 type recordingAdminStore struct {
-	calls    int
-	projects []persistence.AdminProject
-	overview persistence.AdminProjectOverview
+	calls         int
+	overviewCalls int
+	projects      []persistence.AdminProject
+	project       persistence.AdminProject
+	overview      persistence.AdminProjectOverview
 }
 
-// recordingSetupStore returns fixed setup rows and counts reads.
+// recordingSetupStore returns one fixed project setup and counts reads.
 type recordingSetupStore struct {
-	calls  int
-	setups []persistence.AdminApplicationSetup
+	calls int
+	setup persistence.AdminProjectSetup
 }
 
 // recordingReportLister counts financial report reads.
@@ -123,7 +126,7 @@ func TestProjectsShowsAnAgentOnlyItsProject(t *testing.T) {
 	createdAt := time.Date(2026, time.November, 1, 0, 0, 0, 0, time.UTC)
 	admin := &recordingAdminStore{
 		projects: []persistence.AdminProject{{ID: "project-1", CreatedAt: createdAt}, {ID: "project-2", CreatedAt: createdAt}},
-		overview: persistence.AdminProjectOverview{Project: persistence.AdminProject{ID: "project-3", CreatedAt: createdAt}},
+		project:  persistence.AdminProject{ID: "project-3", CreatedAt: createdAt},
 	}
 	service := New(Dependencies{Admin: admin})
 	all, err := service.Projects(context.Background(), Actor{Role: persistence.APIKeyRoleAdmin})
@@ -138,36 +141,43 @@ func TestProjectsShowsAnAgentOnlyItsProject(t *testing.T) {
 	if err != nil || len(beyondBound.Projects) != 1 || beyondBound.Projects[0].ID != "project-3" {
 		t.Fatalf("agent Projects() beyond the bound = %#v, %v, want project-3 read directly", beyondBound, err)
 	}
+	if admin.overviewCalls != 0 {
+		t.Fatalf("Projects() ran the project overview %d times, want the narrow project read", admin.overviewCalls)
+	}
 }
 
-// TestSetupStatusReportsPresenceOnlyAndNotificationURLs verifies setup status composition, URL redaction,
-// and that full notification URLs come only from the configured public URL.
+// TestSetupStatusReportsPresenceOnlyAndNotificationURLs verifies setup status composition, that a webhook
+// URL is reduced to its origin, that full notification URLs come only from the configured public URL, and
+// that an application without a provider adapter is reported as unsupported rather than missing a credential.
 func TestSetupStatusReportsPresenceOnlyAndNotificationURLs(t *testing.T) {
 	t.Parallel()
 
 	createdAt := time.Date(2026, time.November, 1, 0, 0, 0, 0, time.UTC)
 	failedAt := createdAt.Add(time.Hour)
-	admin := &recordingAdminStore{overview: persistence.AdminProjectOverview{
-		Project: persistence.AdminProject{ID: "project 1", CreatedAt: createdAt},
+	admin := &recordingAdminStore{}
+	setup := &recordingSetupStore{setup: persistence.AdminProjectSetup{
 		Applications: []persistence.AdminApplication{
 			{ID: "ios-app", Provider: core.ProviderAppleAppStore, Environment: core.EnvironmentProduction, ProviderApplicationID: "com.example.app"},
 			{ID: "android-app", Provider: core.ProviderGooglePlay, Environment: core.EnvironmentProduction, ProviderApplicationID: "com.example.app"},
+			{ID: "amazon-app", Provider: core.ProviderAmazonAppstore, Environment: core.EnvironmentProduction, ProviderApplicationID: "com.example.app"},
 		},
 		Queues: []persistence.AdminQueue{{Name: persistence.QueueOutbox, Failed: 2}, {Name: persistence.QueueInbox}},
 		RecentWebhookEvents: []persistence.AdminWebhookEvent{
 			{ID: "event-1", ApplicationID: "ios-app", EventType: "entitlement.changed", Status: "failed", ErrorCode: "http_500", OccurredAt: createdAt, FailedAt: &failedAt},
 			{ID: "event-2", ApplicationID: "ios-app", EventType: "entitlement.changed", Status: "delivered", OccurredAt: createdAt},
 		},
-	}}
-	setup := &recordingSetupStore{setups: []persistence.AdminApplicationSetup{
-		{
-			ApplicationID: "ios-app",
-			Credentials:   []persistence.AdminCredentialStatus{{Kind: "apple_app_store_server_api", Revision: 3, UpdatedAt: createdAt}},
-			Webhook: &persistence.AdminWebhookSetup{
-				URL: "https://user:pass@hooks.example.com/iapstack?token=sentinel-query-token#frag", Revision: 2, UpdatedAt: createdAt,
+		ApplicationSetups: []persistence.AdminApplicationSetup{
+			{
+				ApplicationID: "ios-app",
+				Credentials:   []persistence.AdminCredentialStatus{{Kind: "apple_app_store_server_api", Revision: 3, UpdatedAt: createdAt}},
+				Webhook: &persistence.AdminWebhookSetup{
+					URL:      "https://user:pass@hooks.example.com:8443/hooks/catch/123/sentinel-path-token/?token=sentinel-query-token#frag",
+					Revision: 2, UpdatedAt: createdAt,
+				},
 			},
+			{ApplicationID: "android-app", Credentials: []persistence.AdminCredentialStatus{{Kind: "unrelated", Revision: 1, UpdatedAt: createdAt}}},
+			{ApplicationID: "amazon-app", Credentials: []persistence.AdminCredentialStatus{{Kind: "amazon_shared_secret", Revision: 1, UpdatedAt: createdAt}}},
 		},
-		{ApplicationID: "android-app", Credentials: []persistence.AdminCredentialStatus{{Kind: "unrelated", Revision: 1, UpdatedAt: createdAt}}},
 	}}
 	actor := Actor{Role: persistence.APIKeyRoleAgent, ProjectID: "project 1"}
 
@@ -175,9 +185,16 @@ func TestSetupStatusReportsPresenceOnlyAndNotificationURLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupStatus() error = %v", err)
 	}
-	if withoutURL.PublicURLConfigured || withoutURL.Applications[0].StoreNotifications.URL != "" ||
+	if withoutURL.PublicURLConfigured || withoutURL.Applications[0].StoreNotifications == nil ||
+		withoutURL.Applications[0].StoreNotifications.URL != "" ||
 		withoutURL.Applications[0].StoreNotifications.Path != "/v1/providers/apple/projects/project%201/applications/ios-app/notifications" {
 		t.Fatalf("setup without public URL = %#v", withoutURL.Applications[0].StoreNotifications)
+	}
+	if len(withoutURL.Issues) == 0 || withoutURL.Issues[0].Code != SetupIssuePublicURLNotConfigured {
+		t.Fatalf("issues without public URL = %#v, want public_url_not_configured first", withoutURL.Issues)
+	}
+	if admin.calls != 0 {
+		t.Fatalf("SetupStatus() made %d admin store reads, want only the narrow setup read", admin.calls)
 	}
 
 	status, err := New(Dependencies{Admin: admin, Setup: setup, PublicURL: "https://iap.example.com/base/"}).
@@ -185,25 +202,44 @@ func TestSetupStatusReportsPresenceOnlyAndNotificationURLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupStatus() error = %v", err)
 	}
-	ios, android := status.Applications[0], status.Applications[1]
+	ios, android, amazon := status.Applications[0], status.Applications[1], status.Applications[2]
 	if !ios.Credentials.Configured || ios.Credentials.RequiredKind != "apple_app_store_server_api" || len(ios.Credentials.Stored) != 1 {
 		t.Fatalf("iOS credentials = %#v", ios.Credentials)
 	}
-	if !ios.Webhook.Configured || ios.Webhook.URL != "https://hooks.example.com/iapstack" || ios.Webhook.Revision != 2 {
-		t.Fatalf("iOS webhook = %#v, want the URL without user info, query, or fragment", ios.Webhook)
+	if !ios.Webhook.Configured || ios.Webhook.Origin != "https://hooks.example.com:8443" || ios.Webhook.Revision != 2 {
+		t.Fatalf("iOS webhook = %#v, want only the origin of the stored URL", ios.Webhook)
+	}
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("marshal setup status: %v", err)
+	}
+	for _, secret := range []string{"sentinel-path-token", "sentinel-query-token", "user:pass", "/hooks/catch"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("setup status contains %q from the webhook URL: %s", secret, encoded)
+		}
 	}
 	if ios.StoreNotifications.URL != "https://iap.example.com/base/v1/providers/apple/projects/project%201/applications/ios-app/notifications" {
 		t.Fatalf("iOS notification URL = %q", ios.StoreNotifications.URL)
 	}
-	if android.Credentials.Configured || android.Webhook.Configured ||
+	if android.Credentials.Configured || android.Webhook.Configured || android.StoreNotifications == nil ||
 		!strings.Contains(android.StoreNotifications.Path, "/v1/providers/google-play/") {
 		t.Fatalf("Android setup = %#v, want missing credential and webhook", android)
+	}
+	if amazon.Credentials.RequiredKind != "" || amazon.Credentials.Configured || amazon.StoreNotifications != nil ||
+		len(amazon.Credentials.Stored) != 1 || strings.Contains(string(encoded), `"store_notifications":{"destination":""`) {
+		t.Fatalf("Amazon setup = %#v, want no required kind and no store notifications", amazon)
+	}
+	for _, issue := range status.Issues {
+		if issue.ApplicationID == "amazon-app" && issue.Code == SetupIssueCredentialMissing {
+			t.Fatalf("issues = %#v, want no credential_missing for a provider without an adapter", status.Issues)
+		}
 	}
 	codes := map[string]int{}
 	for _, issue := range status.Issues {
 		codes[issue.Code]++
 	}
-	if codes[SetupIssueCredentialMissing] != 1 || codes[SetupIssueWebhookNotConfigured] != 1 ||
+	if codes[SetupIssueCredentialMissing] != 1 || codes[SetupIssueWebhookNotConfigured] != 2 ||
+		codes[SetupIssueProviderNotSupported] != 1 ||
 		codes[SetupIssueQueueFailures] != 1 || codes[SetupIssueWebhookDeliveryFailed] != 1 ||
 		codes[SetupIssuePublicURLNotConfigured] != 0 {
 		t.Fatalf("issues = %#v", status.Issues)
@@ -241,13 +277,20 @@ func (store *recordingAdminStore) AdminProjects(context.Context) ([]persistence.
 	return store.projects, nil
 }
 
-// AdminProjectOverview returns the fixed overview.
+// AdminProject returns the fixed project.
+func (store *recordingAdminStore) AdminProject(context.Context, core.ProjectID) (persistence.AdminProject, error) {
+	store.calls++
+	return store.project, nil
+}
+
+// AdminProjectOverview returns the fixed overview and counts the heavy read separately.
 func (store *recordingAdminStore) AdminProjectOverview(
 	context.Context,
 	core.ProjectID,
 	persistence.AdminRevenueQuery,
 ) (persistence.AdminProjectOverview, error) {
 	store.calls++
+	store.overviewCalls++
 	return store.overview, nil
 }
 
@@ -280,13 +323,13 @@ func (store *recordingAdminStore) AdminSubscriptionMetrics(
 	return persistence.SubscriptionMetrics{}, nil
 }
 
-// AdminApplicationSetup returns the fixed setup rows.
-func (store *recordingSetupStore) AdminApplicationSetup(
+// AdminProjectSetup returns the fixed project setup.
+func (store *recordingSetupStore) AdminProjectSetup(
 	context.Context,
 	core.ProjectID,
-) ([]persistence.AdminApplicationSetup, error) {
+) (persistence.AdminProjectSetup, error) {
 	store.calls++
-	return store.setups, nil
+	return store.setup, nil
 }
 
 // List counts one report read.

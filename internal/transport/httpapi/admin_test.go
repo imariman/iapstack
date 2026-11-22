@@ -146,6 +146,11 @@ func (fakeAdminQueryStore) AdminProjects(context.Context) ([]persistence.AdminPr
 	}}, nil
 }
 
+// AdminProject returns the summary of the requested project.
+func (fakeAdminQueryStore) AdminProject(_ context.Context, projectID core.ProjectID) (persistence.AdminProject, error) {
+	return persistence.AdminProject{ID: projectID, CreatedAt: time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)}, nil
+}
+
 // AdminProjectOverview returns one empty bounded overview for the requested project.
 func (fakeAdminQueryStore) AdminProjectOverview(
 	_ context.Context,

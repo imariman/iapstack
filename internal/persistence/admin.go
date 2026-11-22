@@ -33,6 +33,8 @@ const (
 type AdminQueryStore interface {
 	// AdminProjects returns bounded project summaries ordered by stable identity.
 	AdminProjects(context.Context) ([]AdminProject, error)
+	// AdminProject returns one project summary without the sections of the overview.
+	AdminProject(context.Context, core.ProjectID) (AdminProject, error)
 	// AdminProjectOverview returns one bounded operational snapshot in project scope.
 	AdminProjectOverview(context.Context, core.ProjectID, AdminRevenueQuery) (AdminProjectOverview, error)
 	AdminCustomerStore
@@ -40,11 +42,22 @@ type AdminQueryStore interface {
 	AdminSubscriptionMetrics(context.Context, core.ProjectID, SubscriptionMetricsQuery) (SubscriptionMetrics, error)
 }
 
-// AdminSetupStore exposes secret-free application setup metadata for administrators and agents.
+// AdminSetupStore exposes secret-free project setup metadata for administrators and agents.
 type AdminSetupStore interface {
-	// AdminApplicationSetup returns credential presence and webhook configuration for the applications
-	// of one project, without credential payloads, ciphertext, fingerprints, or webhook secrets.
-	AdminApplicationSetup(context.Context, core.ProjectID) ([]AdminApplicationSetup, error)
+	// AdminProjectSetup returns one project's applications, their credential presence and webhook
+	// configuration, queue outcomes, and recent webhook deliveries in one snapshot. It reads no
+	// analytics, products, customers, or transactions, and never returns credential payloads,
+	// ciphertext, fingerprints, or webhook secrets.
+	AdminProjectSetup(context.Context, core.ProjectID) (AdminProjectSetup, error)
+}
+
+// AdminProjectSetup is the setup read model of one project.
+type AdminProjectSetup struct {
+	Applications []AdminApplication
+	// ApplicationSetups holds the stored setup rows of Applications, in the same order and bound.
+	ApplicationSetups   []AdminApplicationSetup
+	Queues              []AdminQueue
+	RecentWebhookEvents []AdminWebhookEvent
 }
 
 // AdminApplicationSetup is the stored setup state of one application.

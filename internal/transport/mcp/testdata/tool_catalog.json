@@ -1064,7 +1064,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Reports what is still missing in one project's setup: per application the stored provider credential kinds and revisions, the webhook endpoint, and the store notification path (and the full URL when the server's public URL is configured) to paste into App Store Connect, the Play notifications Pub/Sub push subscription, or AppGallery Connect. It also lists queue failures and recent failed webhook deliveries. Credential payloads and secrets are never returned.",
+      "description": "Reports what is still missing in one project's setup: per application the stored provider credential kinds and revisions, whether a webhook endpoint is stored and its origin, and the store notification path (and the full URL when the server's public URL is configured) to paste into App Store Connect, the Play notifications Pub/Sub push subscription, or AppGallery Connect. It also lists queue failures and recent failed webhook deliveries. Credential payloads and secrets are never returned.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1123,7 +1123,6 @@
                     }
                   },
                   "required": [
-                    "required_kind",
                     "configured",
                     "stored"
                   ],
@@ -1158,13 +1157,19 @@
                     "destination",
                     "path"
                   ],
-                  "type": "object"
+                  "type": [
+                    "null",
+                    "object"
+                  ]
                 },
                 "webhook": {
                   "additionalProperties": false,
                   "properties": {
                     "configured": {
                       "type": "boolean"
+                    },
+                    "origin": {
+                      "type": "string"
                     },
                     "revision": {
                       "type": "integer"
@@ -1174,9 +1179,6 @@
                         "null",
                         "string"
                       ]
-                    },
-                    "url": {
-                      "type": "string"
                     }
                   },
                   "required": [
@@ -1191,8 +1193,7 @@
                 "environment",
                 "provider_application_id",
                 "credentials",
-                "webhook",
-                "store_notifications"
+                "webhook"
               ],
               "type": "object"
             },

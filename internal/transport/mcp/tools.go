@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -20,7 +21,8 @@ import (
 )
 
 const (
-	// MaxResponseBytes caps the serialized structured result of one tool call.
+	// MaxResponseBytes caps one serialized tool result as it is sent: the JSON text content and the
+	// structured content together, so a result carries roughly half of this as data.
 	MaxResponseBytes = 256 << 10
 	// defaultPageSize is the page size of list tools when the caller names none.
 	defaultPageSize = 50
@@ -146,7 +148,9 @@ type listPageToken struct {
 	Version int    `json:"v"`
 	List    string `json:"l"`
 	Scope   string `json:"s"`
-	Offset  int    `json:"o"`
+	// After is the stable id of the last item on the previous page. The list is read again for every
+	// page, so the cursor names an item rather than an offset that shifts when the list changes.
+	After string `json:"a"`
 }
 
 var (
@@ -154,7 +158,8 @@ var (
 	readOnlyAnnotations = sdk.ToolAnnotations{
 		ReadOnlyHint: true, DestructiveHint: boolPointer(false), IdempotentHint: true, OpenWorldHint: boolPointer(false),
 	}
-	// errInvalidPageToken rejects a cursor from another list, scope, or encoding.
+	// errInvalidPageToken rejects a cursor from another list, scope, or encoding, and one whose item
+	// is no longer in the list.
 	errInvalidPageToken = errors.New("page token is invalid")
 )
 
@@ -183,7 +188,8 @@ func toolDefinitions(service *controlplane.Service, logger *slog.Logger) []toolD
 			if err != nil {
 				return projectListOutput{}, err
 			}
-			page, next, err := paginate(list.Projects, "projects", "", input.PageSize, input.PageToken)
+			page, next, err := paginate(list.Projects, "projects", "", input.PageSize, input.PageToken,
+				func(project controlplane.Project) string { return string(project.ID) })
 			if err != nil {
 				return projectListOutput{}, err
 			}
@@ -249,7 +255,8 @@ func toolDefinitions(service *controlplane.Service, logger *slog.Logger) []toolD
 			if err != nil {
 				return financialReportsOutput{}, err
 			}
-			page, next, err := paginate(list.FinancialReports, "financial_reports", input.ProjectID, input.PageSize, input.PageToken)
+			page, next, err := paginate(list.FinancialReports, "financial_reports", input.ProjectID, input.PageSize, input.PageToken,
+				func(report controlplane.FinancialReport) string { return report.ID })
 			if err != nil {
 				return financialReportsOutput{}, err
 			}
@@ -263,7 +270,7 @@ func toolDefinitions(service *controlplane.Service, logger *slog.Logger) []toolD
 			Name:  "get_setup_status",
 			Title: "Get setup status",
 			Description: "Reports what is still missing in one project's setup: per application the stored provider credential " +
-				"kinds and revisions, the webhook endpoint, and the store notification path (and the full URL when the server's " +
+				"kinds and revisions, whether a webhook endpoint is stored and its origin, and the store notification path (and the full URL when the server's " +
 				"public URL is configured) to paste into App Store Connect, the Play notifications Pub/Sub push subscription, or " +
 				"AppGallery Connect. It also lists queue failures and recent failed webhook deliveries. Credential payloads and " +
 				"secrets are never returned.",
@@ -332,15 +339,23 @@ func defineTool[In, Out any](
 			outcome = "internal_error"
 			return toolFailure("internal_error", "the request could not be completed"), nil
 		}
-		if len(payload) > MaxResponseBytes {
+		result := &sdk.CallToolResult{
+			Content:           []sdk.Content{&sdk.TextContent{Text: string(payload)}},
+			StructuredContent: json.RawMessage(payload),
+		}
+		// The payload is sent twice, as escaped text and as structured content, so the cap is checked
+		// on the serialized result rather than on the payload alone.
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			outcome = "internal_error"
+			return toolFailure("internal_error", "the request could not be completed"), nil
+		}
+		if len(encoded) > MaxResponseBytes {
 			outcome = codeResponseTooLarge
 			return toolFailure(codeResponseTooLarge,
 				"the result exceeds the response size limit; narrow the query or request a smaller page"), nil
 		}
-		return &sdk.CallToolResult{
-			Content:           []sdk.Content{&sdk.TextContent{Text: string(payload)}},
-			StructuredContent: json.RawMessage(payload),
-		}, nil
+		return result, nil
 	}
 	return toolDefinition{tool: &defined, handler: handler}
 }
@@ -389,8 +404,16 @@ func toolFailure(code, message string) *sdk.CallToolResult {
 	}
 }
 
-// paginate returns one page of an already bounded list and the cursor for the next page.
-func paginate[T any](items []T, list, scope string, pageSize *int, token string) ([]T, string, error) {
+// paginate returns one page of an already bounded list and the cursor for the next page. The cursor
+// names the last item of the page by identity, so an item added or removed between two calls neither
+// repeats nor skips the items that follow. A cursor whose item is gone is rejected.
+func paginate[T any](
+	items []T,
+	list, scope string,
+	pageSize *int,
+	token string,
+	identity func(T) string,
+) ([]T, string, error) {
 	size := defaultPageSize
 	if pageSize != nil {
 		if *pageSize < 1 || *pageSize > maxPageSize {
@@ -398,50 +421,51 @@ func paginate[T any](items []T, list, scope string, pageSize *int, token string)
 		}
 		size = *pageSize
 	}
-	offset := 0
+	start := 0
 	if token != "" {
-		decoded, err := decodeListPageToken(token, list, scope)
+		after, err := decodeListPageToken(token, list, scope)
 		if err != nil {
 			return nil, "", validation.Wrap(err)
 		}
-		offset = decoded
+		position := slices.IndexFunc(items, func(item T) bool { return identity(item) == after })
+		if position < 0 {
+			return nil, "", validation.Wrap(errInvalidPageToken)
+		}
+		start = position + 1
 	}
-	if offset > len(items) {
-		offset = len(items)
-	}
-	end := min(offset+size, len(items))
-	page := items[offset:end]
+	end := min(start+size, len(items))
+	page := items[start:end]
 	if page == nil {
 		page = []T{}
 	}
 	next := ""
 	if end < len(items) {
-		next = encodeListPageToken(list, scope, end)
+		next = encodeListPageToken(list, scope, identity(items[end-1]))
 	}
 	return page, next, nil
 }
 
-// encodeListPageToken returns an opaque cursor for one list and scope.
-func encodeListPageToken(list, scope string, offset int) string {
-	payload, _ := json.Marshal(listPageToken{Version: pageTokenVersion, List: list, Scope: scope, Offset: offset})
+// encodeListPageToken returns an opaque cursor for one list and scope that names the last item read.
+func encodeListPageToken(list, scope, after string) string {
+	payload, _ := json.Marshal(listPageToken{Version: pageTokenVersion, List: list, Scope: scope, After: after})
 	return base64.RawURLEncoding.EncodeToString(payload)
 }
 
 // decodeListPageToken parses an opaque cursor and rejects one issued for another list or scope.
-func decodeListPageToken(token, list, scope string) (int, error) {
+func decodeListPageToken(token, list, scope string) (string, error) {
 	if len(token) > pageTokenMaxBytes {
-		return 0, errInvalidPageToken
+		return "", errInvalidPageToken
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {
-		return 0, errInvalidPageToken
+		return "", errInvalidPageToken
 	}
 	var decoded listPageToken
 	if err := json.Unmarshal(payload, &decoded); err != nil || decoded.Version != pageTokenVersion ||
-		decoded.List != list || decoded.Scope != scope || decoded.Offset < 0 {
-		return 0, errInvalidPageToken
+		decoded.List != list || decoded.Scope != scope || decoded.After == "" {
+		return "", errInvalidPageToken
 	}
-	return decoded.Offset, nil
+	return decoded.After, nil
 }
 
 // financialReportSummaryFrom drops the report file digest from the shared financial report view.
