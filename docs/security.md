@@ -70,9 +70,15 @@ scoped to one project, is read-only unless created with `allow_writes`, and
 authenticates only on the opt-in [MCP endpoint](mcp.md) at `/mcp`; every `/v1` route
 rejects it. `/mcp` accepts only stored agent and admin bearers: application keys, the
 bootstrap credential, and dashboard sessions are rejected. MCP tools call the same
-control-plane authorization as `/v1`, so an agent key cannot read another project, and
-tool output treats customer-supplied strings as untrusted data and never includes
-secrets, purchase evidence, ciphertext, or fingerprints. See
+control-plane authorization as `/v1`, so an agent key cannot read or write another
+project, and tool output treats customer-supplied strings as untrusted data and never
+includes secrets, purchase evidence, ciphertext, or fingerprints. Only agent keys
+created with `allow_writes` and admin keys are offered the six write tools (manual
+grants, customer aliases, and catalog definitions), and the shared write gate checks
+every write call. Credentials, webhook secrets, API keys, sessions, customer merges,
+financial reports, and project or application creation stay out of MCP. Aliases and
+manual grants record the acting key and the channel (`api`, `dashboard`, `mcp`, or
+`import`); definition writes over MCP are recorded only in the tool call log. See
 [ADR-0008](adr/0008-mcp-endpoint-for-agents.md).
 
 The model also assumes a database-only attacker does not possess the protection roots,

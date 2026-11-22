@@ -71,7 +71,10 @@ application key for a missing application. List and revoke responses include
 `allow_writes` for agent keys only.
 
 An agent key never authenticates on a `/v1` route. Every `/v1` endpoint answers it with
-`401`, the same response as any other key of the wrong role.
+`401`, the same response as any other key of the wrong role. An agent key created with
+`allow_writes` makes its writes through the MCP write tools, which run the same
+control-plane writes as the manual grant, alias, entitlement, product, and store product
+routes below.
 
 ## Bootstrap sequence
 
@@ -270,6 +273,14 @@ public id of the stored key that made the change. When the change came from a da
 session opened with a username and password, they hold `account:<id>:<username>`
 instead. The id keeps the row tied to one account when a username is later reused, and
 the username keeps it readable after the account is deleted.
+
+Aliases and manual grants also record the channel the write arrived on, returned as
+`actor_channel` (and `revoked_by_channel` on a revoked grant) in the customer detail,
+its aliases, manual grants, and timeline events: `api` for a request authenticated by a
+bearer on this API, `dashboard` for a dashboard session, `mcp` for the
+[MCP endpoint](mcp.md), and `import` for aliases written by the RevenueCat import. An
+alias `actor_role` is `admin`, `application`, or `agent`; an agent alias is always
+`mcp` and an application alias always `api`. Customer merges record no channel.
 
 A manual grant is an audited access source of kind `manual`. While it allows access, the
 public entitlement and the webhook report `reason` `manual_grant`; after revocation they report
