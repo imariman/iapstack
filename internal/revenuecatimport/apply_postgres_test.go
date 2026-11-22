@@ -41,57 +41,7 @@ type importClock struct {
 
 // TestApplyIsIdempotentAndLosesToAStoreObservation verifies grants, webhooks, and supersession.
 func TestApplyIsIdempotentAndLosesToAStoreObservation(t *testing.T) {
-	databaseURL := strings.TrimSpace(os.Getenv(importDatabaseURLKey))
-	if databaseURL == "" {
-		t.Skipf("%s is not configured", importDatabaseURLKey)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	connection, err := pgx.Connect(ctx, databaseURL)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	if _, err := connection.Exec(ctx, `SELECT pg_advisory_lock($1)`, importDatabaseAdvisoryLock); err != nil {
-		_ = connection.Close(ctx)
-		t.Fatalf("lock: %v", err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cleanupCancel()
-		_, _ = connection.Exec(cleanupCtx, `SELECT pg_advisory_unlock($1)`, importDatabaseAdvisoryLock)
-		_ = connection.Close(cleanupCtx)
-	})
-	if err := postgres.RemoveRiver(ctx, databaseURL); err != nil {
-		t.Fatalf("RemoveRiver() error = %v", err)
-	}
-	migrator, err := postgres.NewMigrator(ctx, connection)
-	if err != nil {
-		t.Fatalf("NewMigrator() error = %v", err)
-	}
-	if err := postgres.ClearIdentityMigrationGuards(ctx, connection); err != nil {
-		t.Fatalf("clear guards: %v", err)
-	}
-	if err := migrator.MigrateTo(ctx, 0); err != nil {
-		t.Fatalf("reset schema: %v", err)
-	}
-	if err := migrator.Up(ctx); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	if err := postgres.MigrateRiver(ctx, databaseURL); err != nil {
-		t.Fatalf("MigrateRiver() error = %v", err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cleanupCancel()
-		_ = postgres.RemoveRiver(cleanupCtx, databaseURL)
-		_ = postgres.ClearIdentityMigrationGuards(cleanupCtx, connection)
-		_ = migrator.MigrateTo(cleanupCtx, 0)
-	})
-	store, err := postgres.OpenStore(ctx, databaseURL)
-	if err != nil {
-		t.Fatalf("OpenStore() error = %v", err)
-	}
-	t.Cleanup(store.Close)
+	ctx, connection, store := openImportDatabase(t)
 	seedImportCatalog(t, ctx, connection)
 
 	now := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
@@ -219,6 +169,95 @@ func TestApplyIsIdempotentAndLosesToAStoreObservation(t *testing.T) {
 	if canonicalGrants != 1 || canonicalProjections != 1 {
 		t.Fatalf("post-merge grants=%d projections=%d, want one each", canonicalGrants, canonicalProjections)
 	}
+}
+
+// TestApplyNamesAliasThatIsAlreadyACustomer verifies a purchase-created alias customer gets an actionable failure.
+func TestApplyNamesAliasThatIsAlreadyACustomer(t *testing.T) {
+	ctx, connection, store := openImportDatabase(t)
+	seedImportCatalog(t, ctx, connection)
+	// The alias verified a purchase before the import ran, so it is already a customer of its own.
+	if _, err := connection.Exec(ctx, `INSERT INTO customers (id, project_id, external_id) VALUES ('cust-purchase', 'project-rc', 'alias-rc')`); err != nil {
+		t.Fatalf("seed purchase customer: %v", err)
+	}
+	export := "rc_original_app_user_id,rc_last_seen_app_user_id_alias,product_identifier,entitlement_identifiers,start_time,effective_end_time,store,is_auto_renewable,is_sandbox,updated_at,original_store_transaction_id\n" +
+		"user-rc,alias-rc,com.example.annual,\"[\"\"premium\"\"]\",2026-10-01 00:00:00,2026-10-15 00:00:00,app_store,true,false,2026-10-01 00:00:00,original-rc\n"
+	input := importInput(time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC), export)
+	input.BatchID = "revenuecat-alias-conflict"
+
+	report, err := Apply(ctx, store, input, false)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if len(report.Failures) != 1 || report.Failures[0].Code != CodeAliasHasCustomer || report.Failures[0].ExternalID != "alias-rc" {
+		t.Fatalf("failures = %#v, want alias_has_customer naming alias-rc", report.Failures)
+	}
+	if report.Counts.Failed != 1 || report.Counts.CustomersCreated != 0 || report.Counts.GrantsUpserted != 0 {
+		t.Fatalf("counts = %#v, want the subscriber refused with nothing written", report.Counts)
+	}
+	var customers int
+	if err := connection.QueryRow(ctx, `SELECT count(*) FROM customers`).Scan(&customers); err != nil {
+		t.Fatalf("count customers: %v", err)
+	}
+	if customers != 1 {
+		t.Fatalf("customers = %d, want only the purchase-created customer", customers)
+	}
+}
+
+// openImportDatabase migrates a fresh schema and opens the store, or skips without a database.
+func openImportDatabase(t *testing.T) (context.Context, *pgx.Conn, *postgres.Store) {
+	t.Helper()
+	databaseURL := strings.TrimSpace(os.Getenv(importDatabaseURLKey))
+	if databaseURL == "" {
+		t.Skipf("%s is not configured", importDatabaseURLKey)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
+	connection, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	if _, err := connection.Exec(ctx, `SELECT pg_advisory_lock($1)`, importDatabaseAdvisoryLock); err != nil {
+		_ = connection.Close(ctx)
+		t.Fatalf("lock: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cleanupCancel()
+		_, _ = connection.Exec(cleanupCtx, `SELECT pg_advisory_unlock($1)`, importDatabaseAdvisoryLock)
+		_ = connection.Close(cleanupCtx)
+	})
+	if err := postgres.RemoveRiver(ctx, databaseURL); err != nil {
+		t.Fatalf("RemoveRiver() error = %v", err)
+	}
+	migrator, err := postgres.NewMigrator(ctx, connection)
+	if err != nil {
+		t.Fatalf("NewMigrator() error = %v", err)
+	}
+	if err := postgres.ClearIdentityMigrationGuards(ctx, connection); err != nil {
+		t.Fatalf("clear guards: %v", err)
+	}
+	if err := migrator.MigrateTo(ctx, 0); err != nil {
+		t.Fatalf("reset schema: %v", err)
+	}
+	if err := migrator.Up(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := postgres.MigrateRiver(ctx, databaseURL); err != nil {
+		t.Fatalf("MigrateRiver() error = %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cleanupCancel()
+		_ = postgres.RemoveRiver(cleanupCtx, databaseURL)
+		_ = postgres.ClearIdentityMigrationGuards(cleanupCtx, connection)
+		_ = migrator.MigrateTo(cleanupCtx, 0)
+	})
+	store, err := postgres.OpenStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("OpenStore() error = %v", err)
+	}
+	t.Cleanup(store.Close)
+	return ctx, connection, store
 }
 
 // importInput builds one apply request for the seeded catalog.

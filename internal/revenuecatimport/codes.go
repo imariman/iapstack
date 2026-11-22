@@ -16,6 +16,10 @@ const (
 	CodeAliasRefused = "alias_refused"
 	// CodeConflictingSubscriber means an alias belongs to another customer, so nothing is written.
 	CodeConflictingSubscriber = "conflicting_subscriber"
+	// CodeAliasHasCustomer means an alias is already its own customer, usually because a purchase
+	// under that id was verified before the import, so nothing is written. The failure's
+	// external_id is that alias: merge its customer into the subscriber's and import again.
+	CodeAliasHasCustomer = "alias_has_customer"
 	// CodeUnknownEntitlement means the RevenueCat entitlement id is not in the mapping.
 	CodeUnknownEntitlement = "unknown_entitlement"
 	// CodeUnknownProduct means the product or store-product row is not already in the catalog.

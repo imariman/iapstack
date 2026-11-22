@@ -480,6 +480,11 @@ func (api *API) putCustomer(writer http.ResponseWriter, request *http.Request) {
 	err := api.operations.Operate(request.Context(), func(repository persistence.OperationsTransaction) error {
 		var putErr error
 		stored, putErr = repository.PutCustomer(request.Context(), customer)
+		if putErr == nil && stored.ID != customer.ID {
+			// The external id already belongs to another customer, for example one its first
+			// purchase created. A PUT never moves an external id, so it must not report success.
+			putErr = fmt.Errorf("put customer %q: %w", customer.ID, persistence.ErrConflict)
+		}
 		return putErr
 	})
 	if err != nil {

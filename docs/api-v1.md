@@ -43,7 +43,7 @@ a restart. Clearing the bootstrap secret from the runtime afterwards is optional
 ## Bootstrap sequence
 
 1. Use `IAPSTACK_BOOTSTRAP_ADMIN_KEY` to create a stored admin key with `POST /v1/admin/api-keys` and `{"role":"admin"}`. The bootstrap key stops working at that moment, so use the returned stored admin key for every later step.
-2. Create the project, provider application, entitlement, product, provider-product mapping, and customer using the idempotent `/v1/admin/projects/...` PUT endpoints.
+2. Create the project, provider application, entitlement, product, and provider-product mapping using the idempotent `/v1/admin/projects/...` PUT endpoints. Customers need no step here: the first stored purchase creates one (see [Application operations](#application-operations)). Create a customer with `PUT /v1/admin/projects/{project_id}/customers/{customer_id}` only to choose its internal id or to attach aliases before its first purchase. That PUT returns `409` when the external id already belongs to a customer with a different internal id.
 3. Store the provider's versioned credential package and an HTTPS webhook configuration.
 4. Create an application key with `{"role":"application","project_id":"...","application_id":"..."}`.
 5. Keep that application key in the trusted host backend. After authenticating a
@@ -246,6 +246,18 @@ Only the trusted host backend calls the first endpoint, using its durable applic
 bearer after authenticating the user. The remaining endpoints require the returned
 customer session and reject requests whose application or external customer ID does
 not exactly match the authenticated session.
+
+Minting a session does not create a customer, so a host can mint one before it attaches
+an alias. The entitlement GET returns `404 not_found` until the external id is a customer
+or an alias. When `purchases:verify` or a `purchases:restore` item stores a purchase for
+an external id that is neither, IAPStack creates the customer, with a generated `cust-`
+internal id, in the same transaction as that purchase. A request that fails before the
+purchase is stored, for example on validation, catalog resolution, or provider
+verification, creates no customer. After the first stored purchase, attaching the external
+id as another customer's alias returns `409`; merge the customers instead. For the same
+reason a RevenueCat import that lists such an external id as an alias refuses that
+subscriber with `alias_has_customer`, so import before migrated users' purchases reach
+IAPStack, or merge and import again.
 
 Restore processes items sequentially under a 25-second server budget. If that budget
 expires, the API returns retryable `503 request_timeout`; already completed items remain

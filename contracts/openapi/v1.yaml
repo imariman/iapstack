@@ -1136,7 +1136,9 @@ paths:
       description: >-
         This operation is for a trusted host backend after it authenticates its
         own user. The durable application bearer must never be shipped in a
-        mobile application.
+        mobile application. Minting a session does not create the customer, so
+        a host can mint one before it attaches an alias; the first purchase
+        IAPStack stores for the external customer ID creates it.
       security:
         - applicationBearer: []
       parameters:
@@ -1171,6 +1173,11 @@ paths:
       tags: [Purchases]
       operationId: verifyPurchase
       summary: Verify one signed purchase and return current projections
+      description: >-
+        When the session's external customer ID is neither a customer nor an
+        alias, IAPStack creates that customer, with a generated internal ID, in
+        the transaction that stores the purchase. A request that fails before
+        the purchase is stored creates no customer.
       security:
         - customerSessionBearer: []
       parameters:
@@ -1214,7 +1221,9 @@ paths:
       description: >-
         Processing is sequential, idempotent, and bounded by a 25-second server
         budget. A timeout returns a retryable 503; items committed before that
-        timeout remain durable and are safe to submit again.
+        timeout remain durable and are safe to submit again. Like
+        verifyPurchase, the first stored item creates the customer when the
+        session's external customer ID is neither a customer nor an alias.
       security:
         - customerSessionBearer: []
       parameters:
@@ -1255,6 +1264,9 @@ paths:
       tags: [Entitlements]
       operationId: getCustomerEntitlements
       summary: Load the current entitlement projection for one customer
+      description: >-
+        Returns 404 not_found until the external customer ID is a customer or
+        an alias. Its first stored purchase creates the customer.
       security:
         - customerSessionBearer: []
       parameters:
