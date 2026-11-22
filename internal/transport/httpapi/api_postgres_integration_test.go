@@ -777,10 +777,6 @@ func openAPIIntegrationDatabase(t *testing.T) *apiIntegrationDatabase {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset HTTP integration River schema: %v", err)
 	}
-	if err := postgres.ClearIdentityMigrationGuards(ctx, connection); err != nil {
-		_ = connection.Close(ctx)
-		t.Fatalf("clear identity migration guards: %v", err)
-	}
 	if err := migrator.MigrateTo(ctx, 0); err != nil {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset HTTP integration PostgreSQL: %v", err)
@@ -805,9 +801,6 @@ func openAPIIntegrationDatabase(t *testing.T) *apiIntegrationDatabase {
 		defer cleanupCancel()
 		if err := postgres.RemoveRiver(cleanupCtx, databaseURL); err != nil {
 			t.Errorf("reset HTTP integration River schema during cleanup: %v", err)
-		}
-		if err := postgres.ClearIdentityMigrationGuards(cleanupCtx, connection); err != nil {
-			t.Errorf("clear identity migration guards during cleanup: %v", err)
 		}
 		if err := migrator.MigrateTo(cleanupCtx, 0); err != nil {
 			t.Errorf("reset HTTP integration PostgreSQL during cleanup: %v", err)

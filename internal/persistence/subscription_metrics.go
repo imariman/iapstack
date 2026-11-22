@@ -335,7 +335,7 @@ func ComputeSubscriptionMetrics(
 
 		first := lineage.FirstStartsAt
 		// A signed lineage start replaces the earliest stored period, so a subscriber first seen at a
-		// renewal is not new. Without it, the earliest stored period decides, as before migration 014.
+		// renewal is not new. Without it, the earliest stored period decides.
 		lineageStart := first
 		if lineage.StartedAt != nil {
 			lineageStart = *lineage.StartedAt

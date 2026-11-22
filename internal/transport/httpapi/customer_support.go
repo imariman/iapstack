@@ -316,7 +316,7 @@ func (api *API) createAdminManualGrant(writer http.ResponseWriter, request *http
 		ProductID:      input.ProductID,
 		EntitlementID:  input.EntitlementID,
 		Reason:         input.Reason,
-		ActorKeyID:     principal.KeyID,
+		ActorKeyID:     principal.ActorID(),
 		IdempotencyKey: input.IdempotencyKey,
 		StartsAt:       now,
 		EndsAt:         endsAt,
@@ -376,7 +376,7 @@ func (api *API) revokeAdminManualGrant(writer http.ResponseWriter, request *http
 		CustomerID: core.CustomerID(request.PathValue("customer_id")),
 		GrantID:    grantID,
 		Reason:     input.Reason,
-		ActorKeyID: principal.KeyID,
+		ActorKeyID: principal.ActorID(),
 		RevokedAt:  now,
 	}
 	if !api.requireValidInput(writer, request, revocation.Validate()) {

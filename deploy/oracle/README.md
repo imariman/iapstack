@@ -46,7 +46,7 @@ those limits.
    The installation then continues on the VM for 5–10 minutes while the image builds.
 4. Open the job's **Outputs** and copy `bootstrap_admin_key`.
 5. Check `https://iapstack.example.com/readyz`, then open `/dashboard/`. Connect with
-   the bootstrap key and create a durable administrator key.
+   the bootstrap key and create your administrator account in the setup banner.
 6. Remove the bootstrap key from the VM:
 
    ```sh

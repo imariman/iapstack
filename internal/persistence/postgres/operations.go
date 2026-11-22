@@ -14,7 +14,7 @@ import (
 const (
 	// apiKeyListLimit bounds lifecycle metadata returned to one administrator request.
 	apiKeyListLimit = 200
-	// apiKeyLifecycleLockID serializes revocations that could remove the final active administrator.
+	// apiKeyLifecycleLockID serializes key revocations and account deletions that could remove the final administrator.
 	apiKeyLifecycleLockID int64 = 0x4941504b45594144
 )
 
@@ -172,7 +172,8 @@ func (repository *transaction) PutAPIKey(ctx context.Context, record persistence
 	return classifyError("put API key", err)
 }
 
-// RevokeAPIKey idempotently revokes one key and atomically preserves an active administrator.
+// RevokeAPIKey idempotently revokes one key. It refuses to revoke the final active administrator key
+// unless an administrator account can still sign in.
 func (repository *transaction) RevokeAPIKey(
 	ctx context.Context,
 	id string,
@@ -207,7 +208,14 @@ func (repository *transaction) RevokeAPIKey(
 			return persistence.APIKeySummary{}, classifyError("count active administrator API keys", err)
 		}
 		if activeAdministrators <= 1 {
-			return persistence.APIKeySummary{}, fmt.Errorf("revoke final administrator API key: %w", persistence.ErrConflict)
+			// An administrator account can still sign in and create a replacement key.
+			hasAccount, err := repository.HasAdminUser(ctx)
+			if err != nil {
+				return persistence.APIKeySummary{}, err
+			}
+			if !hasAccount {
+				return persistence.APIKeySummary{}, fmt.Errorf("revoke final administrator API key: %w", persistence.ErrConflict)
+			}
 		}
 	}
 	revokedAt = revokedAt.UTC()

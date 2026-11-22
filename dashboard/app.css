@@ -542,6 +542,72 @@ form[aria-busy="true"] button[type="submit"]::before {
   color: var(--foreground);
 }
 
+.auth-form > input,
+.password-field input {
+  min-height: 40px;
+}
+
+/* The message sits between the fields and the action, and takes no space while empty. */
+.auth-form > .form-message {
+  margin: 2px 0;
+}
+
+.auth-form input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  padding-right: 44px;
+}
+
+.password-toggle {
+  background: transparent;
+  border-color: transparent;
+  bottom: 0;
+  box-shadow: none;
+  color: var(--muted);
+  height: 34px;
+  margin: auto 0;
+  padding: 0;
+  position: absolute;
+  right: 3px;
+  top: 0;
+  width: 34px;
+}
+
+.password-toggle:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--foreground);
+}
+
+.caps-lock-note {
+  color: var(--warning);
+}
+
+.auth-submit {
+  margin-top: 4px;
+  min-height: 40px;
+  width: 100%;
+}
+
+.auth-alternative {
+  align-items: flex-start;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 16px;
+}
+
+.auth-mode-toggle {
+  margin-left: -12px;
+}
+
 .key-row {
   display: flex;
   gap: 8px;
@@ -975,6 +1041,23 @@ form[aria-busy="true"] button[type="submit"]::before {
 .bootstrap-banner-copy p {
   color: var(--muted);
   font-size: 13px;
+}
+
+/* Username and password pair used to create an administrator account. */
+.account-form {
+  align-items: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+}
+
+.account-form label {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.bootstrap-banner .account-form {
+  flex: 1 1 100%;
 }
 
 /* Shared panel surface */
@@ -2641,6 +2724,25 @@ td code {
   border-top: 1px solid var(--border);
 }
 
+.administrator-section {
+  display: grid;
+  gap: 12px;
+}
+
+.administrator-list {
+  max-height: 240px;
+}
+
+.administrator-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.administrator-actions {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+}
+
 .api-key-card.revoked {
   opacity: 0.6;
 }
@@ -3127,6 +3229,21 @@ td code {
 
   .icon-button {
     width: 44px;
+  }
+
+  .password-toggle {
+    height: 44px;
+    right: 0;
+  }
+
+  .auth-form > input,
+  .password-field input {
+    min-height: 44px;
+  }
+
+  /* 16px keeps iOS from zooming the page when a sign-in field takes focus. */
+  .auth-form input {
+    font-size: 16px;
   }
 }
 

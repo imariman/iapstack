@@ -179,8 +179,30 @@ type OperationsRepository interface {
 	HasActiveAdminAPIKey(context.Context) (bool, error)
 	// PutAPIKey creates one API key verifier without storing the bearer secret.
 	PutAPIKey(context.Context, APIKeyRecord) error
-	// RevokeAPIKey idempotently disables one key while preserving the final active administrator.
+	// RevokeAPIKey idempotently disables one key. It refuses to revoke the final active administrator key
+	// unless an administrator account can still sign in.
 	RevokeAPIKey(context.Context, string, time.Time) (APIKeySummary, error)
+	// AdminUser returns one administrator account and its password verifier by public identity.
+	AdminUser(context.Context, string) (AdminUserRecord, error)
+	// AdminUserByUsername returns one administrator account and its password verifier by normalized username.
+	AdminUserByUsername(context.Context, string) (AdminUserRecord, error)
+	// AdminUsers returns up to 200 administrator accounts, oldest first, without password verifiers.
+	AdminUsers(context.Context) ([]AdminUserSummary, error)
+	// HasAdminUser reports whether at least one administrator account exists.
+	HasAdminUser(context.Context) (bool, error)
+	// PutAdminUser creates one administrator account and rejects a duplicate identity or username.
+	PutAdminUser(context.Context, AdminUserRecord) error
+	// SetAdminUserPassword replaces one account's password verifier, advances its session generation,
+	// and clears its failed sign-in state.
+	SetAdminUserPassword(context.Context, AdminUserPasswordWrite) (AdminUserSummary, error)
+	// RecordAdminUserSignInFailure counts one failed sign-in and locks the account once the count reaches
+	// the threshold. It returns the lock expiry, or nil while the account stays unlocked.
+	RecordAdminUserSignInFailure(context.Context, AdminUserSignInFailure) (*time.Time, error)
+	// ClearAdminUserSignInFailures resets the failed sign-in count and lock of one account.
+	ClearAdminUserSignInFailures(context.Context, string) error
+	// DeleteAdminUser removes one administrator account. It refuses to remove the final account
+	// while no active administrator key exists.
+	DeleteAdminUser(context.Context, string) error
 	// PutWebhookEndpoint creates or rotates one protected application webhook endpoint.
 	PutWebhookEndpoint(context.Context, WebhookEndpointWrite) (WebhookEndpointRecord, error)
 	// WebhookEndpoint returns protected delivery configuration for one application.
@@ -376,6 +398,45 @@ type APIKeyPage struct {
 	NextPageToken string
 }
 
+// AdminUserSummary describes one administrator account without its password verifier.
+type AdminUserSummary struct {
+	ID                string
+	Username          string
+	CreatedAt         time.Time
+	PasswordChangedAt time.Time
+	// SessionGeneration starts at 1 and grows by one with every password change. A dashboard session
+	// is valid only while the account is still in the generation the session was issued in.
+	SessionGeneration int64
+}
+
+// AdminUserRecord stores one administrator account, its memory-hard password verifier, and its
+// failed sign-in state.
+type AdminUserRecord struct {
+	AdminUserSummary
+	PasswordSalt   [16]byte
+	PasswordHash   [32]byte
+	FailedAttempts int
+	// LockedUntil is the end of the current sign-in lock. Nil means the account was never locked.
+	LockedUntil *time.Time
+}
+
+// AdminUserPasswordWrite replaces the password verifier of one administrator account.
+type AdminUserPasswordWrite struct {
+	ID           string
+	PasswordSalt [16]byte
+	PasswordHash [32]byte
+	ChangedAt    time.Time
+}
+
+// AdminUserSignInFailure records one failed sign-in under the service's lock policy.
+type AdminUserSignInFailure struct {
+	ID string
+	// Threshold is the consecutive failure count that locks the account.
+	Threshold int
+	// LockedUntil is the lock expiry stored when this failure reaches the threshold.
+	LockedUntil time.Time
+}
+
 // WebhookEndpointWrite describes protected application delivery configuration.
 type WebhookEndpointWrite struct {
 	ProjectID        core.ProjectID
@@ -560,6 +621,89 @@ func (summary APIKeySummary) Validate() error {
 		validateTime("API key creation time", summary.CreatedAt),
 		lifecycleError,
 	)
+}
+
+// Validate checks administrator account identity, username shape, and lifecycle timestamps.
+func (summary AdminUserSummary) Validate() error {
+	var generationError error
+	if summary.SessionGeneration <= 0 {
+		generationError = errors.New("administrator session generation must be positive")
+	}
+	return errors.Join(
+		generationError,
+		validateText("administrator account ID", summary.ID),
+		ValidateAdminUsername(summary.Username),
+		validateTime("administrator account creation time", summary.CreatedAt),
+		validateTime("administrator password change time", summary.PasswordChangedAt),
+	)
+}
+
+// Validate checks the account summary, the password verifier bytes, and the failed sign-in state.
+func (record AdminUserRecord) Validate() error {
+	var stateError error
+	if record.FailedAttempts < 0 {
+		stateError = errors.New("administrator failed sign-in count must not be negative")
+	} else if record.LockedUntil != nil && record.LockedUntil.IsZero() {
+		stateError = errors.New("administrator lock expiry must not be zero")
+	}
+	return errors.Join(
+		record.AdminUserSummary.Validate(),
+		validateAdminUserVerifier(record.PasswordSalt, record.PasswordHash),
+		stateError,
+	)
+}
+
+// Validate checks the target account, the new verifier bytes, and the change time.
+func (write AdminUserPasswordWrite) Validate() error {
+	return errors.Join(
+		validateText("administrator account ID", write.ID),
+		validateAdminUserVerifier(write.PasswordSalt, write.PasswordHash),
+		validateTime("administrator password change time", write.ChangedAt),
+	)
+}
+
+// Validate checks the target account and the lock policy values.
+func (failure AdminUserSignInFailure) Validate() error {
+	var policyError error
+	if failure.Threshold <= 0 {
+		policyError = errors.New("administrator sign-in failure threshold must be positive")
+	}
+	return errors.Join(
+		validateText("administrator account ID", failure.ID),
+		policyError,
+		validateTime("administrator lock expiry", failure.LockedUntil),
+	)
+}
+
+// ValidateAdminUsername accepts 3-64 lowercase letters, digits, dots, underscores, at signs, and
+// hyphens, starting with a letter or digit. The stored form is already lowercase.
+func ValidateAdminUsername(username string) error {
+	if len(username) < 3 || len(username) > 64 {
+		return errors.New("administrator username must contain 3-64 characters")
+	}
+	for index := 0; index < len(username); index++ {
+		character := username[index]
+		alphanumeric := (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9')
+		if alphanumeric {
+			continue
+		}
+		if index > 0 && strings.IndexByte("._@-", character) >= 0 {
+			continue
+		}
+		return errors.New(
+			"administrator username must start with a lowercase letter or digit and contain only " +
+				"lowercase letters, digits, dots, underscores, at signs, and hyphens",
+		)
+	}
+	return nil
+}
+
+// validateAdminUserVerifier rejects a missing password salt or hash.
+func validateAdminUserVerifier(salt [16]byte, hash [32]byte) error {
+	if salt == ([16]byte{}) || hash == ([32]byte{}) {
+		return errors.New("administrator password verifier is required")
+	}
+	return nil
 }
 
 // Validate checks webhook scope, HTTPS URL, protected secret, and optimistic revision.

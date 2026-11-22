@@ -28,6 +28,15 @@ const (
 	secretBytes = 32
 	// minimumBootstrapAdminKeyBytes prevents trivially brute-forced installation credentials.
 	minimumBootstrapAdminKeyBytes = 32
+	// accountActorPrefix marks an audit actor that is an administrator account rather than a stored key.
+	// Key ids are hexadecimal, so the prefix cannot collide with one.
+	accountActorPrefix = "account:"
+	// maxConcurrentPasswordDerivations caps the memory-hard work that unauthenticated password
+	// sign-in attempts can run at once, and separately what account operations can run at once.
+	maxConcurrentPasswordDerivations = 1
+	// defaultPasswordSlotWait lets concurrent password derivations queue briefly instead of failing,
+	// so two administrators signing in at the same moment both succeed.
+	defaultPasswordSlotWait = 3 * time.Second
 	// argonTime controls Argon2id iterations.
 	argonTime uint32 = 2
 	// argonMemory controls Argon2id memory in KiB.
@@ -40,10 +49,19 @@ const (
 
 // Principal is one authenticated administration or application identity.
 type Principal struct {
-	KeyID         string
-	Role          persistence.APIKeyRole
-	ProjectID     core.ProjectID
-	ApplicationID core.ApplicationID
+	// KeyID is the stored API key that authenticated the request. It is empty for administrator
+	// accounts and for the bootstrap administrator.
+	KeyID string
+	// UserID and Username identify the administrator account that signed in with a password.
+	// Both are empty for API keys and for the bootstrap administrator.
+	UserID   string
+	Username string
+	// AccountGeneration is the account's session generation at the moment it authenticated. A
+	// dashboard session minted from this principal ends when the account moves to a later generation.
+	AccountGeneration int64
+	Role              persistence.APIKeyRole
+	ProjectID         core.ProjectID
+	ApplicationID     core.ApplicationID
 }
 
 // Service creates and verifies memory-hard API key records.
@@ -52,7 +70,15 @@ type Service struct {
 	bootstrapAdminHash [sha256.Size]byte
 	hasBootstrapAdmin  bool
 	derivationSlots    chan struct{}
-	clock              func() time.Time
+	// signInSlots bounds the password derivations that sign-in attempts run. Sign-in is reachable
+	// without a credential, so a flood of it must not take the slots that API keys need.
+	signInSlots chan struct{}
+	// accountSlots bounds the derivations of authenticated account operations (create, change, reset),
+	// so a sign-in flood cannot keep an administrator from managing accounts.
+	accountSlots chan struct{}
+	// passwordSlotWait is how long a password derivation waits for its slot before reporting ErrCapacity.
+	passwordSlotWait time.Duration
+	clock            func() time.Time
 }
 
 var (
@@ -75,7 +101,10 @@ func NewService(
 		return nil, errors.New("maximum concurrent authentication derivations must be positive")
 	}
 	service := &Service{
-		store: store, derivationSlots: make(chan struct{}, maxConcurrentDerivations), clock: time.Now,
+		store: store, derivationSlots: make(chan struct{}, maxConcurrentDerivations),
+		signInSlots:      make(chan struct{}, maxConcurrentPasswordDerivations),
+		accountSlots:     make(chan struct{}, maxConcurrentPasswordDerivations),
+		passwordSlotWait: defaultPasswordSlotWait, clock: time.Now,
 	}
 	if bootstrapAdminKey = strings.TrimSpace(bootstrapAdminKey); bootstrapAdminKey != "" {
 		if len(bootstrapAdminKey) < minimumBootstrapAdminKeyBytes {
@@ -155,18 +184,28 @@ func (service *Service) Revoke(ctx context.Context, id string) (persistence.APIK
 	return summary, nil
 }
 
-// HasActiveAdmin reports whether at least one non-revoked stored administrator key exists.
+// HasActiveAdmin reports whether a non-revoked stored administrator key or an administrator account exists.
+// The bootstrap administrator authenticates only while this is false.
 func (service *Service) HasActiveAdmin(ctx context.Context) (bool, error) {
 	var hasAdmin bool
 	err := service.store.Operate(ctx, func(repository persistence.OperationsTransaction) error {
 		var checkErr error
-		hasAdmin, checkErr = repository.HasActiveAdminAPIKey(ctx)
+		hasAdmin, checkErr = hasStoredAdministrator(ctx, repository)
 		return checkErr
 	})
 	if err != nil {
-		return false, fmt.Errorf("check active administrator API keys: %w", err)
+		return false, fmt.Errorf("check stored administrators: %w", err)
 	}
 	return hasAdmin, nil
+}
+
+// hasStoredAdministrator reports whether an active administrator key or an administrator account exists.
+func hasStoredAdministrator(ctx context.Context, repository persistence.OperationsRepository) (bool, error) {
+	hasKey, err := repository.HasActiveAdminAPIKey(ctx)
+	if err != nil || hasKey {
+		return hasKey, err
+	}
+	return repository.HasAdminUser(ctx)
 }
 
 // Authenticate verifies a bootstrap administrator or stored scoped bearer key.
@@ -219,8 +258,20 @@ func (principal Principal) Validate() error {
 		if principal.ProjectID != "" || principal.ApplicationID != "" {
 			return errors.New("admin principal must not have application scope")
 		}
+		if principal.KeyID != "" && principal.UserID != "" {
+			return errors.New("admin principal must not combine an API key with an administrator account")
+		}
+		if (principal.UserID == "") != (principal.Username == "") {
+			return errors.New("admin principal must carry an administrator account ID together with its username")
+		}
+		if (principal.UserID == "") != (principal.AccountGeneration == 0) || principal.AccountGeneration < 0 {
+			return errors.New("admin principal must carry a positive session generation exactly when it is an account")
+		}
 		return nil
 	case persistence.APIKeyRoleApplication:
+		if principal.UserID != "" || principal.Username != "" || principal.AccountGeneration != 0 {
+			return errors.New("application principal must not carry an administrator account")
+		}
 		return errors.Join(principal.ProjectID.Validate(), principal.ApplicationID.Validate())
 	default:
 		return fmt.Errorf("unsupported principal role %q", principal.Role)
@@ -262,16 +313,53 @@ func (service *Service) deriveVerifier(
 	secret []byte,
 	salt [16]byte,
 ) ([32]byte, error) {
+	return deriveInSlot(ctx, service.derivationSlots, 0, secret, salt)
+}
+
+// deriveInSlot runs one derivation inside the given bounded pool. It waits up to wait for a free slot
+// and reports ErrCapacity when none frees in time; a zero wait fails at once.
+func deriveInSlot(
+	ctx context.Context,
+	slots chan struct{},
+	wait time.Duration,
+	secret []byte,
+	salt [16]byte,
+) ([32]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return [32]byte{}, err
 	}
 	select {
-	case service.derivationSlots <- struct{}{}:
-		defer func() { <-service.derivationSlots }()
-		return derive(secret, salt), nil
+	case slots <- struct{}{}:
 	default:
-		return [32]byte{}, ErrCapacity
+		if wait <= 0 {
+			return [32]byte{}, ErrCapacity
+		}
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case slots <- struct{}{}:
+		case <-timer.C:
+			return [32]byte{}, ErrCapacity
+		case <-ctx.Done():
+			return [32]byte{}, ctx.Err()
+		}
 	}
+	defer func() { <-slots }()
+	return derive(secret, salt), nil
+}
+
+// ActorID returns the durable identity recorded in audit rows: the stored key id, or
+// "account:<id>:<username>" for an administrator account. The id keeps the row tied to one account
+// when a username is reused later, and the username keeps it readable after the account is deleted.
+// The bootstrap administrator has no actor identity.
+func (principal Principal) ActorID() string {
+	if principal.KeyID != "" {
+		return principal.KeyID
+	}
+	if principal.UserID != "" && principal.Username != "" {
+		return accountActorPrefix + principal.UserID + ":" + principal.Username
+	}
+	return ""
 }
 
 // zero overwrites temporary bearer material after use.

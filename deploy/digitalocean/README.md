@@ -50,8 +50,8 @@ single-VM stack on a USD 6–12/month Droplet instead of managed App Platform se
 6. Replace the metrics bearer placeholder with an independent 32+ character secret.
    Read the assigned URL with `doctl apps list`, then verify `<url>/readyz` and open
    `<url>/dashboard/`.
-7. Use `IAPSTACK_BOOTSTRAP_ADMIN_KEY` to create the first durable administrator key,
-   store it securely, and remove the bootstrap variable from the app spec in the
+7. Sign in with `IAPSTACK_BOOTSTRAP_ADMIN_KEY`, create your administrator account in
+   the setup banner, and remove the bootstrap variable from the app spec in the
    control panel.
 
 The committed spec has automatic deployments disabled so a push cannot unexpectedly

@@ -629,10 +629,6 @@ func openProcessingIntegrationDatabase(t *testing.T) *processingIntegrationDatab
 		_ = connection.Close(ctx)
 		t.Fatalf("reset processing integration River schema: %v", err)
 	}
-	if err := postgres.ClearIdentityMigrationGuards(ctx, connection); err != nil {
-		_ = connection.Close(ctx)
-		t.Fatalf("clear identity migration guards: %v", err)
-	}
 	if err := migrator.MigrateTo(ctx, 0); err != nil {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset processing integration PostgreSQL: %v", err)
@@ -657,9 +653,6 @@ func openProcessingIntegrationDatabase(t *testing.T) *processingIntegrationDatab
 		defer cleanupCancel()
 		if err := postgres.RemoveRiver(cleanupCtx, databaseURL); err != nil {
 			t.Errorf("reset processing integration River schema during cleanup: %v", err)
-		}
-		if err := postgres.ClearIdentityMigrationGuards(cleanupCtx, connection); err != nil {
-			t.Errorf("clear identity migration guards during cleanup: %v", err)
 		}
 		if err := migrator.MigrateTo(cleanupCtx, 0); err != nil {
 			t.Errorf("reset processing integration PostgreSQL during cleanup: %v", err)

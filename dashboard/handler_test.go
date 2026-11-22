@@ -67,6 +67,7 @@ func TestDashboardSecretLifecycleAvoidsPersistentStorage(t *testing.T) {
 	}
 	for _, required := range []string{
 		`credentials: "same-origin"`, "/v1/admin/dashboard-session", `elements.adminKey.value = ""`,
+		`elements.adminPassword.value = ""`, "administratorPasswordForm.reset()",
 		`sessionStorage.removeItem("iapstack.dashboard.admin")`,
 		"credentialForm.reset()", "webhookForm.reset()", `revealedKey.value = ""`,
 	} {
@@ -74,8 +75,8 @@ func TestDashboardSecretLifecycleAvoidsPersistentStorage(t *testing.T) {
 			t.Fatalf("dashboard script does not contain secret lifecycle control %q", required)
 		}
 	}
-	if count := strings.Count(string(document), `autocomplete="new-password"`); count != 4 {
-		t.Fatalf("dashboard secret fields with new-password autocomplete = %d, want 4", count)
+	if count := strings.Count(string(document), `autocomplete="new-password"`); count != 7 {
+		t.Fatalf("dashboard secret fields with new-password autocomplete = %d, want 7", count)
 	}
 }
 
@@ -593,7 +594,10 @@ func TestDashboardBootstrapHandoverAndPasswordManagerSupport(t *testing.T) {
 	}
 	for _, required := range []string{
 		`autocomplete="username"`, `autocomplete="current-password"`,
-		`id="bootstrap-banner"`, `id="bootstrap-create-admin-key"`,
+		`id="bootstrap-banner"`, `id="bootstrap-create-admin-key"`, `id="bootstrap-account-form"`,
+		`id="password-form"`, `id="admin-username"`, `id="auth-mode-toggle"`,
+		`id="toggle-password"`, `id="caps-lock-note"`, `aria-describedby="caps-lock-note auth-message"`,
+		`id="administrator-list"`, `id="password-dialog"`, `id="delete-administrator-dialog"`,
 		`id="revealed-key-flag"`, `id="revealed-key-copy"`,
 	} {
 		if !strings.Contains(string(document), required) {
@@ -602,6 +606,8 @@ func TestDashboardBootstrapHandoverAndPasswordManagerSupport(t *testing.T) {
 	}
 	for _, required := range []string{
 		"renderBootstrapBanner", "secureCookieBlockedOnHTTP",
+		"createPasswordSession", "createBootstrapAccount", "/v1/admin/administrators", "too_many_attempts",
+		"setPasswordVisible", "markAuthInvalid", "updateCapsLockNote",
 		`apiRequest("/v1/admin/dashboard-session")`, "Bootstrap retired",
 	} {
 		if !strings.Contains(string(script), required) {

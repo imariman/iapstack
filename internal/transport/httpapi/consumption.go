@@ -147,7 +147,7 @@ func (api *API) putAdminAppleConsumption(writer http.ResponseWriter, request *ht
 		RefundPreference:      input.RefundPreference,
 		SampleContentProvided: *input.SampleContentProvided,
 		ExpectedRevision:      input.ExpectedRevision,
-		ActorKeyID:            principal.KeyID,
+		ActorKeyID:            principal.ActorID(),
 	}
 	if !api.requireValidInput(writer, request, write.Validate()) {
 		return
@@ -212,7 +212,7 @@ func (api *API) putApplicationAppleConsumptionConsent(writer http.ResponseWriter
 		var putErr error
 		consent, putErr = repository.PutAppleConsumptionConsent(request.Context(), persistence.AppleConsumptionConsentWrite{
 			ProjectID: principal.ProjectID, ApplicationID: principal.ApplicationID,
-			CustomerID: customer.ID, Consented: *input.Consented, ActorKeyID: principal.KeyID,
+			CustomerID: customer.ID, Consented: *input.Consented, ActorKeyID: principal.ActorID(),
 		})
 		return putErr
 	})

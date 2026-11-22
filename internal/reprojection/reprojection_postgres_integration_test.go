@@ -288,10 +288,6 @@ func openReprojectionDatabase(t *testing.T) *reprojectionDatabase {
 		_ = connection.Close(ctx)
 		t.Fatalf("RemoveRiver() error = %v", err)
 	}
-	if err := postgres.ClearIdentityMigrationGuards(ctx, connection); err != nil {
-		_ = connection.Close(ctx)
-		t.Fatalf("clear guards: %v", err)
-	}
 	if err := migrator.MigrateTo(ctx, 0); err != nil {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset schema: %v", err)
@@ -315,9 +311,6 @@ func openReprojectionDatabase(t *testing.T) *reprojectionDatabase {
 		defer cleanupCancel()
 		if err := postgres.RemoveRiver(cleanupCtx, databaseURL); err != nil {
 			t.Errorf("RemoveRiver() during cleanup: %v", err)
-		}
-		if err := postgres.ClearIdentityMigrationGuards(cleanupCtx, connection); err != nil {
-			t.Errorf("clear guards during cleanup: %v", err)
 		}
 		if err := migrator.MigrateTo(cleanupCtx, 0); err != nil {
 			t.Errorf("reset schema during cleanup: %v", err)

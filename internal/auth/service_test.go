@@ -10,6 +10,7 @@ import (
 
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
+	"github.com/imariman/iapstack/internal/persistence/persistencetest"
 	platformprotection "github.com/imariman/iapstack/internal/platform/protection"
 )
 
@@ -18,15 +19,18 @@ const (
 	testBootstrapAdminKey = "bootstrap-administrator-secret-32-bytes"
 )
 
-// fakeOperationsStore retains API key verifiers for authentication tests.
+// fakeOperationsStore retains API key verifiers and administrator accounts for authentication tests.
 type fakeOperationsStore struct {
 	records map[string]persistence.APIKeyRecord
-	err     error
+	// users holds administrator accounts by identity. Operate creates it on first use.
+	users map[string]persistence.AdminUserRecord
+	err   error
 }
 
-// fakeOperationsTransaction embeds unused repositories and implements API key operations.
+// fakeOperationsTransaction embeds the in-memory account repository, leaves unused repositories
+// unimplemented, and implements API key operations.
 type fakeOperationsTransaction struct {
-	persistence.OperationsTransaction
+	persistencetest.AdminUserRepository
 	records map[string]persistence.APIKeyRecord
 }
 
@@ -327,7 +331,18 @@ func (store *fakeOperationsStore) Operate(ctx context.Context, operation persist
 	if store.err != nil {
 		return store.err
 	}
-	return operation(&fakeOperationsTransaction{records: store.records})
+	if store.users == nil {
+		store.users = make(map[string]persistence.AdminUserRecord)
+	}
+	transaction := &fakeOperationsTransaction{records: store.records}
+	transaction.AdminUserRepository = persistencetest.AdminUserRepository{
+		Accounts: store.users,
+		HasActiveAdminKey: func() bool {
+			hasKey, _ := transaction.HasActiveAdminAPIKey(ctx)
+			return hasKey
+		},
+	}
+	return operation(transaction)
 }
 
 // APIKey returns one retained non-revoked verifier.
