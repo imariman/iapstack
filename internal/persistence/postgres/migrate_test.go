@@ -60,48 +60,47 @@ func TestOpenMigratorValidatesURL(t *testing.T) {
 	}
 }
 
-// TestMigrationLifecycle verifies every version can be applied, rolled back, and reapplied.
+// TestMigrationLifecycle verifies the baseline schema can be applied, removed, and reapplied.
 func TestMigrationLifecycle(t *testing.T) {
 	database := openTestDatabase(t, 0)
 	relations := []string{
 		"projects",
 		"purchase_observations",
+		"purchase_observations_subscription_metrics_idx",
 		"customer_entitlements",
 		"outbox_events",
 		"application_credentials",
 		"api_keys",
-		"reconciliation_jobs_customer_idx",
-		"outbox_events_failed_retention_idx",
-		"purchase_observations_sandbox_value_idx",
+		"admin_users",
 		"customer_aliases",
 		"financial_report_imports",
 		"import_grants",
 		"reconciliation_schedule_retries",
-		"purchase_observations_subscription_metrics_idx",
 		"manual_grants",
 		"apple_consumption_requests",
 		"api_keys_project_idx",
 	}
-	if got, want := len(relations), int(postgres.LatestVersion); got != want {
-		t.Fatalf("migration relation count = %d, want %d", got, want)
+	assertRelations := func(exists bool) {
+		t.Helper()
+		for _, relation := range relations {
+			assertRelationExists(t, database, relation, exists)
+		}
 	}
 
-	for version := int32(1); version <= postgres.LatestVersion; version++ {
-		mustMigrateTo(t, database, version)
-		assertVersion(t, database, version)
-		assertRelationExists(t, database, relations[version-1], true)
-	}
-
-	for version := postgres.LatestVersion; version > 0; version-- {
-		mustMigrateTo(t, database, version-1)
-		assertVersion(t, database, version-1)
-		assertRelationExists(t, database, relations[version-1], false)
-	}
+	assertVersion(t, database, 0)
+	assertRelations(false)
+	mustMigrateTo(t, database, postgres.LatestVersion)
+	assertVersion(t, database, postgres.LatestVersion)
+	assertRelations(true)
+	mustMigrateTo(t, database, 0)
+	assertVersion(t, database, 0)
+	assertRelations(false)
 
 	if err := database.migrator.Up(database.ctx); err != nil {
 		t.Fatalf("Up() error = %v", err)
 	}
 	assertVersion(t, database, postgres.LatestVersion)
+	assertRelations(true)
 }
 
 // TestQueryIndexMigrationReplacesRedundantIndexes verifies the audited latest index set.
@@ -126,7 +125,7 @@ func TestQueryIndexMigrationReplacesRedundantIndexes(t *testing.T) {
 
 // TestApplicationCredentialMigrationConstraints verifies protected values and project isolation.
 func TestApplicationCredentialMigrationConstraints(t *testing.T) {
-	database := openTestDatabase(t, 5)
+	database := openTestDatabase(t, postgres.LatestVersion)
 	fixture := seedCatalog(t, database)
 	fingerprint := bytes.Repeat([]byte{9}, 32)
 
@@ -160,7 +159,7 @@ func TestApplicationCredentialMigrationConstraints(t *testing.T) {
 
 // TestCatalogMigrationConstraints verifies catalog uniqueness and project isolation.
 func TestCatalogMigrationConstraints(t *testing.T) {
-	database := openTestDatabase(t, 1)
+	database := openTestDatabase(t, postgres.LatestVersion)
 	fixture := seedCatalog(t, database)
 
 	expectConstraint(t, database, "customers_external_id_unique", `
@@ -191,7 +190,7 @@ func TestCatalogMigrationConstraints(t *testing.T) {
 
 // TestPurchaseEvidenceMigrationConstraints verifies immutable purchase idempotency and reference scope.
 func TestPurchaseEvidenceMigrationConstraints(t *testing.T) {
-	database := openTestDatabase(t, 2)
+	database := openTestDatabase(t, postgres.LatestVersion)
 	purchase := seedPurchase(t, database)
 	fingerprint := bytes.Repeat([]byte{1}, 32)
 
@@ -376,7 +375,7 @@ func TestFinancialReportMigrationConstraints(t *testing.T) {
 
 // TestEntitlementProjectionMigrationConstraints verifies source and catalog integrity for current access.
 func TestEntitlementProjectionMigrationConstraints(t *testing.T) {
-	database := openTestDatabase(t, 3)
+	database := openTestDatabase(t, postgres.LatestVersion)
 	purchase := seedPurchase(t, database)
 
 	mustExec(t, database, entitlementInsertSQL(),
@@ -420,91 +419,9 @@ func TestEntitlementProjectionMigrationConstraints(t *testing.T) {
 	)
 }
 
-// TestCustomerIdentityMigrationPreservesProjectionsAndRefusesDirtyDown verifies the version 10 boundary.
-func TestCustomerIdentityMigrationPreservesProjectionsAndRefusesDirtyDown(t *testing.T) {
-	database := openTestDatabase(t, 9)
-	purchase := seedPurchase(t, database)
-	mustExec(t, database, entitlementInsertSQL(),
-		purchase.catalog.projectID,
-		purchase.catalog.customerID,
-		purchase.catalog.entitlementID,
-		purchase.observationID,
-		purchase.catalog.productID,
-	)
-	mustMigrateTo(t, database, postgres.LatestVersion)
-
-	var sourceCustomerID string
-	if err := database.conn.QueryRow(database.ctx, `
-		SELECT source_customer_id FROM customer_entitlements WHERE customer_id = $1
-	`, purchase.catalog.customerID).Scan(&sourceCustomerID); err != nil {
-		t.Fatalf("read backfilled source customer: %v", err)
-	}
-	if sourceCustomerID != purchase.catalog.customerID {
-		t.Fatalf("source_customer_id = %q, want %q", sourceCustomerID, purchase.catalog.customerID)
-	}
-	mustMigrateTo(t, database, postgres.LatestVersion-1)
-	mustMigrateTo(t, database, postgres.LatestVersion)
-
-	mustExec(t, database, `
-		INSERT INTO customer_aliases (
-			project_id, external_id, canonical_customer_id, actor_role, actor_key_id
-		) VALUES ($1, 'alias-external', $2, 'admin', 'admin-key')
-	`, purchase.catalog.projectID, purchase.catalog.customerID)
-	// Version 11 can roll back. Version 10 cannot while an alias exists, so the
-	// financial migration reverses and the identity migration stays.
-	if err := database.migrator.MigrateTo(database.ctx, 9); err == nil {
-		t.Fatal("MigrateTo(9) error = nil, want refusal while an alias exists")
-	}
-	assertVersion(t, database, 10)
-	mustExec(t, database, `DELETE FROM customer_aliases`)
-	mustMigrateTo(t, database, postgres.LatestVersion)
-
-	mustExec(t, database, `
-		INSERT INTO customers (id, project_id, external_id)
-		VALUES ('customer-2', $1, 'customer-external-2')
-	`, purchase.catalog.projectID)
-	var sourceEvidenceID int64
-	if err := database.conn.QueryRow(database.ctx, `
-		INSERT INTO purchase_evidence (
-			project_id, application_id, customer_id, kind, content_type,
-			payload_ciphertext, payload_fingerprint, encryption_key_id, received_at
-		) VALUES ($1, $2, 'customer-2', 'purchase_submission', 'application/json', 'ciphertext', $3, 'test-key', now())
-		RETURNING id
-	`, purchase.catalog.projectID, purchase.catalog.applicationID, bytes.Repeat([]byte{7}, 32)).Scan(&sourceEvidenceID); err != nil {
-		t.Fatalf("insert source evidence: %v", err)
-	}
-	mustExec(t, database, observationInsertSQL(),
-		"observation-2",
-		sourceEvidenceID,
-		purchase.catalog.projectID,
-		purchase.catalog.applicationID,
-		"customer-2",
-		purchase.catalog.productID,
-		purchase.catalog.providerProductID,
-	)
-	mustExec(t, database, `
-		UPDATE customer_entitlements
-		SET source_customer_id = 'customer-2', source_observation_id = 'observation-2'
-		WHERE customer_id = $1
-	`, purchase.catalog.customerID)
-	if err := database.migrator.MigrateTo(database.ctx, 9); err == nil {
-		t.Fatal("MigrateTo(9) error = nil, want refusal while source_customer_id differs")
-	}
-	assertVersion(t, database, 10)
-	mustMigrateTo(t, database, postgres.LatestVersion)
-	mustExec(t, database, `
-		UPDATE customer_entitlements
-		SET source_customer_id = customer_id, source_observation_id = $2
-		WHERE customer_id = $1
-	`, purchase.catalog.customerID, purchase.observationID)
-	expectConstraint(t, database, "customers_merged_into_not_self", `
-		UPDATE customers SET merged_into_customer_id = id WHERE id = $1
-	`, purchase.catalog.customerID)
-}
-
 // TestInboxOutboxMigrationConstraints verifies audit deduplication and terminal outcome consistency.
 func TestInboxOutboxMigrationConstraints(t *testing.T) {
-	database := openTestDatabase(t, 4)
+	database := openTestDatabase(t, postgres.LatestVersion)
 	fixture := seedCatalog(t, database)
 	inboxFingerprint := bytes.Repeat([]byte{5}, 32)
 	outboxFingerprint := bytes.Repeat([]byte{6}, 32)
@@ -555,41 +472,9 @@ func TestInboxOutboxMigrationConstraints(t *testing.T) {
 	`, fixture.projectID, fixture.applicationID, bytes.Repeat([]byte{8}, 32))
 }
 
-// TestImportGrantMigrationRefusesDirtyDown verifies version 12 will not drop grants that are still stored.
-func TestImportGrantMigrationRefusesDirtyDown(t *testing.T) {
-	const importGrantSchemaVersion int32 = 12
-	database := openTestDatabase(t, importGrantSchemaVersion)
-	fixture := seedCatalog(t, database)
-	fingerprint := bytes.Repeat([]byte{9}, 32)
-	mustExec(t, database, `
-		INSERT INTO import_grants (
-			id, project_id, customer_id, application_id, product_id, entitlement_id,
-			origin, origin_store, environment, access_status, access_reason,
-			effective_starts_at, observed_at, export_sha256, lineage_fingerprint
-		) VALUES (
-			'imp-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', $1, $2, $3, $4, $5,
-			'revenuecat', 'app_store', 'sandbox', 'allowed', 'purchase_valid',
-			now() - interval '1 hour', now(), $6, $6
-		)
-	`, fixture.projectID, fixture.customerID, fixture.applicationID, fixture.productID, fixture.entitlementID, fingerprint)
-	mustExec(t, database, `
-		INSERT INTO import_batches (project_id, batch_id, export_sha256, format)
-		VALUES ($1, 'revenuecat-test', $2, 'transactions-csv')
-	`, fixture.projectID, fingerprint)
-	if err := database.migrator.MigrateTo(database.ctx, importGrantSchemaVersion-1); err == nil {
-		t.Fatal("MigrateTo(previous) error = nil, want refusal while import grants exist")
-	}
-	assertVersion(t, database, importGrantSchemaVersion)
-	mustExec(t, database, `DELETE FROM import_grants`)
-	mustExec(t, database, `DELETE FROM import_batches`)
-	mustMigrateTo(t, database, importGrantSchemaVersion-1)
-	mustMigrateTo(t, database, importGrantSchemaVersion)
-}
-
-// TestReconciliationScheduleRetryMigrationRefusesDirtyDown verifies version 13 will not drop unscheduled retries.
-func TestReconciliationScheduleRetryMigrationRefusesDirtyDown(t *testing.T) {
-	const scheduleRetrySchemaVersion int32 = 13
-	database := openTestDatabase(t, scheduleRetrySchemaVersion)
+// TestReconciliationScheduleRetryConstraints verifies a retry cannot be both scheduled and dead.
+func TestReconciliationScheduleRetryConstraints(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
 	fixture := seedCatalog(t, database)
 	fingerprint := bytes.Repeat([]byte{11}, 32)
 	mustExec(t, database, `
@@ -601,29 +486,8 @@ func TestReconciliationScheduleRetryMigrationRefusesDirtyDown(t *testing.T) {
 			'ciphertext', $4, 'test-key'
 		)
 	`, fixture.projectID, fixture.applicationID, fixture.customerID, fingerprint)
-	if err := database.migrator.MigrateTo(database.ctx, scheduleRetrySchemaVersion-1); err == nil {
-		t.Fatal("MigrateTo(previous) error = nil, want refusal while a pending retry exists")
-	}
-	assertVersion(t, database, scheduleRetrySchemaVersion)
-
 	mustExec(t, database, `UPDATE reconciliation_schedule_retries SET dead_at = now() WHERE id = 'retry-pending'`)
-	if err := database.migrator.MigrateTo(database.ctx, scheduleRetrySchemaVersion-1); err == nil {
-		t.Fatal("MigrateTo(previous) error = nil, want refusal while a dead retry is still unscheduled")
-	}
-	assertVersion(t, database, scheduleRetrySchemaVersion)
-
 	mustExec(t, database, `DELETE FROM reconciliation_schedule_retries`)
-	mustExec(t, database, `
-		INSERT INTO reconciliation_schedule_retries (
-			id, project_id, application_id, customer_id,
-			payload_ciphertext, payload_fingerprint, encryption_key_id, scheduled_at
-		) VALUES (
-			'retry-scheduled', $1, $2, $3,
-			'ciphertext', $4, 'test-key', now()
-		)
-	`, fixture.projectID, fixture.applicationID, fixture.customerID, fingerprint)
-	mustMigrateTo(t, database, scheduleRetrySchemaVersion-1)
-	mustMigrateTo(t, database, scheduleRetrySchemaVersion)
 	expectConstraint(t, database, "reconciliation_schedule_retries_outcome_exclusive", `
 		INSERT INTO reconciliation_schedule_retries (
 			id, project_id, application_id, customer_id,
@@ -635,10 +499,9 @@ func TestReconciliationScheduleRetryMigrationRefusesDirtyDown(t *testing.T) {
 	`, fixture.projectID, fixture.applicationID, fixture.customerID, fingerprint)
 }
 
-// TestManualGrantMigrationConstraintsAndDirtyDown verifies version 15 keeps manual sources exclusive and stored.
-func TestManualGrantMigrationConstraintsAndDirtyDown(t *testing.T) {
-	const manualGrantSchemaVersion int32 = 15
-	database := openTestDatabase(t, manualGrantSchemaVersion)
+// TestManualGrantConstraints verifies the schema keeps manual sources exclusive and stored.
+func TestManualGrantConstraints(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
 	purchase := seedPurchase(t, database)
 	fixture := purchase.catalog
 	grantInsert := `
@@ -690,26 +553,11 @@ func TestManualGrantMigrationConstraintsAndDirtyDown(t *testing.T) {
 		UPDATE customer_entitlements SET source_manual_grant_id = 'mgr-ffffffffffffffffffffffffffffffff'
 		WHERE customer_id = $1
 	`, fixture.customerID)
-
-	if err := database.migrator.MigrateTo(database.ctx, manualGrantSchemaVersion-1); err == nil {
-		t.Fatal("MigrateTo(previous) error = nil, want refusal while manual grants exist")
-	}
-	assertVersion(t, database, manualGrantSchemaVersion)
-	mustExec(t, database, `DELETE FROM customer_entitlements`)
-	if err := database.migrator.MigrateTo(database.ctx, manualGrantSchemaVersion-1); err == nil {
-		t.Fatal("MigrateTo(previous) error = nil, want refusal while a manual grant row exists")
-	}
-	mustExec(t, database, `DELETE FROM manual_grants`)
-	mustMigrateTo(t, database, manualGrantSchemaVersion-1)
-	assertRelationExists(t, database, "manual_grants", false)
-	mustMigrateTo(t, database, manualGrantSchemaVersion)
 }
 
-// TestAgentAPIKeyMigrationConstraintsAndDown verifies agent key scope rules, the write flag, the project
-// reference, and that rolling back removes agent keys while keeping every other key.
-func TestAgentAPIKeyMigrationConstraintsAndDown(t *testing.T) {
-	const agentKeySchemaVersion int32 = 17
-	database := openTestDatabase(t, agentKeySchemaVersion)
+// TestAgentAPIKeyConstraints verifies agent key scope rules, the write flag, and the project reference.
+func TestAgentAPIKeyConstraints(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
 	fixture := seedCatalog(t, database)
 	salt := bytes.Repeat([]byte{1}, 16)
 	hash := bytes.Repeat([]byte{2}, 32)
@@ -734,28 +582,15 @@ func TestAgentAPIKeyMigrationConstraintsAndDown(t *testing.T) {
 	expectConstraint(t, database, "api_keys_project_fk", keyInsert,
 		"agent-missing-project", "agent", "missing-project", nil, false, salt, hash)
 
-	mustMigrateTo(t, database, agentKeySchemaVersion-1)
-	assertRelationExists(t, database, "api_keys_project_idx", false)
-	var remaining []string
-	rows, err := database.conn.Query(database.ctx, `SELECT id FROM api_keys ORDER BY id`)
-	if err != nil {
-		t.Fatalf("list API keys after rollback: %v", err)
+	var indexDefinition string
+	if err := database.conn.QueryRow(database.ctx,
+		`SELECT indexdef FROM pg_indexes WHERE indexname = 'api_keys_project_idx'`,
+	).Scan(&indexDefinition); err != nil {
+		t.Fatalf("load api_keys_project_idx: %v", err)
 	}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			t.Fatalf("scan API key after rollback: %v", err)
-		}
-		remaining = append(remaining, id)
+	if strings.Contains(indexDefinition, "WHERE") {
+		t.Fatalf("api_keys_project_idx = %s, want a full index for the cascading project foreign key", indexDefinition)
 	}
-	rows.Close()
-	if strings.Join(remaining, ",") != "admin-key,application-key" {
-		t.Fatalf("API keys after rollback = %v, want only the admin and application keys", remaining)
-	}
-	expectConstraint(t, database, "api_keys_role_valid", `
-		INSERT INTO api_keys (id, role, project_id, secret_salt, secret_hash) VALUES ('agent-old', 'agent', $1, $2, $3)
-	`, fixture.projectID, salt, hash)
-	mustMigrateTo(t, database, agentKeySchemaVersion)
 }
 
 // openTestDatabase opens the configured integration database at one schema version.
@@ -790,10 +625,6 @@ func openTestDatabase(t *testing.T, targetVersion int32) *testDatabase {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset River integration schema: %v", err)
 	}
-	if err := postgres.ClearIdentityMigrationGuards(ctx, connection); err != nil {
-		_ = connection.Close(ctx)
-		t.Fatalf("clear identity migration guards: %v", err)
-	}
 	if err := migrator.MigrateTo(ctx, 0); err != nil {
 		_ = connection.Close(ctx)
 		t.Fatalf("reset integration PostgreSQL: %v", err)
@@ -814,9 +645,6 @@ func openTestDatabase(t *testing.T, targetVersion int32) *testDatabase {
 		defer cleanupCancel()
 		if err := postgres.RemoveRiver(cleanupCtx, databaseURL); err != nil {
 			t.Errorf("reset River PostgreSQL during cleanup: %v", err)
-		}
-		if err := postgres.ClearIdentityMigrationGuards(cleanupCtx, connection); err != nil {
-			t.Errorf("clear identity migration guards during cleanup: %v", err)
 		}
 		if err := migrator.MigrateTo(cleanupCtx, 0); err != nil {
 			t.Errorf("reset integration PostgreSQL during cleanup: %v", err)
@@ -951,8 +779,8 @@ func entitlementInsertSQL() string {
 	return `
 		INSERT INTO customer_entitlements (
 			project_id, customer_id, entitlement_id, source_observation_id,
-			source_product_id, access_status, access_reason, effective_starts_at
-		) VALUES ($1, $2, $3, $4, $5, 'allowed', 'purchase_valid', now() - interval '1 hour')
+			source_product_id, source_customer_id, access_status, access_reason, effective_starts_at
+		) VALUES ($1, $2, $3, $4, $5, $2, 'allowed', 'purchase_valid', now() - interval '1 hour')
 	`
 }
 

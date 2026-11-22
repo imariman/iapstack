@@ -139,7 +139,7 @@ const (
 				ORDER BY first_stored_at, first_starts_at NULLS LAST, transaction_reference_id
 			)
 		), classified_transactions AS (
-			-- Without a signed reason every later transaction stays a renewal, as before migration 014.
+			-- Without a signed reason every later transaction stays a renewal.
 			SELECT application_id, lineage, product_id, first_stored_at, transaction_key, transaction_rank,
 				CASE
 					WHEN reason IS NULL THEN 'renewal'

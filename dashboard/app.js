@@ -114,8 +114,12 @@ const state = {
   managedApplication: null,
   overview: null,
   apiKeys: [],
+  administrators: [],
   sessionBootstrap: false,
+  sessionUsername: "",
   pendingRevokeKey: null,
+  pendingPasswordAdministrator: null,
+  pendingDeleteAdministrator: null,
   consumption: null,
   customerSearch: { query: "", nextToken: "", count: 0, sequence: 0, timer: 0 },
   customerDetail: null,
@@ -135,6 +139,13 @@ const elements = {
   authStage: document.querySelector("#auth-stage"),
   authForm: document.querySelector("#auth-form"),
   adminKey: document.querySelector("#admin-key"),
+  passwordForm: document.querySelector("#password-form"),
+  adminUsername: document.querySelector("#admin-username"),
+  adminPassword: document.querySelector("#admin-password"),
+  authModeToggle: document.querySelector("#auth-mode-toggle"),
+  authModeNote: document.querySelector("#auth-mode-note"),
+  togglePassword: document.querySelector("#toggle-password"),
+  capsLockNote: document.querySelector("#caps-lock-note"),
   authMessage: document.querySelector("#auth-message"),
   appShell: document.querySelector("#app-shell"),
   projectNav: document.querySelector("#project-nav"),
@@ -143,6 +154,19 @@ const elements = {
   globalMessage: document.querySelector("#global-message"),
   bootstrapBanner: document.querySelector("#bootstrap-banner"),
   bootstrapCreateAdminKey: document.querySelector("#bootstrap-create-admin-key"),
+  bootstrapAccountForm: document.querySelector("#bootstrap-account-form"),
+  administratorList: document.querySelector("#administrator-list"),
+  administratorForm: document.querySelector("#administrator-form"),
+  administratorMessage: document.querySelector("#administrator-message"),
+  passwordDialog: document.querySelector("#password-dialog"),
+  administratorPasswordForm: document.querySelector("#administrator-password-form"),
+  passwordDialogTitle: document.querySelector("#password-dialog-title"),
+  passwordDialogCopy: document.querySelector("#password-dialog-copy"),
+  currentPasswordField: document.querySelector("#current-password-field"),
+  passwordDialogMessage: document.querySelector("#password-dialog-message"),
+  deleteAdministratorDialog: document.querySelector("#delete-administrator-dialog"),
+  deleteAdministratorIdentity: document.querySelector("#delete-administrator-identity"),
+  confirmDeleteAdministrator: document.querySelector("#confirm-delete-administrator"),
   bootstrapBannerMessage: document.querySelector("#bootstrap-banner-message"),
   refresh: document.querySelector("#refresh"),
   openAPIKeys: document.querySelector("#open-api-keys"),
@@ -238,6 +262,7 @@ async function apiRequest(path, options = {}) {
     error.status = response.status;
     error.code = body?.error?.code || "request_failed";
     error.requestID = body?.error?.request_id || requestID;
+    error.retryAfter = Number(response.headers.get("Retry-After")) || 0;
     throw error;
   }
   return body;
@@ -258,6 +283,17 @@ function clearLegacyBearerStorage() {
 
 function errorMessage(error) {
   const suffix = error.requestID ? ` · Request ${error.requestID}` : "";
+  // A wrong or locked password is the user's to fix, so these carry a next step instead of a request id.
+  if (error.code === "invalid_credentials") {
+    return "The username or password is incorrect. Check both and try again.";
+  }
+  if (error.code === "too_many_attempts") {
+    const minutes = Math.max(1, Math.ceil((error.retryAfter || 60) / 60));
+    return `Too many failed sign-in attempts. Try again in ${minutes} ${minutes === 1 ? "minute" : "minutes"}, or reset the password on the server with "iapstack admin reset-password".`;
+  }
+  if (error.code === "password_mismatch") {
+    return "The current password is incorrect.";
+  }
   if (error.status === 401) {
     return `Administrator access is invalid or expired.${suffix}`;
   }
@@ -295,7 +331,9 @@ function renderBootstrapBanner() {
   if (!state.sessionBootstrap) {
     if (elements.bootstrapBannerMessage) elements.bootstrapBannerMessage.textContent = "";
     if (elements.bootstrapCreateAdminKey) elements.bootstrapCreateAdminKey.hidden = false;
+    elements.bootstrapAccountForm.hidden = false;
   }
+  elements.logout.title = state.sessionUsername ? `Signed in as ${state.sessionUsername}` : "";
 }
 
 // rememberAdminCredential offers a permanent administrator key to the browser password manager
@@ -310,27 +348,119 @@ async function rememberAdminCredential(key) {
   }
 }
 
+// rememberAccountCredential offers a new username and password to the browser password manager
+// where the Credential Management API exists.
+async function rememberAccountCredential(username, password) {
+  if (typeof window.PasswordCredential !== "function" || !navigator.credentials?.store) return;
+  try {
+    await navigator.credentials.store(new window.PasswordCredential({ id: username, password }));
+  } catch (_) {
+    // Declined or unsupported prompts leave the browser's own save prompt as the fallback.
+  }
+}
+
+// setAuthMode shows either the username and password form or the admin key form.
+function setAuthMode(mode) {
+  const keyMode = mode === "key";
+  elements.passwordForm.hidden = keyMode;
+  elements.authForm.hidden = !keyMode;
+  elements.authModeNote.textContent = keyMode
+    ? "Have an administrator account?"
+    : "No account yet? Sign in with the bootstrap key to create one.";
+  elements.authModeToggle.textContent = keyMode
+    ? "Sign in with a username and password instead"
+    : "Use an admin or bootstrap key instead";
+  // The shared message sits directly under the fields of whichever form is visible.
+  const anchor = keyMode ? elements.authForm.querySelector(".key-row") : elements.capsLockNote;
+  anchor.after(elements.authMessage);
+  setPasswordVisible(false);
+  markAuthInvalid(false);
+}
+
+// focusAuthField moves focus to the field the user most likely has to type next.
+function focusAuthField() {
+  if (!elements.authForm.hidden) {
+    elements.adminKey.focus();
+  } else if (elements.adminUsername.value.trim()) {
+    elements.adminPassword.focus();
+  } else {
+    elements.adminUsername.focus();
+  }
+}
+
+// markAuthInvalid flags the credential fields of the visible form for assistive technology and styling.
+function markAuthInvalid(invalid) {
+  const fields = elements.authForm.hidden ? [elements.adminUsername, elements.adminPassword] : [elements.adminKey];
+  for (const field of [elements.adminUsername, elements.adminPassword, elements.adminKey]) {
+    if (invalid && fields.includes(field)) {
+      field.setAttribute("aria-invalid", "true");
+    } else {
+      field.removeAttribute("aria-invalid");
+    }
+  }
+}
+
+// setPasswordVisible switches the sign-in password between hidden and readable text.
+function setPasswordVisible(visible) {
+  elements.adminPassword.type = visible ? "text" : "password";
+  const label = visible ? "Hide password" : "Show password";
+  elements.togglePassword.setAttribute("aria-label", label);
+  elements.togglePassword.title = label;
+  // SVG elements do not reflect the hidden property, so the attribute is set directly.
+  elements.togglePassword.querySelector("[data-password-icon='show']").toggleAttribute("hidden", visible);
+  elements.togglePassword.querySelector("[data-password-icon='hide']").toggleAttribute("hidden", !visible);
+}
+
+// updateCapsLockNote warns while Caps Lock would change the typed password.
+function updateCapsLockNote(event) {
+  if (typeof event.getModifierState !== "function") return;
+  elements.capsLockNote.hidden = !event.getModifierState("CapsLock");
+}
+
 function secureCookieBlockedOnHTTP() {
   const host = window.location.hostname;
   const loopback = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
   return !window.isSecureContext && !loopback;
 }
 
+// connect signs in with an admin or bootstrap key.
 async function connect(adminKey) {
+  await openSession(elements.authForm, () => createDashboardSession(adminKey.trim()));
+}
+
+// signIn signs in with an administrator account's username and password.
+async function signIn(username, password) {
+  await openSession(elements.passwordForm, () => createPasswordSession(username, password));
+}
+
+// openSession runs one sign-in request and opens the workspace when it succeeds.
+async function openSession(form, createSession) {
   elements.authMessage.textContent = "";
-  setFormBusy(elements.authForm, true);
+  markAuthInvalid(false);
+  setFormBusy(form, true);
   let sessionCreated = false;
+  let failed = false;
   try {
-    const session = await createDashboardSession(adminKey.trim());
+    const session = await createSession();
     sessionCreated = true;
     state.sessionBootstrap = Boolean(session?.bootstrap);
+    state.sessionUsername = session?.username || "";
     elements.adminKey.value = "";
+    elements.adminPassword.value = "";
+    setPasswordVisible(false);
+    elements.capsLockNote.hidden = true;
     await loadProjects();
     renderBootstrapBanner();
     showAuthenticated(true);
   } catch (error) {
+    failed = true;
     elements.adminKey.value = "";
+    elements.adminPassword.value = "";
+    setPasswordVisible(false);
+    elements.capsLockNote.hidden = true;
+    markAuthInvalid(error.status === 401);
     state.sessionBootstrap = false;
+    state.sessionUsername = "";
     renderBootstrapBanner();
     if (sessionCreated && error.status === 401 && secureCookieBlockedOnHTTP()) {
       elements.authMessage.textContent = "This browser rejected the secure session cookie over plain HTTP. Open the dashboard over HTTPS (for example via Cloudflare Tunnel) or localhost.";
@@ -339,17 +469,37 @@ async function connect(adminKey) {
     }
     showAuthenticated(false);
   } finally {
-    setFormBusy(elements.authForm, false);
+    setFormBusy(form, false);
+    // After a failure the cleared credential field is where the user continues.
+    if (failed) focusAuthField();
   }
 }
 
+// createDashboardSession exchanges an admin or bootstrap key for the session cookie.
 async function createDashboardSession(adminKey) {
-  const response = await fetch("/v1/admin/dashboard-session", {
-    method: "POST",
+  return requestDashboardSession({
     headers: {
       Authorization: `Bearer ${adminKey}`,
       "X-IAPStack-Dashboard": "1",
     },
+  });
+}
+
+// createPasswordSession exchanges a username and password for the session cookie.
+async function createPasswordSession(username, password) {
+  return requestDashboardSession({
+    headers: {
+      "Content-Type": "application/json",
+      "X-IAPStack-Dashboard": "1",
+    },
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+async function requestDashboardSession(init) {
+  const response = await fetch("/v1/admin/dashboard-session", {
+    ...init,
+    method: "POST",
     cache: "no-store",
     credentials: "same-origin",
   });
@@ -365,6 +515,7 @@ async function createDashboardSession(adminKey) {
     error.status = response.status;
     error.code = body?.error?.code || "request_failed";
     error.requestID = body?.error?.request_id || requestID;
+    error.retryAfter = Number(response.headers.get("Retry-After")) || 0;
     throw error;
   }
   return body;
@@ -1727,8 +1878,205 @@ async function openAPIKeyManager() {
     ? `It will be scoped to ${state.selectedProject}.`
     : "Select a project first.";
   elements.createAgentKey.disabled = !state.selectedProject;
+  elements.administratorForm.reset();
+  elements.administratorMessage.textContent = "";
   elements.apiKeyDialog.showModal();
-  await loadAPIKeys();
+  await Promise.all([loadAPIKeys(), loadAdministrators()]);
+}
+
+// loadAdministrators refreshes the administrator accounts that can sign in with a password.
+async function loadAdministrators(successMessage = "") {
+  try {
+    const response = await apiRequest("/v1/admin/administrators");
+    state.administrators = response.administrators || [];
+    renderAdministrators();
+    // An account changes whether the last admin key may be revoked.
+    renderAPIKeys();
+    setFormMessage(elements.administratorMessage, successMessage, successMessage ? "success" : "error");
+  } catch (error) {
+    if (error.status === 401) {
+      if (elements.apiKeyDialog.open) elements.apiKeyDialog.close();
+      logout();
+      elements.authMessage.textContent = errorMessage(error);
+      return;
+    }
+    setFormMessage(elements.administratorMessage, errorMessage(error));
+  }
+}
+
+// renderAdministrators draws each account with its password and deletion actions.
+function renderAdministrators() {
+  elements.administratorList.replaceChildren();
+  if (!state.administrators.length) {
+    elements.administratorList.append(node("p", "empty-state", "No administrator account yet. Add one to sign in with a username and password instead of pasting a key."));
+    return;
+  }
+  for (const administrator of state.administrators) {
+    const card = node("article", "api-key-card administrator-card");
+    const identity = node("div", "api-key-identity");
+    const identityLine = node("div");
+    identityLine.append(node("strong", "", administrator.username));
+    if (administrator.current) identityLine.append(node("span", "current-key-badge", "You"));
+    identity.append(identityLine, node("small", "", `Created ${formatTime(administrator.created_at)} · Password set ${formatTime(administrator.password_changed_at)}`));
+
+    const actions = node("div", "administrator-actions");
+    const password = node("button", "secondary-button", administrator.current ? "Change password" : "Reset password");
+    password.type = "button";
+    password.addEventListener("click", () => openPasswordDialog(administrator));
+    const remove = node("button", "text-button", "Delete");
+    remove.type = "button";
+    remove.disabled = Boolean(administrator.current);
+    if (administrator.current) remove.title = "Another administrator must delete the account you are signed in with.";
+    if (!remove.disabled) remove.addEventListener("click", () => openDeleteAdministratorConfirmation(administrator));
+    actions.append(password, remove);
+    card.append(identity, actions);
+    elements.administratorList.append(card);
+  }
+}
+
+// addAdministrator creates one account from the access dialog.
+async function addAdministrator(form) {
+  const data = Object.fromEntries(new FormData(form));
+  setFormBusy(form, true);
+  setFormMessage(elements.administratorMessage, "Creating account…", "working");
+  try {
+    const created = await apiRequest("/v1/admin/administrators", {
+      method: "POST",
+      body: JSON.stringify({ username: data.username, password: data.password }),
+    });
+    form.reset();
+    await loadAdministrators(`Account ${created.username} created.`);
+  } catch (error) {
+    setFormMessage(elements.administratorMessage, administratorErrorMessage(error));
+  } finally {
+    setFormBusy(form, false);
+  }
+}
+
+// createBootstrapAccount creates the first account and moves the bootstrap session onto it.
+async function createBootstrapAccount(form) {
+  const data = Object.fromEntries(new FormData(form));
+  setFormBusy(form, true);
+  setFormMessage(elements.bootstrapBannerMessage, "Creating administrator account…", "working");
+  try {
+    const created = await apiRequest("/v1/admin/administrators", {
+      method: "POST",
+      body: JSON.stringify({ username: data.username, password: data.password }),
+    });
+    let switched = false;
+    try {
+      const session = await createPasswordSession(created.username, data.password);
+      state.sessionBootstrap = Boolean(session?.bootstrap);
+      state.sessionUsername = session?.username || "";
+      switched = !state.sessionBootstrap;
+    } catch (_) {
+      switched = false;
+    }
+    rememberAccountCredential(created.username, data.password);
+    form.reset();
+    if (switched) {
+      renderBootstrapBanner();
+      setGlobalMessage(`Account ${created.username} is ready and the bootstrap key is retired. Sign in with your username and password from now on.`, "success");
+    } else {
+      // The account already retired the bootstrap cookie, so this session cannot do anything else.
+      form.hidden = true;
+      setFormMessage(elements.bootstrapBannerMessage, "The account was created and the bootstrap key is retired, but this browser session could not switch to it. Sign out and sign in with your username and password.");
+    }
+  } catch (error) {
+    setFormMessage(elements.bootstrapBannerMessage, administratorErrorMessage(error));
+  } finally {
+    setFormBusy(form, false);
+  }
+}
+
+// administratorErrorMessage explains the account rules behind a rejected username or password.
+function administratorErrorMessage(error) {
+  if (error.code === "invalid_request") {
+    return "Use a username of 3-64 lowercase letters, digits, dots, underscores, at signs, or hyphens, and a password of at least 12 characters that differs from the username.";
+  }
+  if (error.code === "conflict") {
+    return "The request conflicts with the current accounts: the username may be taken, or this is the last way to sign in.";
+  }
+  return errorMessage(error);
+}
+
+// openPasswordDialog prepares a password change for the signed-in account or a reset for another one.
+function openPasswordDialog(administrator) {
+  state.pendingPasswordAdministrator = administrator;
+  const form = elements.administratorPasswordForm;
+  form.reset();
+  form.elements.username.value = administrator.username;
+  const own = Boolean(administrator.current);
+  elements.passwordDialogTitle.textContent = own ? "Change password" : "Reset password";
+  elements.passwordDialogCopy.textContent = own
+    ? "Your other dashboard sessions end when the password changes. This browser stays signed in."
+    : `Set a new password for ${administrator.username}. Their dashboard sessions end immediately.`;
+  elements.currentPasswordField.hidden = !own;
+  form.elements.current_password.required = own;
+  elements.passwordDialogMessage.textContent = "";
+  elements.passwordDialog.showModal();
+}
+
+// closePasswordDialog clears typed passwords and pending state.
+function closePasswordDialog() {
+  state.pendingPasswordAdministrator = null;
+  elements.administratorPasswordForm.reset();
+  if (elements.passwordDialog.open) elements.passwordDialog.close();
+}
+
+// saveAdministratorPassword sends the pending password change and refreshes the account list.
+async function saveAdministratorPassword(form) {
+  const administrator = state.pendingPasswordAdministrator;
+  if (!administrator) return;
+  const data = Object.fromEntries(new FormData(form));
+  const body = { password: data.password };
+  if (administrator.current) body.current_password = data.current_password;
+  setFormBusy(form, true);
+  try {
+    await apiRequest(`/v1/admin/administrators/${encodeURIComponent(administrator.id)}/password`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+    if (administrator.current) rememberAccountCredential(administrator.username, data.password);
+    closePasswordDialog();
+    await loadAdministrators(`Password updated for ${administrator.username}.`);
+  } catch (error) {
+    form.elements.current_password.value = "";
+    setFormMessage(elements.passwordDialogMessage, administratorErrorMessage(error));
+  } finally {
+    setFormBusy(form, false);
+  }
+}
+
+// openDeleteAdministratorConfirmation prepares an explicit irreversible-action confirmation.
+function openDeleteAdministratorConfirmation(administrator) {
+  state.pendingDeleteAdministrator = administrator;
+  elements.deleteAdministratorIdentity.textContent = administrator.username;
+  elements.deleteAdministratorDialog.showModal();
+}
+
+// closeDeleteAdministratorConfirmation clears pending destructive-action state.
+function closeDeleteAdministratorConfirmation() {
+  state.pendingDeleteAdministrator = null;
+  elements.deleteAdministratorIdentity.textContent = "";
+  if (elements.deleteAdministratorDialog.open) elements.deleteAdministratorDialog.close();
+}
+
+// deletePendingAdministrator deletes the confirmed account and refreshes the account list.
+async function deletePendingAdministrator() {
+  const administrator = state.pendingDeleteAdministrator;
+  if (!administrator) return;
+  elements.confirmDeleteAdministrator.disabled = true;
+  try {
+    await apiRequest(`/v1/admin/administrators/${encodeURIComponent(administrator.id)}`, { method: "DELETE" });
+    closeDeleteAdministratorConfirmation();
+    await loadAdministrators(`Account ${administrator.username} deleted.`);
+  } catch (error) {
+    closeDeleteAdministratorConfirmation();
+    setFormMessage(elements.administratorMessage, administratorErrorMessage(error));
+  } finally {
+    elements.confirmDeleteAdministrator.disabled = false;
+  }
 }
 
 // loadAPIKeys refreshes secret-free lifecycle metadata, following pages so older keys stay revocable.
@@ -1787,7 +2135,7 @@ function renderAPIKeys() {
   setText("active-agent-keys", activeAgents);
   setText("revoked-keys", revoked);
   if (!state.apiKeys.length) {
-    elements.apiKeyList.append(node("p", "empty-state", "No stored keys yet. Create an administrator key before removing the bootstrap credential."));
+    elements.apiKeyList.append(node("p", "empty-state", "No stored keys yet. Scripts and backends authenticate with keys; create one when you need it."));
     return;
   }
   for (const key of state.apiKeys) {
@@ -1816,10 +2164,11 @@ function renderAPIKeys() {
 
     const revoke = node("button", "text-button", revokedKey ? "Revoked" : "Revoke");
     revoke.type = "button";
-    const finalAdmin = key.role === "admin" && activeAdmins <= 1;
+    // With an administrator account, the last admin key is no longer the only way to sign in.
+    const finalAdmin = key.role === "admin" && activeAdmins <= 1 && state.administrators.length === 0;
     revoke.disabled = revokedKey || key.current || finalAdmin;
     if (key.current) revoke.title = "Connect with a replacement key before revoking this session.";
-    if (finalAdmin && !key.current) revoke.title = "Create another administrator key before revoking the final active administrator.";
+    if (finalAdmin && !key.current) revoke.title = "Create an administrator account or another administrator key before revoking the final active administrator.";
     if (!revoke.disabled) revoke.addEventListener("click", () => openRevokeKeyConfirmation(key));
     card.append(identity, scope, revoke);
     elements.apiKeyList.append(card);
@@ -1853,6 +2202,7 @@ async function createAdministratorKey() {
       if (!upgraded) {
         // The new key already retired the bootstrap cookie, so this session cannot do anything else.
         if (elements.bootstrapCreateAdminKey) elements.bootstrapCreateAdminKey.hidden = true;
+        elements.bootstrapAccountForm.hidden = true;
         if (elements.bootstrapBannerMessage) {
           setFormMessage(elements.bootstrapBannerMessage, "The permanent key was created and the bootstrap key is retired, but this browser session could not switch to it. Save the key, sign out, and sign in with it.");
         }
@@ -2237,7 +2587,7 @@ function customerIdentitySection(detail) {
     item.append(
       node("span", "source-badge", "Alias"),
       node("code", "", alias.external_id),
-      node("small", "", `Added ${formatTime(alias.created_at)} by ${alias.actor_role} key ${alias.actor_key_id}`),
+      node("small", "", `Added ${formatTime(alias.created_at)} by ${alias.actor_role} ${actorLabel(alias.actor_key_id)}`),
     );
     list.append(item);
   }
@@ -2246,7 +2596,7 @@ function customerIdentitySection(detail) {
     item.append(
       node("span", "source-badge", "Merge"),
       node("code", "", `${merge.source_external_id} → ${merge.canonical_customer_id}`),
-      node("small", "", `Merged ${formatTime(merge.created_at)} by admin key ${merge.actor_key_id}`),
+      node("small", "", `Merged ${formatTime(merge.created_at)} by admin ${actorLabel(merge.actor_key_id)}`),
     );
     list.append(item);
   }
@@ -2319,10 +2669,10 @@ function customerGrantsSection(detail) {
     summary.append(
       title,
       node("p", "grant-reason", grant.reason),
-      node("small", "", `${formatTime(grant.effective_starts_at)} to ${formatTime(grant.effective_ends_at)} · ${grant.application_id} · by key ${grant.actor_key_id}`),
+      node("small", "", `${formatTime(grant.effective_starts_at)} to ${formatTime(grant.effective_ends_at)} · ${grant.application_id} · by ${actorLabel(grant.actor_key_id)}`),
     );
     if (grant.revoked_at) {
-      summary.append(node("small", "", `Revoked ${formatTime(grant.revoked_at)} by key ${grant.revoked_by_key_id}: ${grant.revocation_reason}`));
+      summary.append(node("small", "", `Revoked ${formatTime(grant.revoked_at)} by ${actorLabel(grant.revoked_by_key_id)}: ${grant.revocation_reason}`));
     }
     item.append(summary);
     if (grant.status === "active") {
@@ -2372,11 +2722,11 @@ function timelineEntry(event) {
     case "alias_added":
       title.append(node("strong", "", "Alias added"));
       identifiers.push(event.external_id);
-      lines.push(`By ${event.actor_role || "admin"} key ${event.actor_key_id}`);
+      lines.push(`By ${event.actor_role || "admin"} ${actorLabel(event.actor_key_id)}`);
       break;
     case "customer_merged":
       title.append(node("strong", "", "Customer merged"));
-      lines.push(`${event.external_id} merged into this customer by admin key ${event.actor_key_id}`);
+      lines.push(`${event.external_id} merged into this customer by admin ${actorLabel(event.actor_key_id)}`);
       identifiers.push(event.related_customer_id, event.source_id);
       break;
     case "purchase_observed":
@@ -2399,13 +2749,13 @@ function timelineEntry(event) {
       break;
     case "manual_grant_created":
       title.append(node("strong", "", "Manual grant"));
-      lines.push(`${event.entitlement_key} until ${formatTime(event.effective_ends_at)} · by key ${event.actor_key_id}`, `Reason: ${event.reason}`);
+      lines.push(`${event.entitlement_key} until ${formatTime(event.effective_ends_at)} · by ${actorLabel(event.actor_key_id)}`, `Reason: ${event.reason}`);
       identifiers.push(event.source_id);
       break;
     case "manual_grant_revoked":
       title.append(node("strong", "", "Manual grant revoked"));
       badge = "revoked";
-      lines.push(`${event.entitlement_key} · by key ${event.actor_key_id}`, `Reason: ${event.reason}`);
+      lines.push(`${event.entitlement_key} · by ${actorLabel(event.actor_key_id)}`, `Reason: ${event.reason}`);
       identifiers.push(event.source_id);
       break;
     case "entitlement_changed":
@@ -2649,6 +2999,15 @@ function countLabel(value, singular) {
   return `${formatNumber(value)} ${singular}${Number(value) === 1 ? "" : "s"}`;
 }
 
+// actorLabel names the audit actor: a stored key, or an administrator account recorded as
+// "account:<id>:<username>". The short id tells apart two accounts that used the same username.
+function actorLabel(actorID) {
+  const value = String(actorID || "");
+  if (!value.startsWith("account:")) return `key ${value}`;
+  const [accountID, ...username] = value.slice("account:".length).split(":");
+  return username.length ? `account ${username.join(":")} (${accountID.slice(0, 8)})` : `account ${accountID}`;
+}
+
 function node(tag, className = "", text = "") {
   const element = document.createElement(tag);
   if (className) element.className = className;
@@ -2681,9 +3040,17 @@ async function logout() {
   state.managedApplication = null;
   state.overview = null;
   state.apiKeys = [];
+  state.administrators = [];
   state.sessionBootstrap = false;
+  state.sessionUsername = "";
   renderBootstrapBanner();
   state.pendingRevokeKey = null;
+  state.pendingPasswordAdministrator = null;
+  state.pendingDeleteAdministrator = null;
+  elements.administratorPasswordForm.reset();
+  elements.administratorForm.reset();
+  elements.bootstrapAccountForm.reset();
+  elements.bootstrapAccountForm.hidden = false;
   state.customerDetail = null;
   state.customerDetailID = "";
   state.pendingRevokeGrant = null;
@@ -2697,15 +3064,18 @@ async function logout() {
     elements.revokeGrantDialog, elements.grantDialog, elements.customerDetailDialog,
     elements.applicationDialog, elements.apiKeyDialog, elements.revokeKeyDialog,
     elements.customerDialog, elements.keyDialog, elements.setupDialog,
+    elements.passwordDialog, elements.deleteAdministratorDialog,
   ]) {
     if (dialog.open) dialog.close();
   }
   elements.adminKey.value = "";
+  elements.adminPassword.value = "";
+  setAuthMode("password");
   showAuthenticated(false);
   if (logoutError) {
     elements.authMessage.textContent = "The browser session could not be cleared while the server was unavailable.";
   }
-  elements.adminKey.focus();
+  focusAuthField();
 }
 
 async function createCatalog(form) {
@@ -2775,6 +3145,52 @@ function syncSetupProvider() {
 elements.authForm.addEventListener("submit", (event) => {
   event.preventDefault();
   connect(elements.adminKey.value);
+});
+elements.passwordForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  signIn(elements.adminUsername.value, elements.adminPassword.value);
+});
+elements.togglePassword.addEventListener("click", () => {
+  setPasswordVisible(elements.adminPassword.type === "password");
+  elements.adminPassword.focus();
+});
+elements.adminPassword.addEventListener("keydown", updateCapsLockNote);
+elements.adminPassword.addEventListener("keyup", updateCapsLockNote);
+elements.adminPassword.addEventListener("blur", () => {
+  elements.capsLockNote.hidden = true;
+});
+for (const field of [elements.adminUsername, elements.adminPassword, elements.adminKey]) {
+  field.addEventListener("input", () => markAuthInvalid(false));
+}
+elements.authModeToggle.addEventListener("click", () => {
+  setAuthMode(elements.authForm.hidden ? "key" : "password");
+  elements.authMessage.textContent = "";
+  focusAuthField();
+});
+elements.bootstrapAccountForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  createBootstrapAccount(event.currentTarget);
+});
+elements.administratorForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  addAdministrator(event.currentTarget);
+});
+elements.administratorPasswordForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveAdministratorPassword(event.currentTarget);
+});
+document.querySelector("#close-password-dialog").addEventListener("click", closePasswordDialog);
+document.querySelector("#cancel-password-dialog").addEventListener("click", closePasswordDialog);
+elements.passwordDialog.addEventListener("close", () => {
+  state.pendingPasswordAdministrator = null;
+  elements.administratorPasswordForm.reset();
+});
+document.querySelector("#close-delete-administrator").addEventListener("click", closeDeleteAdministratorConfirmation);
+document.querySelector("#cancel-delete-administrator").addEventListener("click", closeDeleteAdministratorConfirmation);
+elements.confirmDeleteAdministrator.addEventListener("click", deletePendingAdministrator);
+elements.deleteAdministratorDialog.addEventListener("close", () => {
+  state.pendingDeleteAdministrator = null;
+  elements.deleteAdministratorIdentity.textContent = "";
 });
 
 elements.refresh.addEventListener("click", () => {
@@ -3153,10 +3569,12 @@ async function resumeDashboardSession() {
       loadProjects(),
     ]);
     state.sessionBootstrap = Boolean(session?.bootstrap);
+    state.sessionUsername = session?.username || "";
     renderBootstrapBanner();
     showAuthenticated(true);
   } catch (error) {
     state.sessionBootstrap = false;
+    state.sessionUsername = "";
     renderBootstrapBanner();
     showAuthenticated(false);
     if (error.status !== 401) {

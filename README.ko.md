@@ -112,9 +112,10 @@ curl --fail http://127.0.0.1:8080/readyz
 생성한 값은 보관해 두세요. Compose 볼륨이 이 값에 의존하며, 값을 새로 생성해도 기존
 데이터베이스 비밀번호나 보호 키가 교체되지는 않습니다.
 
-`http://127.0.0.1:8080/dashboard/`를 열고 부트스트랩 관리자 키로 로그인합니다. 장기 유효
-관리자 키를 만든 뒤 `IAPSTACK_BOOTSTRAP_ADMIN_KEY`를 제거하고 API 컨테이너를 다시
-생성하세요. 키 교체, 백업, 업그레이드, 프로덕션 보안 기준 등 나머지 내용은
+`http://127.0.0.1:8080/dashboard/`를 열고 "Use an admin or bootstrap key instead"를 선택한 뒤
+부트스트랩 관리자 키로 로그인합니다. 설정 배너에서 관리자 계정을 만들면 이후에는 그
+사용자 이름과 비밀번호로 로그인합니다. 그런 다음 `IAPSTACK_BOOTSTRAP_ADMIN_KEY`를
+제거하고 API 컨테이너를 다시 생성하세요. 키 교체, 백업, 업그레이드, 프로덕션 보안 기준 등 나머지 내용은
 [운영 가이드](docs/operations.md)에서 다룹니다.
 
 <a id="deploy"></a>

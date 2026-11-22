@@ -118,9 +118,10 @@ curl --fail http://127.0.0.1:8080/readyz
 Guarde esses valores: o volume do Compose depende deles, e gerar novos valores não
 rotaciona a senha existente do banco de dados nem as chaves de proteção.
 
-Abra `http://127.0.0.1:8080/dashboard/` e entre com a chave de administrador de
-bootstrap. Crie uma chave de administrador durável, depois remova
-`IAPSTACK_BOOTSTRAP_ADMIN_KEY` e recrie o contêiner da API. O
+Abra `http://127.0.0.1:8080/dashboard/`, escolha "Use an admin or bootstrap key instead"
+e entre com a chave de administrador de bootstrap. Crie sua conta de administrador no
+aviso de configuração; a partir daí você entra com esse nome de usuário e essa senha.
+Depois remova `IAPSTACK_BOOTSTRAP_ADMIN_KEY` e recrie o contêiner da API. O
 [guia de operações](docs/operations.md) cobre o restante: rotação de chaves, backups,
 atualizações e a base de segurança para produção.
 

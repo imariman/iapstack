@@ -451,8 +451,8 @@ func (repository *transaction) enrichObservationPrice(
 }
 
 // enrichObservationOfferPhase records newly available subscription analytics evidence on an existing
-// snapshot: offer phase, transaction reason, lineage start, and cancellation reason. Rows stored before
-// migration 014 have none of them. Each column is filled only while it is NULL, so the first recorded
+// snapshot: offer phase, transaction reason, lineage start, and cancellation reason. A row whose provider
+// evidence did not carry them yet has none of them. Each column is filled only while it is NULL, so the first recorded
 // value is kept, and the row is not rewritten when no NULL column has a new value. None of them takes
 // part in observationMatches: adapter identities already cover the signed transaction or order they
 // come from, and an analytics field must not turn an identical access snapshot into a conflict.

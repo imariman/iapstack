@@ -20,11 +20,11 @@ a URL-form connection string or use the libpq key/value form.
 
 The fingerprint key must remain stable across encryption-key rotation. The bootstrap
 admin key is an installation credential and must contain at least 32 bytes. Use it to
-create the first stored administrator key through `/dashboard/` or
-`POST /v1/admin/api-keys`. From then on the bootstrap key and every bootstrap dashboard
-session are rejected, with no restart. A bootstrap key left in the environment is a
-dormant credential: it only works again when no active stored administrator key remains
-(see the break-glass procedure under Production security baseline). Clearing
+create the first administrator account through `/dashboard/`, or the first stored
+administrator key through `POST /v1/admin/api-keys`. From then on the bootstrap key and
+every bootstrap dashboard session are rejected, with no restart. A bootstrap key left in
+the environment is a dormant credential: it only works again when no administrator
+account and no active stored administrator key remains. Clearing
 `IAPSTACK_BOOTSTRAP_ADMIN_KEY` afterwards is optional; clear it if you do not want to
 keep that dormant credential. The default Compose worker and migration services never
 receive this secret. Store every durable bearer outside the database because IAPStack
@@ -42,7 +42,7 @@ IAPStack is configured entirely through environment variables:
 | `IAPSTACK_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `IAPSTACK_DATABASE_URL` | none | PostgreSQL connection string required by database-backed modes |
 | `IAPSTACK_AUTO_MIGRATE` | `false` | Apply migrations at compact `server` startup; use only for one-instance disposable environments that cannot run a pre-deploy command |
-| `IAPSTACK_BOOTSTRAP_ADMIN_KEY` | none | Installation-only administrator bearer; when set it must contain at least 32 bytes, and it is rejected while any active stored administrator key exists |
+| `IAPSTACK_BOOTSTRAP_ADMIN_KEY` | none | Installation-only administrator bearer; when set it must contain at least 32 bytes, and it is rejected while any administrator account or active stored administrator key exists |
 | `IAPSTACK_METRICS_BEARER_TOKEN` | none | Dedicated 32+ character bearer for `/metrics`; the endpoint is disabled when absent |
 | `IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS` | `4` | Fail-fast concurrency bound for memory-hard API-key creation and verification; maximum `32` |
 | `IAPSTACK_PROTECTION_ACTIVE_KEY_ID` | none | Encryption key ID used for new protected values |
@@ -134,14 +134,41 @@ until it is absent so an older key remains available to revoke. Use
 `DELETE /v1/admin/api-keys/{key_id}` to revoke a stored key. Revocation is idempotent,
 authentication reads `revoked_at` on every request, and no process restart is required.
 The API rejects revocation of the key authenticating the current request and preserves
-the final active administrator. Rotate by creating the replacement, storing it, signing
-in with it, and then revoking the old key.
+the final active administrator: the last administrator key can be revoked only while an
+administrator account exists, and the last account can be deleted only while an active
+administrator key exists. Rotate by creating the replacement, storing it, signing in
+with it, and then revoking the old key.
 
-If every stored administrator bearer is lost, the bootstrap key cannot help on its own:
-it authenticates only while no active stored administrator key exists. Recover with this
-restricted, break-glass database operation, which revokes every active administrator key
-(and therefore every dashboard session they issued) under the repository's lifecycle
-lock:
+### Recovering administrator access
+
+A lost administrator key needs no recovery while an account can sign in: sign in with
+the username and password, revoke the lost key under **Access**, and create a new one.
+
+If a password is forgotten, the account is locked, or no administrator can sign in at
+all, reset the password on the server. The command needs only database access, so
+whoever can run it already controls the installation:
+
+```sh
+docker compose -f deploy/compose.yaml exec api /usr/local/bin/iapstack admin reset-password <username>
+```
+
+Outside Compose, run `iapstack admin reset-password <username>` with
+`IAPSTACK_DATABASE_URL` set. It prints a generated temporary password once, clears the
+account's sign-in lock, and ends the dashboard sessions the account issued. If no
+account has that username, it creates one, which also covers installations that only
+ever used keys. Sign in with the temporary password and change it under **Access**. The
+password goes to the terminal, so do not run the command where output is logged.
+
+Account sign-in is throttled per account: five consecutive wrong passwords lock the
+account for five minutes, and until a sign-in succeeds every further wrong password
+locks it again. Someone who knows a username can therefore keep that account locked;
+keys and the reset command are unaffected. Keep the ingress rate limits from the list
+above in front of `/v1/admin/dashboard-session`.
+
+To cut off every stored administrator key at once, for example after a leak, use this
+restricted, break-glass database operation. It revokes every active administrator key
+(and therefore every dashboard session those keys issued) under the repository's
+lifecycle lock. Administrator accounts keep working:
 
 ```sql
 BEGIN;
@@ -154,14 +181,16 @@ RETURNING id, revoked_at;
 COMMIT;
 ```
 
-Then make sure `IAPSTACK_BOOTSTRAP_ADMIN_KEY` is set (restore it and recreate the API
-container if you cleared it), sign in at `/dashboard/` with it, and create a new
-permanent administrator key. The bootstrap key retires again as soon as that key exists.
-Application keys are not affected.
+Application keys are not affected. If no administrator account exists either, the
+bootstrap key works again after this: make sure `IAPSTACK_BOOTSTRAP_ADMIN_KEY` is set
+(restore it and recreate the API container if you cleared it), sign in at `/dashboard/`
+with it, and create an administrator account. The bootstrap key retires again as soon
+as that account exists.
 
 The following restricted database operation revokes one specific key and is also
-break-glass only. It uses the same lifecycle lock and final-administrator predicate as
-the repository, but bypasses the API's current-session safeguard. Confirm the exact
+break-glass only. It uses the same lifecycle lock as the repository and never revokes
+the last active administrator key, even when an administrator account exists, but it
+bypasses the API's current-session safeguard. Confirm the exact
 public key ID and an active replacement before running it:
 
 ```sql
@@ -214,15 +243,20 @@ security releases.
 
 ## Operations dashboard
 
-Open `http://127.0.0.1:8080/dashboard/` after the API becomes ready. Connect with a
-stored administrator bearer, or with the bootstrap key before the first stored
-administrator key exists. A bootstrap session shows a setup banner that creates the
-first permanent administrator key and switches the browser session to it. The server exchanges it once for an
-encrypted 12-hour dashboard session in a `Secure`, `HttpOnly`, `SameSite=Strict`
+Open `http://127.0.0.1:8080/dashboard/` after the API becomes ready. Sign in with an
+administrator account's username and password. Before the first account exists, choose
+"Use an admin or bootstrap key instead" and sign in with the bootstrap key (a stored
+administrator bearer works there too). A bootstrap session shows a setup banner that
+creates the first administrator account and switches the browser session to it. Manage
+accounts and keys under **Access**: add or delete accounts, change your password, reset
+another administrator's password, and create or revoke keys. Keys remain the credential
+for scripts and backends; nobody needs one to sign in. The server exchanges the
+credential once for an encrypted 12-hour dashboard session in a `Secure`, `HttpOnly`, `SameSite=Strict`
 cookie scoped to `/v1/admin`; the page never stores the bearer in browser storage.
 The session survives refreshes and browser restarts until expiry, while signing out
 clears it immediately. Sessions issued by stored administrator keys also stop working
-when their issuer key is revoked. Cookie-authenticated mutations require same-origin
+when their issuer key is revoked, and sessions issued by an account stop working when
+that account is deleted or its password changes. Cookie-authenticated mutations require same-origin
 browser proof. Do not use the dashboard from an untrusted browser or expose the API
 over plaintext outside local development.
 
@@ -256,8 +290,8 @@ conversion appear only where the adapter records a signed offer phase (Apple, Go
 Play); Huawei shows "Not available". Apple transaction reasons and original purchase
 dates separate plan changes and existing subscribers from renewals and new
 subscriptions, and Google Play cancellation context marks replacements. Observations
-stored before schema version 14 carry none of these fields and use the earlier rules
-until reconciliation enriches them. The panel shows no money figure.
+whose provider evidence carried none of these fields use simpler rules until
+reconciliation enriches them. The panel shows no money figure.
 The access-key workspace lists active and revoked administrator/application key
 metadata, identifies the current stored key, creates one-time administrator bearers,
 and requires explicit confirmation before revocation.
@@ -474,6 +508,11 @@ Validate table counts, application configuration, entitlement snapshots, and que
 2. Run the new image in `migrate` mode. Migrations are transactional and tested up/down from an empty database.
 3. Roll API processes, then workers. Confirm readiness and queue depth metrics.
 4. For an application rollback, deploy the recorded image digest. For a schema rollback, stop API and workers first, run the migration tool to the explicitly tested prior version, then restore the prior image.
+
+The schema starts from one baseline migration (schema version 1). A database created by
+a development build from before that baseline has a higher recorded version and cannot
+be migrated: the `migrate` step fails. Recreate that database (for Compose, remove its
+volume) and run `migrate` again.
 
 Application migrations do not upgrade the PostgreSQL server itself. PostgreSQL 18
 stores its versioned cluster beneath `/var/lib/postgresql`, so the Compose definitions

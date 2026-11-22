@@ -41,16 +41,19 @@ type systemClock struct{}
 
 var (
 	// ErrUsage indicates that the process mode arguments are missing or invalid.
-	ErrUsage = errors.New("usage: iapstack <server|api|worker|migrate>")
+	ErrUsage = errors.New("usage: iapstack <server|api|worker|migrate> | iapstack admin reset-password <username>")
 )
 
-// Run starts the selected IAPStack process and blocks until it stops.
+// Run starts the selected IAPStack process and blocks until it stops, or executes one operator command.
 func Run(
 	ctx context.Context,
 	args []string,
 	getenv func(string) string,
 	logOutput io.Writer,
 ) error {
+	if len(args) > 0 && args[0] == "admin" {
+		return runAdminCommand(ctx, args[1:], getenv, logOutput)
+	}
 	if len(args) != 1 {
 		return ErrUsage
 	}

@@ -107,7 +107,8 @@ func TestDashboardUsesDocumentedAdminOperations(t *testing.T) {
 	for _, fragment := range []string{
 		"merged_into_customer_id",
 		"alias_count",
-		"/v1/admin/dashboard-session", "/v1/admin/api-keys", "/v1/admin/projects", "/overview", "/applications/",
+		"/v1/admin/dashboard-session", "/v1/admin/api-keys", "/v1/admin/administrators", "/password",
+		"current_password", "password_changed_at", "/v1/admin/projects", "/overview", "/applications/",
 		"/customers/", "/entitlements/", "/products/", "/store-products/", "/credentials/", "/webhook",
 		"/customers?", "/manual-grants", ":revoke", "page_token", "next_page_token",
 		"grant_options", "canonical_customer_id", "idempotency_key", "duration_days", "ends_at",

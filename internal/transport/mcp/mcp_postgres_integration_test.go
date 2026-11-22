@@ -511,7 +511,6 @@ func openIntegrationDatabase(t *testing.T) *postgres.Store {
 	}
 	for _, step := range []func() error{
 		func() error { return postgres.RemoveRiver(ctx, databaseURL) },
-		func() error { return postgres.ClearIdentityMigrationGuards(ctx, connection) },
 		func() error { return migrator.MigrateTo(ctx, 0) },
 		func() error { return migrator.Up(ctx) },
 		func() error { return postgres.MigrateRiver(ctx, databaseURL) },
@@ -532,9 +531,6 @@ func openIntegrationDatabase(t *testing.T) *postgres.Store {
 		defer cleanupCancel()
 		if err := postgres.RemoveRiver(cleanupCtx, databaseURL); err != nil {
 			t.Errorf("reset River schema during cleanup: %v", err)
-		}
-		if err := postgres.ClearIdentityMigrationGuards(cleanupCtx, connection); err != nil {
-			t.Errorf("clear identity migration guards during cleanup: %v", err)
 		}
 		if err := migrator.MigrateTo(cleanupCtx, 0); err != nil {
 			t.Errorf("reset integration PostgreSQL during cleanup: %v", err)

@@ -204,6 +204,17 @@ func TestGoResponsesMatchOpenAPI(t *testing.T) {
 		{name: "dashboard session", schema: "DashboardSession", value: dashboardSessionResponse{
 			ExpiresAt: now.Add(12 * time.Hour),
 		}},
+		{name: "account dashboard session", schema: "DashboardSession", value: dashboardSessionResponse{
+			ExpiresAt: now.Add(12 * time.Hour), HasDurableAdmin: true, Username: "owner@example.com",
+		}},
+		{name: "administrator collection", schema: "AdministratorCollection", value: administratorCollectionResponse{
+			Administrators: []administratorResponse{{
+				ID: "0123456789abcdef01234567", Username: "owner", CreatedAt: now, PasswordChangedAt: now, Current: true,
+			}},
+		}},
+		{name: "empty administrator collection", schema: "AdministratorCollection", value: administratorCollectionResponse{
+			Administrators: []administratorResponse{},
+		}},
 		{name: "project collection", schema: "AdminProjects", value: controlplane.ProjectList{
 			Projects: []controlplane.Project{{ID: "project-1", CreatedAt: now}},
 		}},

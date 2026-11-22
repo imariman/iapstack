@@ -59,8 +59,9 @@ live estimate first. For this topology, Fly.io is not the economical sandbox opt
    fly status --app <unique-iapstack-app>
    ```
 
-5. Verify `https://<unique-iapstack-app>.fly.dev/readyz`, open `/dashboard/`, create
-   the first durable administrator key, and remove the bootstrap secret:
+5. Verify `https://<unique-iapstack-app>.fly.dev/readyz`, open `/dashboard/`, sign in with
+   the bootstrap key, create your administrator account in the setup banner, and remove
+   the bootstrap secret:
 
    ```sh
    fly secrets unset IAPSTACK_BOOTSTRAP_ADMIN_KEY --app <unique-iapstack-app>

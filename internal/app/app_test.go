@@ -28,6 +28,10 @@ func TestRunRequiresKnownMode(t *testing.T) {
 		{name: "missing"},
 		{name: "too many", args: []string{"api", "extra"}},
 		{name: "unknown", args: []string{"unknown"}},
+		{name: "admin without command", args: []string{"admin"}},
+		{name: "admin unknown command", args: []string{"admin", "list", "owner"}},
+		{name: "admin reset without username", args: []string{"admin", "reset-password"}},
+		{name: "admin reset with extra argument", args: []string{"admin", "reset-password", "owner", "extra"}},
 	}
 
 	for _, tt := range tests {
@@ -55,6 +59,16 @@ func TestRunRuntimeModesRequireDatabaseURL(t *testing.T) {
 				t.Fatalf("Run() error = %v, want ErrDatabaseURLRequired", err)
 			}
 		})
+	}
+}
+
+// TestRunAdminResetPasswordRequiresDatabaseURL verifies the recovery command fails fast without persistence.
+func TestRunAdminResetPasswordRequiresDatabaseURL(t *testing.T) {
+	t.Parallel()
+
+	err := app.Run(context.Background(), []string{"admin", "reset-password", "owner"}, emptyEnv, &bytes.Buffer{})
+	if !errors.Is(err, postgres.ErrDatabaseURLRequired) {
+		t.Fatalf("Run() error = %v, want ErrDatabaseURLRequired", err)
 	}
 }
 

@@ -80,7 +80,7 @@ hcloud server create --name iapstack --type cax11 --image ubuntu-24.04 --locatio
    ```
 
 3. Check `https://iapstack.example.com/readyz`, open `/dashboard/`, connect with the
-   bootstrap key, and create a durable administrator key.
+   bootstrap key, and create your administrator account in the setup banner.
 4. Remove the bootstrap key and apply the change:
 
    ```sh

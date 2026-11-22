@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	// identityActorForbiddenMessage rejects principals that have no stored API key.
+	// identityActorForbiddenMessage rejects principals that have no stored API key or administrator account.
 	identityActorForbiddenMessage = "stored credentials are required"
 )
 
@@ -90,7 +90,7 @@ func (api *API) postAdminCustomerMerge(writer http.ResponseWriter, request *http
 		CanonicalCustomerID: input.CanonicalCustomerID,
 		SourceCustomerID:    input.SourceCustomerID,
 		IdempotencyKey:      input.IdempotencyKey,
-		ActorKeyID:          principal.KeyID,
+		ActorKeyID:          principal.ActorID(),
 	}
 	if input.CanonicalCustomerID != "" && input.CanonicalCustomerID == input.SourceCustomerID {
 		api.writeError(writer, request, validation.Wrap(errors.New("canonical and source customers must differ")))
@@ -141,7 +141,7 @@ func (api *API) putCustomerAlias(
 		CanonicalCustomerID: customerID,
 		ExternalID:          externalID,
 		ActorRole:           principal.Role,
-		ActorKeyID:          principal.KeyID,
+		ActorKeyID:          principal.ActorID(),
 	}
 	if !api.requireValidInput(writer, request, write.Validate()) {
 		return
@@ -181,13 +181,13 @@ func (api *API) getCustomerResolution(
 	writeJSON(writer, http.StatusOK, resolution)
 }
 
-// requireDurableActor rejects the bootstrap administrator because it has no stored key id.
+// requireDurableActor rejects the bootstrap administrator because it has no stored key or account to record.
 func (api *API) requireDurableActor(
 	writer http.ResponseWriter,
 	request *http.Request,
 	principal auth.Principal,
 ) bool {
-	if principal.KeyID == "" {
+	if principal.ActorID() == "" {
 		writeAPIError(writer, request, http.StatusForbidden, "forbidden", identityActorForbiddenMessage)
 		return false
 	}

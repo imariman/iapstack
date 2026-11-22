@@ -15,8 +15,6 @@ import (
 )
 
 const (
-	// appleConsumptionSchemaVersion is the migration that adds consumption answers.
-	appleConsumptionSchemaVersion int32 = 16
 	// consumptionApplicationID identifies the App Store application in consumption repository tests.
 	consumptionApplicationID = "apple-application-1"
 )
@@ -324,9 +322,9 @@ func TestDeliveredPurchaseCustomersRequiresAllowedObservation(t *testing.T) {
 	}
 }
 
-// TestAppleConsumptionMigrationRefusesDirtyDown verifies a pending request blocks the down migration.
-func TestAppleConsumptionMigrationRefusesDirtyDown(t *testing.T) {
-	database := openTestDatabase(t, appleConsumptionSchemaVersion)
+// TestAppleConsumptionRequestConstraints verifies a request needs a terminal status and outcome together.
+func TestAppleConsumptionRequestConstraints(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
 	fixture := seedCatalog(t, database)
 	seedConsumptionApplication(t, database, fixture)
 	request := newConsumptionRequest(fixture, "consumption-pending", time.Date(2026, time.November, 18, 8, 0, 0, 0, time.UTC), 4)
@@ -337,10 +335,6 @@ func TestAppleConsumptionMigrationRefusesDirtyDown(t *testing.T) {
 			signed_at, received_at, deadline_at, available_at
 		) VALUES ($1, $2, $3, 'iapstack.pro', 'consumable', 'ciphertext', $4, 'test-key', $5, $5, $6, $5)
 	`, request.ID, fixture.projectID, consumptionApplicationID, request.Payload.Fingerprint[:], request.SignedAt, request.DeadlineAt)
-	if err := database.migrator.MigrateTo(database.ctx, appleConsumptionSchemaVersion-1); err == nil {
-		t.Fatal("MigrateTo(previous) error = nil, want refusal while a request is pending")
-	}
-	assertVersion(t, database, appleConsumptionSchemaVersion)
 	expectConstraint(t, database, "apple_consumption_requests_terminal_valid", `
 		UPDATE apple_consumption_requests SET status = 'sent' WHERE id = $1
 	`, request.ID)
@@ -350,8 +344,6 @@ func TestAppleConsumptionMigrationRefusesDirtyDown(t *testing.T) {
 	mustExec(t, database, `
 		UPDATE apple_consumption_requests SET status = 'skipped', status_reason = 'disabled', completed_at = now() WHERE id = $1
 	`, request.ID)
-	mustMigrateTo(t, database, appleConsumptionSchemaVersion-1)
-	mustMigrateTo(t, database, appleConsumptionSchemaVersion)
 }
 
 // seedConsumptionApplication adds one App Store application to the shared catalog fixture.
