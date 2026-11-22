@@ -282,6 +282,29 @@ func TestExecutorRecordsPermanentFailure(t *testing.T) {
 	}
 }
 
+// TestExecutorRecordsSkippedWebhookAsSkipped verifies an event with no webhook closes without counting as failed.
+func TestExecutorRecordsSkippedWebhookAsSkipped(t *testing.T) {
+	transaction := &executorTransaction{}
+	execution := newTestExecutor(transaction, HandlerFunc(func(context.Context, persistence.QueueMessage) error {
+		return &webhooks.DeliveryError{Code: persistence.WebhookNotConfiguredCode}
+	}))
+	if err := execution.execute(context.Background(), persistence.QueueOutbox, "event-1", 1, 3, 0); err == nil {
+		t.Fatal("execute() error = nil, want River cancellation signal")
+	}
+	if len(transaction.failures) != 1 || transaction.failures[0].ErrorCode != persistence.WebhookNotConfiguredCode {
+		t.Fatalf("failures = %#v, want the event closed with %s", transaction.failures, persistence.WebhookNotConfiguredCode)
+	}
+	var exposition strings.Builder
+	if err := execution.metrics.WritePrometheus(&exposition); err != nil {
+		t.Fatalf("WritePrometheus() error = %v", err)
+	}
+	text := exposition.String()
+	if !strings.Contains(text, `iapstack_queue_attempts_total{queue="outbox",outcome="skipped"} 1`) ||
+		strings.Contains(text, `iapstack_queue_attempts_total{queue="outbox",outcome="failed"}`) {
+		t.Fatalf("queue metrics = %s, want the outbox attempt counted as skipped only", text)
+	}
+}
+
 // TestExecutorHandlesLoadAndTerminalStates verifies handlers run only for active durable records.
 func TestExecutorHandlesLoadAndTerminalStates(t *testing.T) {
 	t.Parallel()

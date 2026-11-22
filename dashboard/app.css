@@ -2281,7 +2281,8 @@ td code {
 }
 
 .status-badge.expired,
-.status-badge.canceled {
+.status-badge.canceled,
+.status-badge.skipped {
   color: var(--subtle);
 }
 

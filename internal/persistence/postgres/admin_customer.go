@@ -775,9 +775,14 @@ func (repository *transaction) addAdminOutboxEvents(
 		); err != nil {
 			return classifyError("scan admin customer webhook event", err)
 		}
+		// An event closed because its application has no webhook was never attempted, so it
+		// is skipped rather than failed and gets no delivery entry of its own.
+		skipped := failedAt.Valid && errorCode == persistence.WebhookNotConfiguredCode
 		status := "pending"
 		if deliveredAt.Valid {
 			status = "delivered"
+		} else if skipped {
+			status = persistence.AdminDeliverySkipped
 		} else if failedAt.Valid {
 			status = "failed"
 		}
@@ -798,7 +803,7 @@ func (repository *transaction) addAdminOutboxEvents(
 		if deliveredAt.Valid {
 			delivery.Kind, delivery.OccurredAt = persistence.AdminTimelineWebhookDelivered, deliveredAt.Time
 			timeline.add(delivery)
-		} else if failedAt.Valid {
+		} else if failedAt.Valid && !skipped {
 			delivery.Kind, delivery.OccurredAt, delivery.ErrorCode = persistence.AdminTimelineWebhookFailed, failedAt.Time, errorCode
 			timeline.add(delivery)
 		}

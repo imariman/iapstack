@@ -102,6 +102,27 @@ func TestDeliverClassifiesDependencyFailures(t *testing.T) {
 	}
 }
 
+// TestDeliverySkipsOnlyWithoutEndpoint verifies a missing webhook is the one expected skip.
+func TestDeliverySkipsOnlyWithoutEndpoint(t *testing.T) {
+	t.Parallel()
+
+	message := persistence.QueueMessage{
+		Queue: persistence.QueueOutbox, ID: "event-1", ProjectID: "project-1",
+		ApplicationID: "application-1", JSONPayload: []byte(`{"event":"changed"}`),
+	}
+	service := &Service{store: &fakeOperationsStore{endpointError: persistence.ErrNotFound}}
+	err := service.Deliver(context.Background(), message)
+	failure, ok := err.(*DeliveryError)
+	if !ok || failure.CodeValue() != persistence.WebhookNotConfiguredCode || !failure.Skipped() || failure.Retryable() {
+		t.Fatalf("Deliver() without endpoint = %#v, want a skipped, non-retryable %s", err, persistence.WebhookNotConfiguredCode)
+	}
+	for _, code := range []string{"webhook_endpoint_unavailable", "webhook_secret_invalid", "webhook_rejected", ""} {
+		if (&DeliveryError{Code: code}).Skipped() {
+			t.Fatalf("DeliveryError{%q}.Skipped() = true, want only %s to skip", code, persistence.WebhookNotConfiguredCode)
+		}
+	}
+}
+
 // TestConfigureRejectsShortSigningSecret verifies weak HMAC keys fail before protection or persistence.
 func TestConfigureRejectsShortSigningSecret(t *testing.T) {
 	t.Parallel()

@@ -136,7 +136,7 @@ func (service *Service) Deliver(ctx context.Context, message persistence.QueueMe
 	})
 	if err != nil {
 		if errors.Is(err, persistence.ErrNotFound) {
-			return &DeliveryError{Code: "webhook_not_configured", CanRetry: false}
+			return &DeliveryError{Code: persistence.WebhookNotConfiguredCode, CanRetry: false}
 		}
 		return &DeliveryError{Code: "webhook_endpoint_unavailable", CanRetry: true}
 	}
@@ -207,6 +207,12 @@ func (failure *DeliveryError) Error() string {
 // Retryable reports whether another bounded delivery attempt is appropriate.
 func (failure *DeliveryError) Retryable() bool {
 	return failure != nil && failure.CanRetry
+}
+
+// Skipped reports that nothing was attempted because the application has no webhook, which
+// is an expected configuration rather than a delivery fault.
+func (failure *DeliveryError) Skipped() bool {
+	return failure != nil && failure.Code == persistence.WebhookNotConfiguredCode
 }
 
 // CodeValue returns the stable safe delivery failure code.
