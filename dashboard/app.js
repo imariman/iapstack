@@ -176,6 +176,9 @@ const elements = {
   apiKeyList: document.querySelector("#api-key-list"),
   apiKeyMessage: document.querySelector("#api-key-message"),
   createAdminKey: document.querySelector("#create-admin-key"),
+  agentKeyForm: document.querySelector("#agent-key-form"),
+  agentKeyProject: document.querySelector("#agent-key-project"),
+  createAgentKey: document.querySelector("#create-agent-key"),
   revokeKeyDialog: document.querySelector("#revoke-key-dialog"),
   revokeKeyIdentity: document.querySelector("#revoke-key-identity"),
   confirmRevokeKey: document.querySelector("#confirm-revoke-key"),
@@ -1699,7 +1702,7 @@ function revealKey(value, role, options = {}) {
   const handover = upgraded || upgradeFailed;
   elements.revealedKeyTitle.textContent = role === "admin"
     ? (handover ? "Permanent admin key ready" : "Admin key ready")
-    : "Application key ready";
+    : (role === "agent" ? "Agent key ready" : "Application key ready");
   elements.revealedKeyFlag.textContent = upgradeFailed
     ? "Sign in again"
     : (upgraded ? "Bootstrap retired" : "Shown once");
@@ -1710,7 +1713,7 @@ function revealKey(value, role, options = {}) {
   } else {
     elements.revealedKeyCopy.textContent = "This value cannot be retrieved again. Copy it to your secure secret store before closing this dialog.";
   }
-  elements.revealedKeyLabel.textContent = role === "admin" ? "Administrator bearer" : "Application bearer";
+  elements.revealedKeyLabel.textContent = keyRoleLabel(role) + " bearer";
   elements.revealedKey.value = value;
   elements.copyMessage.textContent = "";
   elements.keyDialog.showModal();
@@ -1719,6 +1722,11 @@ function revealKey(value, role, options = {}) {
 // openAPIKeyManager opens the lifecycle workspace and refreshes authoritative metadata.
 async function openAPIKeyManager() {
   state.pendingRevokeKey = null;
+  elements.agentKeyForm.reset();
+  elements.agentKeyProject.textContent = state.selectedProject
+    ? `It will be scoped to ${state.selectedProject}.`
+    : "Select a project first.";
+  elements.createAgentKey.disabled = !state.selectedProject;
   elements.apiKeyDialog.showModal();
   await loadAPIKeys();
 }
@@ -1772,9 +1780,11 @@ function renderAPIKeys() {
   elements.apiKeyList.replaceChildren();
   const activeAdmins = state.apiKeys.filter((key) => key.role === "admin" && !key.revoked_at).length;
   const activeApplications = state.apiKeys.filter((key) => key.role === "application" && !key.revoked_at).length;
+  const activeAgents = state.apiKeys.filter((key) => key.role === "agent" && !key.revoked_at).length;
   const revoked = state.apiKeys.filter((key) => key.revoked_at).length;
   setText("active-admin-keys", activeAdmins);
   setText("active-application-keys", activeApplications);
+  setText("active-agent-keys", activeAgents);
   setText("revoked-keys", revoked);
   if (!state.apiKeys.length) {
     elements.apiKeyList.append(node("p", "empty-state", "No stored keys yet. Create an administrator key before removing the bootstrap credential."));
@@ -1795,6 +1805,11 @@ function renderAPIKeys() {
     const scope = node("div", "api-key-scope");
     if (key.role === "admin") {
       scope.append(node("strong", "", "Administrator"), node("small", "", "All control-plane projects"));
+    } else if (key.role === "agent") {
+      scope.append(
+        node("strong", "", `Agent · ${key.project_id || "Unknown project"}`),
+        node("small", "", key.allow_writes ? "MCP · writes allowed" : "MCP · read only"),
+      );
     } else {
       scope.append(node("strong", "", key.application_id || "Application"), node("small", "", key.project_id || "Unknown project"));
     }
@@ -1858,10 +1873,37 @@ async function createAdministratorKey() {
   }
 }
 
+// createAgentKey creates a project-scoped MCP agent bearer; writes stay off unless explicitly chosen.
+async function createAgentKey() {
+  const project = state.selectedProject;
+  if (!project) return;
+  elements.createAgentKey.disabled = true;
+  setFormMessage(elements.apiKeyMessage, "Creating agent key…", "working");
+  try {
+    const allowWrites = new FormData(elements.agentKeyForm).get("allow_writes") === "true";
+    const response = await apiRequest("/v1/admin/api-keys", {
+      method: "POST",
+      body: JSON.stringify({ role: "agent", project_id: project, allow_writes: allowWrites }),
+    });
+    revealKey(response.key, "agent");
+  } catch (error) {
+    setFormMessage(elements.apiKeyMessage, errorMessage(error));
+  } finally {
+    elements.createAgentKey.disabled = !state.selectedProject;
+  }
+}
+
+// keyRoleLabel names an API key role in dialog copy.
+function keyRoleLabel(role) {
+  if (role === "admin") return "Administrator";
+  if (role === "agent") return "Agent";
+  return "Application";
+}
+
 // openRevokeKeyConfirmation prepares an explicit irreversible-action confirmation.
 function openRevokeKeyConfirmation(key) {
   state.pendingRevokeKey = key;
-  elements.revokeKeyIdentity.textContent = `${key.role === "admin" ? "Administrator" : "Application"} · ${key.id}`;
+  elements.revokeKeyIdentity.textContent = `${keyRoleLabel(key.role)} · ${key.id}`;
   elements.revokeKeyDialog.showModal();
 }
 
@@ -2742,6 +2784,10 @@ elements.refresh.addEventListener("click", () => {
 elements.openAPIKeys.addEventListener("click", openAPIKeyManager);
 document.querySelector("#close-api-keys").addEventListener("click", () => elements.apiKeyDialog.close());
 elements.createAdminKey.addEventListener("click", createAdministratorKey);
+elements.agentKeyForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  createAgentKey();
+});
 if (elements.bootstrapCreateAdminKey) {
   elements.bootstrapCreateAdminKey.addEventListener("click", createAdministratorKey);
 }

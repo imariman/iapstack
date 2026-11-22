@@ -426,9 +426,20 @@
           <p class="dialog-copy">See every stored key without exposing its bearer. Create a replacement first, connect with it, then revoke the old key.</p>
           <button class="secondary-button" id="create-admin-key" type="button">Create admin key</button>
         </div>
+        <form class="agent-key-form" id="agent-key-form">
+          <p class="dialog-copy">Agent keys let an AI agent read one project through the MCP endpoint. <span id="agent-key-project"></span></p>
+          <label class="agent-key-access"><span>Agent access</span>
+            <select name="allow_writes" id="agent-key-access">
+              <option value="false" selected>Read only</option>
+              <option value="true">Allow writes</option>
+            </select>
+          </label>
+          <button class="secondary-button" id="create-agent-key" type="submit">Create agent key</button>
+        </form>
         <div class="key-vitals" aria-label="Access key status">
           <article><span>Active admins</span><strong id="active-admin-keys">—</strong></article>
           <article><span>Active apps</span><strong id="active-application-keys">—</strong></article>
+          <article><span>Active agents</span><strong id="active-agent-keys">—</strong></article>
           <article><span>Revoked</span><strong id="revoked-keys">—</strong></article>
         </div>
         <p class="form-message" id="api-key-message" role="status"></p>
