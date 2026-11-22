@@ -233,9 +233,6 @@ func openImportDatabase(t *testing.T) (context.Context, *pgx.Conn, *postgres.Sto
 	if err != nil {
 		t.Fatalf("NewMigrator() error = %v", err)
 	}
-	if err := postgres.ClearIdentityMigrationGuards(ctx, connection); err != nil {
-		t.Fatalf("clear guards: %v", err)
-	}
 	if err := migrator.MigrateTo(ctx, 0); err != nil {
 		t.Fatalf("reset schema: %v", err)
 	}
@@ -249,7 +246,6 @@ func openImportDatabase(t *testing.T) (context.Context, *pgx.Conn, *postgres.Sto
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cleanupCancel()
 		_ = postgres.RemoveRiver(cleanupCtx, databaseURL)
-		_ = postgres.ClearIdentityMigrationGuards(cleanupCtx, connection)
 		_ = migrator.MigrateTo(cleanupCtx, 0)
 	})
 	store, err := postgres.OpenStore(ctx, databaseURL)
