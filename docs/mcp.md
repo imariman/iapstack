@@ -29,7 +29,7 @@ An agent key reaches exactly one project and is read-only unless created with
 `allow_writes`. Phase 1 has no write tools, so leave `allow_writes` off.
 
 - Dashboard: open **Access keys**, select the project, and choose **Create agent key**.
-  The "Allow writes" box is off by default.
+  "Agent access" defaults to "Read only".
 - API, with a stored administrator key:
 
   ```sh
@@ -211,8 +211,10 @@ Rejected HTTP requests return a JSON body `{"error":{"code":"...","message":"...
 | `429` | `too_many_requests` | Per-key concurrency cap reached (with `Retry-After`) |
 | `503` | `authentication_unavailable` | Authentication capacity or storage unavailable (with `Retry-After`) |
 
-A failed tool call returns a result with `isError: true` and structured content
-`{"error":{"code":"...","message":"..."}}`. Codes are the stable codes of the `/v1`
+A failed tool call returns a result with `isError: true` and one text content holding
+the JSON object `{"error":{"code":"...","message":"..."}}`. It carries no structured
+content, because clients validate structured content against the tool's output schema
+even for errors. Codes are the stable codes of the `/v1`
 error envelope: `forbidden`, `not_found`, `invalid_request`, `storage_unavailable`,
 `request_timeout`, and `internal_error`, plus `response_too_large`. Messages are fixed
 text and never repeat arguments or stored values.

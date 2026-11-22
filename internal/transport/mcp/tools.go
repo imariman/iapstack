@@ -46,7 +46,7 @@ type toolDefinition struct {
 	handler sdk.ToolHandler
 }
 
-// toolErrorOutput is the structured content of a failed tool call.
+// toolErrorOutput is the JSON object a failed tool call returns as its text content.
 type toolErrorOutput struct {
 	Error toolError `json:"error"`
 }
@@ -378,13 +378,14 @@ func decodeArguments[In any](arguments json.RawMessage, resolved *jsonschema.Res
 	return input, nil
 }
 
-// toolFailure builds an isError result whose structured content carries only a stable code and fixed message.
+// toolFailure builds an isError result whose text content is a JSON object with only a stable code and
+// fixed message. It sets no structured content: clients validate structured content against the tool's
+// output schema even on errors, and an error object can never match a success schema.
 func toolFailure(code, message string) *sdk.CallToolResult {
 	payload, _ := json.Marshal(toolErrorOutput{Error: toolError{Code: code, Message: message}})
 	return &sdk.CallToolResult{
-		IsError:           true,
-		Content:           []sdk.Content{&sdk.TextContent{Text: string(payload)}},
-		StructuredContent: json.RawMessage(payload),
+		IsError: true,
+		Content: []sdk.Content{&sdk.TextContent{Text: string(payload)}},
 	}
 }
 

@@ -519,13 +519,21 @@ func TestNewHandlerValidatesOptions(t *testing.T) {
 	}
 }
 
-// assertToolError verifies one isError result with a stable code.
+// assertToolError verifies one isError result whose only text content carries a stable code. A failed call
+// must not set structured content, because clients validate it against the success output schema.
 func assertToolError(t *testing.T, name string, result *sdk.CallToolResult, code string) {
 	t.Helper()
-	raw, _ := json.Marshal(result.StructuredContent)
+	if !result.IsError || result.StructuredContent != nil || len(result.Content) != 1 {
+		t.Fatalf("CallTool(%s) = isError %t, structured %v, %d contents, want one text error without structured content",
+			name, result.IsError, result.StructuredContent, len(result.Content))
+	}
+	text, ok := result.Content[0].(*sdk.TextContent)
+	if !ok {
+		t.Fatalf("CallTool(%s) content = %T, want text", name, result.Content[0])
+	}
 	var output toolErrorOutput
-	if err := json.Unmarshal(raw, &output); err != nil || !result.IsError || output.Error.Code != code || output.Error.Message == "" {
-		t.Fatalf("CallTool(%s) = isError %t %s, want error code %s", name, result.IsError, raw, code)
+	if err := json.Unmarshal([]byte(text.Text), &output); err != nil || output.Error.Code != code || output.Error.Message == "" {
+		t.Fatalf("CallTool(%s) error text = %s, want error code %s", name, text.Text, code)
 	}
 }
 

@@ -20,7 +20,7 @@ func addResources(server *sdk.Server) {
 		URI:         OpenAPIResourceURI,
 		Name:        "openapi-v1",
 		Title:       "IAPStack v1 OpenAPI contract",
-		Description: "The published OpenAPI 3.1 contract of the versioned IAPStack HTTP API this server runs.",
+		Description: "The published OpenAPI 3.0 contract of the versioned IAPStack HTTP API this server runs.",
 		MIMEType:    openAPIMIMEType,
 		Size:        int64(len(contracts.OpenAPIV1)),
 	}, func(ctx context.Context, _ *sdk.ReadResourceRequest) (*sdk.ReadResourceResult, error) {
