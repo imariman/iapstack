@@ -5,6 +5,8 @@
 # Create the environment file first:  ./init-env.sh
 # Set CLOUDFLARE_TUNNEL_TOKEN and COMPOSE_PROFILES=tunnel in .env, then start the
 # stack:                              docker compose up --build -d --wait
+# install.sh sets IAPSTACK_COMMIT and IAPSTACK_VERSION for /readyz; when you build by hand,
+# prefix the command with IAPSTACK_COMMIT="$(git rev-parse HEAD)" (and IAPSTACK_VERSION=<tag>).
 
 # Only the migrate service builds the image; the server reuses the same local tag so
 # the build runs once.
@@ -44,6 +46,10 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      # install.sh exports these from the deployed checkout; /readyz reports them.
+      args:
+        IAPSTACK_VERSION: ${IAPSTACK_VERSION:-}
+        IAPSTACK_COMMIT: ${IAPSTACK_COMMIT:-}
     command: ["migrate"]
     environment:
       <<: *database-url

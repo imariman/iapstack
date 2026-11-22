@@ -190,6 +190,25 @@ curl --fail -H "Authorization: Bearer $IAPSTACK_METRICS_BEARER_TOKEN" http://127
 
 The migration container must complete successfully before API and worker processes start. `/healthz` is process liveness; `/readyz` also probes PostgreSQL.
 
+`/readyz` also reports the running build, so you can check which release an upgrade
+deployed: `{"status":"ready","version":"v0.2.0","commit":"<full SHA>"}`. The body used to
+be `{"status":"ready"}` alone; a monitor that matched it byte for byte should check the
+status code or the `status` field instead.
+
+The GHCR release images and the VPS installer stamp the version and commit. Every other
+image built from the `Dockerfile` has no `.git` in its build context, so it reports
+`"version":"dev"` and no commit unless the build passes them as arguments, for example
+`docker build --build-arg IAPSTACK_COMMIT="$(git rev-parse HEAD)" .` (add
+`--build-arg IAPSTACK_VERSION=<tag>` for a release tag). That includes local Compose
+builds and, until their configurations pass the arguments, the Fly.io (`fly.toml`),
+Railway, DigitalOcean App Platform (`.do/app.yaml`), Heroku (`heroku.yml`), Render
+(`render.yaml`), Koyeb (`deploy/koyeb/deploy.sh`) and Coolify
+(`deploy/coolify/compose.yaml`) deployments.
+
+Version and commit are public on this unauthenticated probe. They identify the release,
+not any secret, but they also tell anyone which release you run, so keep up with
+security releases.
+
 ## Operations dashboard
 
 Open `http://127.0.0.1:8080/dashboard/` after the API becomes ready. Connect with a

@@ -98,6 +98,12 @@ later and run the script again. Re-running it is also the upgrade path: with
 the deployed commit. Either way it keeps the existing `.env` and restarts the stack. Create the tunnel as in step 4 before running it, and
 continue with steps 6–8 afterwards.
 
+After an installer run, `curl https://iapstack.example.com/readyz` shows the deployed
+build: `commit` is the full SHA of the checkout, and `version` is the `v…` release tag that
+points at it, or `dev` for an untagged commit. A hand-run `docker compose up --build`
+reports the same only when you pass `IAPSTACK_COMMIT` and `IAPSTACK_VERSION`, as the
+manual steps below do.
+
 ## Manual deploy
 
 1. **Create the VM.** Use Ubuntu 24.04 LTS (Arm64 on Oracle A1 and Hetzner CAX,
@@ -141,10 +147,13 @@ continue with steps 6–8 afterwards.
    minutes.
 
    ```sh
-   docker compose up --build -d --wait
+   IAPSTACK_COMMIT="$(git rev-parse HEAD)" docker compose up --build -d --wait
    curl --fail http://127.0.0.1:8080/readyz
    curl --fail https://iapstack.example.com/readyz
    ```
+
+   `IAPSTACK_COMMIT` stamps the checkout's commit into the image so `/readyz` reports
+   it; add `IAPSTACK_VERSION=<tag>` when you deploy a release tag.
 
 6. **Create a durable administrator.** Open `https://iapstack.example.com/dashboard/`,
    connect with `IAPSTACK_BOOTSTRAP_ADMIN_KEY`, and click **Create permanent admin key**
@@ -235,9 +244,13 @@ To upgrade by hand instead, take a backup, check out the tag, and rebuild:
 cd /opt/iapstack
 ./deploy/vps/backup.sh
 git fetch --depth 1 origin tag <tag> && git checkout --detach <tag>
-cd deploy/vps && docker compose up --build -d --wait
+cd deploy/vps
+IAPSTACK_COMMIT="$(git rev-parse HEAD)" IAPSTACK_VERSION=<tag> docker compose up --build -d --wait
 docker image prune -f
 ```
+
+Without `IAPSTACK_COMMIT` and `IAPSTACK_VERSION`, the rebuilt image reports
+`"version":"dev"` and no commit on `/readyz`.
 
 The `migrate` service applies schema changes before the server restarts. Follow the
 rollback procedure in the operations guide if a release fails.

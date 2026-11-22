@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"go.uber.org/goleak"
+
+	"github.com/imariman/iapstack/internal/platform/buildinfo"
 )
 
 const (
@@ -71,6 +73,7 @@ func TestHealthAndReadiness(t *testing.T) {
 	t.Parallel()
 
 	server := newTestServer()
+	server.build = buildinfo.Info{Version: "v0.2.0", Commit: "4711a71d"}
 
 	tests := []struct {
 		name       string
@@ -79,7 +82,10 @@ func TestHealthAndReadiness(t *testing.T) {
 		wantBody   string
 	}{
 		{name: "health", path: "/healthz", wantStatus: http.StatusOK, wantBody: "{\"status\":\"ok\"}\n"},
-		{name: "not ready", path: "/readyz", wantStatus: http.StatusServiceUnavailable, wantBody: "{\"status\":\"not_ready\"}\n"},
+		{
+			name: "not ready", path: "/readyz", wantStatus: http.StatusServiceUnavailable,
+			wantBody: "{\"status\":\"not_ready\",\"version\":\"v0.2.0\",\"commit\":\"4711a71d\"}\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -104,6 +110,9 @@ func TestHealthAndReadiness(t *testing.T) {
 	server.server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if recorder.Code != http.StatusOK {
 		t.Errorf("ready status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if want := "{\"status\":\"ready\",\"version\":\"v0.2.0\",\"commit\":\"4711a71d\"}\n"; recorder.Body.String() != want {
+		t.Errorf("ready body = %q, want %q", recorder.Body.String(), want)
 	}
 }
 
