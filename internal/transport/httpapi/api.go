@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/imariman/iapstack/internal/auth"
+	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/credentials"
 	"github.com/imariman/iapstack/internal/financialreports"
@@ -173,11 +174,12 @@ type webhookRequest struct {
 	ExpectedRevision int64  `json:"expected_revision"`
 }
 
-// keyRequest selects the durable role and optional application scope for a new bearer.
+// keyRequest selects the durable role, optional scope, and agent write flag for a new bearer.
 type keyRequest struct {
 	Role          persistence.APIKeyRole `json:"role"`
 	ProjectID     core.ProjectID         `json:"project_id,omitempty"`
 	ApplicationID core.ApplicationID     `json:"application_id,omitempty"`
+	AllowWrites   bool                   `json:"allow_writes,omitempty"`
 }
 
 // apiKeyCollectionResponse contains one page of secret-free administrator key metadata.
@@ -192,9 +194,11 @@ type apiKeyResponse struct {
 	Role          persistence.APIKeyRole `json:"role"`
 	ProjectID     core.ProjectID         `json:"project_id,omitempty"`
 	ApplicationID core.ApplicationID     `json:"application_id,omitempty"`
-	CreatedAt     time.Time              `json:"created_at"`
-	RevokedAt     *time.Time             `json:"revoked_at,omitempty"`
-	Current       bool                   `json:"current"`
+	// AllowWrites is present only for agent keys.
+	AllowWrites *bool      `json:"allow_writes,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+	Current     bool       `json:"current"`
 }
 
 // verificationRequest is the public alias of the protected worker verification payload.
@@ -390,7 +394,7 @@ func (api *API) notFound(writer http.ResponseWriter, request *http.Request) {
 	writeAPIError(writer, request, http.StatusNotFound, "not_found", "the requested resource was not found")
 }
 
-// createAPIKey creates a stored administrator or application bearer and returns it once.
+// createAPIKey creates a stored administrator, application, or agent bearer and returns it once.
 func (api *API) createAPIKey(writer http.ResponseWriter, request *http.Request) {
 	if _, ok := api.requireAdmin(writer, request); !ok {
 		return
@@ -401,6 +405,7 @@ func (api *API) createAPIKey(writer http.ResponseWriter, request *http.Request) 
 	}
 	bearer, err := api.authentication.Create(request.Context(), auth.Principal{
 		Role: input.Role, ProjectID: input.ProjectID, ApplicationID: input.ApplicationID,
+		AllowWrites: input.AllowWrites,
 	})
 	if err != nil {
 		api.writeError(writer, request, err)
@@ -976,16 +981,35 @@ func reconciliationScheduleProvider(provider core.Provider) string {
 
 // requireAdmin authenticates one control-plane bearer.
 func (api *API) requireAdmin(writer http.ResponseWriter, request *http.Request) (auth.Principal, bool) {
+	principal, _, ok := api.authorizeAdmin(writer, request)
+	return principal, ok
+}
+
+// requireAdminActor authenticates one control-plane bearer or dashboard session as a control-plane actor.
+func (api *API) requireAdminActor(writer http.ResponseWriter, request *http.Request) (controlplane.Actor, bool) {
+	principal, dashboardSession, ok := api.authorizeAdmin(writer, request)
+	if !ok {
+		return controlplane.Actor{}, false
+	}
+	channel := controlplane.ChannelAPI
+	if dashboardSession {
+		channel = controlplane.ChannelDashboard
+	}
+	return controlplane.ActorFromPrincipal(principal, channel), true
+}
+
+// authorizeAdmin authenticates one administrator and reports whether a dashboard session carried it.
+func (api *API) authorizeAdmin(writer http.ResponseWriter, request *http.Request) (auth.Principal, bool, bool) {
 	principal, dashboardSession, err := api.authenticateAdmin(request)
 	if err != nil || principal.Role != persistence.APIKeyRoleAdmin {
 		api.writeAuthenticationFailure(writer, request, err)
-		return auth.Principal{}, false
+		return auth.Principal{}, false, false
 	}
 	if dashboardSession && !safeRequestMethod(request.Method) && !validDashboardMutation(request) {
 		writeAPIError(writer, request, http.StatusForbidden, "csrf_rejected", "dashboard request origin could not be verified")
-		return auth.Principal{}, false
+		return auth.Principal{}, false, false
 	}
-	return principal, true
+	return principal, dashboardSession, true
 }
 
 // requireApplication authenticates and path-binds one application bearer.
@@ -1157,51 +1181,14 @@ func (api *API) writeMutation(writer http.ResponseWriter, request *http.Request,
 
 // writeError maps domain and provider failures onto the stable v1 error envelope.
 func (api *API) writeError(writer http.ResponseWriter, request *http.Request, err error) {
-	status, code, message := http.StatusInternalServerError, "internal_error", "the request could not be completed"
-	if errors.Is(err, context.DeadlineExceeded) {
-		status, code, message = http.StatusServiceUnavailable, "request_timeout", "the request exceeded its processing deadline"
-	} else if errors.Is(err, auth.ErrCapacity) {
-		status, code, message = http.StatusServiceUnavailable, "authentication_unavailable", "authentication is temporarily unavailable"
-	} else if errors.Is(err, googleplay.ErrNotificationUnauthorized) {
-		status, code, message = http.StatusUnauthorized, "unauthorized", "notification authentication failed"
-	} else if errors.Is(err, googleplay.ErrNotificationInvalid) || errors.Is(err, apple.ErrNotificationInvalid) {
-		status, code, message = http.StatusBadRequest, "invalid_notification", "notification payload is invalid"
-	} else if errors.Is(err, persistence.ErrNotFound) {
-		status, code, message = http.StatusNotFound, "not_found", "the requested resource was not found"
-	} else if errors.Is(err, persistence.ErrManualGrantProductNotMapped) {
-		status, code, message = http.StatusUnprocessableEntity, "product_not_mapped", persistence.ErrManualGrantProductNotMapped.Error()
-	} else if errors.Is(err, persistence.ErrEntitlementConflict) {
-		status, code, message = http.StatusConflict, "entitlement_conflict", entitlementConflictMessage
-	} else if errors.Is(err, persistence.ErrConflict) {
-		status, code, message = http.StatusConflict, "conflict", "the request conflicts with current state"
-	} else if errors.Is(err, persistence.ErrUnavailable) {
-		status, code, message = http.StatusServiceUnavailable, "storage_unavailable", "durable storage is temporarily unavailable"
-	} else {
-		var providerFailure *stores.Failure
-		if errors.As(err, &providerFailure) {
-			switch providerFailure.Kind {
-			case stores.FailureInvalidEvidence:
-				status, code, message = http.StatusUnprocessableEntity, "invalid_purchase", "purchase evidence could not be verified"
-			case stores.FailureUnauthorized:
-				status, code, message = http.StatusBadGateway, "provider_unauthorized", "provider credentials were rejected"
-			case stores.FailureNotFound:
-				status, code, message = http.StatusNotFound, "purchase_not_found", "the provider did not find the purchase"
-			case stores.FailureRateLimited, stores.FailureTemporary:
-				status, code, message = http.StatusServiceUnavailable, "provider_unavailable", "the provider is temporarily unavailable"
-				if providerFailure.RetryAfter > 0 {
-					// Forward the provider cooldown as delay-seconds, rounded up, so SDKs
-					// wait it out instead of retrying on their own jitter.
-					seconds := int64((providerFailure.RetryAfter + time.Second - 1) / time.Second)
-					writer.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
-				}
-			default:
-				status, code, message = http.StatusBadGateway, "provider_error", "the provider request failed"
-			}
-		} else if errors.Is(err, validation.ErrInvalid) {
-			status, code, message = http.StatusBadRequest, "invalid_request", "request values are invalid"
-		}
+	problem := controlplane.Classify(err)
+	if problem.RetryAfter > 0 {
+		// Forward the provider cooldown as delay-seconds, rounded up, so SDKs
+		// wait it out instead of retrying on their own jitter.
+		seconds := int64((problem.RetryAfter + time.Second - 1) / time.Second)
+		writer.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 	}
-	writeAPIError(writer, request, status, code, message)
+	writeAPIError(writer, request, problem.Status, problem.Code, problem.Message)
 }
 
 // strictBearerToken extracts one non-empty bearer without accepting whitespace or alternate schemes.
@@ -1224,11 +1211,16 @@ func responseFromResult(result verification.Result, now time.Time) verificationR
 
 // apiKeyFromSummary maps secret-free lifecycle metadata and identifies the active request key.
 func apiKeyFromSummary(summary persistence.APIKeySummary, currentKeyID string) apiKeyResponse {
-	return apiKeyResponse{
+	response := apiKeyResponse{
 		ID: summary.ID, Role: summary.Role, ProjectID: summary.ProjectID,
 		ApplicationID: summary.ApplicationID, CreatedAt: summary.CreatedAt,
 		RevokedAt: summary.RevokedAt, Current: currentKeyID != "" && summary.ID == currentKeyID,
 	}
+	if summary.Role == persistence.APIKeyRoleAgent {
+		allowWrites := summary.AllowWrites
+		response.AllowWrites = &allowWrites
+	}
+	return response
 }
 
 // entitlementResponses removes internal source identities and fails closed at effective-period expiry.

@@ -26,9 +26,9 @@ Administrator key rotation uses three endpoints:
   pass that value as `page_token` to list the next older page. The last page omits
   `next_page_token`. Revoked records remain visible for audit context, and a stored
   key marks the record authenticating the request with `current: true`.
-- `POST /v1/admin/api-keys` creates an administrator or application key and returns
-  its bearer once. The bearer, salt, hash, and verifier are never returned by the list
-  endpoint.
+- `POST /v1/admin/api-keys` creates an administrator, application, or agent key and
+  returns its bearer once. The bearer, salt, hash, and verifier are never returned by
+  the list endpoint.
 - `DELETE /v1/admin/api-keys/{key_id}` idempotently revokes a stored key. A stored
   administrator cannot revoke the key authenticating its current request. The final
   active administrator key cannot be revoked unless an administrator account exists,
@@ -59,6 +59,19 @@ It works only while no active stored administrator key and no administrator acco
 exists: creating the first of either retires the bootstrap bearer and every bootstrap
 dashboard session immediately, without a restart. Clearing the bootstrap secret from
 the runtime afterwards is optional.
+
+### Agent keys
+
+An agent key is for an AI agent that reaches IAPStack through the opt-in MCP endpoint
+described in [MCP endpoint](mcp.md). Create one with
+`{"role":"agent","project_id":"..."}`. It is scoped to that one project and is read-only
+unless the request also sets `"allow_writes": true`; `allow_writes` is rejected for any
+other role. The project must exist: a missing project returns `409`, exactly like an
+application key for a missing application. List and revoke responses include
+`allow_writes` for agent keys only.
+
+An agent key never authenticates on a `/v1` route. Every `/v1` endpoint answers it with
+`401`, the same response as any other key of the wrong role.
 
 ## Bootstrap sequence
 

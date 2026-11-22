@@ -68,6 +68,9 @@ IAPStack is configured entirely through environment variables:
 | `IAPSTACK_GRAFANA_OTLP_TOKEN` | none | 32+ character metrics-write-only Grafana Cloud access-policy token |
 | `IAPSTACK_GRAFANA_EXPORT_INTERVAL` | `1m` | Direct OTLP metric export interval |
 | `IAPSTACK_GRAFANA_EXPORT_TIMEOUT` | `10s` | Deadline for one direct OTLP export attempt |
+| `IAPSTACK_MCP_ENABLED` | `false` | Serve the read-only [MCP endpoint](#mcp-endpoint) at `/mcp` from `server` and `api` modes; `true` or `false` |
+| `IAPSTACK_MCP_MAX_CONCURRENT_REQUESTS_PER_KEY` | `4` | In-flight `/mcp` requests allowed per API key; further requests get `429` with `Retry-After` |
+| `IAPSTACK_PUBLIC_URL` | none | Absolute `http` or `https` base URL of the API, without credentials, query, or fragment. Only used to print full store notification URLs in the MCP `get_setup_status` tool; never derived from a request `Host` header |
 
 The local Compose files publish PostgreSQL and the API on `127.0.0.1`. Set
 `IAPSTACK_POSTGRES_BIND_ADDRESS` or `IAPSTACK_HTTP_BIND_ADDRESS` only when an explicit
@@ -307,6 +310,46 @@ Customers can also be created from the project overview.
 Credential and signing-secret fields are cleared after submission and never returned
 by the admin read API. Store every newly displayed application bearer immediately in
 your deployment secret manager; the dashboard cannot recover it after the dialog closes.
+
+## MCP endpoint
+
+The API process can serve a read-only [Model Context Protocol](mcp.md) endpoint so AI
+agents (Claude Code, Cursor, Codex, and other MCP clients) can answer support and setup
+questions without hand-written `curl` calls. It is off by default.
+
+1. Set `IAPSTACK_MCP_ENABLED=true` on the `server` or `api` process and restart it.
+   The worker never serves `/mcp`. Optionally set `IAPSTACK_PUBLIC_URL` to the
+   external API base URL so `get_setup_status` prints complete store notification URLs.
+2. Create an agent key for one project, from **Access keys** in the dashboard or with
+   `POST /v1/admin/api-keys` and `{"role":"agent","project_id":"..."}`. Leave
+   `allow_writes` off: phase 1 exposes no write tools.
+3. Configure the client with the URL `https://<api-host>/mcp` and the header
+   `Authorization: Bearer <agent key>`. [MCP endpoint](mcp.md) has client examples.
+
+When the endpoint is disabled, `/mcp` answers exactly like any other unknown path.
+
+Reverse proxies and ingress controllers that forward an allow-list of paths must add
+the exact path `/mcp` (POST only). The bundled Kubernetes Ingress forwards only `/v1` and
+`/dashboard`; uncomment its `/mcp` entry after enabling the endpoint. Do not rewrite or
+strip the `Authorization` header, and do not buffer responses longer than the 30-second
+server write timeout. The endpoint answers each request with one JSON body and keeps no
+long-lived streams or sessions, so it needs no sticky sessions.
+
+Limits:
+
+- Only stored `agent` and `admin` API keys authenticate. Application keys get `403`,
+  the bootstrap administrator gets `403`, and dashboard session cookies are ignored, so a
+  request without a bearer gets `401`. Prefer agent keys: an admin key reaches every
+  project.
+- Request bodies use `IAPSTACK_HTTP_BODY_LIMIT` (`413` above it). Each key may have
+  `IAPSTACK_MCP_MAX_CONCURRENT_REQUESTS_PER_KEY` requests in flight (`429` with
+  `Retry-After` above it). Authentication shares the bounded
+  `IAPSTACK_AUTH_MAX_CONCURRENT_DERIVATIONS` capacity with `/v1` (`503` when exhausted).
+- `GET` and `DELETE` get `405`. A browser request whose `Origin` differs from the
+  request host gets `403`; no CORS headers are sent.
+- One serialized tool result is capped at 256 KiB. Lists are paginated with `next_page_token`.
+- Each tool call writes one structured log line (`mcp tool call`) with the tool name,
+  key id, role, outcome code, and duration. Arguments and results are never logged.
 
 ## Huawei AppGallery notification setup
 

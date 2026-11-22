@@ -106,6 +106,55 @@ func TestServiceCreatesAndAuthenticatesScopedKeys(t *testing.T) {
 	}
 }
 
+// TestServiceCreatesAndAuthenticatesAgentKeys verifies the agent role keeps its project and write flag
+// and that invalid agent scopes are rejected before any key is stored.
+func TestServiceCreatesAndAuthenticatesAgentKeys(t *testing.T) {
+	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}
+	service, err := NewService(store, "", 4)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	for _, allowWrites := range []bool{false, true} {
+		bearer, err := service.Create(context.Background(), Principal{
+			Role: persistence.APIKeyRoleAgent, ProjectID: "project-1", AllowWrites: allowWrites,
+		})
+		if err != nil {
+			t.Fatalf("Create() agent allow_writes=%t error = %v", allowWrites, err)
+		}
+		authenticated, err := service.Authenticate(context.Background(), bearer)
+		if err != nil {
+			t.Fatalf("Authenticate() agent error = %v", err)
+		}
+		if authenticated.KeyID == "" || authenticated.Role != persistence.APIKeyRoleAgent ||
+			authenticated.ProjectID != "project-1" || authenticated.ApplicationID != "" ||
+			authenticated.AllowWrites != allowWrites {
+			t.Fatalf("Authenticate() = %#v, want agent scope with allow_writes %t", authenticated, allowWrites)
+		}
+	}
+	for _, invalid := range []Principal{
+		{Role: persistence.APIKeyRoleAgent},
+		{Role: persistence.APIKeyRoleAgent, ProjectID: "project-1", ApplicationID: "application-1"},
+		{Role: persistence.APIKeyRoleAdmin, AllowWrites: true},
+		{Role: persistence.APIKeyRoleApplication, ProjectID: "project-1", ApplicationID: "application-1", AllowWrites: true},
+	} {
+		if _, err := service.Create(context.Background(), invalid); err == nil {
+			t.Fatalf("Create(%#v) error = nil, want validation error", invalid)
+		}
+	}
+	if len(store.records) != 2 {
+		t.Fatalf("stored keys = %d, want only the two valid agent keys", len(store.records))
+	}
+	sessions, err := NewAdminSessions(store, newCustomerSessionKeyring(t))
+	if err != nil {
+		t.Fatalf("NewAdminSessions() error = %v", err)
+	}
+	if _, err := sessions.Mint(context.Background(), Principal{
+		KeyID: "agent-key", Role: persistence.APIKeyRoleAgent, ProjectID: "project-1",
+	}); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Mint() agent issuer error = %v, want unauthorized", err)
+	}
+}
+
 // TestNewServiceRejectsShortBootstrapKey verifies installation credentials meet the minimum brute-force boundary.
 func TestNewServiceRejectsShortBootstrapKey(t *testing.T) {
 	store := &fakeOperationsStore{records: make(map[string]persistence.APIKeyRecord)}

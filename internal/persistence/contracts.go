@@ -20,6 +20,9 @@ const (
 	APIKeyRoleAdmin APIKeyRole = "admin"
 	// APIKeyRoleApplication grants data-plane access to one application.
 	APIKeyRoleApplication APIKeyRole = "application"
+	// APIKeyRoleAgent grants an AI agent control-plane access to one project over the MCP endpoint.
+	// Writes additionally need the key's explicit AllowWrites flag.
+	APIKeyRoleAgent APIKeyRole = "agent"
 
 	// QueueInbox identifies protected provider notification work.
 	QueueInbox QueueName = "inbox"
@@ -375,9 +378,11 @@ type APIKeyRecord struct {
 	Role          APIKeyRole
 	ProjectID     core.ProjectID
 	ApplicationID core.ApplicationID
-	SecretSalt    [16]byte
-	SecretHash    [32]byte
-	CreatedAt     time.Time
+	// AllowWrites lets an agent key call write operations. It is valid only for the agent role.
+	AllowWrites bool
+	SecretSalt  [16]byte
+	SecretHash  [32]byte
+	CreatedAt   time.Time
 }
 
 // APIKeySummary contains lifecycle metadata without a bearer secret or verifier.
@@ -386,8 +391,10 @@ type APIKeySummary struct {
 	Role          APIKeyRole
 	ProjectID     core.ProjectID
 	ApplicationID core.ApplicationID
-	CreatedAt     time.Time
-	RevokedAt     *time.Time
+	// AllowWrites reports whether an agent key may call write operations.
+	AllowWrites bool
+	CreatedAt   time.Time
+	RevokedAt   *time.Time
 }
 
 // APIKeyPage is one bounded page of secret-free API key lifecycle metadata.
@@ -599,7 +606,7 @@ func (record APIKeyRecord) Validate() error {
 	}
 	return errors.Join(
 		validateText("API key ID", record.ID),
-		validateAPIKeyScope(record.Role, record.ProjectID, record.ApplicationID),
+		ValidateAPIKeyScope(record.Role, record.ProjectID, record.ApplicationID, record.AllowWrites),
 		verifierError,
 		validateTime("API key creation time", record.CreatedAt),
 	)
@@ -617,7 +624,7 @@ func (summary APIKeySummary) Validate() error {
 	}
 	return errors.Join(
 		validateText("API key ID", summary.ID),
-		validateAPIKeyScope(summary.Role, summary.ProjectID, summary.ApplicationID),
+		ValidateAPIKeyScope(summary.Role, summary.ProjectID, summary.ApplicationID, summary.AllowWrites),
 		validateTime("API key creation time", summary.CreatedAt),
 		lifecycleError,
 	)
@@ -1152,8 +1159,18 @@ func validateHTTPSURL(value string) error {
 	return nil
 }
 
-// validateAPIKeyScope enforces role-specific project and application ownership.
-func validateAPIKeyScope(role APIKeyRole, projectID core.ProjectID, applicationID core.ApplicationID) error {
+// ValidateAPIKeyScope enforces role-specific project and application ownership and the agent write flag.
+// An admin key has no scope, an application key has a project and an application, and an agent key
+// has a project but no application. Only an agent key may allow writes.
+func ValidateAPIKeyScope(
+	role APIKeyRole,
+	projectID core.ProjectID,
+	applicationID core.ApplicationID,
+	allowWrites bool,
+) error {
+	if allowWrites && role != APIKeyRoleAgent {
+		return errors.New("only an agent API key may allow writes")
+	}
 	switch role {
 	case APIKeyRoleAdmin:
 		if projectID != "" || applicationID != "" {
@@ -1162,6 +1179,11 @@ func validateAPIKeyScope(role APIKeyRole, projectID core.ProjectID, applicationI
 		return nil
 	case APIKeyRoleApplication:
 		return errors.Join(projectID.Validate(), applicationID.Validate())
+	case APIKeyRoleAgent:
+		if applicationID != "" {
+			return errors.New("agent API key must not have application scope")
+		}
+		return projectID.Validate()
 	default:
 		return fmt.Errorf("unsupported API key role %q", role)
 	}

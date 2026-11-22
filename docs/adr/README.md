@@ -18,3 +18,4 @@ Architecture Decision Records (ADRs) capture decisions that materially constrain
 - [ADR-0005: Normalize provider evidence into purchase observations](0005-provider-neutral-purchase-observations.md)
 - [ADR-0006: Protect sensitive data with scoped authenticated envelopes](0006-scoped-authenticated-data-protection.md)
 - [ADR-0007: Resolve provider credentials through application-scoped packages](0007-application-scoped-provider-credentials.md)
+- [ADR-0008: Serve a least-privilege MCP endpoint for AI agents](0008-mcp-endpoint-for-agents.md)

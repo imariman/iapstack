@@ -45,6 +45,8 @@ const (
 	defaultTelemetryExportInterval = time.Minute
 	// defaultTelemetryExportTimeout bounds one Grafana Cloud metric delivery attempt.
 	defaultTelemetryExportTimeout = 10 * time.Second
+	// defaultMCPMaxConcurrentRequestsPerKey bounds in-flight MCP requests for one API key.
+	defaultMCPMaxConcurrentRequestsPerKey = 4
 )
 
 // Config contains validated process configuration shared by IAPStack modes.
@@ -77,6 +79,13 @@ type Config struct {
 	TelemetryEnvironment         string
 	TelemetryExportInterval      time.Duration
 	TelemetryExportTimeout       time.Duration
+	// MCPEnabled serves the MCP endpoint at /mcp from the API process.
+	MCPEnabled bool
+	// MCPMaxConcurrentRequestsPerKey bounds in-flight MCP requests for one API key.
+	MCPMaxConcurrentRequestsPerKey int
+	// PublicURL is the external base URL of the API, used only to print full store notification URLs.
+	// Empty means unknown; the server never derives it from a request Host header.
+	PublicURL string
 }
 
 // Load reads and validates process configuration from environment values.
@@ -112,6 +121,9 @@ func Load(getenv func(string) string) (Config, error) {
 		TelemetryEnvironment:         valueOrDefault(getenv("IAPSTACK_ENVIRONMENT"), "development"),
 		TelemetryExportInterval:      defaultTelemetryExportInterval,
 		TelemetryExportTimeout:       defaultTelemetryExportTimeout,
+		MCPEnabled:                   false,
+
+		MCPMaxConcurrentRequestsPerKey: defaultMCPMaxConcurrentRequestsPerKey,
 	}
 
 	if raw := strings.TrimSpace(getenv("IAPSTACK_SHUTDOWN_TIMEOUT")); raw != "" {
@@ -204,6 +216,21 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 		cfg.AuthMaxConcurrentDerivations = derivations
 	}
+	if raw := strings.TrimSpace(getenv("IAPSTACK_MCP_ENABLED")); raw != "" {
+		if cfg.MCPEnabled, err = strictBoolean("IAPSTACK_MCP_ENABLED", raw); err != nil {
+			return Config{}, err
+		}
+	}
+	if raw := strings.TrimSpace(getenv("IAPSTACK_MCP_MAX_CONCURRENT_REQUESTS_PER_KEY")); raw != "" {
+		if cfg.MCPMaxConcurrentRequestsPerKey, err = positiveInteger("IAPSTACK_MCP_MAX_CONCURRENT_REQUESTS_PER_KEY", raw); err != nil {
+			return Config{}, err
+		}
+	}
+	if raw := strings.TrimSpace(getenv("IAPSTACK_PUBLIC_URL")); raw != "" {
+		if cfg.PublicURL, err = publicURL(raw); err != nil {
+			return Config{}, err
+		}
+	}
 	if cfg.MetricsBearerToken != "" && len(cfg.MetricsBearerToken) < minimumMetricsBearerTokenLength {
 		return Config{}, fmt.Errorf("IAPSTACK_METRICS_BEARER_TOKEN must be at least %d characters", minimumMetricsBearerTokenLength)
 	}
@@ -253,6 +280,19 @@ func validateTelemetry(cfg Config) error {
 		return fmt.Errorf("IAPSTACK_ENVIRONMENT must contain 1-32 letters, numbers, dots, underscores, or hyphens")
 	}
 	return nil
+}
+
+// publicURL accepts one absolute HTTP or HTTPS base URL without credentials, query, or fragment and
+// returns it without a trailing slash.
+func publicURL(raw string) (string, error) {
+	invalid := fmt.Errorf("IAPSTACK_PUBLIC_URL must be an absolute http or https URL without credentials, query, or fragment")
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" ||
+		strings.ContainsAny(raw, " \t\r\n#?") {
+		return "", invalid
+	}
+	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
 // validTelemetryEnvironment bounds the only deployment-provided telemetry label.

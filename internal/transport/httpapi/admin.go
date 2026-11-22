@@ -1,366 +1,53 @@
 package httpapi
 
 import (
-	"errors"
 	"net/http"
-	"time"
 
+	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/core"
-	"github.com/imariman/iapstack/internal/persistence"
 )
-
-// adminProjectsResponse is the bounded administrator project collection.
-type adminProjectsResponse struct {
-	Projects []adminProjectResponse `json:"projects"`
-}
-
-// adminProjectResponse summarizes one project for navigation and overview counts.
-type adminProjectResponse struct {
-	ID               core.ProjectID `json:"id"`
-	ApplicationCount int64          `json:"application_count"`
-	CustomerCount    int64          `json:"customer_count"`
-	ProductCount     int64          `json:"product_count"`
-	CreatedAt        time.Time      `json:"created_at"`
-}
-
-// adminOverviewResponse contains secret-free operational datasets for one project.
-type adminOverviewResponse struct {
-	Project             adminProjectResponse        `json:"project"`
-	Analytics           adminAnalyticsResponse      `json:"analytics"`
-	Applications        []adminApplicationResponse  `json:"applications"`
-	Products            []adminProductResponse      `json:"products"`
-	Customers           []adminCustomerResponse     `json:"customers"`
-	RecentTransactions  []adminTransactionResponse  `json:"recent_transactions"`
-	Queues              []adminQueueResponse        `json:"queues"`
-	RecentWebhookEvents []adminWebhookEventResponse `json:"recent_webhook_events"`
-}
-
-// adminAnalyticsResponse contains bounded verification activity and revenue availability.
-type adminAnalyticsResponse struct {
-	WindowDays             int                          `json:"window_days"`
-	GeneratedAt            time.Time                    `json:"generated_at"`
-	VerifiedCount          int64                        `json:"verified_count"`
-	AllowedCount           int64                        `json:"allowed_count"`
-	DeniedCount            int64                        `json:"denied_count"`
-	UnresolvedCount        int64                        `json:"unresolved_count"`
-	ReversedCount          int64                        `json:"reversed_count"`
-	ActiveEntitlementCount int64                        `json:"active_entitlement_count"`
-	Revenue                adminRevenueResponse         `json:"revenue"`
-	SandboxValue           adminSandboxValueResponse    `json:"sandbox_value"`
-	DailyActivity          []adminDailyActivityResponse `json:"daily_activity"`
-}
-
-// adminRevenueResponse reports authoritative recognized revenue or why it is unavailable.
-type adminRevenueResponse struct {
-	Status                     persistence.AdminRevenueStatus  `json:"status"`
-	RecognizedMinorUnits       *int64                          `json:"recognized_minor_units"`
-	Currency                   *string                         `json:"currency"`
-	Amounts                    []adminRecognizedAmountResponse `json:"amounts"`
-	UncoveredProviders         []core.Provider                 `json:"uncovered_providers"`
-	ZeroFilledApplicationIDs   []core.ApplicationID            `json:"zero_filled_application_ids"`
-	ProductionApplicationCount int64                           `json:"production_application_count"`
-	TestApplicationCount       int64                           `json:"test_application_count"`
-}
-
-// adminRecognizedAmountResponse is one store-reported provider, period, and currency total.
-type adminRecognizedAmountResponse struct {
-	Provider        core.Provider `json:"provider"`
-	ReportKind      string        `json:"report_kind"`
-	PeriodStart     string        `json:"period_start"`
-	PeriodEnd       string        `json:"period_end"`
-	Currency        string        `json:"currency"`
-	AmountDecimal   string        `json:"amount_decimal"`
-	AmountScale     int32         `json:"amount_scale"`
-	MinorUnits      *int64        `json:"minor_units"`
-	CommissionState string        `json:"commission_state"`
-	TaxState        string        `json:"tax_state"`
-}
-
-// adminMoneyResponse reports one non-converted provider-signed amount.
-type adminMoneyResponse struct {
-	Milliunits int64  `json:"milliunits"`
-	Currency   string `json:"currency"`
-}
-
-// adminSandboxValueResponse reports non-accounting test transaction value coverage.
-type adminSandboxValueResponse struct {
-	Amounts           []adminMoneyResponse `json:"amounts"`
-	TransactionCount  int64                `json:"transaction_count"`
-	MissingPriceCount int64                `json:"missing_price_count"`
-}
-
-// adminDailyActivityResponse contains one UTC day of normalized outcomes.
-type adminDailyActivityResponse struct {
-	Date       string `json:"date"`
-	Verified   int64  `json:"verified"`
-	Allowed    int64  `json:"allowed"`
-	Denied     int64  `json:"denied"`
-	Unresolved int64  `json:"unresolved"`
-	Reversed   int64  `json:"reversed"`
-}
-
-// adminApplicationResponse reports provider scope and safe setup coverage.
-type adminApplicationResponse struct {
-	ID                    core.ApplicationID         `json:"id"`
-	Provider              core.Provider              `json:"provider"`
-	Environment           core.Environment           `json:"environment"`
-	ProviderApplicationID core.ProviderApplicationID `json:"provider_application_id"`
-	CredentialConfigured  bool                       `json:"credential_configured"`
-	CredentialRevision    int64                      `json:"credential_revision"`
-	WebhookConfigured     bool                       `json:"webhook_configured"`
-	WebhookRevision       int64                      `json:"webhook_revision"`
-	CreatedAt             time.Time                  `json:"created_at"`
-}
-
-// adminProductResponse reports grants and provider mapping coverage for one product.
-type adminProductResponse struct {
-	ID                core.ProductID   `json:"id"`
-	Kind              core.ProductKind `json:"kind"`
-	EntitlementKeys   []string         `json:"entitlement_keys"`
-	StoreMappingCount int64            `json:"store_mapping_count"`
-	CreatedAt         time.Time        `json:"created_at"`
-}
-
-// adminCustomerResponse reports current access counts without provider references.
-type adminCustomerResponse struct {
-	ID                   core.CustomerID `json:"id"`
-	ExternalID           string          `json:"external_id"`
-	MergedIntoCustomerID *string         `json:"merged_into_customer_id,omitempty"`
-	AliasCount           int64           `json:"alias_count"`
-	EntitlementCount     int64           `json:"entitlement_count"`
-	AllowedCount         int64           `json:"allowed_count"`
-	LastObservedAt       *time.Time      `json:"last_observed_at,omitempty"`
-	CreatedAt            time.Time       `json:"created_at"`
-}
-
-// adminTransactionResponse reports one normalized, secret-free purchase observation.
-type adminTransactionResponse struct {
-	ID                core.ObservationID     `json:"id"`
-	ApplicationID     core.ApplicationID     `json:"application_id"`
-	CustomerID        core.CustomerID        `json:"customer_id"`
-	ProductID         core.ProductID         `json:"product_id"`
-	ProviderProductID core.ProviderProductID `json:"provider_product_id"`
-	LifecycleState    core.LifecycleState    `json:"lifecycle_state"`
-	Access            core.AccessStatus      `json:"access"`
-	AccessReason      core.AccessReason      `json:"access_reason"`
-	ObservedAt        time.Time              `json:"observed_at"`
-	EffectiveEndsAt   *time.Time             `json:"effective_ends_at,omitempty"`
-}
-
-// adminQueueResponse reports aggregate durable processing outcomes.
-type adminQueueResponse struct {
-	Name      persistence.QueueName `json:"name"`
-	Pending   int64                 `json:"pending"`
-	Completed int64                 `json:"completed"`
-	Failed    int64                 `json:"failed"`
-	Skipped   int64                 `json:"skipped"`
-}
-
-// adminWebhookEventResponse reports delivery metadata without event payloads.
-type adminWebhookEventResponse struct {
-	ID            string             `json:"id"`
-	ApplicationID core.ApplicationID `json:"application_id"`
-	EventType     string             `json:"event_type"`
-	AggregateID   string             `json:"aggregate_id"`
-	Status        string             `json:"status"`
-	ErrorCode     string             `json:"error_code,omitempty"`
-	OccurredAt    time.Time          `json:"occurred_at"`
-	DeliveredAt   *time.Time         `json:"delivered_at,omitempty"`
-	FailedAt      *time.Time         `json:"failed_at,omitempty"`
-}
 
 // adminProjects returns the bounded project navigation collection.
 func (api *API) adminProjects(writer http.ResponseWriter, request *http.Request) {
-	if _, ok := api.requireAdmin(writer, request); !ok {
+	actor, ok := api.requireAdminActor(writer, request)
+	if !ok {
 		return
 	}
-	projects, err := api.admin.AdminProjects(request.Context())
+	projects, err := api.controlPlane().Projects(request.Context(), actor)
 	if err != nil {
 		api.writeError(writer, request, err)
 		return
 	}
-	responses := make([]adminProjectResponse, 0, len(projects))
-	for _, project := range projects {
-		responses = append(responses, adminProjectFromRecord(project))
-	}
-	writeJSON(writer, http.StatusOK, adminProjectsResponse{Projects: responses})
+	writeJSON(writer, http.StatusOK, projects)
 }
 
 // adminProjectOverview returns one project-scoped, secret-free operational snapshot.
 func (api *API) adminProjectOverview(writer http.ResponseWriter, request *http.Request) {
-	if _, ok := api.requireAdmin(writer, request); !ok {
+	actor, ok := api.requireAdminActor(writer, request)
+	if !ok {
 		return
 	}
-	projectID := core.ProjectID(request.PathValue("project_id"))
-	if !api.requireValidInput(writer, request, projectID.Validate()) {
-		return
-	}
-	query, err := adminRevenueQuery(request)
-	if !api.requireValidInput(writer, request, err) {
-		return
-	}
-	overview, err := api.admin.AdminProjectOverview(
-		request.Context(),
-		projectID,
-		query,
-	)
+	values := request.URL.Query()
+	overview, err := api.controlPlane().ProjectOverview(request.Context(), actor, controlplane.ProjectOverviewInput{
+		ProjectID:            core.ProjectID(request.PathValue("project_id")),
+		FinancialPeriodStart: values.Get("financial_period_start"),
+		FinancialPeriodEnd:   values.Get("financial_period_end"),
+	})
 	if err != nil {
 		api.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, adminOverviewFromRecord(overview))
+	writeJSON(writer, http.StatusOK, overview)
 }
 
-// adminProjectFromRecord maps the persistence projection onto the stable JSON contract.
-func adminProjectFromRecord(project persistence.AdminProject) adminProjectResponse {
-	return adminProjectResponse{
-		ID: project.ID, ApplicationCount: project.ApplicationCount,
-		CustomerCount: project.CustomerCount, ProductCount: project.ProductCount,
-		CreatedAt: project.CreatedAt,
+// controlPlane returns the shared control-plane service over this API's dependencies.
+// It is built per call so tests that assemble a partial API keep working.
+func (api *API) controlPlane() *controlplane.Service {
+	dependencies := controlplane.Dependencies{
+		Store: api.store, Admin: api.admin, Protection: api.protection, Clock: api.now,
 	}
-}
-
-// adminOverviewFromRecord removes persistence naming from the public dashboard contract.
-func adminOverviewFromRecord(overview persistence.AdminProjectOverview) adminOverviewResponse {
-	response := adminOverviewResponse{
-		Project:             adminProjectFromRecord(overview.Project),
-		Analytics:           adminAnalyticsFromRecord(overview.Analytics),
-		Applications:        make([]adminApplicationResponse, 0, len(overview.Applications)),
-		Products:            make([]adminProductResponse, 0, len(overview.Products)),
-		Customers:           make([]adminCustomerResponse, 0, len(overview.Customers)),
-		RecentTransactions:  make([]adminTransactionResponse, 0, len(overview.RecentTransactions)),
-		Queues:              make([]adminQueueResponse, 0, len(overview.Queues)),
-		RecentWebhookEvents: make([]adminWebhookEventResponse, 0, len(overview.RecentWebhookEvents)),
+	if api.financialReports != nil {
+		dependencies.FinancialReports = api.financialReports
 	}
-	for _, application := range overview.Applications {
-		response.Applications = append(response.Applications, adminApplicationResponse{
-			ID: application.ID, Provider: application.Provider, Environment: application.Environment,
-			ProviderApplicationID: application.ProviderApplicationID,
-			CredentialConfigured:  application.CredentialConfigured,
-			CredentialRevision:    application.CredentialRevision,
-			WebhookConfigured:     application.WebhookConfigured,
-			WebhookRevision:       application.WebhookRevision, CreatedAt: application.CreatedAt,
-		})
-	}
-	for _, product := range overview.Products {
-		response.Products = append(response.Products, adminProductResponse{
-			ID: product.ID, Kind: product.Kind, EntitlementKeys: product.EntitlementKeys,
-			StoreMappingCount: product.StoreMappingCount, CreatedAt: product.CreatedAt,
-		})
-	}
-	for _, customer := range overview.Customers {
-		response.Customers = append(response.Customers, adminCustomerFromRecord(customer))
-	}
-	for _, transaction := range overview.RecentTransactions {
-		response.RecentTransactions = append(response.RecentTransactions, adminTransactionResponse{
-			ID: transaction.ID, ApplicationID: transaction.ApplicationID,
-			CustomerID: transaction.CustomerID, ProductID: transaction.ProductID,
-			ProviderProductID: transaction.ProviderProductID,
-			LifecycleState:    transaction.LifecycleState, Access: transaction.Access,
-			AccessReason: transaction.AccessReason, ObservedAt: transaction.ObservedAt,
-			EffectiveEndsAt: transaction.EffectiveEndsAt,
-		})
-	}
-	for _, queue := range overview.Queues {
-		response.Queues = append(response.Queues, adminQueueResponse{
-			Name: queue.Name, Pending: queue.Pending,
-			Completed: queue.Completed, Failed: queue.Failed, Skipped: queue.Skipped,
-		})
-	}
-	for _, event := range overview.RecentWebhookEvents {
-		response.RecentWebhookEvents = append(response.RecentWebhookEvents, adminWebhookEventResponse{
-			ID: event.ID, ApplicationID: event.ApplicationID, EventType: event.EventType,
-			AggregateID: event.AggregateID, Status: event.Status, ErrorCode: event.ErrorCode,
-			OccurredAt: event.OccurredAt, DeliveredAt: event.DeliveredAt, FailedAt: event.FailedAt,
-		})
-	}
-	return response
-}
-
-// adminAnalyticsFromRecord maps the bounded analytics projection onto the public contract.
-func adminAnalyticsFromRecord(analytics persistence.AdminAnalytics) adminAnalyticsResponse {
-	response := adminAnalyticsResponse{
-		WindowDays: analytics.WindowDays, GeneratedAt: analytics.GeneratedAt,
-		VerifiedCount: analytics.VerifiedCount, AllowedCount: analytics.AllowedCount,
-		DeniedCount: analytics.DeniedCount, UnresolvedCount: analytics.UnresolvedCount,
-		ReversedCount:          analytics.ReversedCount,
-		ActiveEntitlementCount: analytics.ActiveEntitlementCount,
-		Revenue:                adminRevenueFromRecord(analytics.Revenue),
-		SandboxValue: adminSandboxValueResponse{
-			Amounts:           make([]adminMoneyResponse, 0, len(analytics.SandboxValue.Amounts)),
-			TransactionCount:  analytics.SandboxValue.TransactionCount,
-			MissingPriceCount: analytics.SandboxValue.MissingPriceCount,
-		},
-		DailyActivity: make([]adminDailyActivityResponse, 0, len(analytics.DailyActivity)),
-	}
-	for _, amount := range analytics.SandboxValue.Amounts {
-		response.SandboxValue.Amounts = append(response.SandboxValue.Amounts, adminMoneyResponse{
-			Milliunits: amount.Milliunits,
-			Currency:   amount.Currency,
-		})
-	}
-	for _, day := range analytics.DailyActivity {
-		response.DailyActivity = append(response.DailyActivity, adminDailyActivityResponse{
-			Date: day.Date, Verified: day.Verified, Allowed: day.Allowed,
-			Denied: day.Denied, Unresolved: day.Unresolved, Reversed: day.Reversed,
-		})
-	}
-	return response
-}
-
-// adminRevenueFromRecord maps store-reported proceeds without collapsing currencies.
-func adminRevenueFromRecord(revenue persistence.AdminRevenue) adminRevenueResponse {
-	response := adminRevenueResponse{
-		Status:                     revenue.Status,
-		RecognizedMinorUnits:       revenue.RecognizedMinorUnits,
-		Currency:                   revenue.Currency,
-		Amounts:                    make([]adminRecognizedAmountResponse, 0, len(revenue.Amounts)),
-		UncoveredProviders:         append([]core.Provider{}, revenue.UncoveredProviders...),
-		ZeroFilledApplicationIDs:   append([]core.ApplicationID{}, revenue.ZeroFilledApplicationIDs...),
-		ProductionApplicationCount: revenue.ProductionApplicationCount,
-		TestApplicationCount:       revenue.TestApplicationCount,
-	}
-	if response.UncoveredProviders == nil {
-		response.UncoveredProviders = []core.Provider{}
-	}
-	if response.ZeroFilledApplicationIDs == nil {
-		response.ZeroFilledApplicationIDs = []core.ApplicationID{}
-	}
-	for _, amount := range revenue.Amounts {
-		response.Amounts = append(response.Amounts, adminRecognizedAmountResponse{
-			Provider: amount.Provider, ReportKind: amount.ReportKind,
-			PeriodStart: amount.PeriodStart.UTC().Format(time.DateOnly),
-			PeriodEnd:   amount.PeriodEnd.UTC().Format(time.DateOnly),
-			Currency:    amount.Currency, AmountDecimal: amount.AmountDecimal,
-			AmountScale: amount.AmountScale, MinorUnits: amount.MinorUnits,
-			CommissionState: amount.CommissionState, TaxState: amount.TaxState,
-		})
-	}
-	return response
-}
-
-// adminRevenueQuery reads the optional financial period filter.
-func adminRevenueQuery(request *http.Request) (persistence.AdminRevenueQuery, error) {
-	startRaw := request.URL.Query().Get("financial_period_start")
-	endRaw := request.URL.Query().Get("financial_period_end")
-	if startRaw == "" && endRaw == "" {
-		return persistence.AdminRevenueQuery{}, nil
-	}
-	if startRaw == "" || endRaw == "" {
-		return persistence.AdminRevenueQuery{}, errors.New("financial period requires both start and end")
-	}
-	start, err := time.Parse(time.DateOnly, startRaw)
-	if err != nil {
-		return persistence.AdminRevenueQuery{}, errors.New("financial period start is invalid")
-	}
-	end, err := time.Parse(time.DateOnly, endRaw)
-	if err != nil {
-		return persistence.AdminRevenueQuery{}, errors.New("financial period end is invalid")
-	}
-	start = time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
-	end = time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, time.UTC)
-	if end.Before(start) {
-		return persistence.AdminRevenueQuery{}, errors.New("financial period end is before the start")
-	}
-	return persistence.AdminRevenueQuery{FinancialPeriodStart: &start, FinancialPeriodEnd: &end}, nil
+	return controlplane.New(dependencies)
 }

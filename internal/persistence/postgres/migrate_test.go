@@ -78,6 +78,7 @@ func TestMigrationLifecycle(t *testing.T) {
 		"reconciliation_schedule_retries",
 		"manual_grants",
 		"apple_consumption_requests",
+		"api_keys_project_idx",
 	}
 	assertRelations := func(exists bool) {
 		t.Helper()
@@ -552,6 +553,44 @@ func TestManualGrantConstraints(t *testing.T) {
 		UPDATE customer_entitlements SET source_manual_grant_id = 'mgr-ffffffffffffffffffffffffffffffff'
 		WHERE customer_id = $1
 	`, fixture.customerID)
+}
+
+// TestAgentAPIKeyConstraints verifies agent key scope rules, the write flag, and the project reference.
+func TestAgentAPIKeyConstraints(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	salt := bytes.Repeat([]byte{1}, 16)
+	hash := bytes.Repeat([]byte{2}, 32)
+	keyInsert := `
+		INSERT INTO api_keys (id, role, project_id, application_id, allow_writes, secret_salt, secret_hash)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`
+	mustExec(t, database, keyInsert, "admin-key", "admin", nil, nil, false, salt, hash)
+	mustExec(t, database, keyInsert, "application-key", "application", fixture.projectID, fixture.applicationID, false, salt, hash)
+	mustExec(t, database, keyInsert, "agent-key", "agent", fixture.projectID, nil, false, salt, hash)
+	mustExec(t, database, keyInsert, "agent-writer-key", "agent", fixture.projectID, nil, true, salt, hash)
+	expectConstraint(t, database, "api_keys_scope_valid", keyInsert,
+		"agent-without-project", "agent", nil, nil, false, salt, hash)
+	expectConstraint(t, database, "api_keys_scope_valid", keyInsert,
+		"agent-with-application", "agent", fixture.projectID, fixture.applicationID, false, salt, hash)
+	expectConstraint(t, database, "api_keys_allow_writes_valid", keyInsert,
+		"admin-writer", "admin", nil, nil, true, salt, hash)
+	expectConstraint(t, database, "api_keys_allow_writes_valid", keyInsert,
+		"application-writer", "application", fixture.projectID, fixture.applicationID, true, salt, hash)
+	expectConstraint(t, database, "api_keys_role_valid", keyInsert,
+		"operator-key", "operator", fixture.projectID, nil, false, salt, hash)
+	expectConstraint(t, database, "api_keys_project_fk", keyInsert,
+		"agent-missing-project", "agent", "missing-project", nil, false, salt, hash)
+
+	var indexDefinition string
+	if err := database.conn.QueryRow(database.ctx,
+		`SELECT indexdef FROM pg_indexes WHERE indexname = 'api_keys_project_idx'`,
+	).Scan(&indexDefinition); err != nil {
+		t.Fatalf("load api_keys_project_idx: %v", err)
+	}
+	if strings.Contains(indexDefinition, "WHERE") {
+		t.Fatalf("api_keys_project_idx = %s, want a full index for the cascading project foreign key", indexDefinition)
+	}
 }
 
 // openTestDatabase opens the configured integration database at one schema version.

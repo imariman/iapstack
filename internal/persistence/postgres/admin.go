@@ -38,6 +38,20 @@ func (store *Store) AdminProjects(ctx context.Context) ([]persistence.AdminProje
 	return projects, err
 }
 
+// AdminProject returns one project summary, or ErrNotFound, without loading any overview section.
+func (store *Store) AdminProject(ctx context.Context, projectID core.ProjectID) (persistence.AdminProject, error) {
+	if err := projectID.Validate(); err != nil {
+		return persistence.AdminProject{}, err
+	}
+	var project persistence.AdminProject
+	err := store.transact(ctx, pgx.RepeatableRead, func(repository *transaction) error {
+		var loadErr error
+		project, loadErr = repository.adminProject(ctx, projectID)
+		return loadErr
+	})
+	return project, err
+}
+
 // AdminProjectOverview returns one consistent, bounded, project-scoped operational snapshot.
 func (store *Store) AdminProjectOverview(
 	ctx context.Context,

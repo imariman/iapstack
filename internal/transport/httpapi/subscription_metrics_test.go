@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/imariman/iapstack/internal/auth"
+	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
 )
@@ -77,7 +78,7 @@ func TestAdminSubscriptionMetricsValidatesQueryAndScope(t *testing.T) {
 	if defaults.Code != http.StatusOK {
 		t.Fatalf("default status = %d, body = %s", defaults.Code, defaults.Body.String())
 	}
-	var response adminSubscriptionMetricsResponse
+	var response controlplane.SubscriptionMetrics
 	if err := json.Unmarshal(defaults.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -105,23 +106,23 @@ func TestAdminSubscriptionMetricsValidatesQueryAndScope(t *testing.T) {
 func TestSubscriptionMetricsResponseNeverShowsAbsentTrialsAsZero(t *testing.T) {
 	t.Parallel()
 
-	response := subscriptionMetricsFromRecord(fakeSubscriptionMetrics(persistence.SubscriptionMetricsQuery{
+	response := controlplane.SubscriptionMetricsView(fakeSubscriptionMetrics(persistence.SubscriptionMetricsQuery{
 		Environment: core.EnvironmentProduction, WindowDays: 30,
 	}))
 	if response.Churn.Rate == nil || *response.Churn.Rate != 0.25 {
 		t.Fatalf("churn rate = %v, want churned 4 / active during window 16", response.Churn.Rate)
 	}
 	apple, huawei := response.Trials[0], response.Trials[1]
-	if apple.Availability != trialAvailabilityAvailable || apple.Started == nil || *apple.Started != 4 ||
+	if apple.Availability != controlplane.TrialAvailabilityAvailable || apple.Started == nil || *apple.Started != 4 ||
 		apple.ConversionRate == nil || *apple.ConversionRate != 2.0/3.0 {
 		t.Fatalf("Apple trials = %#v", apple)
 	}
-	if huawei.Availability != trialAvailabilityNotAvailable || huawei.Started != nil || huawei.Ended != nil ||
+	if huawei.Availability != controlplane.TrialAvailabilityNotAvailable || huawei.Started != nil || huawei.Ended != nil ||
 		huawei.Converted != nil || huawei.NotConverted != nil || huawei.OutcomeNotRecorded != nil || huawei.ConversionRate != nil {
 		t.Fatalf("Huawei trials = %#v, want not_available with null counts", huawei)
 	}
 
-	empty := subscriptionMetricsFromRecord(persistence.SubscriptionMetrics{Environment: core.EnvironmentTest, WindowDays: 1})
+	empty := controlplane.SubscriptionMetricsView(persistence.SubscriptionMetrics{Environment: core.EnvironmentTest, WindowDays: 1})
 	if empty.Churn.Rate != nil || empty.Trials == nil || empty.Breakdown == nil || empty.DailyActive == nil {
 		t.Fatalf("empty response = %#v, want a null rate and empty collections", empty)
 	}

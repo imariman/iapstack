@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/imariman/iapstack/internal/auth"
+	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/credentials"
 	"github.com/imariman/iapstack/internal/financialreports"
@@ -279,7 +280,7 @@ func TestAPISuccessPathPersistsAndReturnsPostgreSQLState(t *testing.T) {
 	)
 	assertAPIIntegrationEntitlement(t, entitlementSnapshot.CustomerID, entitlementSnapshot.Entitlements)
 
-	var projects adminProjectsResponse
+	var projects controlplane.ProjectList
 	fixture.requestJSON(t, http.MethodGet, "/v1/admin/projects", adminBearer, nil, http.StatusOK, &projects)
 	if len(projects.Projects) != 1 || projects.Projects[0].ID != apiIntegrationProjectID ||
 		projects.Projects[0].ApplicationCount != 1 || projects.Projects[0].CustomerCount != 1 ||
@@ -296,7 +297,7 @@ func TestAPISuccessPathPersistsAndReturnsPostgreSQLState(t *testing.T) {
 		t.Fatalf("API key collection exposed bearer: %s", keysBody)
 	}
 
-	var overview adminOverviewResponse
+	var overview controlplane.ProjectOverview
 	overviewBody := fixture.requestJSON(t, http.MethodGet,
 		"/v1/admin/projects/"+apiIntegrationProjectID+"/overview",
 		adminBearer,
@@ -305,7 +306,7 @@ func TestAPISuccessPathPersistsAndReturnsPostgreSQLState(t *testing.T) {
 		&overview,
 	)
 	assertAPIIntegrationOverview(t, overview)
-	var subscriptionMetrics adminSubscriptionMetricsResponse
+	var subscriptionMetrics controlplane.SubscriptionMetrics
 	metricsBody := fixture.requestJSON(t, http.MethodGet,
 		"/v1/admin/projects/"+apiIntegrationProjectID+"/subscription-metrics?environment=test&window_days=7",
 		adminBearer,
@@ -315,7 +316,7 @@ func TestAPISuccessPathPersistsAndReturnsPostgreSQLState(t *testing.T) {
 	)
 	if subscriptionMetrics.Environment != core.EnvironmentTest || subscriptionMetrics.WindowDays != 7 ||
 		subscriptionMetrics.ActiveAtEnd != 0 || len(subscriptionMetrics.DailyActive) != 7 ||
-		len(subscriptionMetrics.Trials) != 1 || subscriptionMetrics.Trials[0].Availability != trialAvailabilityAvailable {
+		len(subscriptionMetrics.Trials) != 1 || subscriptionMetrics.Trials[0].Availability != controlplane.TrialAvailabilityAvailable {
 		t.Fatalf("subscription metrics = %#v, want an empty non-consumable test project with Google Play trials available", subscriptionMetrics)
 	}
 	for _, secret := range []string{
@@ -612,7 +613,7 @@ func assertAPIIntegrationEntitlement(
 }
 
 // assertAPIIntegrationOverview verifies the administrator projection reflects the completed HTTP journey.
-func assertAPIIntegrationOverview(t *testing.T, overview adminOverviewResponse) {
+func assertAPIIntegrationOverview(t *testing.T, overview controlplane.ProjectOverview) {
 	t.Helper()
 	if overview.Project.ID != apiIntegrationProjectID || len(overview.Applications) != 1 ||
 		len(overview.Products) != 1 || len(overview.Customers) != 1 ||
@@ -680,17 +681,17 @@ func TestCustomerAliasResolveAndMergeHTTP(t *testing.T) {
 		Role: persistence.APIKeyRoleApplication, ProjectID: apiIntegrationProjectID, ApplicationID: apiIntegrationApplicationID,
 	}, http.StatusCreated, &applicationKey)
 
-	var created customerResolutionResponse
+	var created controlplane.CustomerResolution
 	fixture.requestJSON(t, http.MethodPut, aliasPath, adminKey["key"], map[string]string{}, http.StatusOK, &created)
 	if created.Match != persistence.CustomerMatchAlias || created.CanonicalCustomerID != apiIntegrationCustomerID || created.ExternalID != "auth-user-new" {
 		t.Fatalf("alias response = %#v", created)
 	}
-	var repeated customerResolutionResponse
+	var repeated controlplane.CustomerResolution
 	fixture.requestJSON(t, http.MethodPut, aliasPath, adminKey["key"], map[string]string{}, http.StatusOK, &repeated)
 	if repeated != created {
 		t.Fatalf("repeated alias = %#v, want %#v", repeated, created)
 	}
-	var primary customerResolutionResponse
+	var primary controlplane.CustomerResolution
 	fixture.requestJSON(t, http.MethodPut,
 		"/v1/admin/projects/"+apiIntegrationProjectID+"/customers/"+apiIntegrationCustomerID+"/aliases/"+apiIntegrationExternalCustomerID,
 		adminKey["key"], map[string]string{}, http.StatusOK, &primary,
@@ -698,7 +699,7 @@ func TestCustomerAliasResolveAndMergeHTTP(t *testing.T) {
 	if primary.Match != persistence.CustomerMatchPrimary {
 		t.Fatalf("primary alias = %#v", primary)
 	}
-	var resolved customerResolutionResponse
+	var resolved controlplane.CustomerResolution
 	fixture.requestJSON(t, http.MethodGet,
 		"/v1/applications/"+apiIntegrationApplicationID+"/customer-resolutions/auth-user-new",
 		applicationKey["key"], nil, http.StatusOK, &resolved,
@@ -730,7 +731,7 @@ func TestCustomerAliasResolveAndMergeHTTP(t *testing.T) {
 	if merged.ID == "" || replayed.ID != merged.ID || replayed.SourceCustomerID != "http-customer-2" {
 		t.Fatalf("merge replay = %#v, first %#v", replayed, merged)
 	}
-	var mergedResolution customerResolutionResponse
+	var mergedResolution controlplane.CustomerResolution
 	fixture.requestJSON(t, http.MethodGet,
 		"/v1/admin/projects/"+apiIntegrationProjectID+"/customer-resolutions/http-external-customer-2",
 		adminKey["key"], nil, http.StatusOK, &mergedResolution,
@@ -738,9 +739,9 @@ func TestCustomerAliasResolveAndMergeHTTP(t *testing.T) {
 	if mergedResolution.Match != persistence.CustomerMatchMerged || mergedResolution.CanonicalCustomerID != apiIntegrationCustomerID {
 		t.Fatalf("merged resolution = %#v", mergedResolution)
 	}
-	var overview adminOverviewResponse
+	var overview controlplane.ProjectOverview
 	fixture.requestJSON(t, http.MethodGet, "/v1/admin/projects/"+apiIntegrationProjectID+"/overview", adminKey["key"], nil, http.StatusOK, &overview)
-	var canonical adminCustomerResponse
+	var canonical controlplane.Customer
 	for _, customer := range overview.Customers {
 		if customer.ID == apiIntegrationCustomerID {
 			canonical = customer

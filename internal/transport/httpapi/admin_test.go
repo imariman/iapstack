@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/imariman/iapstack/internal/auth"
+	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/persistence/persistencetest"
@@ -147,6 +148,11 @@ func (fakeAdminQueryStore) AdminProjects(context.Context) ([]persistence.AdminPr
 		ID: "project-1", ApplicationCount: 1, CustomerCount: 2, ProductCount: 3,
 		CreatedAt: time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC),
 	}}, nil
+}
+
+// AdminProject returns the summary of the requested project.
+func (fakeAdminQueryStore) AdminProject(_ context.Context, projectID core.ProjectID) (persistence.AdminProject, error) {
+	return persistence.AdminProject{ID: projectID, CreatedAt: time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)}, nil
 }
 
 // AdminProjectOverview returns one empty bounded overview for the requested project.
@@ -411,7 +417,7 @@ func TestAdminProjectsRequiresAdminAndReturnsStableJSON(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("authorized status = %d, want %d", recorder.Code, http.StatusOK)
 	}
-	var response adminProjectsResponse
+	var response controlplane.ProjectList
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -679,7 +685,8 @@ func keySummary(record persistence.APIKeyRecord, revokedAt time.Time) persistenc
 	}
 	return persistence.APIKeySummary{
 		ID: record.ID, Role: record.Role, ProjectID: record.ProjectID,
-		ApplicationID: record.ApplicationID, CreatedAt: record.CreatedAt, RevokedAt: revoked,
+		ApplicationID: record.ApplicationID, AllowWrites: record.AllowWrites, CreatedAt: record.CreatedAt,
+		RevokedAt: revoked,
 	}
 }
 
@@ -687,7 +694,7 @@ func keySummary(record persistence.APIKeyRecord, revokedAt time.Time) persistenc
 func TestAdminOverviewSerializesEmptyCollections(t *testing.T) {
 	t.Parallel()
 
-	overview := adminOverviewFromRecord(persistence.AdminProjectOverview{
+	overview := controlplane.ProjectOverviewView(persistence.AdminProjectOverview{
 		Project:   persistence.AdminProject{ID: "project-1", CreatedAt: time.Now().UTC()},
 		Analytics: fakeAdminAnalytics(),
 		Applications: []persistence.AdminApplication{{

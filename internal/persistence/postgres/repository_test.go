@@ -199,6 +199,68 @@ func TestAPIKeyLifecycleListsAndRevokesWithoutLosingFinalAdmin(t *testing.T) {
 	}
 }
 
+// TestAgentAPIKeyRoundTripsProjectScopeAndWriteFlag verifies agent keys store their project and write flag,
+// require an existing project, and never count as administrators.
+func TestAgentAPIKeyRoundTripsProjectScopeAndWriteFlag(t *testing.T) {
+	database := openTestDatabase(t, postgres.LatestVersion)
+	fixture := seedCatalog(t, database)
+	store := openRepositoryStore(t, database.ctx)
+	createdAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	readOnly := apiKeyRecord("agent-key-1", persistence.APIKeyRoleAgent, core.ProjectID(fixture.projectID), "", createdAt)
+	writer := apiKeyRecord("agent-key-2", persistence.APIKeyRoleAgent, core.ProjectID(fixture.projectID), "", createdAt.Add(time.Minute))
+	writer.AllowWrites = true
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		if err := repository.PutAPIKey(database.ctx, readOnly); err != nil {
+			return err
+		}
+		return repository.PutAPIKey(database.ctx, writer)
+	}); err != nil {
+		t.Fatalf("PutAPIKey() agent error = %v", err)
+	}
+
+	for _, expected := range []persistence.APIKeyRecord{readOnly, writer} {
+		var loaded persistence.APIKeyRecord
+		if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+			var err error
+			loaded, err = repository.APIKey(database.ctx, expected.ID)
+			return err
+		}); err != nil {
+			t.Fatalf("APIKey(%s) error = %v", expected.ID, err)
+		}
+		if loaded.Role != persistence.APIKeyRoleAgent || loaded.ProjectID != expected.ProjectID ||
+			loaded.ApplicationID != "" || loaded.AllowWrites != expected.AllowWrites {
+			t.Fatalf("APIKey(%s) = %#v, want agent scope with allow_writes %t", expected.ID, loaded, expected.AllowWrites)
+		}
+	}
+	var listed persistence.APIKeyPage
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var err error
+		listed, err = repository.APIKeys(database.ctx, "")
+		return err
+	}); err != nil {
+		t.Fatalf("APIKeys() error = %v", err)
+	}
+	if len(listed.Keys) != 2 || listed.Keys[0].ID != writer.ID || !listed.Keys[0].AllowWrites ||
+		listed.Keys[1].AllowWrites || listed.Keys[1].ProjectID != core.ProjectID(fixture.projectID) {
+		t.Fatalf("APIKeys() = %#v, want both agent keys with their write flags", listed.Keys)
+	}
+	var hasAdmin bool
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		var err error
+		hasAdmin, err = repository.HasActiveAdminAPIKey(database.ctx)
+		return err
+	}); err != nil || hasAdmin {
+		t.Fatalf("HasActiveAdminAPIKey() = %t, %v, want false with only agent keys", hasAdmin, err)
+	}
+
+	missingProject := apiKeyRecord("agent-key-3", persistence.APIKeyRoleAgent, "missing-project", "", createdAt)
+	if err := store.Operate(database.ctx, func(repository persistence.OperationsTransaction) error {
+		return repository.PutAPIKey(database.ctx, missingProject)
+	}); !errors.Is(err, persistence.ErrConflict) {
+		t.Fatalf("PutAPIKey() missing project error = %v, want ErrConflict", err)
+	}
+}
+
 // TestHasActiveAdminAPIKeyIgnoresApplicationAndRevokedKeys verifies the predicate that retires bootstrap credentials.
 func TestHasActiveAdminAPIKeyIgnoresApplicationAndRevokedKeys(t *testing.T) {
 	// breakGlassRevokeAdministratorsSQL mirrors the documented recovery in docs/operations.md.

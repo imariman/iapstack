@@ -2681,8 +2681,33 @@ td code {
   border-radius: var(--radius-control);
   display: grid;
   gap: 1px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   overflow: hidden;
+}
+
+.agent-key-form {
+  align-items: end;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 8px 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 180px) auto;
+  padding-top: 16px;
+}
+
+.agent-key-form .dialog-copy {
+  align-self: center;
+  margin: 0;
+}
+
+.agent-key-access {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-key-access span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .key-vitals article {
@@ -3536,6 +3561,15 @@ td code {
   .key-control-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .agent-key-form,
+  .key-vitals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-key-form .dialog-copy {
+    grid-column: 1 / -1;
   }
 
   .detail-vitals {

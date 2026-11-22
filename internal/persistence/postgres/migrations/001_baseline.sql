@@ -503,6 +503,9 @@ CREATE TABLE application_credentials (
 CREATE INDEX application_credentials_project_idx ON application_credentials (project_id, application_id);
 
 -- Operations: API keys, protected webhook configuration, and reconciliation jobs.
+-- An agent key names a project and no application. It is read-only unless allow_writes is set, and
+-- only an agent key may set allow_writes. Every scoped key references its project, so an agent key
+-- cannot point at a missing project or outlive a deleted one.
 CREATE TABLE api_keys (
     id text PRIMARY KEY,
     role text NOT NULL,
@@ -512,14 +515,19 @@ CREATE TABLE api_keys (
     secret_hash bytea NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     revoked_at timestamptz,
-    CONSTRAINT api_keys_role_valid CHECK (role IN ('admin', 'application')),
+    allow_writes boolean NOT NULL DEFAULT false,
+    CONSTRAINT api_keys_role_valid CHECK (role IN ('admin', 'application', 'agent')),
     CONSTRAINT api_keys_secret_valid CHECK (octet_length(secret_salt) = 16 AND octet_length(secret_hash) = 32),
     CONSTRAINT api_keys_scope_valid CHECK (
         (role = 'admin' AND project_id IS NULL AND application_id IS NULL)
         OR (role = 'application' AND project_id IS NOT NULL AND application_id IS NOT NULL)
+        OR (role = 'agent' AND project_id IS NOT NULL AND application_id IS NULL)
     ),
+    CONSTRAINT api_keys_allow_writes_valid CHECK (NOT allow_writes OR role = 'agent'),
     CONSTRAINT api_keys_application_fk FOREIGN KEY (application_id, project_id)
-        REFERENCES applications (id, project_id) ON DELETE CASCADE
+        REFERENCES applications (id, project_id) ON DELETE CASCADE,
+    CONSTRAINT api_keys_project_fk FOREIGN KEY (project_id)
+        REFERENCES projects (id) ON DELETE CASCADE
 );
 
 CREATE TABLE webhook_endpoints (
@@ -579,6 +587,8 @@ CREATE TABLE reconciliation_jobs (
 );
 
 CREATE INDEX api_keys_application_idx ON api_keys (application_id) WHERE revoked_at IS NULL;
+-- Not partial: the cascading project foreign key deletes by project_id across revoked keys too.
+CREATE INDEX api_keys_project_idx ON api_keys (project_id);
 CREATE INDEX reconciliation_jobs_customer_idx
     ON reconciliation_jobs (customer_id, project_id);
 

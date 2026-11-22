@@ -33,11 +33,54 @@ const (
 type AdminQueryStore interface {
 	// AdminProjects returns bounded project summaries ordered by stable identity.
 	AdminProjects(context.Context) ([]AdminProject, error)
+	// AdminProject returns one project summary without the sections of the overview.
+	AdminProject(context.Context, core.ProjectID) (AdminProject, error)
 	// AdminProjectOverview returns one bounded operational snapshot in project scope.
 	AdminProjectOverview(context.Context, core.ProjectID, AdminRevenueQuery) (AdminProjectOverview, error)
 	AdminCustomerStore
 	// AdminSubscriptionMetrics returns subscription health for one project environment and UTC window.
 	AdminSubscriptionMetrics(context.Context, core.ProjectID, SubscriptionMetricsQuery) (SubscriptionMetrics, error)
+}
+
+// AdminSetupStore exposes secret-free project setup metadata for administrators and agents.
+type AdminSetupStore interface {
+	// AdminProjectSetup returns one project's applications, their credential presence and webhook
+	// configuration, queue outcomes, and recent webhook deliveries in one snapshot. It reads no
+	// analytics, products, customers, or transactions, and never returns credential payloads,
+	// ciphertext, fingerprints, or webhook secrets.
+	AdminProjectSetup(context.Context, core.ProjectID) (AdminProjectSetup, error)
+}
+
+// AdminProjectSetup is the setup read model of one project.
+type AdminProjectSetup struct {
+	Applications []AdminApplication
+	// ApplicationSetups holds the stored setup rows of Applications, in the same order and bound.
+	ApplicationSetups   []AdminApplicationSetup
+	Queues              []AdminQueue
+	RecentWebhookEvents []AdminWebhookEvent
+}
+
+// AdminApplicationSetup is the stored setup state of one application.
+type AdminApplicationSetup struct {
+	ApplicationID core.ApplicationID
+	// Credentials lists each stored credential kind, ordered by kind.
+	Credentials []AdminCredentialStatus
+	// Webhook is nil when the application has no webhook endpoint.
+	Webhook *AdminWebhookSetup
+}
+
+// AdminCredentialStatus reports that one credential kind is stored, never its payload.
+type AdminCredentialStatus struct {
+	Kind      string
+	Revision  int64
+	UpdatedAt time.Time
+}
+
+// AdminWebhookSetup reports one webhook endpoint without its signing secret.
+type AdminWebhookSetup struct {
+	URL       string
+	Revision  int64
+	UpdatedAt time.Time
 }
 
 // AdminProject summarizes one project without exposing protected configuration.

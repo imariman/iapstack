@@ -1,57 +1,18 @@
 package httpapi
 
 import (
-	"encoding/hex"
 	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/financialreports"
-	"github.com/imariman/iapstack/internal/persistence"
 )
-
-// financialReportListResponse is the secret-free import collection.
-type financialReportListResponse struct {
-	FinancialReports []financialReportResponse `json:"financial_reports"`
-}
-
-// financialReportResponse is one stored import without report bytes or order ids.
-type financialReportResponse struct {
-	ID                    string                          `json:"id"`
-	Provider              core.Provider                   `json:"provider"`
-	ReportKind            string                          `json:"report_kind"`
-	PeriodStart           string                          `json:"period_start"`
-	PeriodEnd             string                          `json:"period_end"`
-	Source                string                          `json:"source"`
-	SHA256                string                          `json:"sha256"`
-	ByteSize              int64                           `json:"byte_size"`
-	ContentType           string                          `json:"content_type"`
-	ParserVersion         string                          `json:"parser_version"`
-	Status                string                          `json:"status"`
-	Reason                string                          `json:"reason"`
-	SupersedesImportID    *string                         `json:"supersedes_import_id,omitempty"`
-	Currencies            []string                        `json:"currencies"`
-	Amounts               []financialReportAmountResponse `json:"amounts"`
-	CoveredApplicationIDs []core.ApplicationID            `json:"covered_application_ids"`
-	CreatedAt             time.Time                       `json:"created_at"`
-}
-
-// financialReportAmountResponse is one accepted application and currency total.
-type financialReportAmountResponse struct {
-	Currency             string             `json:"currency"`
-	AmountDecimal        string             `json:"amount_decimal"`
-	AmountScale          int32              `json:"amount_scale"`
-	MinorUnits           *int64             `json:"minor_units"`
-	CommissionState      string             `json:"commission_state"`
-	TaxState             string             `json:"tax_state"`
-	CoveredApplicationID core.ApplicationID `json:"covered_application_id"`
-}
 
 // financialReportPullRequest selects one provider report period and no guessed query parameters.
 type financialReportPullRequest struct {
@@ -63,23 +24,18 @@ type financialReportPullRequest struct {
 
 // listFinancialReports returns import metadata for one project.
 func (api *API) listFinancialReports(writer http.ResponseWriter, request *http.Request) {
-	if _, ok := api.requireAdmin(writer, request); !ok {
+	actor, ok := api.requireAdminActor(writer, request)
+	if !ok {
 		return
 	}
-	projectID := core.ProjectID(request.PathValue("project_id"))
-	if !api.requireValidInput(writer, request, projectID.Validate()) {
-		return
-	}
-	reports, err := api.financialReports.List(request.Context(), projectID)
+	reports, err := api.controlPlane().FinancialReports(
+		request.Context(), actor, core.ProjectID(request.PathValue("project_id")),
+	)
 	if err != nil {
 		api.writeFinancialError(writer, request, err)
 		return
 	}
-	response := financialReportListResponse{FinancialReports: make([]financialReportResponse, 0, len(reports))}
-	for _, report := range reports {
-		response.FinancialReports = append(response.FinancialReports, financialReportResponseFrom(report))
-	}
-	writeJSON(writer, http.StatusOK, response)
+	writeJSON(writer, http.StatusOK, reports)
 }
 
 // uploadFinancialReport stores one operator-supplied report file.
@@ -105,7 +61,7 @@ func (api *API) uploadFinancialReport(writer http.ResponseWriter, request *http.
 	if created {
 		status = http.StatusCreated
 	}
-	writeJSON(writer, status, financialReportResponseFrom(report))
+	writeJSON(writer, status, controlplane.FinancialReportView(report))
 }
 
 // supersedeFinancialReport replaces one accepted period with a newer accepted file.
@@ -132,7 +88,7 @@ func (api *API) supersedeFinancialReport(writer http.ResponseWriter, request *ht
 		api.writeFinancialError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, financialReportResponseFrom(report))
+	writeJSON(writer, http.StatusOK, controlplane.FinancialReportView(report))
 }
 
 // pullFinancialReport validates one pull and refuses providers whose official contract is not pinned.
@@ -292,44 +248,4 @@ func (api *API) writeFinancialError(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	api.writeError(writer, request, err)
-}
-
-// financialReportResponseFrom maps stored metadata and omits amounts that were not accepted.
-func financialReportResponseFrom(report persistence.FinancialReport) financialReportResponse {
-	amounts := report.Amounts
-	if report.Status != persistence.FinancialReportStatusAccepted {
-		amounts = nil
-	}
-	response := financialReportResponse{
-		ID: report.ID, Provider: report.Provider, ReportKind: report.ReportKind,
-		PeriodStart: report.PeriodStart.UTC().Format(time.DateOnly),
-		PeriodEnd:   report.PeriodEnd.UTC().Format(time.DateOnly),
-		Source:      report.Source, SHA256: hex.EncodeToString(report.SHA256[:]),
-		ByteSize: report.ByteSize, ContentType: report.ContentType, ParserVersion: report.ParserVersion,
-		Status: report.Status, Reason: report.Reason, SupersedesImportID: report.SupersedesImportID,
-		Currencies: []string{}, Amounts: make([]financialReportAmountResponse, 0, len(amounts)),
-		CoveredApplicationIDs: []core.ApplicationID{}, CreatedAt: report.CreatedAt,
-	}
-	currencies := map[string]struct{}{}
-	covered := map[core.ApplicationID]struct{}{}
-	for _, amount := range amounts {
-		response.Amounts = append(response.Amounts, financialReportAmountResponse{
-			Currency: amount.Currency, AmountDecimal: amount.AmountDecimal, AmountScale: amount.AmountScale,
-			MinorUnits: amount.MinorUnits, CommissionState: amount.CommissionState, TaxState: amount.TaxState,
-			CoveredApplicationID: amount.CoveredApplicationID,
-		})
-		currencies[amount.Currency] = struct{}{}
-		covered[amount.CoveredApplicationID] = struct{}{}
-	}
-	for currency := range currencies {
-		response.Currencies = append(response.Currencies, currency)
-	}
-	sort.Strings(response.Currencies)
-	for applicationID := range covered {
-		response.CoveredApplicationIDs = append(response.CoveredApplicationIDs, applicationID)
-	}
-	sort.Slice(response.CoveredApplicationIDs, func(left, right int) bool {
-		return response.CoveredApplicationIDs[left] < response.CoveredApplicationIDs[right]
-	})
-	return response
 }

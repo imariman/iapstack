@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/imariman/iapstack/internal/auth"
+	"github.com/imariman/iapstack/internal/controlplane"
 	"github.com/imariman/iapstack/internal/core"
 	"github.com/imariman/iapstack/internal/persistence"
 	"github.com/imariman/iapstack/internal/validation"
@@ -14,19 +15,9 @@ import (
 )
 
 const (
-	// entitlementConflictMessage is the stable client text for dual allowed customer merges.
-	entitlementConflictMessage = "the customers have conflicting active entitlements"
 	// identityActorForbiddenMessage rejects principals that have no stored API key or administrator account.
 	identityActorForbiddenMessage = "stored credentials are required"
 )
-
-// customerResolutionResponse is the public canonical identity for one external id.
-type customerResolutionResponse struct {
-	ProjectID           core.ProjectID  `json:"project_id"`
-	ExternalID          string          `json:"external_id"`
-	CanonicalCustomerID core.CustomerID `json:"canonical_customer_id"`
-	Match               string          `json:"match"`
-}
 
 // customerMergeRequest selects the customer pair and the replay key for one merge.
 type customerMergeRequest struct {
@@ -65,10 +56,11 @@ func (api *API) putApplicationCustomerAlias(writer http.ResponseWriter, request 
 
 // getAdminCustomerResolution resolves an external id inside one admin project path.
 func (api *API) getAdminCustomerResolution(writer http.ResponseWriter, request *http.Request) {
-	if _, ok := api.requireAdmin(writer, request); !ok {
+	actor, ok := api.requireAdminActor(writer, request)
+	if !ok {
 		return
 	}
-	api.getCustomerResolution(writer, request, core.ProjectID(request.PathValue("project_id")), "")
+	api.getCustomerResolution(writer, request, core.ProjectID(request.PathValue("project_id")), actor)
 }
 
 // getApplicationCustomerResolution resolves an external id inside the application principal's project.
@@ -77,7 +69,9 @@ func (api *API) getApplicationCustomerResolution(writer http.ResponseWriter, req
 	if !ok {
 		return
 	}
-	api.getCustomerResolution(writer, request, principal.ProjectID, principal.ApplicationID)
+	api.getCustomerResolution(
+		writer, request, principal.ProjectID, controlplane.ActorFromPrincipal(principal, controlplane.ChannelAPI),
+	)
 }
 
 // postAdminCustomerMerge merges two customers inside one project.
@@ -167,7 +161,7 @@ func (api *API) putCustomerAlias(
 		api.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, customerResolutionFromRecord(resolution))
+	writeJSON(writer, http.StatusOK, controlplane.CustomerResolutionView(resolution))
 }
 
 // getCustomerResolution reads one canonical customer for an external id in the authenticated project.
@@ -175,28 +169,16 @@ func (api *API) getCustomerResolution(
 	writer http.ResponseWriter,
 	request *http.Request,
 	projectID core.ProjectID,
-	applicationID core.ApplicationID,
+	actor controlplane.Actor,
 ) {
-	externalID := request.PathValue("external_id")
-	if !api.requireValidInput(writer, request, errors.Join(projectID.Validate(), core.ValidateExternalCustomerID(externalID))) {
-		return
-	}
-	var resolution persistence.CustomerResolution
-	err := api.store.Transact(request.Context(), func(repository persistence.Transaction) error {
-		if applicationID != "" {
-			if _, loadErr := repository.Application(request.Context(), projectID, applicationID); loadErr != nil {
-				return loadErr
-			}
-		}
-		var resolveErr error
-		resolution, resolveErr = repository.ResolveCustomer(request.Context(), projectID, externalID)
-		return resolveErr
-	})
+	resolution, err := api.controlPlane().ResolveCustomer(
+		request.Context(), actor, projectID, request.PathValue("external_id"),
+	)
 	if err != nil {
 		api.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, customerResolutionFromRecord(resolution))
+	writeJSON(writer, http.StatusOK, resolution)
 }
 
 // requireDurableActor rejects the bootstrap administrator because it has no stored key or account to record.
@@ -210,16 +192,6 @@ func (api *API) requireDurableActor(
 		return false
 	}
 	return true
-}
-
-// customerResolutionFromRecord maps one stored resolution onto the public JSON contract.
-func customerResolutionFromRecord(resolution persistence.CustomerResolution) customerResolutionResponse {
-	return customerResolutionResponse{
-		ProjectID:           resolution.ProjectID,
-		ExternalID:          resolution.ExternalID,
-		CanonicalCustomerID: resolution.CanonicalCustomerID,
-		Match:               resolution.Match,
-	}
 }
 
 // customerMergeFromRecord maps one stored merge audit row onto the public JSON contract.
