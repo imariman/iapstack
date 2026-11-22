@@ -546,6 +546,16 @@ func TestManualGrantConstraints(t *testing.T) {
 	expectConstraint(t, database, "manual_grants_actor_channel_valid", `
 		UPDATE manual_grants SET actor_channel = 'MCP' WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
 	`)
+	// No import path writes manual grants, so the import channel is not a valid actor or revoker here.
+	expectConstraint(t, database, "manual_grants_actor_channel_valid", `
+		UPDATE manual_grants SET actor_channel = 'import' WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
+	`)
+	expectConstraint(t, database, "manual_grants_revocation_valid", `
+		UPDATE manual_grants
+		SET revoked_at = now(), revoked_by_key_id = 'agent-key', revoked_by_channel = 'import',
+			revocation_reason = 'Refund'
+		WHERE id = 'mgr-0123456789abcdef0123456789abcdef'
+	`)
 	mustExec(t, database, `
 		UPDATE manual_grants
 		SET revoked_at = now(), revoked_by_key_id = 'agent-key', revoked_by_channel = 'mcp',

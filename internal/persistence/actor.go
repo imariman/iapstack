@@ -17,6 +17,17 @@ const (
 // dashboard, API, and import work apart.
 type ActorChannel string
 
+// ValidateTransportActorChannel accepts only the channels of a live transport. Manual grants and their
+// revocations are never written by an offline import, so they may not record the import channel.
+func ValidateTransportActorChannel(channel ActorChannel) error {
+	switch channel {
+	case ActorChannelAPI, ActorChannelDashboard, ActorChannelMCP:
+		return nil
+	default:
+		return fmt.Errorf("unsupported transport actor channel %q", channel)
+	}
+}
+
 // ValidateActorChannel accepts only the stored audit channels.
 func ValidateActorChannel(channel ActorChannel) error {
 	switch channel {

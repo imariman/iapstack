@@ -1003,7 +1003,7 @@ CREATE TABLE manual_grants (
         actor_key_id <> '' AND actor_key_id = btrim(actor_key_id) AND actor_key_id !~ '[[:cntrl:]]'
     ),
     CONSTRAINT manual_grants_actor_channel_valid CHECK (
-        actor_channel IN ('api', 'dashboard', 'mcp', 'import')
+        actor_channel IN ('api', 'dashboard', 'mcp')
     ),
     CONSTRAINT manual_grants_idempotency_key_valid CHECK (
         idempotency_key <> ''
@@ -1021,7 +1021,7 @@ CREATE TABLE manual_grants (
             revoked_at IS NOT NULL
             AND revoked_by_key_id IS NOT NULL
             AND revoked_by_channel IS NOT NULL
-            AND revoked_by_channel IN ('api', 'dashboard', 'mcp', 'import')
+            AND revoked_by_channel IN ('api', 'dashboard', 'mcp')
             AND revocation_reason IS NOT NULL
             AND revoked_at >= effective_starts_at
             AND revoked_by_key_id <> ''

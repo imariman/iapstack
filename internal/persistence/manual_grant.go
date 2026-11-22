@@ -112,7 +112,7 @@ func (write ManualGrantWrite) Validate() error {
 		write.EntitlementID.Validate(),
 		ValidateManualGrantReason("manual grant reason", write.Reason),
 		core.ValidateOpaqueIdentifier("actor key ID", write.ActorKeyID),
-		ValidateActorChannel(write.ActorChannel),
+		ValidateTransportActorChannel(write.ActorChannel),
 		validateManualGrantIdempotencyKey(write.IdempotencyKey),
 		periodError,
 	)
@@ -126,7 +126,7 @@ func (revocation ManualGrantRevocation) Validate() error {
 		ValidateManualGrantID(revocation.GrantID),
 		ValidateManualGrantReason("revocation reason", revocation.Reason),
 		core.ValidateOpaqueIdentifier("actor key ID", revocation.ActorKeyID),
-		ValidateActorChannel(revocation.ActorChannel),
+		ValidateTransportActorChannel(revocation.ActorChannel),
 		validateTime("revocation time", revocation.RevokedAt),
 	)
 }
@@ -137,7 +137,7 @@ func (grant ManualGrant) Validate() error {
 	if grant.RevokedAt != nil {
 		revocationError = errors.Join(
 			core.ValidateOpaqueIdentifier("revoking actor key ID", grant.RevokedByKeyID),
-			ValidateActorChannel(grant.RevokedByChannel),
+			ValidateTransportActorChannel(grant.RevokedByChannel),
 			ValidateManualGrantReason("revocation reason", grant.RevocationReason),
 		)
 	} else if grant.RevokedByKeyID != "" || grant.RevokedByChannel != "" || grant.RevocationReason != "" {
@@ -156,7 +156,7 @@ func (grant ManualGrant) Validate() error {
 		grant.EntitlementID.Validate(),
 		ValidateManualGrantReason("manual grant reason", grant.Reason),
 		core.ValidateOpaqueIdentifier("actor key ID", grant.ActorKeyID),
-		ValidateActorChannel(grant.ActorChannel),
+		ValidateTransportActorChannel(grant.ActorChannel),
 		validateManualGrantIdempotencyKey(grant.IdempotencyKey),
 		validateTime("manual grant start", grant.StartsAt),
 		periodError,
