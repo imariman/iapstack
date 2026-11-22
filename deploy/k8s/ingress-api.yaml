@@ -33,3 +33,11 @@ spec:
                 name: iapstack-api
                 port:
                   number: 8080
+          # Uncomment only after setting IAPSTACK_MCP_ENABLED=true (see docs/mcp.md).
+          # - path: /mcp
+          #   pathType: Exact
+          #   backend:
+          #     service:
+          #       name: iapstack-api
+          #       port:
+          #         number: 8080

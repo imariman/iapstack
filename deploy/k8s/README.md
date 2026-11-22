@@ -107,6 +107,8 @@ default.
 
 The Ingress publishes only Service `iapstack-api`. Its paths are `/v1` and
 `/dashboard`. It does not publish `/metrics`, and it has no default backend.
+The opt-in MCP endpoint needs the commented exact `/mcp` path; uncomment it only
+after setting `IAPSTACK_MCP_ENABLED=true` (see `docs/mcp.md`).
 `/healthz` and `/readyz` are omitted because no ingress class is assumed to
 need them; kubelet already probes the pods. Replace `api.example.invalid` in
 both the `tls` and `rules` hosts. No `ingressClassName` is set. Uncomment that
