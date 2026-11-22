@@ -229,10 +229,11 @@ an architecture overview, and code conventions.
 - [x] Flutter, Swift, Kotlin, React Native, Go, and TypeScript SDKs
 - [x] Customer migration, RevenueCat imports, offerings, and Apple financial reports (`v0.2.0-alpha.1`)
 - [x] Subscription metrics, customer support tools, and Apple refund consumption answers (on `main`, not yet released)
+- [x] [MCP endpoint](docs/mcp.md) so AI agents can query and operate IAPStack with least-privilege keys (on `main`, not yet released)
 - [ ] Pass the three-provider real-store gates and publish `v0.1.0-rc.1`
 - [ ] Publish stable `v0.1.0`
 - [ ] Publish versioned SDK packages ([#141](https://github.com/imariman/iapstack/issues/141))
-- [ ] MCP endpoint so AI agents can query and operate IAPStack with least-privilege keys ([#285](https://github.com/imariman/iapstack/issues/285))
+- [ ] OAuth authorization for the MCP endpoint, so hosted chat clients can connect ([#302](https://github.com/imariman/iapstack/issues/302))
 - [ ] Google Play and Huawei financial report recognition
 - [ ] Amazon Appstore and additional store adapters
 
